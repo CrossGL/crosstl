@@ -13738,7 +13738,6 @@ def test_metal_hlsl_system_value_outputs_lower_to_msl_attributes():
 @pytest.mark.parametrize(
     ("stage", "param_type", "semantic", "metal_semantic", "expected_type"),
     [
-        ("vertex", "int", "gl_VertexID", "vertex_id", "uint"),
         ("vertex", "float", "gl_InstanceID", "instance_id", "uint"),
         ("fragment", "int", "gl_PrimitiveID", "primitive_id", "uint"),
         ("fragment", "int", "gl_FrontFacing", "is_front_facing", "bool"),
@@ -13775,6 +13774,31 @@ def test_graphics_builtin_parameter_types_are_validated(
     ast = crosstl.translator.parse(code)
     with pytest.raises(ValueError, match=f"{metal_semantic}.*{expected_type}"):
         MetalCodeGen().generate_stage(ast, stage)
+
+
+def test_signed_vertex_id_stage_parameter_lowers_through_metal_alias():
+    code = """
+    shader SignedVertexID {
+        struct VSOutput {
+            vec4 position @ gl_Position;
+        };
+
+        vertex {
+            VSOutput main(int vertexID @ gl_VertexID) {
+                VSOutput output;
+                output.position = vec4(float(vertexID), 0.0, 0.0, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "uint _crossglVertexID [[vertex_id]]" in generated
+    assert "int vertexID = int(_crossglVertexID);" in generated
+    assert "int vertexID [[vertex_id]]" not in generated
+    assert "float4 position [[position]];" in generated
 
 
 def test_fragment_sample_mask_parameter_rejects_output_only_crossgl_builtin():

@@ -3306,6 +3306,9 @@ class MetalCodeGen:
         texture_parameter_raw_types = {}
         texture_parameter_array_sizes = {}
         image_format_parameters = {}
+        stage_builtin_parameter_alias_declarations = []
+        stage_output_parameters = []
+        stage_output_struct_name = None
         previous_function_name = self.current_function_name
         previous_function_return_type = self.current_function_return_type
         previous_function_return_wrapper = self.current_function_return_wrapper
@@ -3507,6 +3510,19 @@ class MetalCodeGen:
             param_type = self.map_resource_type_with_format(raw_param_type, p)
 
             semantic = self.semantic_from_node(p)
+            if self.is_graphics_stage_output_parameter(p, shader_type):
+                stage_output_parameters.append(
+                    {
+                        "name": p.name,
+                        "raw_type": raw_param_type,
+                        "mapped_type": param_type,
+                        "semantic": semantic,
+                        "attribute": self.metal_stage_output_parameter_attribute(
+                            p, shader_type
+                        ),
+                    }
+                )
+                continue
             if self.is_metal_mesh_payload_parameter(shader_type, p):
                 self.current_metal_mesh_payload_parameter = p.name
                 self.current_metal_mesh_payload_type = self.map_type(raw_param_type)
@@ -3531,6 +3547,26 @@ class MetalCodeGen:
                     self.current_address_space_variables[p.name] = (
                         ray_payload_address_space
                     )
+
+            builtin_lowering = self.metal_graphics_builtin_parameter_lowering(
+                raw_param_type,
+                param_type,
+                p,
+                shader_type,
+                reserved_parameter_names
+                | set(params)
+                | self.metal_function_local_variable_names(func),
+            )
+            if builtin_lowering is not None:
+                params.append(
+                    f"{builtin_lowering['type']} {builtin_lowering['name']} "
+                    f"[[{builtin_lowering['attribute']}]]"
+                )
+                reserved_parameter_names.add(builtin_lowering["name"])
+                stage_builtin_parameter_alias_declarations.append(
+                    f"{param_type} {p.name} = {param_type}({builtin_lowering['name']});"
+                )
+                continue
 
             param_attr = self.parameter_attribute(
                 raw_param_type, semantic, shader_type, p
@@ -3650,6 +3686,11 @@ class MetalCodeGen:
             self.validate_function_return_semantic_type(
                 func, raw_return_type, shader_type
             )
+            if stage_output_parameters and return_type != "void":
+                raise ValueError(
+                    f"Metal {shader_type} function '{self.current_function_name}' "
+                    "cannot combine output parameters with a non-void return type"
+                )
         self.current_function_return_type = raw_return_type
         self.validate_metal_ray_stage_signature(func, shader_type, raw_return_type)
         parameter_diagnostics = self.glsl_buffer_block_parameter_diagnostics(
@@ -3839,26 +3880,46 @@ class MetalCodeGen:
                 filter_writable_textures=True,
             )
             function_name = entry_name or f"vertex_{func.name}"
-            return_wrapper = self.function_return_semantic_wrapper(
-                func, raw_return_type, return_type, shader_type, function_name
-            )
-            if return_wrapper is not None:
-                code += self.generate_return_wrapper_struct(return_wrapper)
-                return_type = return_wrapper["struct_name"]
-            self.current_function_return_wrapper = return_wrapper
+            if stage_output_parameters:
+                stage_output_struct_name = self.unique_return_wrapper_struct_name(
+                    function_name
+                )
+                code += self.generate_metal_stage_output_parameter_struct(
+                    stage_output_struct_name, stage_output_parameters
+                )
+                return_type = stage_output_struct_name
+                self.current_function_return_wrapper = None
+            else:
+                return_wrapper = self.function_return_semantic_wrapper(
+                    func, raw_return_type, return_type, shader_type, function_name
+                )
+                if return_wrapper is not None:
+                    code += self.generate_return_wrapper_struct(return_wrapper)
+                    return_type = return_wrapper["struct_name"]
+                self.current_function_return_wrapper = return_wrapper
             code += f"vertex {return_type} {function_name}({params_str}) {{\n"
         elif shader_type == "fragment":
             params_str = self.append_global_resource_parameters(
                 params_str, self.current_function_name, func
             )
             function_name = entry_name or f"fragment_{func.name}"
-            return_wrapper = self.function_return_semantic_wrapper(
-                func, raw_return_type, return_type, shader_type, function_name
-            )
-            if return_wrapper is not None:
-                code += self.generate_return_wrapper_struct(return_wrapper)
-                return_type = return_wrapper["struct_name"]
-            self.current_function_return_wrapper = return_wrapper
+            if stage_output_parameters:
+                stage_output_struct_name = self.unique_return_wrapper_struct_name(
+                    function_name
+                )
+                code += self.generate_metal_stage_output_parameter_struct(
+                    stage_output_struct_name, stage_output_parameters
+                )
+                return_type = stage_output_struct_name
+                self.current_function_return_wrapper = None
+            else:
+                return_wrapper = self.function_return_semantic_wrapper(
+                    func, raw_return_type, return_type, shader_type, function_name
+                )
+                if return_wrapper is not None:
+                    code += self.generate_return_wrapper_struct(return_wrapper)
+                    return_type = return_wrapper["struct_name"]
+                self.current_function_return_wrapper = return_wrapper
             code += f"fragment {return_type} {function_name}({params_str}) {{\n"
         elif shader_type == "geometry":
             params_str = self.append_global_resource_parameters(
@@ -4014,6 +4075,11 @@ class MetalCodeGen:
             code += self.generate_metal_mesh_output_accumulator_declarations()
         for diagnostic in unsupported_metal_ray_function_table_parameter_diagnostics:
             code += f"    {diagnostic}\n"
+        for declaration in stage_builtin_parameter_alias_declarations:
+            code += f"    {declaration}\n"
+        code += self.generate_metal_stage_output_parameter_locals(
+            stage_output_parameters
+        )
         stage_value_variables = [
             local_var
             for local_var in stage_local_variables or []
@@ -4021,7 +4087,14 @@ class MetalCodeGen:
         ]
         code += self.generate_statement_body(stage_value_variables, 1)
         code += self.generate_statement_body(body, 1)
-        if self.metal_needs_fallback_return(body, return_type):
+        if stage_output_parameters:
+            code += self.generate_metal_stage_output_parameter_return(
+                stage_output_struct_name,
+                stage_output_parameters,
+                reserved_parameter_names
+                | self.metal_function_local_variable_names(func),
+            )
+        elif self.metal_needs_fallback_return(body, return_type):
             fallback = self.metal_default_value_expression(raw_return_type)
             code += (
                 f"    return {fallback} "
@@ -4445,6 +4518,8 @@ class MetalCodeGen:
             "sample_mask": "uint",
         }
         for parameter in parameters or []:
+            if self.is_graphics_stage_output_parameter(parameter, stage_name):
+                continue
             semantic = self.semantic_from_node(parameter)
             if stage_name == "fragment" and str(semantic) == "gl_SampleMask":
                 raise ValueError(
@@ -4456,6 +4531,13 @@ class MetalCodeGen:
             if expected_type is None:
                 continue
             actual_type = self.map_type(self.parameter_raw_type(parameter))
+            if self.metal_graphics_builtin_parameter_lowering(
+                self.parameter_raw_type(parameter),
+                actual_type,
+                parameter,
+                stage_name,
+            ):
+                continue
             if actual_type != expected_type:
                 name = getattr(parameter, "name", "<anonymous>")
                 raise ValueError(
@@ -4463,6 +4545,82 @@ class MetalCodeGen:
                     f"'{metal_semantic}' and requires parameter '{name}' to "
                     f"have type {expected_type}, got {actual_type}"
                 )
+
+    def is_graphics_stage_output_parameter(self, parameter, stage_name):
+        if stage_name not in {"vertex", "fragment"}:
+            return False
+        if self.is_metal_mesh_output_parameter(stage_name, parameter):
+            return False
+        if not (self.parameter_qualifier_names(parameter) & {"out", "inout"}):
+            return False
+        return not self.is_resource_parameter_type(self.parameter_raw_type(parameter))
+
+    def metal_graphics_builtin_parameter_lowering(
+        self,
+        raw_param_type,
+        mapped_param_type,
+        parameter,
+        stage_name,
+        reserved_names=None,
+    ):
+        if stage_name != "vertex":
+            return None
+        metal_semantic = self.canonical_metal_semantic(
+            self.semantic_from_node(parameter)
+        )
+        if metal_semantic not in {"vertex_id", "instance_id"}:
+            return None
+        if mapped_param_type != "int":
+            return None
+
+        base_name = {
+            "vertex_id": "_crossglVertexID",
+            "instance_id": "_crossglInstanceID",
+        }[metal_semantic]
+        return {
+            "type": "uint",
+            "name": self.unique_metal_generated_name(base_name, reserved_names or ()),
+            "attribute": metal_semantic,
+            "source_type": raw_param_type,
+        }
+
+    def metal_stage_output_parameter_attribute(self, parameter, stage_name):
+        semantic = self.semantic_from_node(parameter)
+        if semantic is None and stage_name == "fragment":
+            semantic = "gl_FragColor"
+        return self.map_semantic(semantic)
+
+    def generate_metal_stage_output_parameter_struct(self, struct_name, parameters):
+        code = f"struct {struct_name} {{\n"
+        for parameter in parameters:
+            field_decl = format_c_style_array_declaration(
+                parameter["mapped_type"], parameter["name"]
+            )
+            code += f"    {field_decl}{parameter['attribute']};\n"
+        code += "};\n\n"
+        return code
+
+    def generate_metal_stage_output_parameter_locals(self, parameters):
+        code = ""
+        for parameter in parameters:
+            default_value = self.metal_default_value_expression(parameter["raw_type"])
+            declaration = format_c_style_array_declaration(
+                parameter["mapped_type"], parameter["name"]
+            )
+            code += f"    {declaration} = {default_value};\n"
+        return code
+
+    def generate_metal_stage_output_parameter_return(
+        self, struct_name, parameters, reserved_names
+    ):
+        if not parameters or not struct_name:
+            return ""
+        result_name = self.unique_metal_generated_name("_crossglOutput", reserved_names)
+        code = f"    {struct_name} {result_name};\n"
+        for parameter in parameters:
+            code += f"    {result_name}.{parameter['name']} = {parameter['name']};\n"
+        code += f"    return {result_name};\n"
+        return code
 
     def validate_struct_member_semantic_types(self, struct_node):
         for member in getattr(struct_node, "members", []) or []:
