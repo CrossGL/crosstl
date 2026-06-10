@@ -1118,6 +1118,16 @@ void main() {
 """
 
 
+MIXED_GLSL_150_FRAGMENT_OUTPUT_SHADER = """
+#version 150
+out vec4 outputColor;
+
+void main() {
+    outputColor = vec4(1.0);
+}
+"""
+
+
 GLSL_GEOMETRY_INTERFACE_BLOCK_VALIDATOR_SHADER = """
 shader GLSLGeometryInterfaceBlockValidator {
     @glsl_interface_block(in) @glsl_interface_instance(vertexIn) @glsl_interface_array
@@ -2981,6 +2991,22 @@ def test_mixed_glsl_fragment_color_depth_validate_with_glslangvalidator(
     assert "fragColor" not in code
     assert "return color" not in code
     assert "\n    vec4 color;" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "frag", str(shader_path)])
+
+
+def test_mixed_glsl_150_fragment_output_validates_with_glslangvalidator(tmp_path):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "mixed_glsl_150_fragment_output.frag"
+
+    code = GLSLCodeGen().generate_stage(
+        _mixed_glsl_ast(MIXED_GLSL_150_FRAGMENT_OUTPUT_SHADER, "fragment"),
+        "fragment",
+    )
+    assert code.lstrip().startswith("#version 330 core\n")
+    assert "#version 150" not in code
+    assert "layout(location = 0) out vec4 fragColor;" in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "frag", str(shader_path)])
