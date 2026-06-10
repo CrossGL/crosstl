@@ -29,6 +29,63 @@ def test_opencl_kernel_codegen_reparses_and_lowers_builtin_ids():
     assert "var lid: u32 = gl_LocalInvocationID.x;" in crossgl
 
 
+def test_hashcat_kernel_specifier_macros_codegen_reparse():
+    crossgl = generate_crossgl("""
+        KERNEL_FQ KERNEL_FA void amp(global ulong *pws, const ulong gid_max) {
+            const ulong gid = get_global_id(0);
+            if (gid >= gid_max) return;
+            pws[gid] = gid;
+        }
+        """)
+
+    assert "@compute" in crossgl
+    assert "fn amp(" in crossgl
+    assert "var gid: u64 = gl_GlobalInvocationID.x;" in crossgl
+
+
+def test_hashcat_opaque_kernel_parameter_pack_macro_codegen_reparse():
+    crossgl = generate_crossgl("""
+        KERNEL_FQ KERNEL_FA void m00000_m04(KERN_ATTR_RULES ()) {
+            const ulong gid = get_global_id(0);
+            if (gid >= GID_CNT) return;
+            pws[gid] = gid;
+        }
+        """)
+
+    assert "@compute" in crossgl
+    assert "fn m00000_m04(" in crossgl
+    assert "GID_CNT" in crossgl
+
+
+def test_hashcat_parenthesized_array_access_shift_index_codegen_reparse():
+    crossgl = generate_crossgl("""
+        kernel void cast_lookup(global uint *out, global uint *x, global uint *table) {
+            out[0] = table[(uint)(uchar)(((x[0xD / 4]) >> (8 * (3 - 0xD % 4))))];
+        }
+        """)
+
+    assert "fn cast_lookup(" in crossgl
+    assert ">>" in crossgl
+    assert "table[" in crossgl
+
+
+def test_hashcat_address_space_macro_parameters_codegen_reparse():
+    crossgl = generate_crossgl("""
+        kernel void copy_macro_spaces(GLOBAL_AS const uint *in_buf,
+                                      GLOBAL_AS uint *out,
+                                      LOCAL_AS uint *scratch) {
+            uint lid = get_local_id(0);
+            scratch[lid] = in_buf[lid];
+            barrier(CLK_LOCAL_MEM_FENCE);
+            out[lid] = scratch[lid];
+        }
+        """)
+
+    assert "@binding(0) var<storage, read_write> in_buf: array<u32>" in crossgl
+    assert "@binding(1) var<storage, read_write> out: array<u32>" in crossgl
+    assert "var<workgroup> scratch: array<u32>" in crossgl
+
+
 def test_opencl_local_memory_and_barrier_codegen_reparse():
     crossgl = generate_crossgl("""
         __attribute__((reqd_work_group_size(256, 1, 1)))
@@ -47,6 +104,22 @@ def test_opencl_local_memory_and_barrier_codegen_reparse():
     assert "var<workgroup> scratch: array<f32, 256>;" in crossgl
     assert "workgroupBarrier();" in crossgl
     assert "out[gl_WorkGroupID.x] = scratch[0];" in crossgl
+
+
+def test_opencl_local_pointer_kernel_param_uses_workgroup_storage():
+    crossgl = generate_crossgl("""
+        kernel void local_arg_first(uint scale, local float *scratch, global float *out) {
+            uint lid = get_local_id(0);
+            scratch[lid] = out[lid] * scale;
+            barrier(CLK_LOCAL_MEM_FENCE);
+            out[lid] = scratch[lid];
+        }
+        """)
+
+    assert "var<workgroup> scratch: array<f32>" in crossgl
+    assert "@group(0) @binding(0) var<storage, read_write> out: array<f32>" in crossgl
+    assert "var<storage, read_write> scratch" not in crossgl
+    assert "@binding(1) var<storage, read_write> out" not in crossgl
 
 
 def test_opencl_vector_constructor_cast_codegen_reparse():
@@ -188,3 +261,51 @@ def test_darktable_float_pointer_to_array_kernel_param_codegen_reparse():
 
     assert "levels: array<array<f32, 3>>" in crossgl
     assert "float ()" not in crossgl
+
+
+def test_clspv_unnamed_local_pointer_kernel_param_codegen_reparse():
+    crossgl = generate_crossgl("""
+        kernel void k0(int v, local int *, global int *b) {
+        }
+        """)
+
+    assert "i32 v" in crossgl
+    assert "var<workgroup> _param1: array<i32>" in crossgl
+    assert "@group(0) @binding(0) var<storage, read_write> b: array<i32>" in crossgl
+
+
+def test_clspv_struct_return_and_local_elaborated_type_codegen_reparse():
+    crossgl = generate_crossgl("""
+        struct T {
+            global int *ptr;
+        };
+
+        struct T bar(global int *out) {
+            struct T t;
+            t.ptr = out;
+            return t;
+        }
+
+        kernel void foo(global int *out) {
+            struct T t = bar(out);
+            *(t.ptr) = 42;
+        }
+        """)
+
+    assert "T bar(ptr<i32> out)" in crossgl
+    assert "var t: T;" in crossgl
+    assert "var t: T = bar(out);" in crossgl
+
+
+def test_pocl_statement_expression_macro_block_codegen_reparse():
+    crossgl = generate_crossgl("""
+        DEFINE_BODY_G
+        (test_rotate,
+         ({
+           int patterns[] = {0x01, 0x80};
+         })
+        )
+        """)
+
+    assert "// OpenCL macro block: DEFINE_BODY_G(" in crossgl
+    assert "test_rotate" in crossgl

@@ -24,11 +24,13 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
+    PointerType,
     PreprocessorNode,
     PrimitiveType,
     RangeNode,
     RayQueryOpNode,
     RayTracingOpNode,
+    ReferenceType,
     ReturnNode,
     StructNode,
     SwitchNode,
@@ -312,6 +314,32 @@ class GLSLCodeGen:
         "ray_callable": "GL_CALLABLE_SHADER_EXT",
     }
     TEXTURE_SIZE_NO_LOD_SUFFIXES = ("2DRect", "Buffer")
+    sampled_resource_type_aliases = {
+        "Texture1D": "sampler1D",
+        "Texture1DArray": "sampler1DArray",
+        "Texture2D": "sampler2D",
+        "Texture2DArray": "sampler2DArray",
+        "Texture2DMS": "sampler2DMS",
+        "Texture2DMSArray": "sampler2DMSArray",
+        "Texture3D": "sampler3D",
+        "TextureCube": "samplerCube",
+        "TextureCubeArray": "samplerCubeArray",
+    }
+    storage_resource_type_aliases = {
+        "RWTexture1D": "image1D",
+        "RWTexture1DArray": "image1DArray",
+        "RWTexture2D": "image2D",
+        "RWTexture2DArray": "image2DArray",
+        "RWTexture2DMS": "image2DMS",
+        "RWTexture2DMSArray": "image2DMSArray",
+        "RWTexture3D": "image3D",
+        "RWTextureCube": "imageCube",
+        "RWTextureCubeArray": "imageCubeArray",
+    }
+    sampler_state_type_aliases = {
+        "SamplerState": "sampler",
+        "SamplerComparisonState": "comparison_sampler",
+    }
     RAY_STAGE_NAMES = {
         "ray_generation",
         "ray_intersection",
@@ -8269,7 +8297,11 @@ class GLSLCodeGen:
     def type_name_string(self, vtype):
         if vtype is None:
             return None
-        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
+        if (
+            isinstance(vtype, (PointerType, ReferenceType))
+            or hasattr(vtype, "name")
+            or hasattr(vtype, "element_type")
+        ):
             return self.convert_type_node_to_string(vtype)
         return str(vtype)
 
@@ -9488,6 +9520,10 @@ class GLSLCodeGen:
             return f"{{ {elements} }}"
         elif hasattr(expr, "__class__") and "LiteralNode" in str(type(expr)):
             literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
+            if literal_type == "string":
+                return f'"{expr.value}"'
+            if literal_type == "char":
+                return f"'{expr.value}'"
             if (
                 literal_type == "uint"
                 and isinstance(expr.value, int)
@@ -9612,7 +9648,11 @@ class GLSLCodeGen:
             if original_func_name in self.GLSL_WAVE_INTRINSIC_ARITIES:
                 return self.generate_glsl_wave_operation(original_func_name, expr.args)
 
-            self.validate_glsl_buffer_block_atomic_call(original_func_name, expr.args)
+            glsl_memory_atomic_call = self.generate_glsl_memory_atomic_call(
+                original_func_name, expr.args
+            )
+            if glsl_memory_atomic_call is not None:
+                return glsl_memory_atomic_call
 
             saturate_call = self.generate_saturate_call(original_func_name, expr.args)
             if saturate_call is not None:
@@ -10843,6 +10883,10 @@ class GLSLCodeGen:
             value_type = self.glsl_buffer_block_atomic_argument_type(value_arg)
             if value_type is None or value_type == target_type:
                 continue
+            if self.glsl_unsigned_atomic_literal_is_compatible(
+                value_arg, value_type, target_type
+            ):
+                continue
             raise ValueError(
                 f"OpenGL buffer block atomic '{func_name}' requires {target_type} "
                 f"{label} argument for {target_name}: "
@@ -10866,6 +10910,52 @@ class GLSLCodeGen:
         if result_type is None:
             return None
         return self.map_type(result_type)
+
+    def glsl_unsigned_atomic_literal_is_compatible(
+        self, value_arg, value_type, target_type
+    ):
+        if target_type != "uint" or value_type != "int":
+            return False
+        literal_value = self.literal_int_value(value_arg, self.literal_int_constants)
+        return literal_value is not None and literal_value >= 0
+
+    def generate_glsl_memory_atomic_call(self, func_name, args):
+        if func_name not in self.GLSL_MEMORY_ATOMIC_FUNCTIONS or not args:
+            return None
+
+        self.validate_glsl_buffer_block_atomic_call(func_name, args)
+
+        target_type = self.expression_result_type(args[0])
+        target_type = self.map_type(target_type) if target_type is not None else None
+        rendered_args = [self.generate_expression(args[0])]
+        value_arg_ids = {
+            id(value_arg)
+            for value_arg, _ in self.glsl_buffer_block_atomic_value_arguments(
+                func_name, args
+            )
+        }
+
+        for arg in args[1:]:
+            if id(arg) in value_arg_ids and target_type in {"int", "uint"}:
+                rendered_args.append(
+                    self.generate_glsl_memory_atomic_value_argument(arg, target_type)
+                )
+            else:
+                rendered_args.append(self.generate_expression(arg))
+
+        return f"{func_name}({', '.join(rendered_args)})"
+
+    def generate_glsl_memory_atomic_value_argument(self, arg, target_type):
+        value_type = self.glsl_buffer_block_atomic_argument_type(arg)
+        if value_type == target_type:
+            return self.generate_expression_with_expected(arg, target_type)
+        if self.glsl_unsigned_atomic_literal_is_compatible(
+            arg, value_type, target_type
+        ):
+            literal_value = self.literal_int_value(arg, self.literal_int_constants)
+            if literal_value is not None:
+                return f"{literal_value}u"
+        return self.generate_expression(arg)
 
     def generate_glsl_buffer_block_mutation_target(self, expr):
         self.glsl_buffer_block_read_validation_suppression += 1
@@ -14560,6 +14650,46 @@ class GLSLCodeGen:
             or self.is_inferable_resource_array_type(vtype)
         )
 
+    def canonical_sampled_resource_type(self, type_name):
+        """Return GLSL sampler spelling for HLSL-style sampled resources."""
+        if not isinstance(type_name, str):
+            return None
+        base_type = type_name.split("[", 1)[0].split("<", 1)[0].strip()
+        return self.sampled_resource_type_aliases.get(base_type)
+
+    def canonical_storage_resource_type(self, type_name):
+        """Return GLSL image spelling for HLSL-style writable resources."""
+        if not isinstance(type_name, str):
+            return None
+
+        base_type = type_name.split("[", 1)[0].strip()
+        base_name = base_type.split("<", 1)[0].strip()
+        image_type = self.storage_resource_type_aliases.get(base_name)
+        if image_type is None:
+            return None
+
+        if "<" not in base_type or ">" not in base_type:
+            return image_type
+
+        value_type = base_type.split("<", 1)[1].rsplit(">", 1)[0].strip()
+        value_type = value_type.split(",", 1)[0].strip().lower()
+        if value_type in {"int", "i32"}:
+            return f"i{image_type}"
+        if value_type in {"uint", "u32"}:
+            return f"u{image_type}"
+        return image_type
+
+    def canonical_resource_type(self, type_name):
+        """Return canonical GLSL sampler/image/resource type for known aliases."""
+        if isinstance(type_name, str):
+            base_type = type_name.split("[", 1)[0].split("<", 1)[0].strip()
+            sampler_type = self.sampler_state_type_aliases.get(base_type)
+            if sampler_type is not None:
+                return sampler_type
+        return self.canonical_sampled_resource_type(
+            type_name
+        ) or self.canonical_storage_resource_type(type_name)
+
     def resource_base_type(self, vtype):
         if vtype is None:
             return ""
@@ -14570,8 +14700,8 @@ class GLSLCodeGen:
         vtype = str(vtype)
         if "[" in vtype and "]" in vtype:
             base_type, _ = parse_array_type(vtype)
-            return base_type
-        return vtype
+            return self.canonical_resource_type(base_type) or base_type
+        return self.canonical_resource_type(vtype) or vtype
 
     def resource_array_count(self, size):
         if size is None:
@@ -14909,6 +15039,11 @@ class GLSLCodeGen:
         if vtype is None:
             return "float"
 
+        if isinstance(vtype, PointerType):
+            return f"{self.map_type(vtype.pointee_type)}*"
+        if isinstance(vtype, ReferenceType):
+            return f"{self.map_type(vtype.referenced_type)}&"
+
         if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
@@ -14921,6 +15056,10 @@ class GLSLCodeGen:
             base_type, array_suffix = split_array_type_suffix(vtype_str)
             base_mapped = self.map_type(base_type)
             return f"{base_mapped}{array_suffix}"
+
+        canonical_type = self.canonical_resource_type(vtype_str)
+        if canonical_type is not None:
+            return canonical_type
 
         generic_enum_type = generic_enum_specialized_type_name(self, vtype_str)
         if generic_enum_type is not None:
@@ -14962,6 +15101,9 @@ class GLSLCodeGen:
     ):
         if vtype is None:
             return self.map_type(vtype)
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        if "buffer" in qualifiers and isinstance(vtype, PointerType):
+            return f"{self.map_type(vtype.pointee_type)}[]"
         if self.is_structured_buffer_type(vtype):
             return f"{self.structured_buffer_element_type(vtype)}[]"
 
@@ -14996,7 +15138,11 @@ class GLSLCodeGen:
         if vtype is None:
             return self.map_type(vtype)
 
-        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
+        if (
+            isinstance(vtype, (PointerType, ReferenceType))
+            or hasattr(vtype, "name")
+            or hasattr(vtype, "element_type")
+        ):
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
             vtype_str = str(vtype)
@@ -16026,6 +16172,14 @@ class GLSLCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        if isinstance(type_node, PointerType):
+            pointee_type = self.convert_type_node_to_string(type_node.pointee_type)
+            return f"{pointee_type}*"
+        if isinstance(type_node, ReferenceType):
+            referenced_type = self.convert_type_node_to_string(
+                type_node.referenced_type
+            )
+            return f"{referenced_type}&"
         generic_args = getattr(type_node, "generic_args", [])
         if hasattr(type_node, "name") and generic_args:
             args = ", ".join(

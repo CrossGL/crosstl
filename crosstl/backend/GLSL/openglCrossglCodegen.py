@@ -560,6 +560,8 @@ class GLSLToCrossGLConverter:
             "RasterizerOrderedTextureCubeArray": "imageCubeArray",
             "StructuredBuffer": "StructuredBuffer",
             "RWStructuredBuffer": "RWStructuredBuffer",
+            "Buffer": "StructuredBuffer",
+            "RWBuffer": "RWStructuredBuffer",
             "AppendStructuredBuffer": "RWStructuredBuffer",
             "ConsumeStructuredBuffer": "StructuredBuffer",
             "RasterizerOrderedStructuredBuffer": "RWStructuredBuffer",
@@ -651,6 +653,7 @@ class GLSLToCrossGLConverter:
         self.variable_type_scopes = []
         self.function_name_renames = {}
         self.user_function_arities = set()
+        self.struct_type_renames = {}
 
     def indent(self):
         return self.indent_str * self.indent_level
@@ -1949,7 +1952,7 @@ class GLSLToCrossGLConverter:
             name for name, count in interface_counts.items() if count > 1
         }
         if not duplicate_names:
-            return structs
+            return self.assign_crossgl_safe_struct_names(structs)
 
         used_names = {getattr(struct, "name", "") for struct in structs}
         seen = {}
@@ -1972,6 +1975,31 @@ class GLSLToCrossGLConverter:
             used_names.add(emitted_name)
             struct.glsl_interface_block_name = original_name
             struct.crossgl_struct_name = emitted_name
+
+        return self.assign_crossgl_safe_struct_names(structs)
+
+    def assign_crossgl_safe_struct_names(self, structs):
+        self.struct_type_renames = {}
+        used_names = set()
+
+        for struct in structs:
+            original_name = getattr(struct, "name", "")
+            emitted_name = self.crossgl_struct_name(struct)
+            candidate = self.sanitize_crossgl_identifier(emitted_name)
+            while candidate in used_names:
+                candidate += "_"
+
+            used_names.add(candidate)
+            if candidate == emitted_name:
+                continue
+
+            if self.is_graphics_interface_block_struct(struct) and not getattr(
+                struct, "glsl_interface_block_name", None
+            ):
+                struct.glsl_interface_block_name = original_name
+            struct.crossgl_struct_name = candidate
+            if original_name:
+                self.struct_type_renames[original_name] = candidate
 
         return structs
 
@@ -2676,6 +2704,8 @@ class GLSLToCrossGLConverter:
             param_type, param_name = param
             return f"{self.convert_type(param_type)} {param_name}"
         if isinstance(param, VariableNode):
+            if getattr(param, "is_variadic", False):
+                return None
             declaration = self.generate_variable_declaration(
                 param,
                 array_before_attributes=True,
@@ -3448,15 +3478,40 @@ class GLSLToCrossGLConverter:
         return None
 
     def convert_type(self, type_name):
+        if isinstance(type_name, str):
+            renamed_type = self.struct_type_renames.get(type_name)
+            if renamed_type is not None:
+                return renamed_type
         mapped_type = self.type_map.get(type_name)
         if mapped_type is not None:
             return mapped_type
         if isinstance(type_name, str) and "<" in type_name and type_name.endswith(">"):
             base_type, generic_args = type_name.split("<", 1)
+            mapped_image_type = self.convert_hlsl_rw_texture_type(
+                base_type, generic_args[:-1]
+            )
+            if mapped_image_type is not None:
+                return mapped_image_type
             mapped_base = self.type_map.get(base_type)
             if mapped_base is not None:
                 return f"{mapped_base}<{generic_args}"
         return type_name
+
+    def convert_hlsl_rw_texture_type(self, base_type, generic_args):
+        mapped_base = self.type_map.get(base_type)
+        if mapped_base is None or not mapped_base.startswith("image"):
+            return None
+
+        normalized_args = re.sub(r"\s+", " ", generic_args.strip()).lower()
+        for prefix in ("unorm ", "snorm "):
+            if normalized_args.startswith(prefix):
+                normalized_args = normalized_args[len(prefix) :]
+
+        if normalized_args.startswith(("uint", "uvec")):
+            return f"u{mapped_base}"
+        if normalized_args.startswith(("int", "ivec")):
+            return f"i{mapped_base}"
+        return mapped_base
 
     def variable_declaration_type(self, node):
         var_type = self.convert_type(node.vtype)
@@ -3484,10 +3539,11 @@ class GLSLToCrossGLConverter:
         var_type = self.variable_declaration_type(node)
         var_name = node.name
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", None) or []}
+        has_value = getattr(node, "value", None) is not None
         prefix_parts = []
         if "shared" in qualifiers:
             prefix_parts.append("shared")
-        if getattr(node, "is_const", False) or "const" in qualifiers:
+        if has_value and (getattr(node, "is_const", False) or "const" in qualifiers):
             prefix_parts.append("const")
         if (
             memory_qualifier_prefix
@@ -3535,7 +3591,7 @@ class GLSLToCrossGLConverter:
             else f"{var_name}{attributes}{array_suffix}"
         )
 
-        if getattr(node, "value", None) is not None:
+        if has_value:
             value = self.generate_expression(node.value)
             return f"{prefix}{var_type} {declarator} = {value}"
 

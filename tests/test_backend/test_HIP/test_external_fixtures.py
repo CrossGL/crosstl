@@ -8,6 +8,7 @@ from crosstl.backend.HIP.HipAst import (
     IfNode,
     KernelLaunchNode,
     KernelNode,
+    StructNode,
     SwitchNode,
     TypeAliasNode,
     UnaryOpNode,
@@ -107,10 +108,33 @@ EXTERNAL_FIXTURE_SOURCES = {
             "catch/unit/cooperativeGrps/hipCGThreadBlockTileTypeShfl_old.cc",
         ],
     },
+    "hipblas": {
+        "url": "https://github.com/ROCm/hipBLAS",
+        "commit": "23b26a0093345264e7387481cbe01d1e1ae55fda",
+        "paths": ["clients/gtest/blas3/gemm_gtest.cpp"],
+    },
+    "rocblas": {
+        "url": "https://github.com/ROCm/rocBLAS",
+        "commit": "defce200a69e5346eeadd7ac1e199238758add61",
+        "paths": [
+            "clients/common/blas3/common_gemm.cpp",
+            "clients/common/common_helpers.hpp",
+        ],
+    },
     "llvm_project": {
         "url": "https://github.com/llvm/llvm-project",
         "commit": "3b5b5c1ec4a3095ab096dd780e84d7ab81f3d7ff",
         "paths": ["clang/test/SemaCUDA/amdgpu-attrs.cu"],
+    },
+    "llvm_cuda_consteval": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "146abed5cd072a27c4240c7cf53b764571e62462",
+        "paths": ["clang/test/SemaCUDA/consteval-func.cu"],
+    },
+    "cccl": {
+        "url": "https://github.com/NVIDIA/cccl",
+        "commit": "17869e1d46314036843a9ff9a0cb726de560e94e",
+        "paths": ["libcudacxx/include/cuda/std/__utility/pair.h"],
     },
     "hip_kittens": {
         "url": "https://github.com/HazyResearch/HipKittens",
@@ -139,6 +163,266 @@ def assert_crossgl_reparses(source):
 def generate_hip_from_crossgl(source):
     crossgl_ast = CrossGLParser(CrossGLLexer(source).tokens).parse()
     return HipCodeGen().generate(crossgl_ast)
+
+
+COMPILER_MANUAL_SAMPLER_FIXTURE = """
+shader DirectXMixedManualSamplerUsageUnsupportedShader {
+  compute {
+    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+    layout(set = 0, binding = 0) buffer vec4* values;
+    layout(set = 0, binding = 2) uniform sampler2DShadow shadowMap;
+    layout(set = 0, binding = 3) uniform sampler2DArrayShadow shadowAtlas;
+    layout(set = 0, binding = 5) sampler sharedShadowSampler;
+
+    void main() {
+      float visibility =
+          textureCompare(shadowMap, sharedShadowSampler,
+                         vec2(0.5, 0.5), 0.25);
+      float manualVisibility =
+          textureCompareLodManual(shadowAtlas, sharedShadowSampler,
+                                  vec3(0.25, 0.5, 1.0), 0.33, 2.0,
+                                  less_equal);
+      values[0] = vec4(visibility, manualVisibility, 0.0, 1.0);
+      return;
+    }
+  }
+}
+"""
+
+
+COMPILER_MATRIX_CONSTRUCTOR_FIXTURE = """
+shader MatrixConstructorComputeShader {
+  compute {
+    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+    layout(set = 0, binding = 0) buffer float* values;
+
+    void keep(mat2 flattened, mat2 diagonal, mat3 expanded, mat3 basis) {
+      values[0] = 1.0;
+      return;
+    }
+
+    void main() {
+      mat2 flattened = mat2(1.0, 2.0, 3.0, 4.0);
+      mat2 diagonal = mat2(5.0);
+      mat3 expanded = mat3(flattened);
+      vec3 c0 = vec3(1.0, 2.0, 3.0);
+      vec3 c1 = vec3(4.0, 5.0, 6.0);
+      vec3 c2 = vec3(7.0, 8.0, 9.0);
+      mat3 basis = mat3(c0, c1, c2);
+      keep(flattened, diagonal, expanded, basis);
+      return;
+    }
+  }
+}
+"""
+
+
+def assert_hip_fixture_reverse_codegen_prunes_generated_matrix_helpers(source):
+    hip_code = generate_hip_from_crossgl(source)
+    assert "struct float2x2" in hip_code
+
+    _, crossgl = generate_crossgl_from_hip(hip_code)
+
+    assert "struct float2x2" not in crossgl
+    assert "operator_mul" not in crossgl
+    assert "CGL_COLUMNS" not in crossgl
+    CrossGLParser(CrossGLLexer(crossgl).tokens).parse()
+    return crossgl
+
+
+def test_compiler_manual_sampler_fixture_reverse_codegen_prunes_hip_helpers():
+    # Reduced from CrossGL-Compiler/tests/fixtures/
+    # DirectXMixedManualSamplerUsageUnsupportedShader.cgl.
+    crossgl = assert_hip_fixture_reverse_codegen_prunes_generated_matrix_helpers(
+        COMPILER_MANUAL_SAMPLER_FIXTURE
+    )
+
+    assert len(crossgl) < 2_000
+    assert "textureCompareLodManual(" in crossgl
+    assert "var visibility: f32 = 0.0f;" in crossgl
+
+
+def test_compiler_matrix_constructor_fixture_reverse_codegen_prunes_hip_helpers():
+    # Reduced from CrossGL-Compiler/tests/fixtures/MatrixConstructorComputeShader.cgl.
+    crossgl = assert_hip_fixture_reverse_codegen_prunes_generated_matrix_helpers(
+        COMPILER_MATRIX_CONSTRUCTOR_FIXTURE
+    )
+
+    assert len(crossgl) < 2_000
+    assert (
+        "void keep(mat2 flattened, mat2 diagonal, mat3 expanded, mat3 basis)" in crossgl
+    )
+    assert "var flattened: mat2 = mat2(1.0, 2.0, 3.0, 4.0);" in crossgl
+    assert "var basis: mat3 = mat3(c0, c1, c2);" in crossgl
+
+
+def test_external_hipblas_gtest_parameterized_block_macro_codegen_reparse():
+    # Reduced from ROCm/hipBLAS@23b26a0093345264e7387481cbe01d1e1ae55fda,
+    # clients/gtest/blas3/gemm_gtest.cpp.
+    source = """
+    using gemm = gemm_template<gemm_testing, GEMM>;
+    TEST_P(gemm, blas3)
+    {
+        CATCH_SIGNALS_AND_EXCEPTIONS_AS_FAILURES(
+            hipblas_simple_dispatch<gemm_testing>(GetParam()));
+    }
+    INSTANTIATE_TEST_CATEGORIES(gemm);
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    alias = ast.statements[0]
+    test_case = ast.statements[1]
+    instantiate = ast.statements[2]
+
+    assert isinstance(alias, TypeAliasNode)
+    assert alias.name == "gemm"
+    assert isinstance(test_case, FunctionNode)
+    assert test_case.name == "gemm_blas3"
+    assert test_case.qualifiers == ["TEST_P"]
+    assert isinstance(test_case.body[0], FunctionCallNode)
+    assert test_case.body[0].name == "CATCH_SIGNALS_AND_EXCEPTIONS_AS_FAILURES"
+    assert isinstance(instantiate, FunctionCallNode)
+    assert instantiate.name == "INSTANTIATE_TEST_CATEGORIES"
+    assert "// Function: gemm_blas3" in crossgl
+    assert "hipblas_simple_dispatch<gemm_testing>(GetParam())" in crossgl
+    assert "TEST_P" not in crossgl
+
+
+def test_external_rocblas_repeated_instantiate_tests_macro_chain_parse():
+    # Reduced from ROCm/rocBLAS@defce200a69e5346eeadd7ac1e199238758add61,
+    # clients/common/blas3/common_gemm.cpp plus clients/common/common_helpers.hpp.
+    source = """
+    #define INSTANTIATE(T_)                 \\
+        INSTANTIATE_TESTS(gemm, T_)         \\
+        INSTANTIATE_TESTS(gemm_batched, T_) \\
+        INSTANTIATE_TESTS(gemm_strided_batched, T_)
+
+    INSTANTIATE(rocblas_half)
+    INSTANTIATE(float)
+    INSTANTIATE(double)
+    INSTANTIATE(rocblas_float_complex)
+    """
+
+    ast = parse_hip_source(source)
+    calls = ast.statements
+
+    assert len(calls) == 12
+    assert all(isinstance(call, FunctionCallNode) for call in calls)
+    assert {call.name for call in calls} == {"INSTANTIATE_TESTS"}
+    assert [call.args for call in calls[:3]] == [
+        ["gemm", "rocblas_half"],
+        ["gemm_batched", "rocblas_half"],
+        ["gemm_strided_batched", "rocblas_half"],
+    ]
+    assert calls[-1].args == ["gemm_strided_batched", "rocblas_float_complex"]
+
+
+def test_external_rocthrust_rocprim_namespace_macros_codegen_reparse():
+    # Reduced from ROCm/rocThrust@8c061ed4f0628254578a3de28df775bea765f89d
+    # and ROCm/rocPRIM@14cd5e3c27a4b9ae7d510823a450723a03985ac0.
+    source = """
+    THRUST_NAMESPACE_BEGIN
+    THRUST_EXEC_CHECK_DISABLE
+    THRUST_HOST_DEVICE THRUST_FORCEINLINE int thrust_identity(int value) {
+        return value;
+    }
+    THRUST_NAMESPACE_END
+
+    BEGIN_ROCPRIM_NAMESPACE
+    THRUST_HIP_DEVICE_FUNCTION int rocprim_identity(int value) {
+        return value;
+    }
+    END_ROCPRIM_NAMESPACE
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert [statement.name for statement in ast.statements] == [
+        "thrust_identity",
+        "rocprim_identity",
+    ]
+    assert ast.statements[0].qualifiers == [
+        "THRUST_HOST_DEVICE",
+        "THRUST_FORCEINLINE",
+    ]
+    assert ast.statements[1].qualifiers == ["THRUST_HIP_DEVICE_FUNCTION"]
+    assert "i32 thrust_identity(i32 value)" in crossgl
+    assert "i32 rocprim_identity(i32 value)" in crossgl
+    assert "THRUST_" not in crossgl
+    assert "ROCPRIM_NAMESPACE" not in crossgl
+
+
+def test_external_rocprim_enable_if_trailing_return_codegen_reparse():
+    # Reduced from ROCm/rocPRIM@14cd5e3c27a4b9ae7d510823a450723a03985ac0,
+    # test/rocprim/test_block_histogram.kernels.hpp.
+    source = """
+    template<class T>
+    auto get_safe_maxval(size_t maxval)
+        -> std::enable_if_t<rocprim::is_floating_point<T>::value, bool> {
+        return maxval > 0;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert isinstance(ast.statements[0], FunctionNode)
+    assert ast.statements[0].return_type == (
+        "std::enable_if_t<rocprim::is_floating_point<T>::value, bool>"
+    )
+    assert "void get_safe_maxval(u32 maxval)" in crossgl
+    assert "std::enable_if_t" not in crossgl
+
+
+def test_external_rocthrust_static_templated_constructor_declaration_codegen_reparse():
+    # Reduced from ROCm/rocThrust@8c061ed4f0628254578a3de28df775bea765f89d,
+    # examples/sum.cu and examples/lexicographical_sort.cu.
+    source = """
+    int my_rand(void)
+    {
+        static thrust::uniform_int_distribution<int> dist(0, 9999);
+        return dist(rng);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    function = ast.statements[0]
+    declaration = function.body[0]
+
+    assert isinstance(declaration, VariableNode)
+    assert declaration.qualifiers == ["static"]
+    assert declaration.vtype == "thrust::uniform_int_distribution<int>"
+    assert declaration.name == "dist"
+    assert isinstance(declaration.value, FunctionCallNode)
+    assert declaration.value.name == "thrust::uniform_int_distribution<int>"
+    assert declaration.value.args == ["0", "9999"]
+    assert (
+        "var dist: thrust::uniform_int_distribution<int> = "
+        "thrust::uniform_int_distribution<int>(0, 9999);" in crossgl
+    )
+
+
+def test_external_rocthrust_return_type_followed_by_hip_qualifiers_codegen_reparse():
+    # Reduced from ROCm/rocThrust@8c061ed4f0628254578a3de28df775bea765f89d,
+    # examples/cuda/range_view.cu.
+    source = """
+    template <class Iterator, class Size>
+    range_view<Iterator> __host__ __device__
+    make_range_view(Iterator first, Size n)
+    {
+        return range_view<Iterator>(first, first + n);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    function = ast.statements[0]
+
+    assert isinstance(function, FunctionNode)
+    assert function.return_type == "range_view<Iterator>"
+    assert function.name == "make_range_view"
+    assert function.qualifiers == ["__host__", "__device__"]
+    assert "range_view<Iterator> make_range_view(Iterator first, Size n)" in crossgl
+    assert "__host__" not in crossgl
+    assert "__device__" not in crossgl
 
 
 def test_external_rocm_device_globals_symbol_api_codegen_reparse():
@@ -1026,6 +1310,166 @@ def test_external_rocm_docs_system_scope_atomics_codegen_reparse():
     assert "atomicCAS_system(" not in crossgl
 
 
+def test_external_hip_tests_bare_atomic_compat_block_macro_codegen_reparse():
+    # Upstream: https://github.com/ROCm/hip-tests
+    # Commit: 8889ba5c7a89a85d5262dadcfbde17589a53ccfb
+    # Path: catch/unit/atomics/arithmetic_common.hh
+    source = """
+    __device__ int perform_atomic_add(int* mem, int val) {
+        if(val > 0) {
+            HIP_TEST_ATOMIC_BACKWARD_COMPAT_MEMORY {
+                return __hip_atomic_fetch_add(
+                    mem,
+                    val,
+                    __ATOMIC_RELAXED,
+                    __HIP_MEMORY_SCOPE_AGENT);
+            }
+        }
+        return 0;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    branch = ast.statements[0].body[0]
+
+    assert isinstance(branch, IfNode)
+    assert len(branch.if_body) == 1
+    assert "HIP_TEST_ATOMIC_BACKWARD_COMPAT_MEMORY" not in crossgl
+    assert "__hip_atomic_fetch_add" in crossgl
+    assert "return 0;" in crossgl
+
+
+def test_external_hip_tests_newline_split_range_for_initializer_codegen_reparse():
+    # Upstream: https://github.com/ROCm/hip-tests
+    # Commit: 8889ba5c7a89a85d5262dadcfbde17589a53ccfb
+    # Path: catch/unit/atomics/arithmetic_common.hh
+    source = """
+    void host() {
+        using LA = LinearAllocs;
+        for (const auto alloc_type :
+             {LA::hipMalloc}) {
+            sink(alloc_type);
+        }
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    loop = ast.statements[0].body[1]
+
+    assert loop.vtype == "const auto"
+    assert loop.name == "alloc_type"
+    assert "for alloc_type in {LA::hipMalloc}" in crossgl
+
+
+def test_external_hip_tests_user_function_template_call_codegen_reparse():
+    # Upstream: https://github.com/ROCm/hip-tests
+    # Commit: 8889ba5c7a89a85d5262dadcfbde17589a53ccfb
+    # Path: catch/unit/atomics/arithmetic_common.hh
+    source = """
+    struct TestParams {
+        int value;
+    };
+
+    template <typename TestType, int operation, bool use_shared_mem, int memory_scope>
+    void TestCore(TestParams params) {
+        sink(params.value);
+    }
+
+    template <typename TestType, int operation, int memory_scope>
+    void host(TestParams params) {
+        TestCore<TestType, operation, false, memory_scope>(params);
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "TestCore(params);" in crossgl
+    assert "TestCore<TestType" not in crossgl
+
+
+def test_external_hip_tests_user_function_template_reference_codegen_reparse():
+    # Upstream: https://github.com/ROCm/hip-tests
+    # Commit: 8889ba5c7a89a85d5262dadcfbde17589a53ccfb
+    # Path: catch/unit/atomics/arithmetic_common.hh
+    source = """
+    template <typename TestType, int operation>
+    void HostAtomicOperation(int iterations) {
+        sink(iterations);
+    }
+
+    template <typename TestType, int operation>
+    void host(int iterations) {
+        std::thread(HostAtomicOperation<TestType, operation>, iterations);
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "std::thread(HostAtomicOperation, iterations);" in crossgl
+    assert "HostAtomicOperation<TestType" not in crossgl
+
+
+def test_external_hip_tests_tuple_of_vectors_return_type_codegen_reparse():
+    # Upstream: https://github.com/ROCm/hip-tests
+    # Commit: 8889ba5c7a89a85d5262dadcfbde17589a53ccfb
+    # Path: catch/unit/atomics/arithmetic_common.hh
+    source = """
+    template <typename TestType>
+    std::tuple<std::vector<TestType>, std::vector<TestType>>
+    TestKernelHostRef(TestParams p) {
+        std::vector<TestType> old_vals(p.width);
+        std::vector<TestType> res_vals(p.width);
+        return std::make_tuple(res_vals, old_vals);
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "tuple<array<TestType>, array<TestType>> TestKernelHostRef" in crossgl
+    assert "std::tuple" not in crossgl
+
+
+def test_external_hip_tests_pair_of_vectors_return_type_codegen_reparse():
+    # Reduced from ROCm/hip-tests@a618b48f0a29cfbd8c990fa72ab772483f61d381:
+    # catch/unit/deviceLib/hadd.cc.
+    source = """
+    static auto get_hadd_inputs() -> std::pair<std::vector<int>, std::vector<int>> {
+        std::vector<int> a, b;
+        return std::make_pair(a, b);
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "pair<array<i32>, array<i32>> get_hadd_inputs()" in crossgl
+    assert "std::pair" not in crossgl
+    assert "std::vector" not in crossgl
+
+
+def test_external_hipblas_template_template_parameter_codegen_reparse():
+    # Upstream: https://github.com/ROCm/hipBLAS
+    # Commit: 4a1f902127ba378e1e22600e17de5894327e28d5
+    # Path: clients/gtest/auxil/set_get_mode_gtest.cpp
+    source = """
+    enum aux_mode_test_type { SG_POINTER, SG_ATOMICS };
+
+    template <template <typename...> class FILTER, aux_mode_test_type AUX_TYPE>
+    void host(aux_mode_test_type value) {
+        if(value == AUX_TYPE) {
+            sink();
+        }
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    function = ast.statements[1]
+
+    assert isinstance(function, FunctionNode)
+    assert function.name == "host"
+    assert "void host(aux_mode_test_type value)" in crossgl
+    assert "if ((value == AUX_TYPE))" in crossgl
+
+
 def test_external_rocm_rocdecode_typedef_enum_codegen_reparse():
     # Upstream: ROCm/rocm-examples@d3ad835e46ff50412cf51086df7400fb3bbd1649,
     # Common/rocdecode_utils.hpp.
@@ -1226,6 +1670,94 @@ def test_external_llvm_amdgpu_attribute_before_global_codegen_reparse():
     assert "__attribute__" not in crossgl
 
 
+def test_external_llvm_cuda_consteval_device_function_hip_codegen_reparse():
+    # Upstream:
+    # repo: https://github.com/llvm/llvm-project
+    # commit: 146abed5cd072a27c4240c7cf53b764571e62462
+    # path: clang/test/SemaCUDA/consteval-func.cu
+    source = """
+    __device__ consteval int f() { return 0; }
+    int main() { return f(); }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    function_signatures = [
+        (function.name, function.return_type, function.qualifiers)
+        for function in ast.statements
+    ]
+    assert function_signatures == [
+        ("f", "int", ["__device__", "consteval"]),
+        ("main", "int", []),
+    ]
+    assert "i32 f()" in crossgl
+    assert "i32 main()" in crossgl
+    assert "return f();" in crossgl
+    assert "consteval" not in crossgl
+
+
+def test_external_cccl_three_way_operator_hip_codegen_reparse():
+    # Reduced after macro expansion from:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 17869e1d46314036843a9ff9a0cb726de560e94e
+    # path: libcudacxx/include/cuda/std/__utility/pair.h
+    source = """
+    template <class _T1, class _T2>
+    __host__ __device__ int operator<=>(const pair<_T1, _T2>& __x,
+                                        const pair<_T1, _T2>& __y)
+    {
+      return compare(__x.first, __y.first);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    function = ast.statements[0]
+    assert function.name == "operator<=>"
+    assert function.qualifiers == ["__host__", "__device__"]
+    assert function.params == [
+        {"type": "const pair<_T1, _T2> &", "name": "__x"},
+        {"type": "const pair<_T1, _T2> &", "name": "__y"},
+    ]
+    assert "i32 operator_three_way(pair<_T1, _T2> __x, pair<_T1, _T2> __y)" in crossgl
+    assert "i32 operator<=>" not in crossgl
+
+
+def test_external_cccl_requires_requires_struct_specialization_hip_codegen_reparse():
+    # Reduced from:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 17869e1d46314036843a9ff9a0cb726de560e94e
+    # path: libcudacxx/include/cuda/std/__utility/pair.h
+    source = """
+    template <class _T1, class _T2, class _U1, class _U2>
+      requires requires {
+        typename pair<common_type_t<_T1, _U1>, common_type_t<_T2, _U2>>;
+      }
+    struct common_type<pair<_T1, _T2>, pair<_U1, _U2>>
+    {
+      using type = pair<common_type_t<_T1, _U1>,
+                        common_type_t<_T2, _U2>>;
+    };
+
+    __device__ int keep_after_requires(int value) {
+        return value;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    record = ast.statements[0]
+    function = ast.statements[1]
+    assert isinstance(record, StructNode)
+    assert record.name == "common_type<pair<_T1, _T2>, pair<_U1, _U2>>"
+    assert function.name == "keep_after_requires"
+    assert "struct common_type_pair__T1__T2_pair__U1__U2 {" in crossgl
+    assert "i32 keep_after_requires(i32 value)" in crossgl
+    assert "requires requires" not in crossgl
+    assert "typename pair" not in crossgl
+    assert "common_type<" not in crossgl
+
+
 def test_external_rocm_dynamic_shared_extern_crossgl_reparse():
     source = """
     __global__ void matrix_transpose_kernel(
@@ -1395,6 +1927,30 @@ def test_external_rocm_warp_shuffle_reserved_in_parameter_codegen_reparse():
     ) in crossgl
 
 
+def test_public_cuda_precision_parameter_keyword_hip_parity_codegen_reparse():
+    # HIP parity for NVlabs/tiny-cuda-nn@749dd70c5afc5a9dadb85e5652ed65d55e0ba187,
+    # include/tiny-cuda-nn/common_device.h.
+    source = """
+    template <typename T>
+    __global__ void cast_from(const unsigned int num_elements,
+                              const T* __restrict__ precision,
+                              float* __restrict__ full_precision) {
+        const unsigned int i = threadIdx.x + blockIdx.x * blockDim.x;
+        if (i >= num_elements) return;
+
+        full_precision[i] = (float)precision[i];
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    kernel = ast.statements[0]
+
+    assert kernel.params[1]["name"] == "precision"
+    assert "var<storage, read_write> precision_: array<T>" in crossgl
+    assert "full_precision[i] = f32(precision_[i]);" in crossgl
+    assert " precision:" not in crossgl
+
+
 def test_external_rocm_histogram_ffs_codegen_reparse():
     source = """
     __global__ void histogram(unsigned int* bins,
@@ -1475,6 +2031,29 @@ def test_external_rocm_hip_tests_clz_intrinsics_codegen_reparse():
     assert "out[1] = countLeadingZeros(y);" in crossgl
     assert "__clz" not in crossgl
     assert "__clzll" not in crossgl
+
+
+def test_external_hip_tests_multiword_integer_spellings_codegen_reparse():
+    # Reduced from ROCm/hip-tests@a618b48f0a29cfbd8c990fa72ab772483f61d381:
+    # catch/unit/deviceLib/ldg.cc, plus long-long spellings used across HIP tests.
+    source = """
+    char2 make_vector2(signed char a) {
+        return make_char2(a, a);
+    }
+
+    __device__ unsigned long long int ticks(long long int x) {
+        unsigned long long int y = 1ull;
+        return y + (unsigned long long int)x;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].params[0]["type"] == "signed char"
+    assert "vec2<i8> make_vector2(i8 a)" in crossgl
+    assert "u64 ticks(i64 x)" in crossgl
+    assert "var y: u64 = 1u;" in crossgl
+    assert "u64(x)" in crossgl
 
 
 def test_external_rocm_hip_tests_brev_intrinsics_codegen_reparse():
@@ -1797,6 +2376,32 @@ def test_external_hip_kittens_fast_exp_vector_codegen_reparse():
     assert "return exp(x);" in crossgl
     assert "return vec2<f32>(exp(x.x), exp(x.y));" in crossgl
     assert "__expf" not in crossgl
+
+
+def test_hip_scalar_brace_initializer_scoped_call_codegen_reparse():
+    source = """
+    template <class T>
+    struct Info {
+        int value;
+    };
+
+    template <class T>
+    int make_info() {
+        return ::hip::detail::make_value<T>();
+    }
+
+    template <class T>
+    Info<T> info = {::hip::detail::make_info<T>()};
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[1].name == "make_info"
+    assert ast.statements[2].name == "info"
+    assert "return hip_detail_make_value();" in crossgl
+    assert "var info: Info<T> = hip_detail_make_info();" in crossgl
+    assert "{::hip::detail" not in crossgl
+    assert "::hip::detail" not in crossgl
 
 
 def test_rocm_math_api_fast_float_intrinsics_codegen_reparse():
@@ -2141,3 +2746,82 @@ def test_public_cuda_kernel_if_init_statement_hip_parity_codegen_reparse():
     assert "var r: auto = ((ti + (s * rows)) + row);" in crossgl
     assert "if (((r < num) && (di < dim))) {" in crossgl
     assert "out[r] = di;" in crossgl
+
+
+def test_current_cccl_pair_namespace_visibility_and_alias_macros_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 17869e1d46314036843a9ff9a0cb726de560e94e
+    # path: libcudacxx/include/cuda/std/__utility/pair.h
+    source = """
+    _CCCL_BEGIN_NAMESPACE_CUDA_STD
+
+    template <class _T1, class _T2>
+    struct _CCCL_TYPE_VISIBILITY_DEFAULT pair {
+      _CCCL_API inline _CCCL_CONSTEXPR_CXX20 void swap(pair& __p) noexcept {
+        using ::cuda::std::swap;
+        swap(first, __p.first);
+      }
+      _T1 first;
+    };
+
+    template <class _Tp, class _Up>
+    struct _CCCL_TYPE_VISIBILITY_DEFAULT tuple_element<0, pair<_Tp, _Up>> {
+      using type _CCCL_NODEBUG_ALIAS = _Tp;
+    };
+
+    _CCCL_END_NAMESPACE_CUDA_STD
+    _CCCL_BEGIN_NAMESPACE_STD
+    _CCCL_END_NAMESPACE_STD
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].name == "pair"
+    assert ast.statements[1].name == "tuple_element<0, pair<_Tp, _Up>>"
+    assert "struct pair" in crossgl
+    assert "struct tuple_element_type_0_pair__Tp__Up" in crossgl
+    assert "_CCCL_TYPE_VISIBILITY_DEFAULT" not in crossgl
+    assert "_CCCL_NODEBUG_ALIAS" not in crossgl
+
+
+def test_hip_kernel_register_storage_class_declaration_codegen_reparse():
+    # HIP C++ accepts the same C/C++ register storage-class spelling that
+    # appears in older CUDA/HIP sample-style local declarations.
+    source = """
+    __global__ void register_local_kernel(int* out) {
+        register int lane = threadIdx.x;
+        out[lane] = lane;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    declaration = ast.statements[0].body[0]
+
+    assert declaration.qualifiers == ["register"]
+    assert declaration.vtype == "int"
+    assert declaration.name == "lane"
+    assert "var lane: i32 = gl_LocalInvocationID.x;" in crossgl
+    assert "register int lane" not in crossgl
+
+
+def test_external_llvm_amdgpu_numeric_template_kernel_name_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/llvm/llvm-project
+    # commit: 3b5b5c1ec4a3095ab096dd780e84d7ab81f3d7ff
+    # path: clang/test/SemaCUDA/amdgpu-attrs.cu
+    source = """
+    template <int X, int Y>
+    __attribute__((amdgpu_flat_work_group_size(X, Y)))
+    __global__ void template_flat_work_group_size_32_64() {}
+
+    template __global__ void template_flat_work_group_size_32_64<32, 64>();
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].name == "template_flat_work_group_size_32_64"
+    assert ast.statements[1].name == "template_flat_work_group_size_32_64<32, 64>"
+    assert "fn template_flat_work_group_size_32_64(" in crossgl
+    assert crossgl.count("fn template_flat_work_group_size_32_64(") == 2
+    assert "fn template_flat_work_group_size_32_64<32, 64>" not in crossgl

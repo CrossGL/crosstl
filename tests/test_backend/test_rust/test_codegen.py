@@ -526,6 +526,46 @@ def test_bevy_higher_ranked_function_pointer_tuple_struct_field_reparse():
     CrossGLParser(CrossGLLexer(result).tokens).parse()
 
 
+def test_bevy_public_tuple_type_tuple_struct_field_reparse():
+    # Reduced from https://github.com/bevyengine/bevy commit
+    # fd4f66fc36ec9f8181afe85d65e22c52b14e86a9,
+    # crates/bevy_core_pipeline/src/skybox/mod.rs.
+    code = """
+    pub struct SkyboxBindGroup(pub (BindGroup, u32));
+    """
+
+    result = parse_and_generate(code)
+
+    assert "struct SkyboxBindGroup {" in result
+    assert "Tuple<BindGroup, uint> field0;" in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
+def test_bevy_nested_generic_qualified_associated_type_reparse():
+    # Reduced from https://github.com/bevyengine/bevy commit
+    # fd4f66fc36ec9f8181afe85d65e22c52b14e86a9,
+    # crates/bevy_render/src/render_resource/pipeline_specializer.rs.
+    code = """
+    type VertexLayoutCache<S> = HashMap<
+        VertexBufferLayout,
+        HashMap<<S as SpecializedMeshPipeline>::Key, CachedRenderPipelineId>,
+    >;
+
+    fn get(cache: VertexLayoutCache<S>) {
+        cache;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "void get(HashMap<VertexBufferLayout, "
+        "HashMap<S_as_SpecializedMeshPipeline__Key_, CachedRenderPipelineId>> cache)"
+        in result
+    )
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
 def test_value_returning_function_uses_final_literal_expression_as_return():
     code = r"""
     fn zero() -> u32 {
@@ -5487,6 +5527,137 @@ def test_lifetime_generic_type_arguments_codegen_reparse_from_corpus():
     crosstl.translator.parse(result)
 
 
+def test_lifetime_turbofish_method_call_codegen_reparse_from_cubecl_vulkan_features():
+    # Reduced from tracel-ai/cubecl commit
+    # 9afbb3144ba40c2ecb6e7fbfb662b80b94148dd5,
+    # crates/cubecl-wgpu/src/backend/vulkan/features.rs InfoExt::push_or_update.
+    code = """
+    struct DeviceCreateInfo<'a> {
+        marker: PhantomData<&'a u32>,
+    }
+
+    struct BaseOutStructure<'a> {
+        p_next: *mut BaseOutStructure<'a>,
+    }
+
+    trait InfoExt<'a>: Sized {
+        fn push_or_update(self) -> Self;
+    }
+
+    impl<'a> InfoExt<'a> for DeviceCreateInfo<'a> {
+        fn push_or_update(mut self) -> Self {
+            let this = &mut self as *mut DeviceCreateInfo<'a>;
+            let mut this = unsafe { &mut *this.cast::<BaseOutStructure<'a>>() };
+            let feat_ptr = this.cast::<BaseOutStructure<'a>>();
+            self
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "this_.cast<BaseOutStructure>()" in result
+    assert "BaseOutStructure<'a>" not in result
+    crosstl.translator.parse(result)
+
+
+def test_cubecl_array_frontend_macro_codegen_reparse_from_upstream():
+    # Reduced from tracel-ai/cubecl commit
+    # 9afbb3144ba40c2ecb6e7fbfb662b80b94148dd5,
+    # crates/cubecl-core/src/frontend/container/array/base.rs.
+    code = """
+    struct Array<E> {
+        value: E,
+    }
+
+    impl<E> Array<E> {
+        pub fn len(&self) -> comptime_type!(usize) {
+            intrinsic!(|_| self.expand.ty.array_size())
+        }
+
+        pub fn next(&mut self) -> Option<E> {
+            unexpanded!()
+        }
+
+        pub fn assign(&mut self, other: Self) {
+            assert_eq!(
+                other.len(),
+                self.len(),
+                "Can't assign differently sized arrays"
+            );
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uint Array_len(Array<E> self)" in result
+    assert "return intrinsic();" in result
+    assert "return unexpanded();" in result
+    assert (
+        'assert_eq(other.len(), self.len(), "Can\'t assign differently sized arrays");'
+        in result
+    )
+    assert "comptime_type!(" not in result
+    assert "intrinsic!(|_|" not in result
+    assert "assert_eq!(" not in result
+    crosstl.translator.parse(result)
+
+
+def test_cubecl_cmma_comptime_and_size_macro_pattern_codegen_reparse():
+    # Reduced from tracel-ai/cubecl commit
+    # 9afbb3144ba40c2ecb6e7fbfb662b80b94148dd5,
+    # crates/cubecl-core/src/frontend/cmma.rs and
+    # crates/cubecl-core/src/runtime_tests/cmma.rs.
+    code = """
+    struct MmaDefinition<A, B, CD> {
+        m: usize,
+        n: usize,
+        k: usize,
+    }
+
+    impl<A, B, CD> MmaDefinition<A, B, CD> {
+        pub fn num_elems(&self, ident: MatrixIdent) -> comptime_type!(usize) {
+            intrinsic!(|scope| {
+                match ident {
+                    MatrixIdent::A => self.m * self.k,
+                    MatrixIdent::B => self.k * self.n,
+                    MatrixIdent::Accumulator => self.m * self.n,
+                }
+            })
+        }
+
+        pub fn use_accumulator(&self, ident: MatrixIdent) -> bool {
+            if comptime![ident == MatrixIdent::Accumulator] {
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    fn kernel(def: MmaDefinition<A, B, CD>) {
+        let vector_size_a = def.num_elems(MatrixIdent::A);
+        let size!(NA) = vector_size_a;
+        let vector_count_a = comptime!(vector_size_a / NA);
+        let registers_a = Array::<Vector<A, NA>>::new(vector_count_a);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uint MmaDefinition_num_elems" in result
+    assert "return intrinsic();" in result
+    assert "let NA = vector_size_a;" in result
+    assert "let vector_count_a = vector_size_a/NA;" in result
+    assert "if (ident==MatrixIdent::Accumulator)" in result
+    assert "comptime_type!(" not in result
+    assert "comptime!(" not in result
+    assert "comptime![" not in result
+    assert "size!(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_function_call_conversion():
     code = """
     fn test_calls() {
@@ -7257,6 +7428,27 @@ def test_escaped_newline_string_literal_codegen_reparseable_from_asm_macro():
         pytest.fail(f"Escaped newline string literal conversion failed: {e}")
 
 
+def test_rust_gpu_turbofish_prefix_string_literal_codegen_reparse():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # a27c0363d391a54de1feb9ee6864ad9dff72d243,
+    # crates/rustc_codegen_spirv/src/codegen_cx/declare.rs
+    # Arguments::new::<...> symbol parsing.
+    code = """
+    fn parse_symbol(demangled_symbol_name: SymbolName) {
+        let generics = demangled_symbol_name
+            .strip_prefix("::<")
+            .and_then(|s| s.strip_suffix(">"));
+        consume(generics);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert 'strip_prefix("::<")' in result
+    assert 'strip_suffix(">")' in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_cuda_tuple_return_match_codegen_reparse_from_atomic_ordering():
     # Reduced from Rust-GPU/Rust-CUDA crates/cuda_std/src/atomic.rs.
     code = """
@@ -8521,6 +8713,31 @@ def test_const_expression_array_size_codegen_from_rust_gpu_const_generics():
     assert "void shade(vec4 values[LANES+1], float scratch[LANES+1][2])" in result
     assert "uint local_[LANES+1];" in result
     assert "[{LANES+1}]" not in result
+    crosstl.translator.parse(result)
+
+
+def test_cast_array_size_codegen_reparse_from_wgpu_backend_list():
+    # Reduced from:
+    # Repo: https://github.com/gfx-rs/wgpu
+    # Commit: 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6
+    # Path: wgpu-types/src/backend.rs
+    code = """
+    enum Backend {
+        Noop = 0,
+    }
+
+    impl Backend {
+        pub const ALL: [Backend; Backends::all().bits().count_ones() as usize] = [
+            Self::Noop,
+        ];
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Backend_ALL[Backends::all().bits().count_ones()]" in result
+    assert "asusize" not in result
+    assert " as usize" not in result
     crosstl.translator.parse(result)
 
 
@@ -10103,6 +10320,36 @@ def test_local_unsafe_extern_block_codegen_reparse_from_rust_cuda_thread_intrins
     crosstl.translator.parse(result)
 
 
+def test_rust_cuda_nested_unsafe_extern_callback_and_array_result_reparse():
+    # Reduced from https://github.com/Rust-GPU/Rust-CUDA commit
+    # 103a8d56935c4e0885ff7c3d25402319df1a8e00,
+    # crates/blastoff/src/context.rs and crates/cudnn-sys/build/cudnn_sdk.rs.
+    code = """
+    struct CublasContext;
+    struct CudnnSdk;
+
+    impl CublasContext {
+        fn set_logger_callback(callback: Option<unsafe extern "C" fn(*const c_char)>) {
+            cublas_sys::cublasSetLoggerCallback(callback).to_result().unwrap();
+        }
+    }
+
+    impl CudnnSdk {
+        fn parse_cudnn_version(header_content: &str) -> Result<[u32; 3], Box<error::Error>> {
+            Ok([1, 2, 3])
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "void CublasContext_set_logger_callback(Option<auto> callback)" in result
+    assert "unsafe extern" not in result
+    assert "Result<uint[3], Box<error_Error>> CudnnSdk_parse_cudnn_version" in result
+    assert "Result<[u32;3]" not in result
+    crosstl.translator.parse(result)
+
+
 def test_associated_type_projection_alias_codegen_reparse_from_rust_cuda_gpu_rand():
     # Reduced from https://github.com/Rust-GPU/Rust-CUDA commit
     # 103a8d56935c4e0885ff7c3d25402319df1a8e00,
@@ -10291,6 +10538,41 @@ def test_nested_try_expression_conversion():
         assert "return wrapped;" in result
     except Exception as e:
         pytest.fail(f"Nested try expression conversion failed: {e}")
+
+
+def test_qualified_path_try_postfix_codegen_reparse_from_wgpu_deno_webgpu():
+    # Reduced from:
+    # Repo: https://github.com/gfx-rs/wgpu.git
+    # Commit: 26e2525f8dea477ef356b80efb6eb1bc1dec120d
+    # Path: deno_webgpu/compute_pass.rs set_bind_group.
+    code = """
+    fn set_bind_group(
+        scope: Scope,
+        dynamic_offsets: Value,
+        prefix: Prefix,
+        context: Context,
+        options: Options,
+    ) -> Result<(), WebIdlError> {
+        let offsets = <Option<Vec<u32>>>::convert(
+            scope,
+            dynamic_offsets,
+            prefix,
+            context,
+            options,
+        )?.unwrap_or_default();
+        Ok(())
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "Option_Vec_u32_convert(scope, dynamic_offsets, prefix, context, options)"
+        in result
+    )
+    assert "?.unwrap_or_default" not in result
+    assert "offsets = _rust_try_value_0.unwrap_or_default();" in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
 
 
 def test_try_pattern_subject_conversion():
@@ -11078,6 +11360,37 @@ def test_callable_trait_parameter_type_codegen_reparse_from_wgpu_bench_iter():
     crosstl.translator.parse(result)
 
 
+def test_unsafe_extern_function_pointer_type_codegen_reparse_from_rusty_v8_callbacks():
+    # Reduced from denoland/rusty_v8 commit
+    # c2bac76486b5db090587e3f40988a8033ce81773 src/function.rs.
+    code = """
+    pub(crate) type NamedGetterCallbackForAccessor =
+        unsafe extern "C" fn(SealedLocal<Name>, *const PropertyCallbackInfo<Value>);
+
+    struct Hook {
+        callback: unsafe extern "C" fn(handle: &Hook, data: Option<NonNull<c_void>>),
+        fallback: extern "system" fn(u32) -> u32,
+    }
+
+    static CALLBACK: unsafe extern "C" fn() = handler;
+
+    fn install(callback: unsafe fn(u32) -> u32) -> unsafe fn(u32) -> u32 {
+        callback
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "typedef NamedGetterCallbackForAccessor = auto;" in result
+    assert "auto callback;" in result
+    assert "auto fallback;" in result
+    assert "static auto CALLBACK = handler;" in result
+    assert "auto install(auto callback)" in result
+    assert "unsafe extern" not in result
+    assert 'extern "system" fn' not in result
+    crosstl.translator.parse(result)
+
+
 def test_nested_array_generic_declarator_codegen_reparse_from_wgpu_print():
     # Reduced from gfx-rs/wgpu commit
     # 26e2525f8dea477ef356b80efb6eb1bc1dec120d,
@@ -11399,6 +11712,87 @@ def test_nested_block_doc_comment_codegen_reparse_from_wgpu_hub():
     assert "uint value;" in result
     assert "nested note" not in result
     crosstl.translator.parse(result)
+
+
+def test_raw_string_macro_argument_codegen_reparse_from_rust_gpu_target_spec():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # a27c0363d391a54de1feb9ee6864ad9dff72d243,
+    # crates/rustc_codegen_spirv-types/src/target_spec.rs
+    # TargetSpecVersion::format_spec.
+    code = r"""
+    impl TargetSpecVersion {
+        fn format_spec(&self, target_env: TargetEnv) -> String {
+            format!(
+                r#"{{
+  "env": "{target_env}",
+  "target-pointer-width": 32
+}}"#
+            )
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert 'r#"' not in result
+    assert '\\"env\\"' in result
+    assert "\\n  " in result
+    crosstl.translator.parse(result)
+
+
+def test_wgpu_vulkan_const_generic_braces_codegen_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-hal/src/vulkan/mod.rs FramebufferKey.
+    code = """
+    const MAX_TOTAL_ATTACHMENTS: usize = crate::MAX_COLOR_ATTACHMENTS * 2 + 1;
+
+    struct ResourceIdentity<T> {
+        id: u64,
+        _phantom: PhantomData<T>,
+    }
+
+    struct FramebufferKey {
+        raw_pass: vk::RenderPass,
+        attachment_identities:
+            ArrayVec<ResourceIdentity<vk::ImageView>, { MAX_TOTAL_ATTACHMENTS }>,
+        attachment_views: ArrayVec<vk::ImageView, { MAX_TOTAL_ATTACHMENTS }>,
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "ArrayVec<ResourceIdentity<vk_ImageView>, MAX_TOTAL_ATTACHMENTS>" in result
+    assert "ArrayVec<vk_ImageView, MAX_TOTAL_ATTACHMENTS>" in result
+    assert "{MAX_TOTAL_ATTACHMENTS}" not in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
+def test_naga_parser_assert_macro_struct_payload_codegen_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # naga/src/front/glsl/parser_tests.rs version tests.
+    code = """
+    fn version(frontend: Frontend) {
+        assert_eq!(
+            frontend.parse(&Options::from(ShaderStage::Vertex), "#version 99000").err().unwrap(),
+            ParseErrors {
+                errors: vec![Error {
+                    kind: ErrorKind::InvalidVersion(99000),
+                    meta: Span::new(9, 14),
+                }],
+            },
+        );
+        assert_eq!(frontend.metadata().version, 450);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "assert_eq();" in result
+    assert "assert_eq(frontend.metadata().version, 450);" in result
+    assert "ParseErrors" not in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
 
 
 def test_error_handling():

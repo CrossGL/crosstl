@@ -1285,6 +1285,7 @@ class MojoCodeGen:
         self.required_mod_helpers = set()
         self.required_saturate_helpers = set()
         self.required_builtin_placeholders = set()
+        self.required_gpu_builtin_placeholders = set()
         self.current_return_type = None
         self.current_shader = None
         self.current_shader_type = None
@@ -1546,6 +1547,7 @@ class MojoCodeGen:
         self.required_mod_helpers = set()
         self.required_saturate_helpers = set()
         self.required_builtin_placeholders = set()
+        self.required_gpu_builtin_placeholders = set()
         self.current_return_type = None
         self.current_shader_type = None
         self.current_shader_stage_count = len(getattr(ast, "stages", {}) or {})
@@ -8519,6 +8521,11 @@ class MojoCodeGen:
             vector_binary = self.generate_vector_binary_op(expr)
             if vector_binary is not None:
                 return vector_binary
+            numeric_vector_binary = self.generate_numeric_vector_binary_op(
+                expr, target_type, target_context
+            )
+            if numeric_vector_binary is not None:
+                return numeric_vector_binary
             left = self.generate_expression(expr.left)
             right = self.generate_expression(expr.right)
             op = self.map_operator(expr.op)
@@ -8636,9 +8643,15 @@ class MojoCodeGen:
                 if clamp_call is not None:
                     return clamp_call
             if func_name in {"min", "max"}:
-                min_max_call = self.generate_min_max_call(func_name, expr.args)
+                min_max_call = self.generate_min_max_call(
+                    func_name, expr.args, target_type
+                )
                 if min_max_call is not None:
                     return min_max_call
+            if func_name == "smoothstep":
+                smoothstep_call = self.generate_smoothstep_call(expr.args, target_type)
+                if smoothstep_call is not None:
+                    return smoothstep_call
             if func_name == "atan" and len(expr.args) == 2:
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 return f"atan2({args})"
@@ -9135,6 +9148,7 @@ class MojoCodeGen:
         if builtin is None or name in self.variable_types:
             return None
         alias_name, type_name = builtin
+        self.required_gpu_builtin_placeholders.add((alias_name, type_name))
         if component:
             swizzle_indices = self.get_swizzle_indices(component)
             if swizzle_indices is None:
@@ -10021,7 +10035,7 @@ class MojoCodeGen:
         false_value = self.generate_expression(args[0])
         return f"({true_value} if {condition} else {false_value})"
 
-    def generate_min_max_call(self, func_name, args):
+    def generate_min_max_call(self, func_name, args, target_type=None):
         if len(args) != 2:
             return None
 
@@ -10030,7 +10044,9 @@ class MojoCodeGen:
         left_info = self.vector_type_info(left_type)
         right_info = self.vector_type_info(right_type)
         if left_info is None and right_info is None:
-            return None
+            return self.generate_scalar_min_max_call(
+                func_name, args, target_type, left_type, right_type
+            )
         if left_info is not None and left_info[0] != "DType.float32":
             return None
         if right_info is not None and right_info[0] != "DType.float32":
@@ -10044,6 +10060,42 @@ class MojoCodeGen:
         elif left_info is None and right_info is not None:
             left = f"Float32({left})"
         return f"{func_name}({left}, {right})"
+
+    def generate_scalar_min_max_call(
+        self, func_name, args, target_type, left_type, right_type
+    ):
+        left = self.generate_expression(args[0])
+        right = self.generate_expression(args[1])
+        comparator = ">=" if func_name == "max" else "<="
+
+        if self.is_scalar_integer_type(target_type) or (
+            self.is_scalar_integer_type(left_type)
+            and self.is_scalar_integer_type(right_type)
+        ):
+            scalar_type = self.scalar_integer_mojo_type(
+                target_type, left_type, right_type
+            )
+            self.required_math_helpers.add(func_name)
+            return f"{func_name}({scalar_type}({left}), {scalar_type}({right}))"
+
+        if (
+            self.is_float_scalar_type(target_type)
+            or self.is_float_scalar_type(left_type)
+            or self.is_float_scalar_type(right_type)
+        ):
+            self.required_math_helpers.add(func_name)
+            return f"{func_name}(Float32({left}), Float32({right}))"
+
+        return None
+
+    def scalar_integer_mojo_type(self, *type_names):
+        for type_name in type_names:
+            if not self.is_scalar_integer_type(type_name):
+                continue
+            mapped_type = self.map_type(type_name)
+            if mapped_type in MOJO_MAPPED_INTEGER_TYPES:
+                return mapped_type
+        return "Int32"
 
     def generate_clamp_call(self, args):
         if len(args) != 3:
@@ -10075,6 +10127,25 @@ class MojoCodeGen:
             min_value = f"Float32({min_value})"
             max_value = f"Float32({max_value})"
         return f"clamp({value}, {min_value}, {max_value})"
+
+    def generate_smoothstep_call(self, args, target_type=None):
+        if len(args) != 3:
+            return None
+
+        arg_types = [self.expression_result_type(arg) for arg in args]
+        if any(self.vector_type_info(arg_type) is not None for arg_type in arg_types):
+            return None
+        if not (
+            self.is_float_scalar_type(target_type)
+            or any(self.is_float_scalar_type(arg_type) for arg_type in arg_types)
+        ):
+            return None
+
+        self.required_math_helpers.add("smoothstep")
+        rendered_args = [self.generate_expression(arg) for arg in args]
+        return "smoothstep({})".format(
+            ", ".join(f"Float32({arg})" for arg in rendered_args)
+        )
 
     def generate_texture_call(self, args, helper_name):
         if not args:
@@ -10253,6 +10324,8 @@ class MojoCodeGen:
 
         if target_vector is not None and source_vector is not None:
             if source_vector[:2] == target_vector[:2]:
+                return
+            if self.compatible_numeric_vector_target(source_vector, target_vector):
                 return
         elif target_matrix is not None and source_matrix is not None:
             if source_matrix == target_matrix:
@@ -12227,6 +12300,7 @@ class MojoCodeGen:
             and not self.required_wave_helpers
             and not self.required_ray_helpers
             and not self.required_builtin_placeholders
+            and not self.required_gpu_builtin_placeholders
         ):
             return ""
 
@@ -12235,6 +12309,15 @@ class MojoCodeGen:
             code += "# CrossGL builtin placeholders\n"
             for name, type_name in sorted(self.required_builtin_placeholders):
                 code += self.generate_builtin_placeholder(name, type_name)
+            code += "\n"
+
+        if self.required_gpu_builtin_placeholders:
+            code += "# CrossGL GPU builtin placeholders\n"
+            emitted_placeholder_types = set()
+            for name, type_name in sorted(self.required_gpu_builtin_placeholders):
+                code += self.generate_gpu_builtin_placeholder(
+                    name, type_name, emitted_placeholder_types
+                )
             code += "\n"
 
         resource_sampled_types = (
@@ -12465,6 +12548,34 @@ class MojoCodeGen:
 
     def generate_builtin_placeholder(self, name, type_name):
         return self.generate_zero_initialized_variable(name, type_name)
+
+    def generate_gpu_builtin_placeholder(self, name, type_name, emitted_types):
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is None:
+            return self.generate_builtin_placeholder(name, type_name)
+
+        dtype, source_width, _, _ = vector_info
+        if source_width > 3:
+            return self.generate_builtin_placeholder(name, type_name)
+
+        scalar_type = self.map_type(MOJO_DTYPE_INFO[dtype][0])
+        zero = MOJO_DTYPE_INFO[dtype][2]
+        struct_name = (
+            f"_CrossGLGpuBuiltin{MOJO_DTYPE_SUFFIX[dtype].upper()}Vec{source_width}"
+        )
+        code = ""
+        if struct_name not in emitted_types:
+            emitted_types.add(struct_name)
+            fields = ("x", "y", "z")[:source_width]
+            code += "@value\n"
+            code += f"struct {struct_name}:\n"
+            for field in fields:
+                code += f"    var {field}: {scalar_type}\n"
+            code += "\n"
+
+        values = ", ".join(zero for _ in range(source_width))
+        code += f"var {self.mojo_identifier(name)} = {struct_name}({values})\n"
+        return code
 
     def generate_ray_helpers(self):
         code = "# CrossGL ray tracing placeholders\n"
@@ -13224,6 +13335,21 @@ class MojoCodeGen:
             f"fn {helper_name}(a: Float32, b: Float32) -> Float32:\n"
             f"    return {selector}\n\n"
         )
+        for scalar_type in (
+            "Int8",
+            "Int16",
+            "Int32",
+            "Int64",
+            "UInt8",
+            "UInt16",
+            "UInt32",
+            "UInt64",
+        ):
+            code += (
+                f"fn {helper_name}(a: {scalar_type}, b: {scalar_type}) -> "
+                f"{scalar_type}:\n"
+                f"    return {selector}\n\n"
+            )
         for width in (2, 4):
             vector_type = f"SIMD[DType.float32, {width}]"
             components = ", ".join(
@@ -14659,6 +14785,71 @@ class MojoCodeGen:
         if info is not None:
             return info[0]
         return MOJO_SCALAR_DTYPES.get(expr_type)
+
+    def compatible_numeric_vector_target(self, source_info, target_info):
+        if source_info is None or target_info is None:
+            return False
+        source_dtype, source_width, source_storage_width, _ = source_info
+        target_dtype, target_width, target_storage_width, _ = target_info
+        if source_width != target_width or source_storage_width != target_storage_width:
+            return False
+        if "DType.bool" in {source_dtype, target_dtype}:
+            return False
+        return source_dtype in MOJO_DTYPE_SUFFIX and target_dtype in MOJO_DTYPE_SUFFIX
+
+    def generate_numeric_vector_binary_op(self, expr, target_type, target_context=None):
+        op = self.map_operator(expr.op)
+        if op not in MOJO_VECTOR_ARITHMETIC_OPS or target_type is None:
+            return None
+
+        target_info = self.vector_type_info(target_type)
+        if target_info is None or target_info[0] == "DType.bool":
+            return None
+
+        left_type = self.expression_result_type(expr.left)
+        right_type = self.expression_result_type(expr.right)
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        if left_info is None and right_info is None:
+            return None
+        if left_info is not None and not self.compatible_numeric_vector_target(
+            left_info, target_info
+        ):
+            return None
+        if right_info is not None and not self.compatible_numeric_vector_target(
+            right_info, target_info
+        ):
+            return None
+
+        target_dtype = target_info[0]
+        context = target_context or "vector binary expression"
+        left = self.generate_numeric_vector_binary_operand(
+            expr.left,
+            target_dtype,
+            context,
+        )
+        right = self.generate_numeric_vector_binary_operand(
+            expr.right,
+            target_dtype,
+            context,
+        )
+        return f"({left} {op} {right})"
+
+    def generate_numeric_vector_binary_operand(self, expr, target_dtype, context):
+        expr_info = self.vector_type_info(self.expression_result_type(expr))
+        if expr_info is not None:
+            expr_text = self.generate_expression(expr)
+            source_dtype = expr_info[0]
+            if source_dtype == target_dtype:
+                return expr_text
+            return f"({expr_text}).cast[{target_dtype}]()"
+
+        scalar_type = MOJO_DTYPE_INFO[target_dtype][0]
+        return self.generate_constructor_scalar_expression(
+            expr,
+            target_dtype,
+            f"{context} scalar operand as {scalar_type}",
+        )
 
     def is_literal_expression(self, expr):
         return hasattr(expr, "__class__") and "Literal" in str(expr.__class__)

@@ -340,6 +340,12 @@ class VulkanToCrossGLConverter:
                 self.spirv_interface_layout_id(layout), []
             ).append(layout)
 
+        functions_by_spirv_id = {
+            getattr(function, "spirv_id", None): function
+            for function in getattr(ast, "functions", []) or []
+            if getattr(function, "spirv_id", None)
+        }
+        duplicated_interface_ids = self.spirv_duplicated_entry_point_interface_ids(ast)
         stage_layouts = {}
         for function in getattr(ast, "functions", []) or []:
             interface_ids = []
@@ -351,6 +357,23 @@ class VulkanToCrossGLConverter:
             if not interface_ids:
                 continue
 
+            referenced_ids = self.spirv_function_reachable_referenced_ids(
+                function, functions_by_spirv_id
+            )
+            referenced_duplicate_interface_ids = {
+                interface_id
+                for interface_id in interface_ids
+                if interface_id in duplicated_interface_ids
+                if self.spirv_interface_id_is_referenced(interface_id, referenced_ids)
+            }
+            if referenced_duplicate_interface_ids:
+                interface_ids = [
+                    interface_id
+                    for interface_id in interface_ids
+                    if interface_id not in duplicated_interface_ids
+                    or interface_id in referenced_duplicate_interface_ids
+                ]
+
             seen = set()
             for interface_id in interface_ids:
                 for layout in by_interface_id.get(interface_id, []):
@@ -361,6 +384,54 @@ class VulkanToCrossGLConverter:
                     stage_layouts.setdefault(id(function), []).append(layout)
 
         return stage_layouts
+
+    def spirv_duplicated_entry_point_interface_ids(self, ast):
+        interface_id_counts = {}
+        for function in getattr(ast, "functions", []) or []:
+            for entry_point in getattr(function, "spirv_entry_points", []) or []:
+                for interface_id in set(entry_point.get("interface_ids", []) or []):
+                    interface_id_counts[interface_id] = (
+                        interface_id_counts.get(interface_id, 0) + 1
+                    )
+        return {
+            interface_id
+            for interface_id, count in interface_id_counts.items()
+            if count > 1
+        }
+
+    def spirv_function_reachable_referenced_ids(
+        self, function, functions_by_spirv_id, visited=None
+    ):
+        visited = visited or set()
+        function_id = getattr(function, "spirv_id", None) or id(function)
+        if function_id in visited:
+            return set()
+        visited.add(function_id)
+
+        referenced_ids = set()
+        called_function_ids = set()
+        for instruction in getattr(function, "spirv_raw_instructions", []) or []:
+            operands = instruction.get("operands", []) or []
+            for operand in operands:
+                if isinstance(operand, str) and operand.startswith("%"):
+                    referenced_ids.add(operand)
+            if instruction.get("opcode") == "OpFunctionCall" and len(operands) >= 2:
+                called_function_ids.add(operands[1])
+
+        for called_function_id in called_function_ids:
+            called_function = functions_by_spirv_id.get(called_function_id)
+            if called_function is None:
+                continue
+            referenced_ids.update(
+                self.spirv_function_reachable_referenced_ids(
+                    called_function, functions_by_spirv_id, visited
+                )
+            )
+        return referenced_ids
+
+    def spirv_interface_id_is_referenced(self, interface_id, referenced_ids):
+        interface_base_id = str(interface_id).split(".", 1)[0]
+        return interface_base_id in referenced_ids
 
     def is_spirv_stage_interface_layout(self, node):
         if not isinstance(node, LayoutNode):
@@ -374,16 +445,125 @@ class VulkanToCrossGLConverter:
 
     def generate_stage_interface_layouts(self, function, stage_interface_layouts):
         code = ""
-        for layout in stage_interface_layouts.get(id(function), []):
+        layouts = stage_interface_layouts.get(id(function), [])
+        clip_position_location = self.crossgl_vertex_clip_position_location(
+            function, layouts
+        )
+        for layout in layouts:
+            override_name = None
+            forced_builtin = None
+            qualifiers = None
+            suppressed_qualifiers = self.suppressed_stage_interface_qualifiers(
+                function, layout
+            )
+            if self.is_crossgl_vertex_clip_position_layout(
+                function, layout, clip_position_location
+            ):
+                override_name = "gl_Position"
+                forced_builtin = "Position"
+                suppressed_qualifiers = {
+                    *suppressed_qualifiers,
+                    "location",
+                    "component",
+                    "index",
+                }
+                self.record_stage_interface_renamed_spirv_id(layout, override_name)
+            elif clip_position_location is not None and self.is_stage_output_layout(
+                layout
+            ):
+                qualifiers = self.shift_stage_interface_locations(
+                    layout, clip_position_location
+                )
+
             code += self.indent_generated_layout(
                 self.generate_layout(
                     layout,
-                    suppressed_interface_qualifiers=(
-                        self.suppressed_stage_interface_qualifiers(function, layout)
-                    ),
+                    suppressed_interface_qualifiers=suppressed_qualifiers,
+                    override_interface_qualifiers=qualifiers,
+                    override_variable_name=override_name,
+                    forced_builtin=forced_builtin,
                 )
             )
         return code
+
+    def crossgl_vertex_clip_position_location(self, function, layouts):
+        if self.function_shader_stage(function) != "vertex":
+            return None
+
+        for layout in layouts:
+            if not self.is_crossgl_clip_position_output_layout(layout):
+                continue
+            location = self.layout_location(layout)
+            if location == 0:
+                return location
+        return None
+
+    def is_crossgl_vertex_clip_position_layout(
+        self, function, layout, clip_position_location
+    ):
+        if clip_position_location is None:
+            return False
+        if self.function_shader_stage(function) != "vertex":
+            return False
+        if not self.is_crossgl_clip_position_output_layout(layout):
+            return False
+        return self.layout_location(layout) == clip_position_location
+
+    def is_crossgl_clip_position_output_layout(self, layout):
+        if not self.is_stage_output_layout(layout):
+            return False
+        if str(getattr(layout, "data_type", "")).lower() not in {"vec4", "float4"}:
+            return False
+        return self.is_clip_position_name(getattr(layout, "variable_name", None))
+
+    def is_stage_output_layout(self, layout):
+        if not isinstance(layout, LayoutNode):
+            return False
+        return (getattr(layout, "layout_type", None) or "").lower() == "out"
+
+    def is_clip_position_name(self, name):
+        normalized = "".join(char for char in str(name or "").lower() if char.isalnum())
+        return normalized == "clipposition" or (
+            normalized.startswith("crossglvertexoutput")
+            and normalized.endswith("clipposition")
+        )
+
+    def layout_location(self, layout):
+        for name, value in getattr(layout, "qualifiers", []) or []:
+            if str(name).lower() != "location":
+                continue
+            try:
+                return int(str(value), 0)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def shift_stage_interface_locations(self, layout, after_location):
+        shifted = []
+        changed = False
+        for name, value in getattr(layout, "qualifiers", []) or []:
+            if str(name).lower() != "location":
+                shifted.append((name, value))
+                continue
+            try:
+                location = int(str(value), 0)
+            except (TypeError, ValueError):
+                shifted.append((name, value))
+                continue
+            if location <= after_location:
+                shifted.append((name, value))
+                continue
+            shifted.append((name, str(location - 1)))
+            changed = True
+        return shifted if changed else None
+
+    def record_stage_interface_renamed_spirv_id(self, layout, generated_name):
+        spirv_id = getattr(layout, "spirv_id", None)
+        if not spirv_id or "." in str(spirv_id):
+            return
+        self.renamed_spirv_global_names[spirv_id] = self.declaration_base_name(
+            generated_name
+        )
 
     def suppressed_stage_interface_qualifiers(self, function, layout):
         layout_type = (getattr(layout, "layout_type", None) or "").lower()
@@ -717,7 +897,14 @@ class VulkanToCrossGLConverter:
                 generated_name
             )
 
-    def generate_layout(self, node, suppressed_interface_qualifiers=None):
+    def generate_layout(
+        self,
+        node,
+        suppressed_interface_qualifiers=None,
+        override_interface_qualifiers=None,
+        override_variable_name=None,
+        forced_builtin=None,
+    ):
         code = ""
         if (getattr(node, "layout_type", None) or "").lower() == "const":
             return self.generate_specialization_constant_layout(node)
@@ -774,11 +961,20 @@ class VulkanToCrossGLConverter:
                 self.reserve_global_declaration_name(variable_name)
         elif layout_type == "in" or layout_type == "out":
             if node.data_type and node.variable_name:
-                code += (
-                    f"    {self.map_type(node.data_type)} {node.variable_name}"
-                    f"{self.interface_layout_attribute_suffix(node, suppressed_interface_qualifiers)};\n"
+                attributes = self.interface_layout_attribute_suffix(
+                    node,
+                    suppressed_interface_qualifiers,
+                    override_interface_qualifiers,
+                    forced_builtin,
                 )
-                self.reserve_global_declaration_name(node.variable_name)
+                code += (
+                    f"    {self.map_type(node.data_type)} "
+                    f"{override_variable_name or node.variable_name}"
+                    f"{attributes};\n"
+                )
+                self.reserve_global_declaration_name(
+                    override_variable_name or node.variable_name
+                )
         elif self.is_ray_storage_layout(node):
             code += (
                 f"    {self.map_type(node.data_type)} {node.variable_name}"
@@ -1014,7 +1210,13 @@ class VulkanToCrossGLConverter:
             "rgba32ui",
         }
 
-    def interface_layout_attribute_suffix(self, node, suppressed_qualifiers=None):
+    def interface_layout_attribute_suffix(
+        self,
+        node,
+        suppressed_qualifiers=None,
+        override_qualifiers=None,
+        forced_builtin=None,
+    ):
         layout_type = node.layout_type.lower() if node.layout_type else ""
         if layout_type not in {"in", "out"}:
             return ""
@@ -1023,7 +1225,11 @@ class VulkanToCrossGLConverter:
             str(qualifier).lower() for qualifier in suppressed_qualifiers or set()
         }
         attributes = ["@input" if layout_type == "in" else "@output"]
-        for name, value in getattr(node, "qualifiers", []) or []:
+        for name, value in (
+            override_qualifiers
+            if override_qualifiers is not None
+            else getattr(node, "qualifiers", []) or []
+        ):
             qualifier_name = str(name).lower()
             if qualifier_name in suppressed_qualifiers:
                 continue
@@ -1038,6 +1244,12 @@ class VulkanToCrossGLConverter:
                         value, getattr(node, "spirv_storage_class", None)
                     )
                 )
+        if forced_builtin is not None:
+            attributes.append(
+                self.crossgl_builtin_attribute(
+                    forced_builtin, getattr(node, "spirv_storage_class", None)
+                )
+            )
 
         supported_qualifiers = {
             "centroid",

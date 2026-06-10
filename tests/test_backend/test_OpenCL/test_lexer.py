@@ -9,13 +9,13 @@ def test_opencl_kernel_and_address_space_tokens_are_normalized():
     tokens = token_pairs(
         "__kernel void k(__global const float *in, local float *scratch, "
         "LOCAL_PTR float *macro_scratch) { "
-        "barrier(CLK_LOCAL_MEM_FENCE); }"
+        "barrier(CLK_LOCAL_MEM_FENCE); work_group_barrier(CLK_LOCAL_MEM_FENCE); }"
     )
 
     assert ("__GLOBAL__", "__kernel") in tokens
     assert ("__DEVICE__", "__global__") in tokens
     assert ("__SHARED__", "__shared__") in tokens
-    assert ("SYNCTHREADS", "barrier") in tokens
+    assert tokens.count(("SYNCTHREADS", "barrier")) == 2
 
 
 def test_opencl_access_qualifier_tokens():
@@ -44,3 +44,24 @@ def test_darktable_hex_float_literal_tokenizes_as_single_float():
 
     assert ("FLOAT", "0x1.0p-24f") in tokens
     assert ("IDENTIFIER", "p") not in tokens
+
+
+def test_opencl_half_literal_suffixes_tokenize_as_single_float():
+    tokens = token_pairs(
+        "half lo = 0.5h; half mid = 0.0f16; "
+        "half hi = 0x1.ffcp15H; half huge = 0x1p15f16;"
+    )
+
+    assert ("FLOAT", "0.5h") in tokens
+    assert ("FLOAT", "0.0f16") in tokens
+    assert ("FLOAT", "0x1.ffcp15H") in tokens
+    assert ("FLOAT", "0x1p15f16") in tokens
+    assert ("IDENTIFIER", "h") not in tokens
+    assert ("INTEGER", "16") not in tokens
+    assert ("IDENTIFIER", "H") not in tokens
+
+
+def test_opencl_generic_address_space_token_is_normalized():
+    tokens = token_pairs("generic int *p; __generic float *q;")
+
+    assert tokens.count(("__GENERIC__", "__generic__")) == 2

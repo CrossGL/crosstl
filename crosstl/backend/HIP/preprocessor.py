@@ -12,6 +12,7 @@ class HipPreprocessor(HLSLPreprocessor):
 
     DEFAULT_PLATFORM_DEFINES = {
         "__HIP_PLATFORM_AMD__": "1",
+        "__cplusplus": "201703L",
         "__linux__": "1",
         "__unix__": "1",
     }

@@ -221,6 +221,24 @@ def test_power_operator_reparses_as_pow_intrinsic_without_dropping_body():
     assert [argument.name for argument in statement.value.arguments] == ["base", "exp"]
 
 
+def test_generated_long_binary_expression_chain_validates_without_recursion_error():
+    # Reduced from backend round trips over generated DXC cbuffer expressions,
+    # where a valid CrossGL reparse failed in metadata validation.
+    expression = " + ".join(f"value{index}" for index in range(1400))
+    code = f"""
+    shader LongExpressionShader {{
+        float main() {{
+            return {expression};
+        }}
+    }}
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = ast.functions[0]
+
+    assert isinstance(function.body.statements[0].value, BinaryOpNode)
+
+
 def test_square_bracket_expression_specializations_accept_colon_parameters():
     code = """
     shader ExpressionSquareGenericColonShader {

@@ -1,3 +1,4 @@
+from crosstl.backend.OpenCL.OpenCLAst import OpenCLBlockLiteralNode
 from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import OpenCLToCrossGLConverter
 from crosstl.backend.OpenCL.OpenCLLexer import OpenCLLexer
 from crosstl.backend.OpenCL.OpenCLParser import OpenCLParser
@@ -56,6 +57,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f",
         "path": "samples/extensions/khr/histogram/histogram.cl",
     },
+    "khronos_opencl_cts_generic_address_space_work_group_barrier": {
+        "url": "https://github.com/KhronosGroup/OpenCL-CTS",
+        "commit": "8d8f3d272dbd3f0a84156be7890835c4b6deff8e",
+        "path": "test_conformance/generic_address_space/base.h",
+    },
     "arrayfire_nearest_neighbour_bare_unsigned_parameter": {
         "url": "https://github.com/arrayfire/arrayfire",
         "commit": "492718b5a256d4a9d5198fdce89d8fd21772bfda",
@@ -96,10 +102,55 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
         "path": "tests/kernel/test_as_type.cl",
     },
+    "pocl_get_linear_id_post_return_function_specifier_macros": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "lib/kernel/get_linear_id.cl",
+    },
+    "pocl_as_type_prefix_function_specifier_macros": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "lib/kernel/as_type.cl",
+    },
+    "pocl_ocml_irif_asm_label": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "lib/kernel/ocml/inc/irif.h",
+    },
+    "pocl_common_sizeof_constant_array": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "tests/kernel/common.cl",
+    },
+    "pocl_common_hadd_typename_const_alias_declarator": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "tests/kernel/common_hadd.cl",
+    },
+    "pocl_core_math_typedef_union_designated_initializer": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "7bc17e135b393336fab370a4def48327f30d754b",
+        "path": "lib/kernel/core-math/acosf16.cl",
+    },
+    "pocl_core_math_nested_union_designated_array_initializer": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "lib/kernel/core-math/cosf16.cl",
+    },
+    "pocl_core_math_global_union_designated_initializer": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "lib/kernel/core-math/powf16.cl",
+    },
     "opencv_filter2d_small_block_macro_argument": {
         "url": "https://github.com/opencv/opencv",
         "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
         "path": "modules/imgproc/src/opencl/filter2DSmall.cl",
+    },
+    "opencv_filter_small_loop_token_paste_block_argument": {
+        "url": "https://github.com/opencv/opencv",
+        "commit": "b9a38df0e6e3a327610e6ce2de1a17ddeddce5d6",
+        "path": "modules/imgproc/src/opencl/filterSmall.cl",
     },
     "opencv_filter2d_small_elaborated_struct_type": {
         "url": "https://github.com/opencv/opencv",
@@ -110,6 +161,106 @@ EXTERNAL_FIXTURE_SOURCES = {
         "url": "https://github.com/opencv/opencv",
         "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
         "path": "modules/objdetect/src/opencl/cascadedetect.cl",
+    },
+    "pocl_block_literal": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "tests/kernel/test_block.cl",
+    },
+    "pocl_flatten_barrier_vector_token_paste": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "tests/regression/test_flatten_barrier_subs.cl",
+    },
+    "pocl_opencl_c_private_const": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "include/opencl-c.h",
+    },
+    "pocl_opencl_c_atomic_scalar_aliases": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "include/opencl-c.h",
+    },
+    "pocl_build_program_feature_error": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "tests/runtime/test_clBuildProgram_macros.cl",
+    },
+    "pocl_einstein_nested_mad_initializer": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "examples/EinsteinToolkit/ML_BSSN_CL_RHS2.cl",
+    },
+    "llvm_clang_opencl_as_type_prefix_vector_typedef": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
+        "path": "clang/test/CodeGenOpenCL/as_type.cl",
+    },
+    "llvm_clang_opencl_pipe_typedefs": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
+        "path": "clang/test/AST/ast-dump-pipe.cl",
+    },
+    "llvm_clang_opencl_pipe_builtin_parameters": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
+        "path": "clang/test/CodeGenOpenCL/pipe_builtin.cl",
+    },
+    "llvm_libclc_clc_workitem_specifier_macros": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
+        "path": "libclc/clc/lib/amdgpu/workitem/clc_get_sub_group_size.cl",
+    },
+    "llvm_libclc_implicit_args_constant_pointer": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
+        "path": "libclc/clc/lib/amdgpu/workitem/clc_get_num_groups.cl",
+    },
+    "llvm_clang_opencl_c_base_half_literals": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
+        "path": "clang/lib/Headers/opencl-c-base.h",
+    },
+    "llvm_clang_opencl_c_base_builtin_typedef_macros": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "ef7d2c97b4e5158a230aca54100b15cd3b9fa815",
+        "path": "clang/lib/Headers/opencl-c-base.h",
+    },
+    "llvm_clang_opencl_bool_vector_typedef": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "ef7d2c97b4e5158a230aca54100b15cd3b9fa815",
+        "path": "clang/test/SemaOpenCL/bool-vectors.cl",
+    },
+    "llvm_clang_opencl_convergent_parameter_attribute": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "ef7d2c97b4e5158a230aca54100b15cd3b9fa815",
+        "path": "clang/test/SemaOpenCL/convergent.cl",
+    },
+    "llvm_clang_opencl_vector_typedef_middle_attribute": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "ef7d2c97b4e5158a230aca54100b15cd3b9fa815",
+        "path": "clang/test/CodeGenOpenCL/vector_odd.cl",
+    },
+    "llvm_clang_opencl_generic_address_space_keyword": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
+        "path": "clang/include/clang/Basic/TokenKinds.def",
+    },
+    "intel_compute_runtime_simple_spill_fill_kernel": {
+        "url": "https://github.com/intel/compute-runtime",
+        "commit": "5d9dec127a943c688c816e345c64a4ee2f99c7e6",
+        "path": "opencl/test/unit_test/test_files/simple_spill_fill_kernel.cl",
+    },
+    "clspv_atomic_builtin_post_return_attribute": {
+        "url": "https://github.com/google/clspv",
+        "commit": "2b3c2ede6ac9a05642ced265ec0d3653e113e455",
+        "path": "test/AtomicBuiltins/atom_add_int.cl",
+    },
+    "hashcat_declspec_helper_function_macro": {
+        "url": "https://github.com/hashcat/hashcat",
+        "commit": "2d71af3718ef76f69c675e933cb4900c40788c58",
+        "path": "OpenCL/m34211_a0-pure.cl",
     },
 }
 
@@ -396,6 +547,36 @@ def test_external_khronos_opencl_sdk_histogram_newline_for_codegen_reparse():
     assert "channel++" in crossgl
 
 
+def test_external_opencl_cts_work_group_barrier_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "khronos_opencl_cts_generic_address_space_work_group_barrier"
+    ]
+    assert source_info["commit"] == "8d8f3d272dbd3f0a84156be7890835c4b6deff8e"
+    assert source_info["path"] == "test_conformance/generic_address_space/base.h"
+
+    source = """
+    __kernel void testKernel(__global uint *results, __local uint *buf) {
+        uint tid = get_local_id(0);
+        if (get_local_id(0) == 0) {
+            for (uint i = 0; i < get_local_size(0); ++i) {
+                uint idx = get_local_size(0) * get_group_id(0) + i;
+                buf[idx] = idx;
+            }
+        }
+
+        work_group_barrier(CLK_LOCAL_MEM_FENCE);
+        results[tid] = buf[tid];
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    sync = ast.statements[0].body[2]
+
+    assert sync.sync_type == "barrier"
+    assert "workgroupBarrier();" in crossgl
+    assert "work_group_barrier" not in crossgl
+
+
 def test_external_arrayfire_bare_unsigned_parameter_codegen_reparse():
     source_info = EXTERNAL_FIXTURE_SOURCES[
         "arrayfire_nearest_neighbour_bare_unsigned_parameter"
@@ -502,6 +683,8 @@ def test_external_opencv_opencl_const_parameter_codegen_reparse():
         "name": "src",
     }
     assert "var<storage, read_write> src: array<f32>" in crossgl
+    assert "var<workgroup> smem: array<f32>" in crossgl
+    assert "var<storage, read_write> smem: array<f32>" not in crossgl
     assert "__const" not in crossgl
 
 
@@ -598,6 +781,252 @@ def test_external_pocl_noinline_function_specifier_codegen_reparse():
     assert "void clear_bytes(ptr<u8> p, u8 c, u32 n)" in crossgl
 
 
+def test_external_pocl_post_return_function_specifier_macros_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "pocl_get_linear_id_post_return_function_specifier_macros"
+    ]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "lib/kernel/get_linear_id.cl"
+
+    source = """
+    constant extern const size_t _local_size_x;
+    constant extern const size_t _group_id_x;
+
+    size_t _CL_OVERLOADABLE _CL_READNONE _CL_OPTNONE
+    get_local_id (unsigned int dimindx);
+
+    size_t _CL_OVERLOADABLE _CL_READNONE _CL_OPTNONE get_global_linear_id (void);
+
+    size_t _CL_OVERLOADABLE _CL_READNONE _CL_OPTNONE
+    get_global_linear_id ()
+    {
+      return (_local_size_x * _group_id_x + get_local_id (0));
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    helper = ast.statements[2]
+    assert helper.name == "get_local_id"
+    assert helper.qualifiers == ["_CL_OVERLOADABLE", "_CL_READNONE", "_CL_OPTNONE"]
+    assert "u32 get_local_id(u32 dimindx)" in crossgl
+    assert "u32 get_global_linear_id()" in crossgl
+    assert "_CL_OVERLOADABLE" not in crossgl
+    assert "_CL_READNONE" not in crossgl
+    assert "_CL_OPTNONE" not in crossgl
+
+
+def test_external_pocl_prefix_function_specifier_macros_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "pocl_as_type_prefix_function_specifier_macros"
+    ]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "lib/kernel/as_type.cl"
+
+    source = """
+    _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+    uint as_uint(float a)
+    {
+      return 0u;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    helper = ast.statements[0]
+    assert helper.name == "as_uint"
+    assert helper.return_type == "uint"
+    assert helper.qualifiers == [
+        "_CL_ALWAYSINLINE",
+        "_CL_OVERLOADABLE",
+        "_CL_READNONE",
+    ]
+    assert "u32 as_uint(f32 a)" in crossgl
+    assert "_CL_ALWAYSINLINE" not in crossgl
+    assert "_CL_OVERLOADABLE" not in crossgl
+    assert "_CL_READNONE" not in crossgl
+
+
+def test_external_pocl_ocml_asm_label_declaration_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["pocl_ocml_irif_asm_label"]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "lib/kernel/ocml/inc/irif.h"
+
+    source = """
+    extern __attribute__((const)) half __llvm_floor_f16(half)
+        __asm("llvm.floor.f16");
+
+    kernel void ocml_asm_probe(global half *out, half x) {
+        out[0] = __llvm_floor_f16(x);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert [stmt.name for stmt in ast.statements] == [
+        "__llvm_floor_f16",
+        "ocml_asm_probe",
+    ]
+    assert "f16 __llvm_floor_f16(f16 _param0)" in crossgl
+    assert "__asm" not in crossgl
+
+
+def test_external_pocl_sizeof_constant_array_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["pocl_common_sizeof_constant_array"]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "tests/kernel/common.cl"
+
+    source = """
+    constant float values[] = {
+      0.0f, 0.1f, 0.9f, 1.0f,
+      1.1f, 10.0f, 1000000.0f, 1000000000000.0f,
+      MAXFLOAT, HUGE_VALF, INFINITY, (0.0f / 0.0f),
+      FLT_MAX, FLT_MIN, FLT_EPSILON,
+    };
+    constant int nvalues = sizeof(values) / sizeof(*values);
+
+    kernel void pocl_sizeof_probe(global int *out) {
+        out[0] = nvalues;
+    }
+    """
+
+    _ast, crossgl = assert_crossgl_reparses(source)
+
+    assert "sizeof(" not in crossgl
+    assert "var<uniform> nvalues: i32 = (60 / 4);" in crossgl
+
+
+def test_external_pocl_typename_const_alias_declarator_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "pocl_common_hadd_typename_const_alias_declarator"
+    ]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "tests/kernel/common_hadd.cl"
+
+    source = """
+    typedef constant char *string;
+    string const typename = "char";
+
+    kernel void typename_probe(global int *out) {
+        out[0] = typename[0];
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    global_name = ast.statements[1]
+    assert global_name.vtype == "string const"
+    assert global_name.name == "typename"
+    assert 'var typename: ptr<i8> = "char";' in crossgl
+    assert "out[0] = typename[0];" in crossgl
+
+
+def test_external_pocl_core_math_typedef_union_designated_initializer_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "pocl_core_math_typedef_union_designated_initializer"
+    ]
+    assert source_info["commit"] == "7bc17e135b393336fab370a4def48327f30d754b"
+    assert source_info["path"] == "lib/kernel/core-math/acosf16.cl"
+
+    source = """
+    typedef union
+    {
+        float f;
+        uint u;
+    } b32u32_u;
+
+    _CL_OVERLOADABLE half acos(half x)
+    {
+        b32u32_u v = {.f = x};
+        uint au = v.u & 0x7fffffffu;
+        return au == 0u ? (half)v.f : x;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    union_node = ast.statements[0]
+    init = ast.statements[1].body[0].value.elements[0]
+
+    assert union_node.name == "b32u32_u"
+    assert union_node.is_union is True
+    assert init.designators == [("field", "f")]
+    assert "struct b32u32_u" in crossgl
+    assert "{.f = x}" in crossgl
+
+
+def test_external_pocl_core_math_nested_designated_array_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "pocl_core_math_nested_union_designated_array_initializer"
+    ]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "lib/kernel/core-math/cosf16.cl"
+
+    source = """
+    typedef union
+    {
+        float f;
+        uint u;
+    } b32u32_u;
+
+    static constant b32u32_u C1[] = {
+        {0x1p+0},
+        {.u = 0x7fc00000},
+        {.u = 0x7f800001},
+    };
+
+    kernel void pocl_core_math_table_probe(global uint *out) {
+        out[0] = C1[1].u;
+    }
+    """
+
+    _ast, crossgl = assert_crossgl_reparses(source)
+
+    assert "var<uniform> C1: array<b32u32_u>" in crossgl
+    assert "{.u =" not in crossgl
+    assert "{{0x1p+0}, {0x7fc00000}, {0x7f800001}}" in crossgl
+
+
+def test_external_pocl_core_math_global_designated_initializer_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "pocl_core_math_global_union_designated_initializer"
+    ]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "lib/kernel/core-math/powf16.cl"
+
+    source = """
+    typedef union
+    {
+        half f;
+        ushort u;
+    } b16u16_u;
+
+    static constant b16u16_u poszero = {.u = 0x0000};
+
+    kernel void pocl_pow_table_probe(global ushort *out) {
+        out[0] = poszero.u;
+    }
+    """
+
+    _ast, crossgl = assert_crossgl_reparses(source)
+
+    assert "var<uniform> poszero: b16u16_u = {0x0000};" in crossgl
+    assert "{.u =" not in crossgl
+
+
+def test_opencl_unknown_sizeof_codegen_emits_diagnostic_fallback():
+    source = """
+    kernel void unknown_sizeof_probe(global int *out) {
+        int n = sizeof(user_type);
+        out[0] = n;
+    }
+    """
+
+    _ast, crossgl = assert_crossgl_reparses(source)
+
+    assert "unsupported OpenCL size query: user_type" in crossgl
+    assert "var n: i32 = (/* unsupported OpenCL size query: user_type */ 0);" in crossgl
+
+
 def test_external_opencv_filter2d_small_block_macro_argument_codegen_reparse():
     source_info = EXTERNAL_FIXTURE_SOURCES["opencv_filter2d_small_block_macro_argument"]
     assert source_info["commit"] == "6f29af625bb4617e2e061f8097b5f3e2ed341a82"
@@ -621,6 +1050,48 @@ def test_external_opencv_filter2d_small_block_macro_argument_codegen_reparse():
     assert "int y = startY + py" in macro_stmt.args[1]
     assert "// OpenCL macro block: LOOPPX_LOAD_Y_ITERATIONS" in crossgl
     assert "out[0] = 2.0f;" in crossgl
+
+
+def test_external_opencv_filter_small_token_paste_block_argument_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "opencv_filter_small_loop_token_paste_block_argument"
+    ]
+    assert source_info["commit"] == "b9a38df0e6e3a327610e6ce2de1a17ddeddce5d6"
+    assert source_info["path"] == "modules/imgproc/src/opencl/filterSmall.cl"
+
+    source = """
+    #define __CAT(x, y) x##y
+    #define CAT(x, y) __CAT(x, y)
+    #define LOOP(N, VAR, STMT) CAT(LOOP, N)(VAR, STMT)
+
+    kernel void filter_small_macro_probe(global float *out, int startY) {
+        int py = 0;
+        LOOP(PX_LOAD_Y_ITERATIONS, py,
+        {
+            int2 pos = (int2)(startY + py, py);
+#ifdef SQR
+            out[pos.y] = out[0] * out[0];
+#else
+            out[pos.y] = fma(out[0], out[1], out[2]);
+#endif
+        });
+        out[0] = py;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    macro_stmt = next(
+        stmt
+        for stmt in ast.statements[0].body
+        if stmt.__class__.__name__ == "OpenCLMacroBlockNode"
+    )
+
+    assert macro_stmt.name == "LOOPPX_LOAD_Y_ITERATIONS"
+    assert macro_stmt.args[0] == "py"
+    assert "fma ( out [ 0 ] , out [ 1 ] , out [ 2 ] )" in macro_stmt.args[1]
+    assert "out [ 0 ] * out [ 0 ]" not in macro_stmt.args[1]
+    assert "// OpenCL macro block: LOOPPX_LOAD_Y_ITERATIONS" in crossgl
+    assert "out[0] = py;" in crossgl
 
 
 def test_external_opencv_filter2d_small_elaborated_struct_type_codegen_reparse():
@@ -691,3 +1162,577 @@ def test_external_opencv_cascadedetect_aligned_typedef_struct_codegen_reparse():
     assert struct_node.members[0].name == "st"
     assert "struct Stump" in crossgl
     assert "__attribute__" not in crossgl
+
+
+def test_external_pocl_block_literal_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["pocl_block_literal"]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "tests/kernel/test_block.cl"
+
+    source = """
+    void output(float (^op)(float))
+    {
+      op(1.0f);
+    }
+
+    kernel void test_block()
+    {
+      float (^add1)(float) = ^(float x) { return x + 1.0f; };
+      output(add1);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    block_decl = ast.statements[1].body[0]
+    assert block_decl.vtype.startswith("__opencl_block float")
+    assert isinstance(block_decl.value, OpenCLBlockLiteralNode)
+    assert "// unsupported OpenCL block declaration: add1" in crossgl
+    assert "output(add1);" in crossgl
+
+
+def test_external_pocl_vector_token_paste_wrapper_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["pocl_flatten_barrier_vector_token_paste"]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "tests/regression/test_flatten_barrier_subs.cl"
+
+    source = """
+    #define PASTE_VEC_(type, width) type##width
+    #define PASTE_VEC(type, width) PASTE_VEC_(type, width)
+    #define VEC_T PASTE_VEC(char, 2)
+
+    kernel void token_paste_vector_probe(global VEC_T *out, char x, char y) {
+      VEC_T value = (VEC_T)(x, y);
+      out[0] = value;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].params[0]["type"] == "__global__ char2 *"
+    assert ast.statements[0].body[0].vtype == "char2"
+    assert "array<vec2<i8>>" in crossgl
+    assert "vec2<i8>(x, y)" in crossgl
+
+
+def test_external_pocl_private_const_address_space_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["pocl_opencl_c_private_const"]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "include/opencl-c.h"
+
+    source = """
+    char2 vload2(size_t offset, const __private char *p);
+
+    kernel void private_const_probe(global char2 *out, const private char *src) {
+      out[0] = vload2(0, src);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].params[1] == {
+        "type": "const __private__ char *",
+        "name": "p",
+    }
+    assert ast.statements[1].params[1] == {
+        "type": "const __private__ char *",
+        "name": "src",
+    }
+    assert "__private" not in crossgl
+    assert "array<vec2<i8>>" in crossgl
+
+
+def test_external_pocl_opencl_c_typedef_builtin_alias_name_parses():
+    source_info = EXTERNAL_FIXTURE_SOURCES["pocl_opencl_c_private_const"]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "include/opencl-c.h"
+
+    source = """
+    typedef __SIZE_TYPE__ size_t;
+    typedef __PTRDIFF_TYPE__ ptrdiff_t;
+    typedef char char2 __attribute__((ext_vector_type(2))) __attribute__((aligned(2)));
+    """
+
+    ast = OpenCLParser(OpenCLLexer(source).tokenize()).parse()
+
+    assert [stmt.name for stmt in ast.statements] == ["size_t", "ptrdiff_t", "char2"]
+
+
+def test_external_llvm_clang_opencl_c_base_builtin_typedef_macros_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "llvm_clang_opencl_c_base_builtin_typedef_macros"
+    ]
+    assert source_info["commit"] == "ef7d2c97b4e5158a230aca54100b15cd3b9fa815"
+    assert source_info["path"] == "clang/lib/Headers/opencl-c-base.h"
+
+    source = """
+    typedef __SIZE_TYPE__ size_t;
+    typedef __PTRDIFF_TYPE__ ptrdiff_t;
+    typedef __INTPTR_TYPE__ intptr_t;
+    typedef __UINTPTR_TYPE__ uintptr_t;
+    """
+
+    _ast, crossgl = assert_crossgl_reparses(source)
+
+    assert "typedef u64 size_t;" in crossgl
+    assert "typedef i64 ptrdiff_t;" in crossgl
+    assert "typedef i64 intptr_t;" in crossgl
+    assert "typedef u64 uintptr_t;" in crossgl
+
+
+def test_external_llvm_clang_opencl_bool_vector_typedef_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["llvm_clang_opencl_bool_vector_typedef"]
+    assert source_info["commit"] == "ef7d2c97b4e5158a230aca54100b15cd3b9fa815"
+    assert source_info["path"] == "clang/test/SemaOpenCL/bool-vectors.cl"
+
+    source = """
+    typedef __attribute__((ext_vector_type(16))) _Bool bool8;
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].alias_type == "_Bool"
+    assert "typedef bool bool8;" in crossgl
+    assert "_Bool" not in crossgl
+
+
+def test_external_llvm_clang_opencl_convergent_parameter_attribute_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "llvm_clang_opencl_convergent_parameter_attribute"
+    ]
+    assert source_info["commit"] == "ef7d2c97b4e5158a230aca54100b15cd3b9fa815"
+    assert source_info["path"] == "clang/test/SemaOpenCL/convergent.cl"
+
+    source = """
+    void f3(int a __attribute__((convergent)));
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].name == "f3"
+    assert ast.statements[0].params == [{"type": "int", "name": "a"}]
+    assert "__attribute__" not in crossgl
+    assert "void f3(i32 a)" in crossgl
+
+
+def test_external_llvm_clang_opencl_vector_typedef_middle_attribute_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "llvm_clang_opencl_vector_typedef_middle_attribute"
+    ]
+    assert source_info["commit"] == "ef7d2c97b4e5158a230aca54100b15cd3b9fa815"
+    assert source_info["path"] == "clang/test/CodeGenOpenCL/vector_odd.cl"
+
+    source = """
+    typedef unsigned char __attribute__((ext_vector_type(3))) uchar3;
+
+    kernel void test_odd_vector1(uchar3 lhs) {
+      lhs.odd = 1;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].name == "uchar3"
+    assert ast.statements[1].params == [{"type": "uchar3", "name": "lhs"}]
+    assert "typedef u8 uchar3;" in crossgl
+    assert "lhs.odd = 1;" in crossgl
+
+
+def test_external_pocl_opencl_c_sync_builtin_declarations_parse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["pocl_opencl_c_private_const"]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "include/opencl-c.h"
+
+    source = """
+    void barrier(cl_mem_fence_flags flags);
+    void mem_fence(cl_mem_fence_flags flags);
+    int atomic_add(volatile global int *p, int val);
+    void __attribute__((overloadable)) atomic_init(volatile global atomic_int *p,
+                                                  int val);
+    kernel void use_barrier(global int *out) {
+        barrier(CLK_LOCAL_MEM_FENCE);
+        mem_fence(CLK_GLOBAL_MEM_FENCE);
+        out[0] = 1;
+    }
+    """
+
+    ast = OpenCLParser(OpenCLLexer(source).tokenize()).parse()
+
+    assert [stmt.name for stmt in ast.statements[:4]] == [
+        "barrier",
+        "mem_fence",
+        "atomic_add",
+        "atomic_init",
+    ]
+    assert ast.statements[4].name == "use_barrier"
+    assert ast.statements[4].body[0].sync_type == "barrier"
+    assert ast.statements[4].body[1].sync_type == "mem_fence"
+
+
+def test_external_pocl_opencl_c_atomic_scalar_aliases_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["pocl_opencl_c_atomic_scalar_aliases"]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "include/opencl-c.h"
+
+    source = """
+    void __attribute__((overloadable)) atomic_init(volatile global atomic_int *p,
+                                                  int val);
+    uint __attribute__((overloadable)) atomic_fetch_add(
+        volatile global atomic_uint *p, uint val);
+    uintptr_t __attribute__((overloadable)) atomic_fetch_sub(
+        volatile global atomic_uintptr_t *p, ptrdiff_t val);
+
+    kernel void atomic_alias_probe(global atomic_uint *counter,
+                                   global atomic_float *weights,
+                                   global uint *out) {
+        uint old = atomic_fetch_add(counter, 1u);
+        out[0] = old + sizeof(atomic_uint) + sizeof(*counter) + sizeof(*weights);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert [stmt.name for stmt in ast.statements[:3]] == [
+        "atomic_init",
+        "atomic_fetch_add",
+        "atomic_fetch_sub",
+    ]
+    assert "ptr<i32> p" in crossgl
+    assert "ptr<u32> p" in crossgl
+    assert "ptr<u64> p" in crossgl
+    assert "counter: array<u32>" in crossgl
+    assert "weights: array<f32>" in crossgl
+    assert "sizeof" not in crossgl
+    assert "atomic_uint" not in crossgl
+    assert "atomic_float" not in crossgl
+
+
+def test_external_pocl_feature_gated_error_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["pocl_build_program_feature_error"]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "tests/runtime/test_clBuildProgram_macros.cl"
+
+    source = """
+    #ifdef cl_khr_global_int32_base_atomics
+    #  pragma OPENCL EXTENSION cl_khr_global_int32_base_atomics : disable
+    #else
+    #  error "cl_khr_global_int32_base_atomics macro undefined"
+    #endif
+
+    __kernel void kernel_1(global int *out) {
+      out[0] = 1;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].name == "kernel_1"
+    assert "#error" not in OpenCLLexer(source).code
+    assert "fn kernel_1(" in crossgl
+
+
+def test_external_pocl_einstein_nested_mad_initializer_parses():
+    source_info = EXTERNAL_FIXTURE_SOURCES["pocl_einstein_nested_mad_initializer"]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "examples/EinsteinToolkit/ML_BSSN_CL_RHS2.cl"
+
+    nested = "x"
+    for index in range(1200):
+        nested = f"mad(x, x, ({nested}))"
+
+    source = f"""
+    kernel void einstein_nested_mad_probe(global double *out, double x) {{
+        double acc = {nested};
+        out[0] = acc;
+    }}
+    """
+
+    ast = OpenCLParser(OpenCLLexer(source).tokenize()).parse()
+
+    assert ast.statements[0].name == "einstein_nested_mad_probe"
+    assert ast.statements[0].body[0].name == "acc"
+
+
+def test_external_llvm_clang_prefix_vector_typedef_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "llvm_clang_opencl_as_type_prefix_vector_typedef"
+    ]
+    assert source_info["commit"] == "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66"
+    assert source_info["path"] == "clang/test/CodeGenOpenCL/as_type.cl"
+
+    source = """
+    typedef __attribute__(( ext_vector_type(3) )) char char3;
+    typedef __attribute__(( ext_vector_type(4) )) char char4;
+
+    char3 f1(char4 x) {
+      return __builtin_astype(x, char3);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert [stmt.name for stmt in ast.statements[:2]] == ["char3", "char4"]
+    assert ast.statements[2].return_type == "char3"
+    assert "__builtin_astype" in crossgl
+
+
+def test_external_llvm_clang_pipe_typedefs_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["llvm_clang_opencl_pipe_typedefs"]
+    assert source_info["commit"] == "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66"
+    assert source_info["path"] == "clang/test/AST/ast-dump-pipe.cl"
+
+    source = """
+    typedef pipe int pipetype;
+    typedef read_only pipe int pipetype2;
+    typedef write_only pipe float4 pipetype3;
+
+    void takes_pipe(pipetype p, pipetype2 q, pipetype3 r);
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert [stmt.alias_type for stmt in ast.statements[:3]] == [
+        "pipe int",
+        "read_only pipe int",
+        "write_only pipe float4",
+    ]
+    assert "// OpenCL pipe typedef: pipe_i32 pipetype" in crossgl
+    assert "// OpenCL pipe typedef: pipe_vec4_f32 pipetype3" in crossgl
+    assert "void takes_pipe(pipe_i32 p, pipe_i32 q, pipe_vec4_f32 r)" in crossgl
+
+
+def test_external_llvm_clang_pipe_builtin_parameters_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["llvm_clang_opencl_pipe_builtin_parameters"]
+    assert source_info["commit"] == "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66"
+    assert source_info["path"] == "clang/test/CodeGenOpenCL/pipe_builtin.cl"
+
+    source = """
+    void test_read_pipe_parameter(read_only pipe int p, global int *ptr) {
+        read_pipe(p, ptr);
+        reserve_id_t rid = reserve_read_pipe(p, 2);
+        read_pipe(p, rid, 2, ptr);
+        commit_read_pipe(p, rid);
+    }
+
+    void test_write_pipe_parameter(write_only pipe int p, global int *ptr) {
+        write_pipe(p, ptr);
+        reserve_id_t rid = reserve_write_pipe(p, 2);
+        write_pipe(p, rid, 2, ptr);
+        commit_write_pipe(p, rid);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].params[0]["type"] == "read_only pipe int"
+    assert ast.statements[1].params[0]["type"] == "write_only pipe int"
+    assert "void test_read_pipe_parameter(pipe_i32 p, ptr<i32> ptr)" in crossgl
+    assert "void test_write_pipe_parameter(pipe_i32 p, ptr<i32> ptr)" in crossgl
+
+
+def test_external_llvm_libclc_function_specifier_macros_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["llvm_libclc_clc_workitem_specifier_macros"]
+    assert source_info["commit"] == "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66"
+    assert (
+        source_info["path"]
+        == "libclc/clc/lib/amdgpu/workitem/clc_get_sub_group_size.cl"
+    )
+
+    source = """
+    _CLC_DEF _CLC_OVERLOAD _CLC_CONST uint __clc_get_sub_group_size(void) {
+        uint wavesize = __builtin_amdgcn_wavefrontsize();
+        uint lid = (uint)__clc_get_local_linear_id();
+        return min(wavesize, 64 - (lid & ~(wavesize - 1)));
+    }
+
+    _CLC_DECL _CLC_OVERLOAD _CLC_CONST uint __clc_get_max_sub_group_size(void);
+    _CLC_INLINE uint __clc_inline_probe(uint x) { return x; }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].qualifiers == [
+        "_CLC_DEF",
+        "_CLC_OVERLOAD",
+        "_CLC_CONST",
+    ]
+    assert ast.statements[1].qualifiers == [
+        "_CLC_DECL",
+        "_CLC_OVERLOAD",
+        "_CLC_CONST",
+    ]
+    assert ast.statements[2].qualifiers == ["_CLC_INLINE"]
+    assert "u32 __clc_get_sub_group_size()" in crossgl
+
+
+def test_external_llvm_libclc_constant_pointer_local_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["llvm_libclc_implicit_args_constant_pointer"]
+    assert source_info["commit"] == "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66"
+    assert source_info["path"] == "libclc/clc/lib/amdgpu/workitem/clc_get_num_groups.cl"
+
+    source = """
+    _CLC_OVERLOAD _CLC_DEF size_t __clc_get_num_groups(uint dim) {
+        if (dim > 2)
+            return 1;
+
+        __constant amdhsa_implicit_kernarg_v5 *args =
+            (__constant amdhsa_implicit_kernarg_v5 *)
+                __builtin_amdgcn_implicitarg_ptr();
+        return args->block_count[dim] + (args->remainder[dim] > 0);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    local = ast.statements[0].body[1]
+    assert local.qualifiers == ["__constant__"]
+    assert local.vtype == "amdhsa_implicit_kernarg_v5 *"
+    assert "var<uniform> args: ptr<amdhsa_implicit_kernarg_v5>" in crossgl
+
+
+def test_external_llvm_clang_opencl_c_base_half_literal_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["llvm_clang_opencl_c_base_half_literals"]
+    assert source_info["commit"] == "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66"
+    assert source_info["path"] == "clang/lib/Headers/opencl-c-base.h"
+
+    source = """
+    #define HALF_MAX ((0x1.ffcp15h))
+    #define M_E_H 2.71828182845904523536028747135266250h
+
+    kernel void half_literal_probe(global half *out) {
+        half maxv = HALF_MAX;
+        out[0] = maxv + M_E_H;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    value = ast.statements[0].body[0].value
+    assert value == "0x1.ffcp15h"
+    assert "0x1.ffcp15;" in crossgl
+    assert "2.71828182845904523536028747135266250h" not in crossgl
+    assert "out[0] = (maxv + 2.71828182845904523536028747135266250);" in crossgl
+
+
+def test_external_llvm_clang_generic_address_space_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "llvm_clang_opencl_generic_address_space_keyword"
+    ]
+    assert source_info["commit"] == "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66"
+    assert source_info["path"] == "clang/include/clang/Basic/TokenKinds.def"
+
+    source = """
+    int read_generic(generic int *p) {
+        return *p;
+    }
+
+    kernel void generic_probe(global int *out) {
+        out[0] = read_generic(out);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].params[0] == {"type": "__generic__ int *", "name": "p"}
+    assert "i32 read_generic(ptr<i32> p)" in crossgl
+    assert "__generic" not in crossgl
+
+
+def test_external_compute_runtime_simple_spill_long_sum_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "intel_compute_runtime_simple_spill_fill_kernel"
+    ]
+    assert source_info["commit"] == "5d9dec127a943c688c816e345c64a4ee2f99c7e6"
+    assert (
+        source_info["path"]
+        == "opencl/test/unit_test/test_files/simple_spill_fill_kernel.cl"
+    )
+
+    declarations = "\n".join(
+        f"        int _data{index} = in[get_global_id(0) + offset[{index}]];"
+        for index in range(128)
+    )
+    weighted_sum = " + ".join(f"_data{index} * {index}" for index in range(128))
+    square_sum = " + ".join(f"_data{index} * _data{index}" for index in range(128))
+    source = f"""
+    kernel void spill_test(global const int *in,
+                           global int *out,
+                           global const uint *offset) {{
+{declarations}
+        out[get_global_id(0) * 2] = {weighted_sum};
+        out[get_global_id(0) * 2 + 1] = {square_sum};
+    }}
+    """
+
+    _ast, crossgl = assert_crossgl_reparses(source)
+
+    assert "out[(gl_GlobalInvocationID.x * 2)] =" in crossgl
+    assert crossgl.count("_data127") >= 2
+    assert "(((((((((((((((((((((((((((((((((((((((((((((((((((((((((" not in crossgl
+
+
+def test_external_clspv_post_return_reqd_work_group_size_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["clspv_atomic_builtin_post_return_attribute"]
+    assert source_info["commit"] == "2b3c2ede6ac9a05642ced265ec0d3653e113e455"
+    assert source_info["path"] == "test/AtomicBuiltins/atom_add_int.cl"
+
+    source = """
+    kernel void __attribute__((reqd_work_group_size(1, 1, 1)))
+    foo(global int* a, global int* b)
+    {
+        *a = atom_add(b, 42);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    kernel = ast.statements[0]
+    assert kernel.name == "foo"
+    assert kernel.attributes == ["__attribute__((reqd_work_group_size(1,1,1)))"]
+    assert "@workgroup_size(1, 1, 1)" in crossgl
+
+
+def test_external_hashcat_declspec_helper_function_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["hashcat_declspec_helper_function_macro"]
+    assert source_info["commit"] == "2d71af3718ef76f69c675e933cb4900c40788c58"
+    assert source_info["path"] == "OpenCL/m34211_a0-pure.cl"
+
+    source = """
+    DECLSPEC u32 MurmurHash64A_truncated(PRIVATE_AS const u32 *data,
+                                         const u32 len) {
+        u64 hash = len * 0xc6a4a7935bd1e995;
+        return (u32)(hash >> 32);
+    }
+
+    KERNEL_FQ KERNEL_FA void m34211_mxx(KERN_ATTR_RULES ()) {
+        const u64 gid = get_global_id(0);
+        if (gid >= GID_CNT) return;
+        u32 hash = MurmurHash64A_truncated(pws[gid].i, pws[gid].pw_len);
+        out[gid] = hash;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].qualifiers == ["DECLSPEC"]
+    assert "u32 MurmurHash64A_truncated(ptr<u32> data, u32 len)" in crossgl
+    assert "fn m34211_mxx(" in crossgl
+
+
+def test_external_hashcat_top_level_include_fragment_is_inert():
+    source_info = EXTERNAL_FIXTURE_SOURCES["hashcat_declspec_helper_function_macro"]
+    assert source_info["url"] == "https://github.com/hashcat/hashcat"
+
+    source = """
+    for (int digest_pos = 0; digest_pos < DIGESTS_CNT; digest_pos++) {
+        const u32 final_hash_pos = DIGESTS_OFFSET_HOST + digest_pos;
+        GLOBAL_AS const digest_t *digest = digests_buf + final_hash_pos;
+        if (digest->digest_buf[0] == r0) continue;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert [type(stmt).__name__ for stmt in ast.statements] == ["ForNode"]
+    assert "// skipped top-level OpenCL fragment: ForNode" in crossgl
+    assert "final_hash_pos" not in crossgl

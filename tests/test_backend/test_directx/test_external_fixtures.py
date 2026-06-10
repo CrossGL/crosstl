@@ -48,13 +48,19 @@ DIRECTX_SHADER_COMPILER_GEOMETRY_INPUTPATCH_COMMIT = (
     "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 )
 DIRECTX_SHADER_COMPILER_INLINE_SPIRV_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
+DIRECTX_SHADER_COMPILER_WORKGRAPH_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 DIRECTX_SHADER_COMPILER_CONVERSION_SELECTOR_COMMIT = (
     "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 )
+DIRECTX_SHADER_COMPILER_TEMPLATE_VALUE_PATH_COMMIT = (
+    "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
+)
+DIRECTX_SHADER_COMPILER_VARMODS_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 DIRECTX_SHADER_COMPILER_UNSIGNED_SHORTHAND_COMMIT = (
     "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 )
 DIRECTX_SHADER_COMPILER_MATRIX_COMMA_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
+DIRECTX_SHADER_COMPILER_VOID_PARAM_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 DIRECTX_SDK_SAMPLES_REWORKED_REPO = (
     "https://github.com/walbourn/directx-sdk-samples-reworked"
 )
@@ -65,6 +71,8 @@ FIDELITYFX_SDK_REPO = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SD
 FIDELITYFX_SDK_COMMIT = "e236f2304dcda35f282fdddd085f41e2ff48c86a"
 WICKED_ENGINE_REPO = "https://github.com/turanszkij/WickedEngine"
 WICKED_ENGINE_COMMIT = "9df7a530aed53cc59b345f751939e513170ddf3c"
+WICKED_ENGINE_CONDITION_LOOKAHEAD_COMMIT = "448b0f1c4447f94bc328b712fbabce0e0ced8cba"
+WICKED_ENGINE_PRECISION_QUALIFIER_COMMIT = "4188226af2b13ae947f02553a61f8a82dcb05a94"
 UNITY_BUILT_IN_SHADERS_REPO = "https://github.com/TwoTailsGames/Unity-Built-in-Shaders"
 UNITY_BUILT_IN_SHADERS_COMMIT = "6a63f93bc1f20ce6cd47f981c7494e8328915621"
 
@@ -336,6 +344,36 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_workgraph_node_output_record_templates",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_WORKGRAPH_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/node.sparse-nodes.hlsl",
+        code=textwrap.dedent("""
+            struct RECORD1
+            {
+                uint a;
+            };
+
+            [Shader("node")]
+            [NodeLaunch("broadcasting")]
+            [NodeDispatchGrid(1, 1, 1)]
+            [NumThreads(1, 1, 1)]
+            void node_1_0(
+                [AllowSparseNodes] [NodeArraySize(129)] [MaxRecords(31)]
+                NodeOutputArray<RECORD1> OutputArray_1_0)
+            {
+                ThreadNodeOutputRecords<RECORD1> outRec =
+                    OutputArray_1_0[1].GetThreadNodeOutputRecords(2);
+                outRec.OutputComplete();
+            }
+        """).strip(),
+        contains=(
+            "void node_1_0(NodeOutputArray<RECORD1> OutputArray_1_0) @ stage_entry",
+            "ThreadNodeOutputRecords<RECORD1> outRec = OutputArray_1_0[1].GetThreadNodeOutputRecords(2);",
+            "outRec.OutputComplete();",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_precise_struct_member",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,
@@ -555,6 +593,28 @@ EXTERNAL_FIXTURES = [
         contains=(
             "return vec4(MulBy2(0.25), 1, 0, 1);",
             "float MulBy2(float f)",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_void_parameter_list",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_VOID_PARAM_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/functions/arguments/void-param.hlsl",
+        code=textwrap.dedent("""
+            void helper(void)
+            {
+            }
+
+            float4 main() : SV_Target
+            {
+                helper();
+                return 0;
+            }
+        """).strip(),
+        contains=(
+            "void helper()",
+            "helper();",
+            "return 0;",
         ),
     ),
     ExternalFixture(
@@ -979,6 +1039,40 @@ EXTERNAL_FIXTURES = [
         contains=(
             "uint x = uint(1);",
             "return vec4(component, component, component, component);",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_template_value_path_reparse",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_TEMPLATE_VALUE_PATH_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/template/ackermann.hlsl",
+        code=textwrap.dedent("""
+            template<unsigned int M, unsigned int N>
+            struct Ackermann {
+              enum {
+                value = Ackermann<M - 1, Ackermann<M, N - 1>::value>::value
+              };
+            };
+
+            template<unsigned int M> struct Ackermann<M, 0> {
+              enum {
+                value = Ackermann<M - 1, 1>::value
+              };
+            };
+
+            template<> struct Ackermann<0, 0> {
+              enum {
+                value = 1
+              };
+            };
+
+            int main(int a : A) : SV_Target {
+              return Ackermann<3, 4>::value;
+            }
+        """).strip(),
+        contains=(
+            "value = Ackermann_M_1_Ackermann_M_N_1__value__value,",
+            "return Ackermann_3_4__value;",
         ),
     ),
     # Source repo: https://github.com/microsoft/DirectXShaderCompiler
@@ -1581,6 +1675,59 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="wickedengine_virtual_texture_residency_else_if_less_than",
+        repo=WICKED_ENGINE_REPO,
+        commit=WICKED_ENGINE_CONDITION_LOOKAHEAD_COMMIT,
+        path="WickedEngine/shaders/virtualTextureResidencyUpdateCS.hlsl",
+        code=textwrap.dedent("""
+            [numthreads(8, 8, 1)]
+            void main(uint3 DTid : SV_DispatchThreadID)
+            {
+                uint lod = 0;
+                uint minLod = 1;
+
+                if (lod == 0)
+                {
+                    minLod = 0xFF;
+                }
+                else if (lod < minLod)
+                {
+                    minLod = lod;
+                }
+
+                for (lod = 0; lod < 4; ++lod)
+                {
+                    uint2 write_coord = DTid.xy >> lod;
+                }
+            }
+        """).strip(),
+        contains=(
+            "@ numthreads(8, 8, 1)",
+            "else if (lod < minLod)",
+            "for (lod = 0; lod < 4; ++lod)",
+            "uvec2 write_coord = DTid.xy >> lod;",
+        ),
+    ),
+    ExternalFixture(
+        name="wickedengine_brdf_precision_qualifiers",
+        repo=WICKED_ENGINE_REPO,
+        commit=WICKED_ENGINE_PRECISION_QUALIFIER_COMMIT,
+        path="WickedEngine/shaders/brdf.hlsli",
+        code=textwrap.dedent("""
+            half D_GGX(half roughness, highp float NoH, const float3 h)
+            {
+                highp float oneMinusNoHSquared = 1.0 - NoH * NoH;
+                mediump half d = roughness;
+                return d;
+            }
+        """).strip(),
+        contains=(
+            "float16 D_GGX(float16 roughness, float NoH, const vec3 h)",
+            "float oneMinusNoHSquared = 1.0 - (NoH * NoH);",
+            "float16 d = roughness;",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_struct_method_body_trailing_semicolon",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,
@@ -1663,6 +1810,24 @@ EXTERNAL_FIXTURES = [
             "case 6:",
             "case 7:",
             "default:",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_varmods_precise_const_global",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_VARMODS_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/types/conversions/varmods-syntax_Mod.hlsl",
+        code=textwrap.dedent("""
+            precise uniform const float g_pre_uni_con_init = 1.0f;
+
+            float4 main() : SV_Target
+            {
+                return float4(g_pre_uni_con_init, 0.0f, 0.0f, 1.0f);
+            }
+        """).strip(),
+        contains=(
+            "precise const float g_pre_uni_con_init = 1.0;",
+            "return vec4(g_pre_uni_con_init, 0.0, 0.0, 1.0);",
         ),
     ),
     ExternalFixture(
@@ -1773,3 +1938,36 @@ def test_codegen_external_directx_fixture_to_parseable_crossgl(fixture):
     for expected in fixture.contains:
         assert expected in crossgl
     assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_dxc_cbuffer_long_member_sum_reparse_regression():
+    # Reduced from microsoft/DirectXShaderCompiler
+    # d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652,
+    # tools/clang/test/HLSLFileCheck/hlsl/objects/CbufferLegacy/cbufferInt16-struct.hlsl.
+    code = textwrap.dedent("""
+        struct Foo {
+          int16_t h1;
+          int3 f3;
+          int16_t2 h2;
+          int3 f3_1;
+          int2 f2;
+          int16_t4 h4;
+          int16_t2 h2_1;
+          int16_t3 h3;
+        };
+
+        ConstantBuffer<Foo> f : register(b0);
+
+        int4 main() : SV_Target {
+          return f.h1 + f.f3.x + f.h2.x + f.h2.y + f.f3_1.z
+            + f.f2.x + f.h4.x + f.h4.y + f.h4.z + f.h4.w
+            + f.h2_1.x + f.h2_1.y + f.h3.x + f.h3.y + f.h3.z
+            + f.h1 + f.f3.y + f.f3.z + f.h2.x + f.h2.y;
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert parse_crossgl(crossgl) is not None
+    assert "return f.h1 + f.f3.x + f.h2.x" in crossgl
+    assert "(((((((((" not in crossgl

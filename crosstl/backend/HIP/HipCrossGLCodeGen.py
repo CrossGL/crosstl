@@ -6,6 +6,7 @@ from .HipAst import (
     ArrayAccessNode,
     AssignmentNode,
     CastNode,
+    DesignatedInitializerNode,
     EnumNode,
     FunctionCallNode,
     FunctionNode,
@@ -265,7 +266,7 @@ class HipToCrossGLConverter:
         "lastMipmapLevel",
         "width",
     }
-    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in"}
+    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "precision"}
     CPP_OPERATOR_FUNCTION_NAME_PARTS = {
         "+": "plus",
         "-": "minus",
@@ -290,6 +291,7 @@ class HipToCrossGLConverter:
         "^=": "bit_xor_assign",
         "==": "eq",
         "!=": "ne",
+        "<=>": "three_way",
         "<=": "le",
         ">=": "ge",
         "&&": "logical_and",
@@ -355,6 +357,8 @@ class HipToCrossGLConverter:
         self.suppress_device_attribute_value_access = 0
         self.suppress_device_query_value_access = 0
         self.suppress_identifier_name_rewrite = 0
+        self.generated_matrix_helper_types = set()
+        self.anonymous_enum_count = 0
 
     def generate(self, ast_node):
         self.output = []
@@ -364,6 +368,9 @@ class HipToCrossGLConverter:
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
         self.vector1_name_scopes = [{}]
+        self.generated_matrix_helper_types = self.collect_generated_matrix_helper_types(
+            ast_node
+        )
         self.user_function_names = self.collect_user_function_names(ast_node)
         self.global_resource_object_type_hints = (
             self.collect_global_resource_object_type_hints(ast_node)
@@ -379,6 +386,7 @@ class HipToCrossGLConverter:
         self.suppress_device_attribute_value_access = 0
         self.suppress_device_query_value_access = 0
         self.suppress_identifier_name_rewrite = 0
+        self.anonymous_enum_count = 0
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -401,6 +409,9 @@ class HipToCrossGLConverter:
             query_expression = self.format_hip_device_query_read(node)
             if query_expression is not None:
                 return query_expression
+            user_defined_name = self.format_user_defined_function_call_name(node)
+            if user_defined_name is not None:
+                return user_defined_name
             return self.output_identifier_name(node)
         elif isinstance(node, list):
             return [self.visit(item) for item in node]
@@ -624,7 +635,8 @@ class HipToCrossGLConverter:
             name = getattr(current, "name", None)
             body = getattr(current, "body", None)
             if name is not None and body is not None:
-                names.add(name)
+                if not self.is_generated_matrix_helper_function(current):
+                    names.add(name)
 
             for stmt in getattr(current, "statements", []):
                 collect(stmt)
@@ -636,6 +648,88 @@ class HipToCrossGLConverter:
         collect(node)
         names.discard(None)
         return names
+
+    def collect_generated_matrix_helper_types(self, node):
+        structs = []
+        for stmt in getattr(node, "statements", []) or []:
+            if isinstance(stmt, StructNode):
+                structs.append(stmt)
+        structs.extend(getattr(node, "structs", []) or [])
+        return {
+            struct.name
+            for struct in structs
+            if self.is_generated_matrix_helper_struct(struct)
+        }
+
+    def native_matrix_helper_dimensions(self, type_name):
+        match = re.fullmatch(r"(float|double)([234])x([234])", str(type_name))
+        if match is None:
+            return None
+        scalar_type, columns, rows = match.groups()
+        return scalar_type, int(columns), int(rows)
+
+    def convert_native_matrix_helper_name_to_crossgl(self, type_name):
+        if type_name not in self.generated_matrix_helper_types:
+            return None
+
+        dimensions = self.native_matrix_helper_dimensions(type_name)
+        if dimensions is None:
+            return None
+
+        scalar_type, columns, rows = dimensions
+        prefix = "dmat" if scalar_type == "double" else "mat"
+        suffix = str(columns) if columns == rows else f"{columns}x{rows}"
+        return f"{prefix}{suffix}"
+
+    def is_generated_matrix_helper_struct(self, node):
+        dimensions = self.native_matrix_helper_dimensions(getattr(node, "name", ""))
+        if dimensions is None:
+            return False
+
+        scalar_type, columns, rows = dimensions
+        members = getattr(node, "members", []) or []
+        member_by_name = {
+            getattr(member, "name", None): member
+            for member in members
+            if getattr(member, "name", None)
+        }
+
+        matrix_values = member_by_name.get("m")
+        column_count = member_by_name.get("CGL_COLUMNS")
+        row_count = member_by_name.get("CGL_ROWS")
+        if matrix_values is None or column_count is None or row_count is None:
+            return False
+
+        return (
+            getattr(matrix_values, "vtype", None) == f"{scalar_type}[{columns * rows}]"
+            and getattr(column_count, "vtype", None) == "const int"
+            and str(getattr(column_count, "value", "")).strip() == str(columns)
+            and "static" in (getattr(column_count, "qualifiers", []) or [])
+            and getattr(row_count, "vtype", None) == "const int"
+            and str(getattr(row_count, "value", "")).strip() == str(rows)
+            and "static" in (getattr(row_count, "qualifiers", []) or [])
+        )
+
+    def is_generated_matrix_helper_function(self, node):
+        if getattr(node, "name", None) not in {"operator*", "transpose", "inverse"}:
+            return False
+        if not self.function_references_generated_matrix_helper_type(node):
+            return False
+        qualifiers = set(getattr(node, "qualifiers", []) or [])
+        return {"__host__", "__device__", "inline"}.issubset(qualifiers)
+
+    def function_references_generated_matrix_helper_type(self, node):
+        candidate_types = [getattr(node, "return_type", "")]
+        for param in getattr(node, "params", []) or []:
+            if isinstance(param, dict):
+                candidate_types.append(param.get("type", ""))
+            else:
+                candidate_types.append(getattr(param, "vtype", ""))
+        return any(
+            self.strip_type_qualifiers(candidate_type).strip()
+            in self.generated_matrix_helper_types
+            for candidate_type in candidate_types
+        )
 
     def is_user_defined_function(self, func_name):
         return isinstance(func_name, str) and func_name in self.user_function_names
@@ -1052,6 +1146,33 @@ class HipToCrossGLConverter:
             return f"{name}_"
         return name
 
+    def sanitize_crossgl_type_identifier(self, name):
+        parts = []
+        for char in str(name):
+            if char.isalnum() or char == "_":
+                parts.append(char)
+            elif char == ":":
+                if not parts or parts[-1] != "_":
+                    parts.append("_")
+            elif not parts or parts[-1] != "_":
+                parts.append("_")
+
+        sanitized = "".join(parts).strip("_") or "anonymous"
+        if sanitized[0].isdigit():
+            sanitized = f"type_{sanitized}"
+        return self.sanitize_identifier_name(sanitized)
+
+    def convert_hip_record_name_to_crossgl(self, name):
+        base_name, template_args = self.parse_cpp_template(name)
+        if not template_args:
+            return self.sanitize_crossgl_type_identifier(name)
+
+        parts = [self.sanitize_crossgl_type_identifier(base_name)]
+        for arg in template_args:
+            converted_arg = self.convert_hip_type_to_crossgl(arg)
+            parts.append(self.sanitize_crossgl_type_identifier(converted_arg))
+        return "_".join(part for part in parts if part)
+
     def format_crossgl_array_extent(self, size):
         size = str(size).strip()
         if not size:
@@ -1102,10 +1223,13 @@ class HipToCrossGLConverter:
         operator_name = self.format_cpp_operator_function_name(name)
         if operator_name is not None:
             return operator_name
+        base_name, template_args = self.parse_cpp_template(name)
+        if template_args:
+            return self.format_function_declaration_name(base_name)
         if self.is_simple_identifier(name):
             return self.sanitize_identifier_name(name)
         if not isinstance(name, str) or "::" not in name:
-            return name
+            return self.sanitize_crossgl_type_identifier(name)
 
         normalized_name = name.replace("::~", "::destructor_")
         return self.sanitize_qualified_variable_name(normalized_name) or name
@@ -1135,9 +1259,20 @@ class HipToCrossGLConverter:
         return self.sanitize_qualified_variable_name("::".join(parts)) or parts[-1]
 
     def format_function_call_name(self, name):
+        user_defined_name = self.format_user_defined_function_call_name(name)
+        if user_defined_name is not None:
+            return user_defined_name
+        return name
+
+    def format_user_defined_function_call_name(self, name):
         if self.is_user_defined_function(name):
             return self.format_function_declaration_name(name)
-        return name
+
+        base_name, template_args = self.parse_cpp_template(name)
+        if template_args and self.is_user_defined_function(base_name):
+            return self.format_function_declaration_name(base_name)
+
+        return None
 
     def strip_cpp_template_arguments(self, text):
         stripped = []
@@ -4451,6 +4586,8 @@ class HipToCrossGLConverter:
 
         for stmt in node.statements:
             if isinstance(stmt, FunctionNode):
+                if self.is_generated_matrix_helper_function(stmt):
+                    continue
                 if hasattr(stmt, "qualifiers") and "__global__" in getattr(
                     stmt, "qualifiers", []
                 ):
@@ -4461,6 +4598,8 @@ class HipToCrossGLConverter:
                     self.visit(stmt)
                 self.emit("")
             elif isinstance(stmt, StructNode):
+                if self.is_generated_matrix_helper_struct(stmt):
+                    continue
                 self.visit(stmt)
                 self.emit("")
             elif isinstance(stmt, EnumNode):
@@ -4627,7 +4766,8 @@ class HipToCrossGLConverter:
                         self.register_variable_type(param_name, param_type)
                         params.append(f"{param_type} {output_name}")
 
-            self.emit(f"fn {kernel.name}(")
+            kernel_name = self.format_function_declaration_name(kernel.name)
+            self.emit(f"fn {kernel_name}(")
             self.indent_level += 1
             for i, param in enumerate(params):
                 if i == len(params) - 1:
@@ -4682,7 +4822,8 @@ class HipToCrossGLConverter:
             if not node.name:
                 return
 
-        self.emit(f"struct {node.name} {{")
+        struct_name = self.convert_hip_record_name_to_crossgl(node.name)
+        self.emit(f"struct {struct_name} {{")
         self.indent_level += 1
 
         if hasattr(node, "members") and node.members:
@@ -4787,7 +4928,24 @@ class HipToCrossGLConverter:
         string_value = self.format_single_string_initializer(value)
         if string_value is not None:
             return string_value
+        scalar_value = self.format_single_scalar_initializer(value)
+        if scalar_value is not None:
+            return scalar_value
         return self.visit(value)
+
+    def format_single_scalar_initializer(self, value):
+        if not isinstance(value, InitializerListNode) or len(value.elements) != 1:
+            return None
+        initializer = value.elements[0]
+        if isinstance(initializer, DesignatedInitializerNode):
+            return None
+        if not isinstance(initializer, FunctionCallNode):
+            return None
+        if not isinstance(initializer.name, str) or not initializer.name.startswith(
+            "::"
+        ):
+            return None
+        return self.visit(initializer)
 
     def format_single_string_initializer(self, value):
         if not isinstance(value, InitializerListNode) or len(value.elements) != 1:
@@ -4864,7 +5022,11 @@ class HipToCrossGLConverter:
         return f"(/* HIP device property: {property_name}, device: {device_id} */ 0)"
 
     def visit_KernelLaunchNode(self, node):
-        kernel_name = self.visit(node.kernel_name)
+        kernel_name = (
+            node.kernel_name
+            if isinstance(node.kernel_name, str)
+            else self.visit(node.kernel_name)
+        )
         config = [self.visit(node.blocks), self.visit(node.threads)]
         if node.shared_mem is not None:
             config.append(self.visit(node.shared_mem))
@@ -5112,8 +5274,9 @@ class HipToCrossGLConverter:
         if hip_intrinsic is not None:
             return hip_intrinsic
 
-        if self.is_user_defined_function(func_name):
-            return f"{self.format_function_call_name(func_name)}({args_str})"
+        user_defined_call_name = self.format_user_defined_function_call_name(func_name)
+        if user_defined_call_name is not None:
+            return f"{user_defined_call_name}({args_str})"
 
         timer_intrinsic = self.format_hip_timer_intrinsic_call(func_name, args)
         if timer_intrinsic is not None:
@@ -5143,6 +5306,13 @@ class HipToCrossGLConverter:
 
         # Convert HIP built-in functions
         crossgl_func = self.convert_hip_builtin_function(func_name)
+        if (
+            crossgl_func == func_name
+            and isinstance(func_name, str)
+            and func_name.startswith("::")
+            and not self.is_simple_identifier(crossgl_func)
+        ):
+            crossgl_func = self.format_function_declaration_name(func_name)
         return f"{crossgl_func}({args_str})"
 
     def format_std_numeric_limits_call(self, function_name, args):
@@ -6623,7 +6793,26 @@ class HipToCrossGLConverter:
         if template_alias is not None:
             return template_alias
 
+        scoped_alias = self.convert_reparsable_scoped_alias(alias_type)
+        if scoped_alias is not None:
+            return scoped_alias
+
         return alias_type
+
+    def convert_reparsable_scoped_alias(self, alias_type):
+        if not isinstance(alias_type, str):
+            return None
+
+        alias_type = alias_type.strip()
+        if "<" in alias_type or ">" in alias_type or "::" not in alias_type:
+            return None
+        if not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+",
+            alias_type,
+        ):
+            return None
+
+        return "ptr<void>"
 
     def convert_type_member_alias(self, alias_type):
         parsed = self.parse_cpp_template_member_type(alias_type)
@@ -7141,6 +7330,9 @@ class HipToCrossGLConverter:
         hip_type = self.strip_variadic_type_marker(hip_type)
         hip_type = self.strip_union_type_keyword(hip_type)
         hip_type = self.CPP_SCALAR_TYPE_ALIASES.get(hip_type, hip_type)
+        matrix_type = self.convert_native_matrix_helper_name_to_crossgl(hip_type)
+        if matrix_type is not None:
+            return matrix_type
         cooperative_group_type = self.convert_cooperative_group_type(hip_type)
         if cooperative_group_type is not None:
             return cooperative_group_type
@@ -7150,9 +7342,14 @@ class HipToCrossGLConverter:
             "void": "void",
             "bool": "bool",
             "char": "i8",
+            "signed char": "i8",
             "unsigned char": "u8",
             "short": "i16",
+            "signed short": "i16",
+            "short int": "i16",
+            "signed short int": "i16",
             "unsigned short": "u16",
+            "unsigned short int": "u16",
             "int": "i32",
             "signed": "i32",
             "unsigned": "u32",
@@ -7161,10 +7358,17 @@ class HipToCrossGLConverter:
             "unsigned int": "u32",
             "long": "i64",
             "signed long": "i64",
+            "long int": "i64",
+            "signed long int": "i64",
             "unsigned long": "u64",
+            "unsigned long int": "u64",
+            "long unsigned int": "u64",
             "long long": "i64",
             "signed long long": "i64",
+            "long long int": "i64",
+            "signed long long int": "i64",
             "unsigned long long": "u64",
+            "unsigned long long int": "u64",
             "long long unsigned int": "u64",
             "__int64": "i64",
             "signed __int64": "i64",
@@ -7209,6 +7413,10 @@ class HipToCrossGLConverter:
         std_container_type = self.convert_std_container_type(hip_type)
         if std_container_type is not None:
             return std_container_type
+
+        enable_if_type = self.convert_enable_if_type(hip_type)
+        if enable_if_type is not None:
+            return enable_if_type
 
         resource_type = self.convert_hip_resource_type(hip_type)
         if resource_type is not None:
@@ -7263,6 +7471,21 @@ class HipToCrossGLConverter:
             element_type = self.convert_hip_type_to_crossgl(template_args[0])
             size = self.format_crossgl_array_extent(template_args[1])
             return f"array<{element_type}, {size}>"
+        if self.is_std_pair_base_name(base_name) and len(template_args) >= 2:
+            first_type = self.convert_hip_type_to_crossgl(template_args[0])
+            second_type = self.convert_hip_type_to_crossgl(template_args[1])
+            return f"pair<{first_type}, {second_type}>"
+        if self.is_std_tuple_base_name(base_name) and template_args:
+            element_types = [
+                self.convert_hip_type_to_crossgl(arg) for arg in template_args
+            ]
+            return f"tuple<{', '.join(element_types)}>"
+        return None
+
+    def convert_enable_if_type(self, hip_type):
+        base_name, template_args = self.parse_cpp_template(hip_type)
+        if base_name in {"std::enable_if_t", "::std::enable_if_t"} and template_args:
+            return "void"
         return None
 
     def is_unique_ptr_type_name(self, type_name):
@@ -7282,6 +7505,12 @@ class HipToCrossGLConverter:
 
     def is_std_array_base_name(self, base_name):
         return base_name in {"array", "std::array"}
+
+    def is_std_pair_base_name(self, base_name):
+        return base_name in {"pair", "std::pair"}
+
+    def is_std_tuple_base_name(self, base_name):
+        return base_name in {"tuple", "std::tuple"}
 
     def is_std_make_unique_base_name(self, base_name):
         return base_name in {"make_unique", "std::make_unique"}
@@ -7526,6 +7755,11 @@ class HipToCrossGLConverter:
         }
 
         normalized_func_name = self.normalize_hip_builtin_function_name(func_name)
+        matrix_constructor = self.convert_native_matrix_helper_name_to_crossgl(
+            normalized_func_name
+        )
+        if matrix_constructor is not None:
+            return matrix_constructor
         return function_mapping.get(normalized_func_name, func_name)
 
     def normalize_hip_builtin_function_name(self, func_name):
@@ -7543,7 +7777,7 @@ class HipToCrossGLConverter:
         return normalized_name
 
     def visit_EnumNode(self, node):
-        name = node.name or ""
+        name = node.name or self.next_anonymous_enum_name()
         underlying = getattr(node, "underlying_type", None)
         suffix = (
             f" : {self.convert_hip_type_to_crossgl(underlying)}" if underlying else ""
@@ -7561,12 +7795,21 @@ class HipToCrossGLConverter:
 
             if member_value is not None:
                 value = self.visit(member_value)
+                member_name = self.sanitize_enum_member_name(member_name)
                 self.emit(f"{member_name} = {value},")
             else:
-                self.emit(f"{member_name},")
+                self.emit(f"{self.sanitize_enum_member_name(member_name)},")
 
         self.indent_level -= 1
         self.emit("};")
+
+    def sanitize_enum_member_name(self, name):
+        return self.sanitize_identifier_name(name)
+
+    def next_anonymous_enum_name(self):
+        name = f"anonymous_enum_{self.anonymous_enum_count}"
+        self.anonymous_enum_count += 1
+        return name
 
     # Legacy method for backwards compatibility
     def convert(self, node):

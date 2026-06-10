@@ -44,6 +44,83 @@ def test_pocl_style_kernel_qualifier_after_return_type_parses():
     assert kernel.name == "memfill"
 
 
+def test_hashcat_kernel_specifier_macros_parse_as_kernel():
+    ast = parse_code("""
+        KERNEL_FQ KERNEL_FA void amp(global ulong *pws, const ulong gid_max) {
+            const ulong gid = get_global_id(0);
+            if (gid >= gid_max) return;
+            pws[gid] = gid;
+        }
+        """)
+
+    kernel = ast.statements[0]
+    assert isinstance(kernel, KernelNode)
+    assert kernel.name == "amp"
+    assert kernel.params[0]["type"] == "__global__ ulong *"
+    assert kernel.params[1]["type"] == "const ulong"
+
+
+def test_hashcat_opaque_kernel_parameter_pack_macro_parses():
+    ast = parse_code("""
+        KERNEL_FQ KERNEL_FA void m00000_m04(KERN_ATTR_RULES ()) {
+            const ulong gid = get_global_id(0);
+            if (gid >= GID_CNT) return;
+            pws[gid] = gid;
+        }
+        """)
+
+    kernel = ast.statements[0]
+    assert isinstance(kernel, KernelNode)
+    assert kernel.name == "m00000_m04"
+    assert kernel.params == []
+
+
+def test_hashcat_declspec_function_specifier_macro_parses():
+    ast = parse_code("""
+        DECLSPEC u32 MurmurHash64A_truncated(PRIVATE_AS const u32 *data,
+                                             const u32 len) {
+            u64 hash = len * 0xc6a4a7935bd1e995;
+            return (u32)(hash >> 32);
+        }
+        """)
+
+    helper = ast.statements[0]
+    assert helper.name == "MurmurHash64A_truncated"
+    assert helper.return_type == "u32"
+    assert helper.qualifiers == ["DECLSPEC"]
+    assert helper.params[0]["type"] == "__private__ const u32 *"
+
+
+def test_hashcat_parenthesized_array_access_shift_index_parses():
+    ast = parse_code("""
+        kernel void cast_lookup(global uint *out, global uint *x, global uint *table) {
+            out[0] = table[(uint)(uchar)(((x[0xD / 4]) >> (8 * (3 - 0xD % 4))))];
+        }
+        """)
+
+    kernel = ast.statements[0]
+    assert isinstance(kernel, KernelNode)
+    assert kernel.name == "cast_lookup"
+
+
+def test_hashcat_address_space_macro_declaration_parses():
+    ast = parse_code("""
+        CONSTANT_VK uint table[2] = { 1, 2 };
+
+        kernel void compare(global uint *out, GLOBAL_AS const digest_t *digests_buf) {
+            for (int digest_pos = 0; digest_pos < DIGESTS_CNT; digest_pos++) {
+                GLOBAL_AS const digest_t *digest = digests_buf + digest_pos;
+                out[digest_pos] = digest->digest_buf[0];
+            }
+        }
+        """)
+
+    assert ast.statements[0].qualifiers == ["__constant__"]
+    kernel = ast.statements[1]
+    assert isinstance(kernel, KernelNode)
+    assert kernel.params[1]["type"] == "__global__ const digest_t *"
+
+
 def test_local_memory_and_barrier_parse_from_arrayfire_pattern():
     ast = parse_code("""
         kernel void reduce_first_kernel(global float *out, const global float *in) {
@@ -217,3 +294,49 @@ def test_darktable_gnu_statement_expression_switch_macro_parses():
     statement_expr = ast.statements[0].body[0]
     assert isinstance(statement_expr, OpenCLStatementExpressionNode)
     assert isinstance(statement_expr.statements[0], SwitchNode)
+
+
+def test_opencl_generic_address_space_pointer_parameter_parses():
+    ast = parse_code("""
+        int read_generic(generic int *p) {
+            return *p;
+        }
+
+        kernel void generic_probe(global int *out) {
+            out[0] = read_generic(out);
+        }
+        """)
+
+    helper = ast.statements[0]
+    assert helper.params[0] == {"type": "__generic__ int *", "name": "p"}
+    assert ast.statements[1].name == "generic_probe"
+
+
+def test_clspv_postfix_volatile_pointer_declarator_parses():
+    ast = parse_code("""
+        kernel void volatile_pointer_probe(global uint *results) {
+            __private float val;
+            val = 0.1f;
+            float *volatile ptr = &val;
+            results[0] = ptr != 0;
+        }
+        """)
+
+    ptr = ast.statements[0].body[2]
+    assert ptr.vtype == "float * volatile"
+    assert ptr.name == "ptr"
+
+
+def test_clspv_line_broken_private_qualifier_declaration_parses():
+    ast = parse_code("""
+        void kernel private_array_probe(global int *out) {
+        private
+          unsigned char tab[128];
+          out[0] = tab[0];
+        }
+        """)
+
+    tab = ast.statements[0].body[0]
+    assert tab.qualifiers == ["__private__"]
+    assert tab.vtype == "unsigned char[128]"
+    assert tab.name == "tab"

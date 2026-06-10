@@ -41,6 +41,10 @@ class SlangToCrossGLConverter:
     HEX_NUMERIC_LITERAL = re.compile(
         r"^(?P<body>0[xX][0-9a-fA-F]+)(?P<suffix>[uUlL]*)$"
     )
+    HEX_FLOAT_NUMERIC_LITERAL = re.compile(
+        r"^(?P<body>0[xX](?:(?:[0-9a-fA-F]+(?:\.[0-9a-fA-F]*)?)|"
+        r"(?:\.[0-9a-fA-F]+))[pP][+-]?\d+)(?P<suffix>[fFhH]?)$"
+    )
     RAY_PAYLOAD_ACCESS_SEMANTIC = re.compile(r"^(read|write)\((.*)\)$")
     ASSOCIATED_DIFFERENTIAL_TYPE = re.compile(
         r"^(?P<base>[A-Za-z_][A-Za-z0-9_]*(?:[234](?:x[234])?)?)\.Differential$"
@@ -165,6 +169,95 @@ class SlangToCrossGLConverter:
     BYTE_ADDRESS_BUFFER_RESOURCE_TYPES = {
         "ByteAddressBuffer",
         "RWByteAddressBuffer",
+    }
+    CROSSGL_BUILTIN_TYPE_NAMES = {
+        "void",
+        "bool",
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "f16",
+        "f32",
+        "f64",
+        "int",
+        "uint",
+        "float",
+        "double",
+        "half",
+        "char",
+        "string",
+        "vec2",
+        "vec3",
+        "vec4",
+        "ivec2",
+        "ivec3",
+        "ivec4",
+        "uvec2",
+        "uvec3",
+        "uvec4",
+        "bvec2",
+        "bvec3",
+        "bvec4",
+        "mat2",
+        "mat3",
+        "mat4",
+        "mat2x2",
+        "mat2x3",
+        "mat2x4",
+        "mat3x2",
+        "mat3x3",
+        "mat3x4",
+        "mat4x2",
+        "mat4x3",
+        "mat4x4",
+        "dvec2",
+        "dvec3",
+        "dvec4",
+        "dmat2",
+        "dmat3",
+        "dmat4",
+        "dmat2x2",
+        "dmat2x3",
+        "dmat2x4",
+        "dmat3x2",
+        "dmat3x3",
+        "dmat3x4",
+        "dmat4x2",
+        "dmat4x3",
+        "dmat4x4",
+        "sampler",
+        "image1D",
+        "image1DArray",
+        "image2D",
+        "image2DArray",
+        "image2DMS",
+        "image2DMSArray",
+        "image3D",
+        "imageCube",
+        "imageCubeArray",
+        "iimage1D",
+        "iimage1DArray",
+        "iimage2D",
+        "iimage2DArray",
+        "iimage2DMS",
+        "iimage2DMSArray",
+        "iimage3D",
+        "iimageCube",
+        "iimageCubeArray",
+        "uimage1D",
+        "uimage1DArray",
+        "uimage2D",
+        "uimage2DArray",
+        "uimage2DMS",
+        "uimage2DMSArray",
+        "uimage3D",
+        "uimageCube",
+        "uimageCubeArray",
     }
     BYTE_ADDRESS_BUFFER_METHOD_MAP = {
         "Load": "buffer_load",
@@ -543,7 +636,12 @@ class SlangToCrossGLConverter:
             for exp in getattr(ast, "exports", [])
             if isinstance(getattr(exp, "item", None), FunctionNode)
         ]
-        functions = [*getattr(ast, "functions", []), *exported_functions]
+        extension_methods = self.collect_lowerable_extension_methods(ast)
+        functions = [
+            *getattr(ast, "functions", []),
+            *extension_methods,
+            *exported_functions,
+        ]
         local_structs = self.collect_function_local_structs(functions)
         self.user_function_names = {getattr(func, "name", None) for func in functions}
         self.user_function_names.discard(None)
@@ -578,9 +676,7 @@ class SlangToCrossGLConverter:
                 code += self.generate_export(exp)
             code += "\n"
         for node in ast.typedefs:
-            code += (
-                f"    typedef {self.map_type(node.original_type)} {node.new_type};\n"
-            )
+            code += f"    {self.generate_typedef(node)}\n"
         for enum in getattr(ast, "enums", []) or []:
             if isinstance(enum, EnumNode):
                 code += f"    enum {enum.name} {{\n"
@@ -605,7 +701,7 @@ class SlangToCrossGLConverter:
             code += "    // Constant Buffers\n"
             code += self.generate_cbuffers(ast)
 
-        for func in ast.functions:
+        for func in [*ast.functions, *extension_methods]:
             qualifier = self.effective_function_qualifier(func)
             if qualifier == "vertex":
                 code += "    vertex {\n"
@@ -631,6 +727,20 @@ class SlangToCrossGLConverter:
         code += "}\n"
         return code
 
+    def generate_typedef(self, node):
+        original_type = self.map_type(node.original_type)
+        new_type = node.new_type
+        if self.requires_typealias_spelling(original_type):
+            return f"typealias {new_type} = {original_type};"
+        return f"typedef {original_type} {new_type};"
+
+    def requires_typealias_spelling(self, type_name):
+        type_name = str(type_name)
+        return (
+            type_name not in self.CROSSGL_BUILTIN_TYPE_NAMES
+            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", type_name) is not None
+        )
+
     def raise_for_unsupported_conformance_constructs(self, ast):
         constructs = []
 
@@ -641,13 +751,16 @@ class SlangToCrossGLConverter:
 
         for extension in getattr(ast, "extensions", []) or []:
             conformances = getattr(extension, "conformances", []) or []
-            suffix = f" : {', '.join(conformances)}" if conformances else ""
-            constructs.append(f"extension {extension.extended_type}{suffix}")
+            if not self.is_lowerable_extension(extension):
+                suffix = f" : {', '.join(conformances)}" if conformances else ""
+                constructs.append(f"extension {extension.extended_type}{suffix}")
             constructs.extend(
                 self.format_typedef_generic_constraints(
                     getattr(extension, "typedefs", [])
                 )
             )
+            for method in getattr(extension, "methods", []) or []:
+                constructs.extend(self.format_function_generic_constraints(method))
 
         for function in getattr(ast, "functions", []) or []:
             constructs.extend(self.format_function_generic_constraints(function))
@@ -696,6 +809,27 @@ class SlangToCrossGLConverter:
                 f"{constraint.parameter} {relation} {constraint.constraint_type}"
             )
         return constraints
+
+    def collect_lowerable_extension_methods(self, ast):
+        methods = []
+        for extension in getattr(ast, "extensions", []) or []:
+            if not self.is_lowerable_extension(extension):
+                continue
+            for method in getattr(extension, "methods", []) or []:
+                if getattr(method, "is_declaration", False):
+                    continue
+                if getattr(method, "generic_constraints", None):
+                    continue
+                methods.append(method)
+        return methods
+
+    def is_lowerable_extension(self, extension):
+        return not (
+            getattr(extension, "conformances", None)
+            or getattr(extension, "typedefs", None)
+            or getattr(extension, "generic_parameters", None)
+            or getattr(extension, "generic_constraints", None)
+        )
 
     def is_erased_generic_constraint(self, constraint):
         relation = getattr(constraint, "relation", ":")
@@ -939,7 +1073,7 @@ class SlangToCrossGLConverter:
             )
             for p in func.params
         )
-        semantic = self.map_semantic(func.semantic)
+        semantic = self.map_semantic(getattr(func, "semantic", None))
         semantic_suffix = f" {semantic}" if semantic else ""
         code += (
             f"    {self.map_type(func.return_type)} "
@@ -975,11 +1109,19 @@ class SlangToCrossGLConverter:
             param, preserve_qualifiers
         )
         parameter_name = param.name or fallback_name or "_param"
-        parameter = (
-            f"{qualifier_prefix}{self.map_parameter_type(param.vtype)} "
-            f"{self.format_identifier(parameter_name)}"
-            f"{self.format_array_suffixes(param)}"
+        parameter_type = self.map_parameter_type(param.vtype, function_qualifier)
+        array_suffix = self.format_array_suffixes(param)
+        array_suffix += self.non_tessellation_patch_parameter_array_suffix(
+            param.vtype, function_qualifier
         )
+        parameter = (
+            f"{qualifier_prefix}{parameter_type} "
+            f"{self.format_identifier(parameter_name)}"
+            f"{array_suffix}"
+        )
+        metadata = self.format_parameter_metadata(param)
+        if metadata:
+            parameter += metadata
         semantic = self.map_semantic(
             param.semantic,
             function_qualifier=function_qualifier,
@@ -988,6 +1130,13 @@ class SlangToCrossGLConverter:
         if semantic:
             parameter += f" {semantic}"
         return parameter
+
+    def format_parameter_metadata(self, param):
+        register_name = getattr(param, "register", None)
+        if not self.should_emit_register_metadata(register_name, param):
+            return ""
+        register_arguments = self.format_register_metadata_arguments(register_name)
+        return f" @register({register_arguments})"
 
     def is_entry_like_function(self, func):
         return bool(
@@ -1233,9 +1382,15 @@ class SlangToCrossGLConverter:
         return code
 
     def generate_if_statement(self, node, indent, is_main, deferred_scopes=None):
+        binding = getattr(node, "if_binding", None)
+        code = ""
+        if binding is not None:
+            code += self.generate_assignment(binding, is_main) + ";\n"
+            code += "    " * indent
+
         condition = self.generate_expression(node.condition, is_main)
 
-        code = f"if ({condition}) {{\n"
+        code += f"if ({condition}) {{\n"
         code += self.generate_function_body(
             node.if_body, indent + 1, is_main, deferred_scopes
         )
@@ -1267,29 +1422,60 @@ class SlangToCrossGLConverter:
 
     def generate_global_variable(self, node):
         if isinstance(node, AssignmentNode):
-            left = self.generate_variable_declaration(node.left)
+            left = self.generate_variable_declaration(
+                node.left, has_initializer=True, initializer=node.right
+            )
             right = self.generate_expression(node.right, False)
             return f"    {left} {node.operator} {right};\n"
         return f"    {self.generate_variable_declaration(node)};\n"
 
-    def generate_variable_declaration(self, node):
-        qualifiers = self.format_global_variable_qualifiers(node)
+    def generate_variable_declaration(
+        self, node, has_initializer=False, initializer=None
+    ):
+        qualifiers = self.format_global_variable_qualifiers(
+            node, has_initializer=has_initializer
+        )
         if qualifiers:
             qualifiers += " "
+        variable_type = self.resolve_variable_declaration_type(node, initializer)
         return (
-            f"{qualifiers}{self.map_type(node.vtype)} "
+            f"{qualifiers}{self.map_type(variable_type)} "
             f"{self.format_identifier(node.name)}{self.format_array_suffixes(node)}"
             f"{self.format_variable_metadata(node)}"
         )
 
-    def format_global_variable_qualifiers(self, node):
+    def resolve_variable_declaration_type(self, node, initializer=None):
+        vtype = getattr(node, "vtype", None)
+        storage_modifier = getattr(node, "storage_modifier", None)
+        if vtype in {"let", "var"} and storage_modifier in {"let", "var"}:
+            inferred_type = self.infer_type_from_initializer(initializer)
+            if inferred_type is not None:
+                return inferred_type
+        return vtype
+
+    def infer_type_from_initializer(self, initializer):
+        if isinstance(initializer, VectorConstructorNode):
+            return initializer.type_name
+        return None
+
+    def format_global_variable_qualifiers(self, node, has_initializer=False):
         allowed_qualifiers = {"extern", "static", "const", "constexpr"}
-        qualifiers = [
-            qualifier
+        excluded_qualifiers = set()
+        if not has_initializer and self.is_plain_uninitialized_const_global(node):
+            # CrossGL requires plain top-level const declarations to carry an
+            # initializer; static const declarations are accepted and can keep
+            # their original storage semantics.
+            excluded_qualifiers = {"const"}
+        return self.format_ordered_storage_qualifiers(
+            node, allowed_qualifiers, excluded_qualifiers=excluded_qualifiers
+        )
+
+    def is_plain_uninitialized_const_global(self, node):
+        qualifiers = {
+            str(qualifier).lower()
             for qualifier in getattr(node, "qualifiers", []) or []
-            if str(qualifier).lower() in allowed_qualifiers
-        ]
-        return " ".join(qualifiers)
+        }
+        return "const" in qualifiers and "static" not in qualifiers
 
     def generate_struct_member(self, struct_node, member):
         qualifiers = self.format_struct_member_qualifiers(member)
@@ -1309,12 +1495,32 @@ class SlangToCrossGLConverter:
 
     def format_struct_member_qualifiers(self, member):
         allowed_qualifiers = {"static", "const"} | self.interpolation_qualifiers
+        return self.format_ordered_storage_qualifiers(member, allowed_qualifiers)
+
+    def format_ordered_storage_qualifiers(
+        self, node, allowed_qualifiers, excluded_qualifiers=None
+    ):
+        allowed = {str(qualifier).lower() for qualifier in allowed_qualifiers}
+        excluded = {
+            str(qualifier).lower() for qualifier in excluded_qualifiers or set()
+        }
         qualifiers = [
-            qualifier
-            for qualifier in getattr(member, "qualifiers", []) or []
-            if str(qualifier).lower() in allowed_qualifiers
+            (index, str(qualifier))
+            for index, qualifier in enumerate(getattr(node, "qualifiers", []) or [])
+            if str(qualifier).lower() in allowed
+            and str(qualifier).lower() not in excluded
         ]
-        return " ".join(qualifiers)
+        storage_order = {"extern": 0, "static": 1, "const": 2, "constexpr": 3}
+        return " ".join(
+            qualifier
+            for _index, qualifier in sorted(
+                qualifiers,
+                key=lambda item: (
+                    storage_order.get(item[1].lower(), len(storage_order)),
+                    item[0],
+                ),
+            )
+        )
 
     def format_variable_metadata(self, node):
         metadata = []
@@ -1511,7 +1717,7 @@ class SlangToCrossGLConverter:
                     f"{self.map_type(expr.vtype)} {self.format_identifier(expr.name)}"
                     f"{self.format_array_suffixes(expr, is_main)}"
                 )
-            return self.format_identifier(expr.name)
+            return self.format_expression_identifier(expr.name)
         elif isinstance(expr, BinaryOpNode):
             return self.generate_binary_expression(expr, is_main)
         elif isinstance(expr, AssignmentNode):
@@ -1669,9 +1875,20 @@ class SlangToCrossGLConverter:
             )
         return self.generate_expression(index, is_main)
 
+    def format_expression_identifier(self, name):
+        name = self.format_identifier(name)
+        return self.normalize_scoped_generic_expression_identifier(name)
+
+    def normalize_scoped_generic_expression_identifier(self, name):
+        return re.sub(r"(?<=>)::(?=[A-Za-z_])", ".", str(name))
+
     def normalize_numeric_literal(self, value):
         if not isinstance(value, str):
             return value
+        hex_float_match = self.HEX_FLOAT_NUMERIC_LITERAL.match(value)
+        if hex_float_match:
+            return self.normalize_hex_float_literal(hex_float_match.group("body"))
+
         hex_match = self.HEX_NUMERIC_LITERAL.match(value)
         if hex_match:
             return self.normalize_integer_suffix(
@@ -1701,6 +1918,15 @@ class SlangToCrossGLConverter:
             normalized = f"{normalized}.0"
         return normalized
 
+    def normalize_hex_float_literal(self, body):
+        try:
+            normalized = format(Decimal.from_float(float.fromhex(body)), "f")
+        except (InvalidOperation, OverflowError, ValueError):
+            return body
+        if "." not in normalized:
+            normalized = f"{normalized}.0"
+        return normalized
+
     def normalize_integer_suffix(self, body, suffix):
         if not suffix:
             return body
@@ -1723,6 +1949,11 @@ class SlangToCrossGLConverter:
             if generic_vector_or_matrix:
                 return f"{generic_vector_or_matrix}{pointer_suffix}"
             base_type = slang_type.split("<", 1)[0].strip()
+            pointer_buffer_type = self.map_pointer_element_buffer_type(
+                slang_type, base_type
+            )
+            if pointer_buffer_type:
+                return f"{pointer_buffer_type}{pointer_suffix}"
             mapped_type = self.type_map.get(
                 slang_type, self.type_map.get(base_type, slang_type)
             )
@@ -1731,9 +1962,71 @@ class SlangToCrossGLConverter:
         return slang_type
 
     def sanitize_generic_type_expression_arguments(self, type_name):
-        if "<" not in str(type_name):
+        text = str(type_name)
+        if "<" not in text:
             return type_name
-        return re.sub(r"!(?=[A-Za-z_])", "not_", str(type_name))
+
+        start = text.find("<")
+        if start < 0 or not text.endswith(">"):
+            return re.sub(r"!(?=[A-Za-z_])", "not_", text)
+
+        arguments = self.generic_type_arguments(text)
+        if not arguments:
+            return re.sub(r"!(?=[A-Za-z_])", "not_", text)
+
+        base_type = text[:start]
+        sanitized_arguments = [
+            self.sanitize_generic_type_argument(argument) for argument in arguments
+        ]
+        return f"{base_type}<{', '.join(sanitized_arguments)}>"
+
+    def sanitize_generic_type_argument(self, argument):
+        argument = re.sub(r"!(?=[A-Za-z_])", "not_", str(argument).strip())
+        if "<" in argument:
+            argument = self.sanitize_generic_type_expression_arguments(argument)
+        if not self.requires_generic_value_argument_encoding(argument):
+            return argument
+        return self.encode_generic_value_argument(argument)
+
+    def requires_generic_value_argument_encoding(self, argument):
+        return re.search(r"[()+\-*/%]", str(argument)) is not None
+
+    def encode_generic_value_argument(self, argument):
+        text = str(argument).strip()
+        replacements = [
+            ("&&", "_and_"),
+            ("||", "_or_"),
+            ("!=", "_ne_"),
+            ("==", "_eq_"),
+            ("<=", "_le_"),
+            (">=", "_ge_"),
+            ("::", "_"),
+            ("+", "_plus_"),
+            ("-", "_minus_"),
+            ("*", "_mul_"),
+            ("/", "_div_"),
+            ("%", "_mod_"),
+            ("<", "_lt_"),
+            (">", "_gt_"),
+            ("!", "not_"),
+        ]
+        for old, new in replacements:
+            text = text.replace(old, new)
+        text = re.sub(r"[^A-Za-z0-9_]+", "_", text)
+        text = re.sub(r"_+", "_", text).strip("_")
+        if not text or not re.match(r"[A-Za-z_]", text):
+            text = f"value_{text}" if text else "value"
+        elif not text.startswith("value_"):
+            text = f"value_{text}"
+        return text
+
+    def map_pointer_element_buffer_type(self, slang_type, base_type):
+        if base_type not in {"StructuredBuffer", "RWStructuredBuffer"}:
+            return None
+        args = self.generic_type_arguments(slang_type)
+        if len(args) != 1 or "*" not in args[0]:
+            return None
+        return f"buffer<{self.map_type(args[0])}>"
 
     def map_associated_differential_type(self, slang_type):
         match = self.ASSOCIATED_DIFFERENTIAL_TYPE.fullmatch(str(slang_type))
@@ -1767,6 +2060,7 @@ class SlangToCrossGLConverter:
 
         vector_prefixes = {
             "float": "vec",
+            "half": "half",
             "int": "ivec",
             "uint": "uvec",
             "bool": "bvec",
@@ -1799,9 +2093,51 @@ class SlangToCrossGLConverter:
             return None
         return f"{prefix}{rows}"
 
-    def map_parameter_type(self, slang_type):
+    def map_parameter_type(self, slang_type, function_qualifier=None):
         """Map Slang parameter wrapper types to CrossGL value/resource types."""
+        patch_element_type = self.non_tessellation_patch_parameter_element_type(
+            slang_type, function_qualifier
+        )
+        if patch_element_type:
+            return self.map_type(patch_element_type)
         return self.map_type(self.unwrap_resource_container_type(slang_type))
+
+    def non_tessellation_patch_parameter_array_suffix(
+        self, slang_type, function_qualifier
+    ):
+        patch_type = self.non_tessellation_patch_parameter_type_info(
+            slang_type, function_qualifier
+        )
+        if patch_type is None:
+            return ""
+        _element_type, control_points = patch_type
+        return f"[{control_points}]" if control_points else ""
+
+    def non_tessellation_patch_parameter_element_type(
+        self, slang_type, function_qualifier
+    ):
+        patch_type = self.non_tessellation_patch_parameter_type_info(
+            slang_type, function_qualifier
+        )
+        if patch_type is None:
+            return None
+        element_type, _control_points = patch_type
+        return element_type
+
+    def non_tessellation_patch_parameter_type_info(
+        self, slang_type, function_qualifier
+    ):
+        if function_qualifier in {"tessellation_control", "tessellation_evaluation"}:
+            return None
+        base_type = str(slang_type or "").split("<", 1)[0].strip()
+        if base_type not in {"InputPatch", "OutputPatch"}:
+            return None
+        arguments = self.generic_type_arguments(slang_type)
+        if not arguments:
+            return None
+        element_type = arguments[0]
+        control_points = arguments[1] if len(arguments) > 1 else None
+        return element_type, control_points
 
     def canonical_function_call_name(self, name):
         """Return the CrossGL-facing name for known namespace-qualified builtins."""

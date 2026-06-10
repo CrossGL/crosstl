@@ -1,8 +1,8 @@
 #include <hip/device_functions.h>
+#include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
 #include <hip/hip_runtime_api.h>
 #include <hip/math_functions.h>
-
 __device__ inline float cgl_float3_dot(float3 lhs, float3 rhs) {
   return (lhs.x * rhs.x) + (lhs.y * rhs.y) + (lhs.z * rhs.z);
 }

@@ -1,5 +1,6 @@
 import shutil
 import subprocess
+from pathlib import Path
 from typing import List
 
 import pytest
@@ -5247,6 +5248,48 @@ def test_resource_size_target_shape_contexts_for_mojo_codegen():
     assert "accept2(texture_size(tex, 0))" in generated_code
     assert "var dims: SIMD[DType.int32, 4] = texture_size(tex, 0)" in generated_code
     assert "accept3(texture_size(tex, 0))" in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+
+
+def test_resource_size_vector_arithmetic_casts_to_float_target_for_mojo_codegen():
+    code = """
+    sampler2D shadowMap;
+
+    vec2 texelSize(sampler2D shadowMap) {
+        vec2 texel_size = 1.0 / textureSize(shadowMap, 0);
+        return texel_size;
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "var texel_size: SIMD[DType.float32, 2] = "
+        "(1.0 / (texture_size(shadowMap, 0)).cast[DType.float32]())"
+    ) in generated_code
+    assert "textureSize(" not in generated_code
+
+
+def test_universal_pbr_example_translates_resource_size_vectors_to_mojo():
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (repo_root / "examples/cross_platform/UniversalPBRShader.cgl").read_text(
+        encoding="utf-8"
+    )
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert (
+        "var texel_size: SIMD[DType.float32, 2] = "
+        "(1.0 / (texture_size(shadow_map, 0)).cast[DType.float32]())"
+    ) in generated_code
+    assert (
+        "var uv: SIMD[DType.float32, 2] = "
+        "((SIMD[DType.float32, 2](coord[0].cast[DType.float32](), "
+        "coord[1].cast[DType.float32]()) + 0.5) / "
+        "SIMD[DType.float32, 2](size[0].cast[DType.float32](), "
+        "size[1].cast[DType.float32]()))"
+    ) in generated_code
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
 

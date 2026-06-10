@@ -375,6 +375,32 @@ class TestHipCodeGen:
         assert "MemoryMode::PAGED" in result
         assert "EnumNode" not in result
 
+    def test_current_rocm_stb_anonymous_enum_codegen_reparse(self):
+        # Reduced from:
+        # repo: https://github.com/ROCm/rocm-examples
+        # commit: adaf64a066eecb4ad90036dfd1838fc95bed9914
+        # path: Applications/optical_flow/stb_image.h
+        code = """
+        enum {
+            STBI_default = 0,
+            STBI_grey = 1,
+            STBI_rgb_alpha = 4,
+        };
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+        assert "enum anonymous_enum_0 {" in result
+        assert "STBI_default = 0," in result
+        assert "STBI_rgb_alpha = 4," in result
+        assert "enum  {" not in result
+
     def test_inline_assembly_conversion(self):
         code = r"""
         __global__ void asmKernel(float* out, float in) {
@@ -682,6 +708,9 @@ class TestHipCodeGen:
         assert codegen.convert_hip_type_to_crossgl("double") == "f64"
         assert codegen.convert_hip_type_to_crossgl("bool") == "bool"
         assert codegen.convert_hip_type_to_crossgl("void") == "void"
+        assert codegen.convert_hip_type_to_crossgl("signed char") == "i8"
+        assert codegen.convert_hip_type_to_crossgl("long long int") == "i64"
+        assert codegen.convert_hip_type_to_crossgl("unsigned long long int") == "u64"
         assert codegen.convert_hip_type_to_crossgl("long long unsigned int") == "u64"
         assert codegen.convert_hip_type_to_crossgl("half") == "f16"
         assert codegen.convert_hip_type_to_crossgl("__half") == "f16"
@@ -16482,6 +16511,41 @@ class TestHipCodeGen:
         assert "for x in h {" in result
         assert "&&" not in result.replace("(true && false)", "")
 
+    def test_cpp_alternative_operators_codegen_reparse(self):
+        # Sibling CUDA fixture provenance: NVIDIA/cutlass@1fc71b3,
+        # examples/common/dist_gemm_helpers.h, uses C++ alternative `not`.
+        code = """
+        void host(bool ready, bool done, bool fallback, int mask, int flag) {
+            bool keep = ready and not done or fallback;
+            int bits = (mask bitand flag) bitor compl flag;
+            mask and_eq flag;
+            bits xor_eq 3;
+            if (bits not_eq 0) {
+                return;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var keep: bool = ((ready && (!done)) || fallback);" in result
+        assert "var bits: i32 = ((mask & flag) | (~flag));" in result
+        assert "mask &= flag;" in result
+        assert "bits ^= 3;" in result
+        assert "if ((bits != 0)) {" in result
+        assert " and " not in result
+        assert " not " not in result
+        assert "bitand" not in result
+        assert "bitor" not in result
+        assert "compl" not in result
+        assert "not_eq" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_cpp_named_casts_conversion(self):
         code = """
         void host(const float* input, float* data, int i, int n) {
@@ -16695,6 +16759,52 @@ class TestHipCodeGen:
         assert "var table: Table;" in result
         assert "consume(h, owned);" in result
         assert "using namespace" not in result
+
+    def test_public_hipblaslt_scoped_type_alias_codegen_reparse(self):
+        # Reduced from ROCm/hipBLASLt@3a609b06926c8227e753b62087555e1f435bf2d4,
+        # clients/include/hipblaslt_random.hpp.
+        code = """
+        using hipblaslt_rng_t = std::mt19937;
+        extern thread_local hipblaslt_rng_t t_hipblaslt_rng;
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+        assert "typedef ptr<void> hipblaslt_rng_t;" in result
+        assert "typedef std::mt19937" not in result
+        assert "var t_hipblaslt_rng: hipblaslt_rng_t;" in result
+
+    def test_public_hipblaslt_function_specialization_name_codegen_reparse(self):
+        # Reduced from ROCm/hipBLASLt@3a609b06926c8227e753b62087555e1f435bf2d4,
+        # clients/include/hipblaslt_random.hpp.
+        code = """
+        template <typename T>
+        T random_generator() {
+            return T(0);
+        }
+
+        template <>
+        float random_generator<float>() {
+            return 1.0f;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+        assert "f32 random_generator()" in result
+        assert "f32 random_generator<float>" not in result
 
     def test_typedef_multi_declarator_alias_conversion(self):
         code = """

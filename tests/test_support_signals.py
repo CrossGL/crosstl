@@ -218,6 +218,20 @@ def test_load_docs_report_accepts_valid_contract(tmp_path):
     assert report["path"] == module.relpath(docs_path)
 
 
+def test_check_defaults_to_checked_in_docs_report_when_present(tmp_path, monkeypatch):
+    module = load_signals_module()
+    docs_path = tmp_path / "backend-docs-report.json"
+    docs_path.write_text(json.dumps(valid_docs_report()), encoding="utf-8")
+    monkeypatch.setattr(module, "DEFAULT_DOCS_REPORT_PATH", docs_path)
+
+    assert module.resolve_docs_report_path("check", None) == docs_path
+    assert module.resolve_docs_report_path("extract", None) == docs_path
+    assert module.resolve_docs_report_path("update", None) == docs_path
+
+    docs_path.unlink()
+    assert module.resolve_docs_report_path("check", None) is None
+
+
 def test_load_docs_report_reports_malformed_json(tmp_path):
     module = load_signals_module()
     docs_path = tmp_path / "backend-docs-report.json"

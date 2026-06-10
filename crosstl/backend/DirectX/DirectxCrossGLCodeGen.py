@@ -34,6 +34,19 @@ class HLSLToCrossGLConverter:
             "AppendStructuredBuffer",
             "ConsumeStructuredBuffer",
         }
+        self.generic_passthrough_types = {
+            "DispatchNodeInputRecord",
+            "RWDispatchNodeInputRecord",
+            "GroupNodeInputRecords",
+            "RWGroupNodeInputRecords",
+            "ThreadNodeInputRecord",
+            "RWThreadNodeInputRecord",
+            "NodeOutput",
+            "NodeOutputArray",
+            "ThreadNodeOutputRecords",
+            "GroupNodeOutputRecords",
+            "NodeOutputRecords",
+        }
         self.type_map = {
             # Scalar Types
             "void": "void",
@@ -71,6 +84,8 @@ class HLSLToCrossGLConverter:
             "uint16_t": "uint16",
             "int64_t": "int64",
             "uint64_t": "uint64",
+            "int8_t4_packed": "uint",
+            "uint8_t4_packed": "uint",
             # Vector Types - float
             "float2": "vec2",
             "float3": "vec3",
@@ -441,6 +456,7 @@ class HLSLToCrossGLConverter:
         self.suppress_storage_image_index_lowering = False
         self.function_identifier_renames = {}
         self.global_identifier_renames = {}
+        self.type_identifier_renames = {}
         self.legacy_sampler_bindings = {}
         self.legacy_sampler_declaration_ids = set()
         self.legacy_bound_texture_types = {}
@@ -1409,7 +1425,14 @@ class HLSLToCrossGLConverter:
             return name
         if name in self.current_identifier_renames:
             return self.current_identifier_renames[name]
-        return self.global_identifier_renames.get(name, name)
+        rendered = self.global_identifier_renames.get(name, name)
+        if self.is_opaque_template_value_path(rendered):
+            return self.sanitize_scoped_identifier_name(rendered)
+        return rendered
+
+    def is_opaque_template_value_path(self, name):
+        """Return whether an HLSL template value path needs CrossGL-safe spelling."""
+        return isinstance(name, str) and "<" in name and ">" in name and "::" in name
 
     def function_parameter_renames(self, params):
         reserved_names = {param.name for param in params if param.name}
@@ -1455,6 +1478,41 @@ class HLSLToCrossGLConverter:
             used_names.add(candidate)
         return renames
 
+    def collect_type_identifier_renames(self, ast):
+        declared_names = {
+            name
+            for nodes in (
+                getattr(ast, "structs", []) or [],
+                getattr(ast, "typedefs", []) or [],
+                getattr(ast, "enums", []) or [],
+            )
+            for node in nodes
+            for name in [getattr(node, "name", None)]
+            if isinstance(name, str) and name
+        }
+        used_names = set(declared_names) | set(
+            self.function_identifier_renames.values()
+        )
+        renames = {}
+        for name in sorted(declared_names):
+            if (
+                name.isidentifier()
+                and name not in self.crossgl_reserved_identifiers
+                and "::" not in name
+            ):
+                continue
+            if name.isidentifier() and name in self.crossgl_reserved_identifiers:
+                candidate = f"{name}_"
+            else:
+                candidate = self.sanitize_scoped_identifier_name(name)
+                if candidate in self.crossgl_reserved_identifiers:
+                    candidate = f"{candidate}_"
+            while candidate in used_names or candidate in renames.values():
+                candidate = f"{candidate}_"
+            renames[name] = candidate
+            used_names.add(candidate)
+        return renames
+
     def collect_global_identifier_renames(self, ast):
         declared_names = {
             name
@@ -1491,6 +1549,11 @@ class HLSLToCrossGLConverter:
             return name
         return self.function_identifier_renames.get(name, name)
 
+    def render_type_identifier(self, name):
+        if not isinstance(name, str):
+            return name
+        return self.type_identifier_renames.get(name, name)
+
     def normalize_hlsl_intrinsic_name(self, name):
         """Drop HLSL's intrinsic namespace so builtin lowering still applies."""
         if not isinstance(name, str):
@@ -1513,8 +1576,22 @@ class HLSLToCrossGLConverter:
                 parts.append(f"[{self.generate_expression(size, is_main)}]")
         return "".join(parts)
 
+    def format_type_alias_target(self, alias_type, alias):
+        mapped_type = self.map_type(alias_type)
+        sizes = getattr(alias, "array_sizes", None) or []
+        if not any(size is None for size in sizes):
+            return f"{mapped_type}{self.format_array_suffixes(alias)}"
+
+        type_text = mapped_type
+        for size in reversed(sizes):
+            if size is None:
+                type_text = f"[{type_text}]"
+            else:
+                type_text = f"{type_text}[{self.generate_expression(size)}]"
+        return type_text
+
     def generate_enum(self, enum, indent=1):
-        code = "    " * indent + f"enum {enum.name} {{\n"
+        code = "    " * indent + f"enum {self.render_type_identifier(enum.name)} {{\n"
         for member_name, member_value in enum.members:
             if member_value is None:
                 code += "    " * (indent + 1) + f"{member_name},\n"
@@ -1540,6 +1617,10 @@ class HLSLToCrossGLConverter:
                 if isinstance(name, str) and name:
                     if isinstance(node, FunctionNode):
                         name = self.render_function_identifier(name)
+                    elif isinstance(node, (StructNode, TypeAliasNode, EnumNode)):
+                        name = self.render_type_identifier(name)
+                    else:
+                        name = self.render_identifier(name)
                     names.add(name)
         return names
 
@@ -1564,7 +1645,7 @@ class HLSLToCrossGLConverter:
             if attr_name.lower() in skip_names:
                 continue
             attr_name = self.crossgl_attribute_name(attr_name)
-            prefix = "@" if attr_name.lower() == "domain" else "@ "
+            prefix = "@" if attr_name in self.crossgl_reserved_identifiers else "@ "
             args = getattr(attr, "args", getattr(attr, "arguments", []))
             if args:
                 rendered_args = ", ".join(self.generate_expression(arg) for arg in args)
@@ -2916,6 +2997,7 @@ class HLSLToCrossGLConverter:
         self.function_identifier_renames = self.collect_function_identifier_renames(
             ast.functions
         )
+        self.type_identifier_renames = self.collect_type_identifier_renames(ast)
         self.global_identifier_renames = self.collect_global_identifier_renames(ast)
         code = "shader main {\n"
         typedefs = getattr(ast, "typedefs", []) or []
@@ -2926,10 +3008,9 @@ class HLSLToCrossGLConverter:
                     alias, "original_type", None
                 )
                 if alias_type is not None:
-                    array_suffix = self.format_array_suffixes(alias)
                     code += (
-                        f"    type {alias.name} = "
-                        f"{self.map_type(alias_type)}{array_suffix};\n"
+                        f"    type {self.render_type_identifier(alias.name)} = "
+                        f"{self.format_type_alias_target(alias_type, alias)};\n"
                     )
         if enums:
             for enum in enums:
@@ -2940,7 +3021,7 @@ class HLSLToCrossGLConverter:
             if getattr(node, "is_forward_declaration", False):
                 continue
             if isinstance(node, StructNode):
-                code += f"    struct {node.name} {{\n"
+                code += f"    struct {self.render_type_identifier(node.name)} {{\n"
                 for member in node.members:
                     if isinstance(member, EnumNode):
                         code += self.generate_enum(member, 2)
@@ -3257,7 +3338,10 @@ class HLSLToCrossGLConverter:
         initializer = ""
         if getattr(node, "value", None) is not None:
             initializer = f" = {self.generate_expression(node.value)}"
-        declaration_prefix = f"{storage_prefix}{precise_prefix}"
+        if storage_prefix == "const " and precise_prefix:
+            declaration_prefix = f"{precise_prefix}{storage_prefix}"
+        else:
+            declaration_prefix = f"{storage_prefix}{precise_prefix}"
         if (
             getattr(node, "attributes", None)
             and not declaration_prefix
@@ -3289,9 +3373,13 @@ class HLSLToCrossGLConverter:
                     code += self.format_binding_attributes(member, 2)
                     array_suffix = self.format_array_suffixes(member)
                     qualifier_prefix = self.format_precise_qualifier_prefix(member)
+                    initializer = ""
+                    if getattr(member, "value", None) is not None:
+                        initializer = f" = {self.generate_expression(member.value)}"
                     code += (
                         f"        {qualifier_prefix}{self.map_variable_type(member)} "
-                        f"{self.render_identifier(member.name)}{array_suffix};\n"
+                        f"{self.render_identifier(member.name)}{array_suffix}"
+                        f"{initializer};\n"
                     )
                 code += "    }\n"
         return code
@@ -3868,6 +3956,33 @@ class HLSLToCrossGLConverter:
             return f"({rendered})"
         return rendered
 
+    def binary_operator_text(self, op):
+        return op.value if hasattr(op, "value") else str(op)
+
+    def generate_flat_long_binary_expression(self, expr, is_main=False):
+        op = self.binary_operator_text(expr.op)
+        if op != "+":
+            return None
+
+        parts = []
+        current = expr
+        while (
+            isinstance(current, BinaryOpNode)
+            and self.binary_operator_text(current.op) == op
+        ):
+            parts.append(current.right)
+            current = current.left
+
+        parts.append(current)
+        if len(parts) < 16:
+            return None
+
+        rendered_parts = []
+        for part in reversed(parts):
+            rendered = self.generate_expression(part, is_main)
+            rendered_parts.append(self.maybe_parenthesize(part, rendered))
+        return f" {op} ".join(rendered_parts)
+
     def generate_for_loop(self, node, indent, is_main):
         def render_initializer(initializer, include_type=True):
             if isinstance(initializer, VariableNode):
@@ -3990,6 +4105,9 @@ class HLSLToCrossGLConverter:
         elif isinstance(expr, VariableNode):
             return self.render_identifier(expr.name)
         elif isinstance(expr, BinaryOpNode):
+            flat_expression = self.generate_flat_long_binary_expression(expr, is_main)
+            if flat_expression is not None:
+                return flat_expression
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
             left = self.maybe_parenthesize(expr.left, left)
@@ -4230,6 +4348,12 @@ class HLSLToCrossGLConverter:
             storage_image_type = self.map_rw_texture_type(base, generic_type)
             if storage_image_type:
                 return storage_image_type
+            if base in self.generic_passthrough_types:
+                mapped_args = ", ".join(
+                    self.sanitize_type_name(self.canonical_composite_type(arg))
+                    for arg in self.split_generic_arguments(generic_type)
+                )
+                return f"{self.sanitize_type_name(base)}<{mapped_args}>"
             type_name = base
         default_template_type = {
             "vector": "vec4",
@@ -4360,7 +4484,13 @@ class HLSLToCrossGLConverter:
 
     def sanitize_type_name(self, type_name):
         """Convert HLSL scoped type paths into CrossGL identifier-safe names."""
-        return str(type_name).replace("::", "_")
+        raw = str(type_name)
+        if raw in self.type_identifier_renames:
+            return self.type_identifier_renames[raw]
+        sanitized = raw.replace("::", "_")
+        if sanitized in self.type_identifier_renames:
+            return self.type_identifier_renames[sanitized]
+        return sanitized
 
     def sanitize_scoped_identifier_name(self, name):
         """Convert HLSL scoped function declarations into CrossGL identifiers."""
@@ -4805,7 +4935,7 @@ class HLSLToCrossGLConverter:
     def visit_StructNode(self, node):
         if getattr(node, "is_forward_declaration", False):
             return ""
-        code = f"struct {node.name} {{\n"
+        code = f"struct {self.render_type_identifier(node.name)} {{\n"
         self.indentation += 1
 
         for member in node.members:

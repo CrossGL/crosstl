@@ -592,7 +592,10 @@ static LIGHT_DIRECTION : std::sync::LazyLock<math::Vec3<f32>> =
 static CAMERA_POSITION : std::sync::LazyLock<math::Vec3<f32>> =
                              std::sync::LazyLock::new (|| Default::default());
 // CrossGL resource metadata: name=main_texture kind=texture set=0 binding=0
-// binding_source=automatic
+// binding_source=automatic CrossGL Rust limitation: resource main_texture is
+// emitted as a compile-only placeholder static, not a rust-gpu resource
+// binding; pass real spirv_std resources as #[spirv(...)] entry parameters when
+// targeting rust-gpu.
 static MAIN_TEXTURE : std::sync::LazyLock<Texture2D<f32>> =
                           std::sync::LazyLock::new (|| Default::default());
 // Fragment Shader

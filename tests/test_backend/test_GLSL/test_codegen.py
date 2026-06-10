@@ -186,6 +186,30 @@ def test_codegen_multiline_for_header_from_graphicsfuzz_bubblesort():
     assert "for (int i = 0; (i < 2); (i++))" in crossgl
 
 
+def test_codegen_pointer_declarators_reparse_from_compiler_fixtures():
+    # Reduced from CrossGL-Compiler fixtures:
+    # StorageBufferArrayAccessShader.cgl and StorageBufferPointerHelperParamShader.cgl.
+    code = textwrap.dedent("""
+        #version 450 core
+        uniform float* values[2];
+
+        void writeScalar(float* dst, float value) {
+            dst[0] = value;
+        }
+
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            writeScalar(values[0], 1.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "compute")
+
+    assert "float* values[2];" in crossgl
+    assert "void writeScalar(float* dst, float value)" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_layout_qualifier_with_newline_before_parens_from_glsl_grammar():
     # GLSL 4.60 layout-qualifier is "layout ( ... )"; newlines are whitespace.
     code = textwrap.dedent("""
@@ -269,6 +293,45 @@ def test_codegen_function_call_array_sizes_roundtrip_from_glslang_constfold():
         "vec4 arrayMax[(int(max(float(array2.length()), float(array3.length()))))];"
         in crossgl
     )
+
+
+def test_codegen_transform_feedback_defaults_reparse_from_glslang():
+    # Reduced from KhronosGroup/glslang Test/spv.xfb.vert at
+    # 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515. GLSL transform-feedback
+    # defaults are ordered, so conflicting xfb_buffer defaults must be folded
+    # onto the affected output declarations instead of emitted as global stage
+    # layouts that CrossGL validation treats as simultaneous.
+    code = textwrap.dedent("""
+        #version 450
+
+        layout(xfb_buffer = 3) out;
+        layout(xfb_stride = 48) out;
+        layout(xfb_offset = 12, location = 0) out float out1;
+
+        layout(xfb_buffer = 2) out;
+        layout(location=1) out outXfb {
+            layout(xfb_buffer = 2, xfb_stride = 32, xfb_offset = 8) float out2;
+        };
+
+        layout(xfb_buffer = 1, location=3) out outXfb2 {
+            layout(xfb_stride = 64, xfb_offset = 60) float out3;
+        };
+
+        layout(location = 4, xfb_buffer = 0, xfb_offset = 4) out float out4;
+
+        void main()
+        {
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert "layout(xfb_buffer = 3) out;" not in crossgl
+    assert (
+        "float out1 @location(0) @xfb_buffer(3) @xfb_offset(12) @xfb_stride(48);"
+        in crossgl
+    )
+    assert "float out4 @location(4) @xfb_buffer(0) @xfb_offset(4);" in crossgl
 
 
 def test_codegen_half_float_suffix_and_ssbo_struct_array_roundtrip_from_glslang():
@@ -721,6 +784,34 @@ def test_codegen_inversesqrt_from_khronos_spec_preserves_glsl_spelling():
     assert "float scalarInv = inversesqrt(4.0);" in glsl
     assert "vec3 vectorInv = inversesqrt(vec3(4.0, 9.0, 16.0));" in glsl
     assert "inverseSqrt(" not in glsl
+
+
+def test_codegen_debug_printf_string_literal_roundtrip_from_saschawillems():
+    # Reduced from SaschaWillems/Vulkan@2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade
+    # shaders/glsl/debugprintf/toon.vert. The GLSL emitter must keep quotes
+    # around printf format strings; otherwise the generated GLSL reparses as
+    # an invalid expression containing a bare '%' token.
+    code = textwrap.dedent("""
+        #version 450
+        #extension GL_EXT_debug_printf : enable
+
+        layout(location = 0) in vec3 inPos;
+        layout(location = 0) out vec4 outColor;
+
+        void main()
+        {
+            vec4 pos = vec4(inPos, 1.0);
+            debugPrintfEXT("Position = %v4f", pos);
+            outColor = pos;
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+    assert 'debugPrintfEXT("Position = %v4f", pos);' in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert 'debugPrintfEXT("Position = %v4f", pos);' in glsl
+    GLSLParser(GLSLLexer(glsl).tokenize(), "vertex").parse()
 
 
 def test_codegen_resource_function_descriptors():
@@ -1810,6 +1901,31 @@ def test_codegen_unnamed_function_parameters_get_stable_names():
 
     assert "void ftd(int _param0, float _param1, double _param2)" in crossgl
     assert "ftd(1, 1.0, 2.0)" in crossgl
+
+
+def test_codegen_variadic_function_parameter_from_glslang_reparse():
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/variadic.comp.
+    code = textwrap.dedent("""
+        #version 450
+
+        void foo(int n, ...)
+        {
+        }
+
+        void main()
+        {
+            foo(7);
+            foo(8, 43);
+            foo(9, 42.0, 21.05);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "compute", ShaderStage.COMPUTE)
+
+    assert "void foo(int n)" in crossgl
+    assert "... ..." not in crossgl
+    assert "foo(9, 42.0, 21.05)" in crossgl
 
 
 def test_codegen_query_intrinsics_use_resource_descriptors():

@@ -50,18 +50,22 @@ PYTORCH_POOLING_COMMIT = "7168b60c0d3561d93aac7519d03d1bd95ee3e7a3"
 PYTORCH_BUCKETIZATION_COMMIT = "5ee1f788c7098ae5e50e49543ee7822f73cd8990"
 PYTORCH_ACTIVATION_COMMIT = "fa5cb72912c44b22acd9c26c69f3e933794ac501"
 PYTORCH_C10_METAL_CONSTEXPR_COMMIT = "fa5cb72912c44b22acd9c26c69f3e933794ac501"
+PYTORCH_CURRENT_COMMIT = "474a11a166e1313c37a9ad6f5ed0c887409d2cfc"
 CANDLE_REPO = "https://github.com/huggingface/candle"
 CANDLE_COMMIT = "39355c6c9187747e360a2d6ec9d67a2a501b2552"
 LLAMA_CPP_REPO = "https://github.com/ggml-org/llama.cpp"
 LLAMA_CPP_COMMIT = "94a220cd6745e6e3f8de62870b66fd5b9bc92700"
 LLAMA_CPP_GGML_COMMON_COMMIT = "e3471b3e7306fe120dc8f38a2263c1293fc2add7"
 LLAMA_CPP_METAL_DEVICE_COMMIT = "f0152efe401acd5b329b5f62d87dc070a6d069f0"
+LLAMA_CPP_METAL_CONTEXT_COMMIT = "d6d0ce8215a1c324e8de04b52f9dd65c5edc129f"
 PMETAL_REPO = "https://github.com/Epistates/pmetal"
 PMETAL_COMMIT = "089171635d1b9c9b7a58b575cf7d522834022cd3"
 IMGUI_REPO = "https://github.com/ocornut/imgui"
 IMGUI_COMMIT = "7950c96f0e86b761607a34601f19e90afa825bd6"
 METALPETAL_REPO = "https://github.com/MetalPetal/MetalPetal"
 METALPETAL_COMMIT = "f9b78897bd4214bb097f352a1bde0a4f4a1e2ddb"
+WEBKIT_REPO = "https://github.com/WebKit/WebKit"
+WEBKIT_COMMIT = "7f16a4cd45bf6fe4c1b0bcdddec0b1bdee6859c1"
 BLENDER_REPO = "https://github.com/blender/blender"
 BLENDER_COMMIT = "2d196d20b93a9f6e596e6d451c5e845d84f21c89"
 BLENDER_STRING_COMMIT = "e5fc656cdab0e682296f8dd024b942b548e788f4"
@@ -837,6 +841,41 @@ EXTERNAL_FIXTURES = [
         "source": _dawn_deep_tint_array_initializer_source(),
     },
     {
+        "name": "dawn_tint_warning_prologue_before_generated_msl",
+        "repo_url": DAWN_REPO,
+        "commit": DAWN_COMMIT,
+        "source_path": "test/tint/bug/tint/2201.wgsl.expected.msl",
+        "roundtrip": False,
+        "source": (
+            """
+            <dawn>/test/tint/bug/tint/2201.wgsl:9:9 warning: code is unreachable
+                    let _e16_ = vec2(false, false);
+                    ^^^^^^^^^
+
+            #include <metal_stdlib>
+            using namespace metal;
+
+            [[max_total_threads_per_threadgroup(1)]]
+            kernel void v() {
+              {
+                uint2 tint_loop_idx = uint2(4294967295u);
+                while(true) {
+                  if (all((tint_loop_idx == uint2(0u)))) {
+                    break;
+                  }
+                  if (true) {
+                    break;
+                  } else {
+                    break;
+                  }
+                  /* unreachable */
+                }
+              }
+            }
+        """
+        ),
+    },
+    {
         "name": "mlx_axpby_template_static_cast_buffer_store",
         "repo_url": MLX_REPO,
         "commit": MLX_COMMIT,
@@ -1321,12 +1360,13 @@ EXTERNAL_FIXTURES = [
         "repo_url": PYTORCH_REPO,
         "commit": PYTORCH_GRID_SAMPLER_COMMIT,
         "source_path": "aten/src/ATen/native/mps/kernels/GridSampler.h",
-        "roundtrip": False,
+        "roundtrip": True,
         "struct_names": ["GridSamplerParams"],
         "contains": [
-            "c10::metal::array<idx_t,N> output_sizes;",
-            "c10::metal::array<idx_t,N> input_strides;",
+            "idx_t[N] output_sizes;",
+            "idx_t[N] input_strides;",
         ],
+        "not_contains": ["c10::metal::array"],
         "source": (
             """
             template <unsigned N = 5, typename idx_t = int32_t>
@@ -1335,6 +1375,94 @@ EXTERNAL_FIXTURES = [
                 ::c10::metal::array<idx_t, N> output_sizes;
                 ::c10::metal::array<idx_t, N> input_strides;
             };
+            """
+        ),
+    },
+    # Reduced from:
+    # Repo: https://github.com/pytorch/pytorch
+    # Commit: 474a11a166e1313c37a9ad6f5ed0c887409d2cfc
+    # Path: aten/src/ATen/native/mps/kernels/UpSample.h
+    {
+        "name": "pytorch_upsample_c10_array_expression_extent",
+        "repo_url": PYTORCH_REPO,
+        "commit": PYTORCH_CURRENT_COMMIT,
+        "source_path": "aten/src/ATen/native/mps/kernels/UpSample.h",
+        "roundtrip": True,
+        "contains": [
+            "uint64[N] input_strides;",
+            "float[N-2] scales;",
+        ],
+        "not_contains": ["c10::metal::array"],
+        "source": (
+            """
+            #include <c10/metal/common.h>
+
+            template <unsigned N = 5>
+            struct UpsampleParams {
+                ::c10::metal::array<uint64_t, N> input_strides;
+                ::c10::metal::array<float, N - 2> scales;
+                bool align_corners;
+            };
+            """
+        ),
+    },
+    # Reduced from:
+    # Repo: https://github.com/pytorch/pytorch
+    # Commit: 474a11a166e1313c37a9ad6f5ed0c887409d2cfc
+    # Path: aten/src/ATen/native/mps/kernels/Embedding.h
+    {
+        "name": "pytorch_embedding_c10_array_scoped_extent",
+        "repo_url": PYTORCH_REPO,
+        "commit": PYTORCH_CURRENT_COMMIT,
+        "source_path": "aten/src/ATen/native/mps/kernels/Embedding.h",
+        "roundtrip": True,
+        "contains": [
+            "idx_type_t[c10_u3a_u3ametal_u3a_u3amax_ndim] outer_sizes;",
+            "int64 padding_idx;",
+        ],
+        "not_contains": ["c10::metal::array", "::c10::metal::max_ndim"],
+        "source": (
+            """
+            #include <c10/metal/common.h>
+
+            template <typename idx_type_t = uint32_t>
+            struct EmbeddingDenseBackwardParams {
+                ::c10::metal::array<idx_type_t, ::c10::metal::max_ndim>
+                    outer_sizes;
+                int64_t padding_idx;
+            };
+            """
+        ),
+    },
+    # Reduced from:
+    # Repo: https://github.com/pytorch/pytorch
+    # Commit: 474a11a166e1313c37a9ad6f5ed0c887409d2cfc
+    # Path: c10/metal/atomic.h
+    {
+        "name": "pytorch_atomic_function_pointer_parameter",
+        "repo_url": PYTORCH_REPO,
+        "commit": PYTORCH_CURRENT_COMMIT,
+        "source_path": "c10/metal/atomic.h",
+        "roundtrip": True,
+        "contains": [
+            "void atomic_binary_op_helper(device atomic<AT>* data",
+            "T* op)",
+            "val = op(value, value);",
+        ],
+        "not_contains": ["(*op)"],
+        "source": (
+            """
+            #include <metal_atomic>
+
+            template <typename AT, typename T>
+            static inline void atomic_binary_op_helper(
+                device ::metal::atomic<AT>* data,
+                long offset,
+                T value,
+                T (*op)(T, T)) {
+                T val;
+                val = op(value, value);
+            }
         """
         ),
     },
@@ -1615,6 +1743,29 @@ EXTERNAL_FIXTURES = [
             ggml_metal_library_get_pipeline_base(
                 ggml_metal_library_t lib,
                 enum ggml_op op);
+        """
+        ),
+    },
+    {
+        "name": "llama_cpp_ggml_metal_context_enum_return_prototypes",
+        "repo_url": LLAMA_CPP_REPO,
+        "commit": LLAMA_CPP_METAL_CONTEXT_COMMIT,
+        "source_path": "ggml/src/ggml-metal/ggml-metal-context.h",
+        "roundtrip": True,
+        "source": (
+            """
+            typedef struct ggml_metal * ggml_metal_t;
+
+            ggml_metal_t ggml_metal_init(ggml_metal_device_t dev);
+            void ggml_metal_free(ggml_metal_t ctx);
+
+            enum ggml_status ggml_metal_graph_compute(
+                ggml_metal_t ctx,
+                struct ggml_cgraph * gf);
+
+            void ggml_metal_graph_optimize(
+                ggml_metal_t ctx,
+                struct ggml_cgraph * gf);
         """
         ),
     },
@@ -2186,6 +2337,73 @@ EXTERNAL_FIXTURES = [
                 v.uv.y = float(row) / targetFrameSize.y;
                 v.opacity = 1.0 - (p.life / 1000.0);
                 return v;
+            }
+        """
+        ),
+    },
+    {
+        "name": "webkit_skia_interface_block_trailing_globals",
+        "repo_url": WEBKIT_REPO,
+        "commit": WEBKIT_COMMIT,
+        "source_path": (
+            "Source/ThirdParty/skia/tests/sksl/shared/InterfaceBlockInoutArray.metal"
+        ),
+        "roundtrip": True,
+        "contains": [
+            "InterfaceBlockIn[3] i;",
+            "thread InterfaceBlockOut[3] o;",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            #include <simd/simd.h>
+            using namespace metal;
+
+            struct Inputs {
+            };
+            struct Outputs {
+                half4 sk_FragColor [[color(0)]];
+            };
+            struct InterfaceBlockIn {
+                int x;
+            } i[3];
+            thread struct InterfaceBlockOut {
+                int x;
+            } o[3];
+            struct Globals {
+                constant InterfaceBlockIn* i;
+                constant InterfaceBlockOut* o;
+            };
+        """
+        ),
+    },
+    {
+        "name": "webkit_skia_restrict_local_identifier",
+        "repo_url": WEBKIT_REPO,
+        "commit": WEBKIT_COMMIT,
+        "source_path": (
+            "Source/ThirdParty/skia/tests/sksl/shared/ReservedInGLSLButAllowedInSkSL.metal"
+        ),
+        "roundtrip": True,
+        "contains": [
+            "f16vec4 restrict = _uniforms.colorGreen;",
+            "return restrict * shared;",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            #include <simd/simd.h>
+            using namespace metal;
+
+            struct Uniforms {
+                half4 colorGreen;
+            };
+
+            fragment half4 fragmentMain(
+                constant Uniforms& _uniforms [[buffer(0)]]) {
+                half4 restrict = _uniforms.colorGreen;
+                half4 shared = _uniforms.colorGreen;
+                return restrict * shared;
             }
         """
         ),

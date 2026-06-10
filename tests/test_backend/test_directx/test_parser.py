@@ -432,6 +432,47 @@ def test_parse_elaborated_struct_function_signature_and_local_from_vkd3d():
     assert local_output.name == "o"
 
 
+def test_parse_elaborated_struct_member_from_dxc_cast_subscript():
+    # Source: microsoft/DirectXShaderCompiler@main
+    # tools/clang/test/HLSLFileCheck/hlsl/types/cast/mat_cast_sub_write.hlsl
+    ast = parse_code(textwrap.dedent("""
+            struct B {
+                uint4 ui;
+            };
+
+            struct M {
+                struct B base;
+                float4 color;
+            };
+            """))
+
+    members = ast.structs[1].members
+
+    assert members[0].vtype == "B"
+    assert members[0].name == "base"
+    assert members[1].vtype == "float4"
+    assert members[1].name == "color"
+
+
+def test_parse_anonymous_embedded_struct_members_from_dxc_workgraphs():
+    # Source: microsoft/DirectXShaderCompiler@main
+    # tools/clang/test/HLSLFileCheck/hlsl/workgraph/nested_sv_dispatchgrid.hlsl
+    ast = parse_code(textwrap.dedent("""
+            struct Record1 {
+                struct {
+                    uint3 grid : SV_DispatchGrid;
+                };
+            };
+            """))
+
+    record = ast.structs[0]
+
+    assert len(record.members) == 1
+    assert record.members[0].vtype == "uint3"
+    assert record.members[0].name == "grid"
+    assert record.members[0].semantic == "SV_DispatchGrid"
+
+
 def test_parse_elaborated_struct_declarations_from_dxc_rewriter():
     ast = parse_code(textwrap.dedent("""
             struct my_struct_type_decl {
@@ -998,6 +1039,18 @@ def test_parse_enum_and_typedef():
     assert ast.typedefs[1].qualifiers == ["row_major"]
     assert ast.typedefs[2].alias_type == "float2"
     assert ast.typedefs[2].qualifiers == ["precise", "const"]
+
+
+def test_parse_const_incomplete_array_typedef_from_dxc():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/HLSLFileCheck/hlsl/types/array/incomp_array.hlsl
+    ast = parse_code("typedef const int inta[];")
+
+    typedef = ast.typedefs[0]
+    assert typedef.name == "inta"
+    assert typedef.alias_type == "int"
+    assert typedef.qualifiers == ["const"]
+    assert typedef.array_sizes == [None]
 
 
 def test_parse_using_alias_declarations_from_hlsl_spec():
@@ -1847,6 +1900,35 @@ def test_parse_dependent_typename_scoped_template_return_from_dxc_sfinae():
     assert wrapper.methods[0].return_type == "hlsl::enable_if<IsArithmetic, U>::type"
     assert wrapper.methods[0].name == "Get"
     assert wrapper.members[-1].name == "val"
+
+
+def test_parse_dependent_scoped_template_call_from_dxc_udt_validation():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/HLSLFileCheck/hlsl/template/4771-udt-parameter-validation.hlsl
+    ast = parse_code("""
+    template<typename T>
+    struct Leg {
+        static T zero() {
+            return (T)0;
+        }
+    };
+
+    template<class Animal>
+    typename Animal::LegType getLegs(Animal A) {
+      return A.Legs + Leg<typename Animal::LegType>::zero();
+    }
+
+    struct Pup {
+      using LegType = int;
+      LegType Legs;
+    };
+    """)
+
+    function = ast.functions[0]
+    returned = function.body[0].value
+
+    assert function.return_type == "Animal::LegType"
+    assert returned.right.name == "Leg<typename Animal::LegType>::zero"
 
 
 def test_parse_variable_template_id_expressions_from_dxc_var_template():

@@ -61,6 +61,43 @@ def test_codegen_preserves_variadic_pack_expansion_from_mlx_integral_constant():
     assert parse_crossgl(generated) is not None
 
 
+def test_codegen_keeps_dependent_enable_if_return_type_from_tinygrad_metal():
+    # Reduced from tinygrad/tinygrad
+    # extra/thunder/metal/include/ops/group/memory/tile/shared_to_register.metal.
+    code = """
+    template<typename RT, typename ST>
+    METAL_FUNC static typename metal::enable_if<
+        ducks::is_row_register_tile<RT>() && ducks::is_shared_tile<ST>(),
+        void>::type
+    load(thread RT &dst, threadgroup const ST &src, const int threadIdx) {
+        return;
+    }
+    """
+    generated = convert(code)
+
+    assert "type load(thread RT& dst, threadgroup ST& src, int threadIdx)" in generated
+    assert "return;" in generated
+    assert parse_crossgl(generated) is not None
+
+
+def test_codegen_preserves_hex_float_literals_from_msl_cxx_base():
+    # MSL is C++14 based, so hexadecimal floating literals use a p/P exponent.
+    code = """
+    kernel void main(device float* out [[buffer(0)]]) {
+        float tiny = 0x1.0p-14f;
+        half one = 0x1p+0h;
+        float separated = 0x1'0.8p+2f;
+        out[0] = tiny + float(one) + separated;
+    }
+    """
+    generated = convert(code)
+
+    assert "float tiny = 0x1.0p-14f;" in generated
+    assert "float16 one = 0x1p+0h;" in generated
+    assert "float separated = 0x10.8p+2f;" in generated
+    assert parse_crossgl(generated) is not None
+
+
 def test_codegen_emits_shader_and_stages():
     code = """
     #include <metal_stdlib>
@@ -1770,6 +1807,90 @@ def test_codegen_device_buffer_parameters_use_structured_buffer_contract():
     assert "data[tid.x] = value * 2.0;" in metal
 
 
+def test_codegen_pointer_return_buffer_selector_reparses_from_compiler_fixture():
+    # Reduced from local CrossGL-Compiler build artifact:
+    # build/test-metal-storage-buffer-nonuniform-descriptor-array.cglb/backend/metal/
+    # MetalStorageBufferNonUniformDescriptorArrayShader.metal.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    device float* cgl_select_compute_values(int descriptorIndex,
+                                            device float* values_0,
+                                            device float* values_1) {
+        if (descriptorIndex < 0 || descriptorIndex >= 2) {
+            return values_0;
+        }
+        switch (descriptorIndex) {
+        case 0:
+            return values_0;
+        case 1:
+            return values_1;
+        default:
+            return values_0;
+        }
+    }
+
+    kernel void compute_main(device float* values_0 [[buffer(0)]],
+                             device float* values_1 [[buffer(1)]],
+                             device int* descriptors [[buffer(4)]]) {
+        int descriptor = descriptors[0];
+        float first = cgl_select_compute_values(
+            descriptor, values_0, values_1)[0];
+        values_0[1] = first;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "RWStructuredBuffer<float> cgl_select_compute_values" in crossgl
+    assert "return values_0;" in crossgl
+    assert "return values_1;" in crossgl
+    assert "/* Unhandled expression: ReturnNode */" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_struct_pointer_return_buffer_selector_reparses_from_compiler_fixture():
+    # Reduced from local CrossGL-Compiler build artifact:
+    # build/test-metal-mixed-resource-descriptor-array.cglb/backend/metal/
+    # MixedResourceDescriptorArrayShader.metal.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Particle {
+        float3 position;
+        float mass;
+    };
+
+    device Particle* cgl_select_compute_particles(int descriptorIndex,
+                                                  device Particle* particles_0,
+                                                  device Particle* particles_1) {
+        switch (descriptorIndex) {
+        case 0:
+            return particles_0;
+        case 1:
+            return particles_1;
+        default:
+            return particles_0;
+        }
+    }
+
+    kernel void compute_main(device Particle* particles_0 [[buffer(0)]],
+                             device Particle* particles_1 [[buffer(1)]]) {
+        float mass = cgl_select_compute_particles(
+            1, particles_0, particles_1)[0].mass;
+        particles_0[1].mass = mass;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "RWStructuredBuffer<Particle> cgl_select_compute_particles" in crossgl
+    assert "return particles_0;" in crossgl
+    assert "return particles_1;" in crossgl
+    assert "/* Unhandled expression: ReturnNode */" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_buffer_pointer_typedef_resource_resolves_element_contract():
     code = """
     #include <metal_stdlib>
@@ -2219,6 +2340,28 @@ def test_codegen_statement_expression_block_from_angle_generated_shader():
     assert "out32[onOutIndex] = tmpIndex;" in crossgl
     assert "onOutIndex++;" in crossgl
     assert "({" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_fragment_stencil_output_from_angle_generated_shader():
+    # Reduced from:
+    # Repo: https://android.googlesource.com/platform/external/angle
+    # Path: src/libANGLE/renderer/metal/shaders/mtl_internal_shaders_autogen.metal
+    code = """
+    struct FragmentStencilOut {
+        uint32_t stencil [[stencil]];
+    };
+
+    fragment FragmentStencilOut blitStencilFS() {
+        FragmentStencilOut output;
+        output.stencil = 7u;
+        return output;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "uint stencil @gl_FragStencilRefEXT;" in crossgl
+    assert "@stencil" not in crossgl
     assert parse_crossgl(crossgl) is not None
 
 
@@ -2959,6 +3102,26 @@ def test_codegen_skips_mlx_decltype_kernel_template_id_instantiation():
     parse_crossgl(crossgl)
 
 
+def test_codegen_preserves_materialx_out_parameter_qualifier_from_xcode_genmsl():
+    # Reduced from Xcode's bundled MaterialX MSL library:
+    # /Applications/Xcode.app/.../USDLib_FormatLoaderProxy_Xcode.framework/
+    # Resources/libraries/stdlib/genmsl/mx_burn_float.metal
+    code = """
+    void mx_burn_float(float fg, float bg, float mixval, out float result) {
+        if (abs(fg) < M_FLOAT_EPS) {
+            result = 0.0;
+            return;
+        }
+        result = mixval * (1.0 - ((1.0 - bg) / fg)) + ((1.0 - mixval) * bg);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "out float result" in crossgl
+    assert "float out" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_sanitizes_crossgl_keyword_identifiers_from_real_msl():
     code = """
     #include <metal_stdlib>
@@ -2985,6 +3148,19 @@ def test_codegen_sanitizes_crossgl_keyword_identifiers_from_real_msl():
 
     ast = parse_crossgl(crossgl)
     assert ast is not None
+
+
+def test_codegen_sanitizes_crossgl_keyword_generic_type_argument_from_tinygrad():
+    code = """
+    template<typename T, typename layout>
+    void consume(thread rt_base<T, layout>& src) {
+        return;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "rt_base<T,layout_>& src" in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_codegen_omits_global_constexpr_sampler_argument_for_roundtrip():
@@ -3339,6 +3515,21 @@ def test_codegen_sizeof_and_cast():
     assert "sizeof(int)" in result
     assert "alignof(float4)" in result
     assert "(vec3)" in result or "(float3)" in result
+
+
+def test_codegen_sizeof_dependent_typename_from_tinygrad_tile_copy():
+    code = """
+    template<typename ST>
+    METAL_FUNC void load(threadgroup ST &dst) {
+        constexpr const int elem_per_memcpy =
+            sizeof(read_vector) / sizeof(typename ST::dtype);
+        return;
+    }
+    """
+    result = convert(code)
+
+    assert "sizeof(ST::dtype)" in result
+    assert parse_crossgl(result) is not None
 
 
 def test_codegen_alignas_and_static_assert():

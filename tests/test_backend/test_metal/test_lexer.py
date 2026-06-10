@@ -113,6 +113,18 @@ def test_tokenizes_structs_functions_and_attributes():
     )
 
 
+def test_tokenizes_cpp_raw_string_literal_from_mlx_jit_header():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: 968d264f2903d578e699c4452a4dbf48633921aa
+    # Path: mlx/backend/metal/jit/indexing.h
+    code = 'constexpr std::string_view kernel_src = R"(template [[host_name("{0}")]] [[kernel]] void k();)";'
+    tokens = tokenize_code(code)
+    strings = [value for token_type, value in tokens if token_type == "STRING"]
+
+    assert strings == ['R"(template [[host_name("{0}")]] [[kernel]] void k();)"']
+
+
 def test_tokenizes_control_flow_keywords():
     code = """
     void main() {
@@ -299,6 +311,22 @@ def test_tokenizes_cxx14_digit_separator_numeric_literals_from_msl_spec():
     assert_literal_present(values, "0b1010'0011u")
     assert_literal_present(values, "1.602'176e-19f")
     assert_literal_present(values, "12'345.f")
+
+
+def test_tokenizes_hex_float_literals_from_msl_cxx_base():
+    # MSL is C++14 based, so hexadecimal floating literals use a p/P exponent.
+    code = """
+    void main() {
+        float tiny = 0x1.0p-14f;
+        half one = 0x1p+0h;
+        float separated = 0x1'0.8p+2f;
+    }
+    """
+    values = token_values(tokenize_code(code))
+
+    assert_literal_present(values, "0x1.0p-14f")
+    assert_literal_present(values, "0x1p+0h")
+    assert_literal_present(values, "0x1'0.8p+2f")
 
 
 def test_tokenizes_char_literals_from_public_metal_samples():

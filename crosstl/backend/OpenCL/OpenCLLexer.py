@@ -11,16 +11,17 @@ from .preprocessor import OpenCLPreprocessor
 
 OPENCL_TOKENS = (
     ("__GLOBAL__", r"\b(?:__kernel|kernel)\b"),
-    ("__DEVICE__", r"\b(?:__global|global)\b"),
-    ("__SHARED__", r"\b(?:__local|local|LOCAL_PTR)\b"),
-    ("__CONSTANT__", r"\b(?:__constant|constant)\b"),
-    ("__MANAGED__", r"\b(?:__private|private)\b"),
+    ("__DEVICE__", r"\b(?:__global|global|GLOBAL_AS)\b"),
+    ("__SHARED__", r"\b(?:__local|local|LOCAL_AS|LOCAL_PTR)\b"),
+    ("__CONSTANT__", r"\b(?:__constant|constant|CONSTANT_AS|CONSTANT_VK)\b"),
+    ("__MANAGED__", r"\b(?:__private|private|PRIVATE_AS)\b"),
+    ("__GENERIC__", r"\b(?:__generic|generic)\b"),
     ("__RESTRICT__", r"\b(?:__restrict__|__restrict|restrict)\b"),
     ("CONST", r"\b(?:__const|__const__)\b"),
     ("READ_WRITE", r"\b(?:__read_write|read_write)\b"),
     ("READ_ONLY", r"\b(?:__read_only|read_only)\b"),
     ("WRITE_ONLY", r"\b(?:__write_only|write_only)\b"),
-    ("SYNCTHREADS", r"\bbarrier\b"),
+    ("SYNCTHREADS", r"\b(?:barrier|work_group_barrier)\b"),
     ("SYNCWARP", r"\bmem_fence\b"),
     (
         "ATOMICCAS",
@@ -42,20 +43,30 @@ _HEX_DIGITS = r"[0-9a-fA-F](?:'?[0-9a-fA-F])*"
 _DECIMAL_DIGITS = r"\d(?:'?\d)*"
 OPENCL_HEX_FLOAT_LITERAL = (
     rf"0[xX](?:{_HEX_DIGITS}(?:\.(?:{_HEX_DIGITS})?)?|\.(?:{_HEX_DIGITS}))"
-    rf"[pP][+-]?{_DECIMAL_DIGITS}[fFdDlL]*"
+    rf"[pP][+-]?{_DECIMAL_DIGITS}(?:(?:[fF]16)|[fFdDlLhH])*"
 )
-OPENCL_LITERAL_TOKENS = (("FLOAT", OPENCL_HEX_FLOAT_LITERAL),)
+OPENCL_HALF_FLOAT_LITERAL = (
+    rf"(?:(?:{_DECIMAL_DIGITS}\.(?:{_DECIMAL_DIGITS})?|\.(?:{_DECIMAL_DIGITS}))"
+    rf"(?:[eE][+-]?{_DECIMAL_DIGITS})?|{_DECIMAL_DIGITS}[eE][+-]?{_DECIMAL_DIGITS})"
+    rf"(?:[hH]|[fF]16)"
+)
+OPENCL_LITERAL_TOKENS = (
+    ("FLOAT", OPENCL_HEX_FLOAT_LITERAL),
+    ("FLOAT", OPENCL_HALF_FLOAT_LITERAL),
+)
 
 NORMALIZED_VALUES = {
     "__DEVICE__": "__global__",
     "__SHARED__": "__shared__",
     "__CONSTANT__": "__constant__",
     "__MANAGED__": "__private__",
+    "__GENERIC__": "__generic__",
     "__RESTRICT__": "__restrict__",
     "CONST": "const",
     "READ_ONLY": "read_only",
     "WRITE_ONLY": "write_only",
     "READ_WRITE": "read_write",
+    "SYNCTHREADS": "barrier",
 }
 
 
@@ -91,6 +102,8 @@ KEYWORDS = {
     "constant": "__CONSTANT__",
     "__private": "__MANAGED__",
     "private": "__MANAGED__",
+    "__generic": "__GENERIC__",
+    "generic": "__GENERIC__",
     "__restrict__": "__RESTRICT__",
     "__restrict": "__RESTRICT__",
     "restrict": "__RESTRICT__",
@@ -101,7 +114,9 @@ KEYWORDS = {
     "__read_write": "READ_WRITE",
     "read_write": "READ_WRITE",
     "barrier": "SYNCTHREADS",
+    "work_group_barrier": "SYNCTHREADS",
     "mem_fence": "SYNCWARP",
+    "__asm": "ASM",
 }
 
 
@@ -204,6 +219,8 @@ class OpenCLLexer:
 
             if token_type == "IDENTIFIER" and text in self.reserved_keywords:
                 token_type = self.reserved_keywords[text]
+            elif token_type == "PRIVATE" and text == "private":
+                token_type = "__MANAGED__"
 
             if token_type not in SKIP_TOKENS:
                 value = NORMALIZED_VALUES.get(token_type, text)

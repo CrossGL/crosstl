@@ -56,6 +56,7 @@ class MetalToCrossGLConverter:
         "fragment",
         "if",
         "in",
+        "layout",
         "out",
         "return",
         "sampler",
@@ -463,6 +464,7 @@ class MetalToCrossGLConverter:
             "get_depth",
             "get_array_size",
         }
+        self.parameter_direction_qualifiers = ("inout", "out")
         self.fragment_execution_attribute_names = {
             "early_fragment_tests",
         }
@@ -499,6 +501,7 @@ class MetalToCrossGLConverter:
             "color(3)": "gl_FragColor3",
             "color(4)": "gl_FragColor4",
             "depth(any)": "gl_FragDepth",
+            "stencil": "gl_FragStencilRefEXT",
             "sample_id": "gl_SampleID",
             "sample_mask": "gl_SampleMask",
             "primitive_id": "gl_PrimitiveID",
@@ -1346,7 +1349,7 @@ class MetalToCrossGLConverter:
 
     def format_array_suffix(self, var, include_declarator_arrays=True):
         array_type = self.metal_array_type_parts(getattr(var, "vtype", None))
-        suffix = f"[{array_type[1]}]" if array_type else ""
+        suffix = f"[{self.format_array_extent(array_type[1])}]" if array_type else ""
         if not include_declarator_arrays:
             return suffix
         return suffix + self.format_declarator_array_suffix(var)
@@ -1359,8 +1362,18 @@ class MetalToCrossGLConverter:
             if size is None:
                 suffix += "[]"
             else:
-                suffix += f"[{self.generate_expression(size, False)}]"
+                suffix += f"[{self.format_array_extent(size)}]"
         return suffix
+
+    def format_array_extent(self, size):
+        if not isinstance(size, str):
+            return self.generate_expression(size, False)
+
+        extent = size.strip()
+        if self.is_scoped_identifier(extent.lstrip(":")):
+            extent = extent.lstrip(":")
+            return self.sanitize_identifier(extent)
+        return extent
 
     def use_name_array_suffix(self, mapped_type, var):
         if not getattr(var, "array_sizes", None):
@@ -1524,24 +1537,35 @@ class MetalToCrossGLConverter:
 
     def format_parameter_decl(self, var, index, semantic_context=None):
         if getattr(var, "name", None):
-            return self.format_decl(
+            declaration = self.format_decl(
                 var,
                 include_semantic=True,
                 semantic_context=semantic_context,
             )
+            return self.with_parameter_direction_qualifier(var, declaration)
 
         generated_name = self.reserve_generated_identifier(f"_unnamed_param_{index}")
         original_name = var.name
         var.name = generated_name
         try:
-            return self.format_decl(
+            declaration = self.format_decl(
                 var,
                 include_semantic=True,
                 declare_name=False,
                 semantic_context=semantic_context,
             )
+            return self.with_parameter_direction_qualifier(var, declaration)
         finally:
             var.name = original_name
+
+    def with_parameter_direction_qualifier(self, var, declaration):
+        qualifiers = [
+            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
+        ]
+        for qualifier in self.parameter_direction_qualifiers:
+            if qualifier in qualifiers:
+                return f"{qualifier} {declaration}"
+        return declaration
 
     def format_global_decl(self, var, include_semantic=False):
         declaration = self.format_decl(var, include_semantic=include_semantic)
@@ -1597,10 +1621,26 @@ class MetalToCrossGLConverter:
         return code
 
     def map_function_return_type(self, return_type):
+        pointer_buffer_type = self.map_pointer_return_buffer_type(return_type)
+        if pointer_buffer_type:
+            return pointer_buffer_type
         mapped_type = self.map_type(return_type)
         if str(mapped_type).rstrip().endswith("&"):
             return str(mapped_type).rstrip()[:-1].rstrip()
         return mapped_type
+
+    def map_pointer_return_buffer_type(self, return_type):
+        element_type = self.pointer_element_type(return_type)
+        if not element_type:
+            return None
+
+        element_type = re.sub(
+            r"^(?:(?:const|device|thread|threadgroup|constant|volatile|restrict)\s+)+",
+            "",
+            str(element_type).strip(),
+        )
+        element_type = self.resolve_type_alias(element_type)
+        return f"RWStructuredBuffer<{self.map_type(element_type)}>"
 
     def function_output_name(self, func):
         host_name = self.function_host_name(func)
@@ -1945,6 +1985,8 @@ class MetalToCrossGLConverter:
         return f"{''.join(designators)} = {value}"
 
     def normalize_literal_string(self, value):
+        if "'" in value and re.match(r"^(?:0[xX][0-9a-fA-F]|0[bB][01]|\d|\.\d)", value):
+            value = value.replace("'", "")
         if re.fullmatch(r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[hH]", value):
             return value[:-1]
         for pattern in (
@@ -2340,7 +2382,7 @@ class MetalToCrossGLConverter:
         array_type = self.metal_array_type_parts(metal_type)
         if array_type:
             element_type, size = array_type
-            return f"{self.map_type(element_type)}[{size}]"
+            return f"{self.map_type(element_type)}[{self.format_array_extent(size)}]"
 
         base = metal_type.strip()
         if base.endswith("..."):
@@ -2377,22 +2419,54 @@ class MetalToCrossGLConverter:
 
         # Normalize Metal resource access qualifiers without dropping dimensions or
         # other non-resource generic arguments, e.g. matrix<bfloat, 4, 4>.
-        if "<" in base and ">" in base:
+        if "<" in base and base.endswith(">"):
             base_name, inner = base.split("<", 1)
             inner = inner.rstrip(">")
             generic_args = self.split_generic_arguments(inner)
             if self.should_elide_resource_access_qualifier(base_name, generic_args):
                 base = f"{base_name}<{generic_args[0].strip()}>"
+            elif (
+                not self.is_metal_resource_type_name(base_name)
+                and "::" not in base_name
+            ):
+                mapped_base_name = self.sanitize_identifier(base_name.strip())
+                mapped_args = ",".join(
+                    self.map_generic_type_argument(arg) for arg in generic_args
+                )
+                return f"{mapped_base_name}<{mapped_args}>{suffix}"
 
         sampled_resource_type = self.map_sampled_texture_type(base)
         if sampled_resource_type:
             return f"{sampled_resource_type}{suffix}"
 
-        mapped = self.type_map.get(base, base)
-        mapped = self.struct_name_map.get(mapped, mapped)
-        if mapped == base:
-            mapped = self.map_scoped_type_name(mapped)
+        mapped = self.type_map.get(base)
+        if mapped is not None:
+            return f"{mapped}{suffix}"
+        mapped = self.struct_name_map.get(base)
+        if mapped is not None:
+            return f"{mapped}{suffix}"
+        mapped = self.map_scoped_type_name(base)
         return f"{mapped}{suffix}"
+
+    def map_generic_type_argument(self, argument):
+        argument = str(argument).strip()
+        if not argument:
+            return argument
+        if self.crossgl_identifier_pattern.fullmatch(argument):
+            return self.sanitize_identifier(argument)
+        base_name, generic_args = self.generic_type_parts(argument)
+        if (
+            base_name
+            and generic_args
+            and "::" not in base_name
+            and argument.endswith(">")
+        ):
+            mapped_base_name = self.sanitize_identifier(base_name.strip())
+            mapped_args = ",".join(
+                self.map_generic_type_argument(arg) for arg in generic_args
+            )
+            return f"{mapped_base_name}<{mapped_args}>"
+        return argument
 
     def format_type_alias_declaration(self, alias):
         if getattr(alias, "is_function_type", False) or self.is_resource_type_alias(
@@ -2511,7 +2585,10 @@ class MetalToCrossGLConverter:
 
     def map_scoped_type_name(self, type_name):
         if "::" not in str(type_name):
-            return type_name
+            text = str(type_name)
+            if self.crossgl_identifier_pattern.match(text):
+                return self.sanitize_identifier(text)
+            return text
 
         base_name, _generic_args = self.generic_type_parts(type_name)
         if base_name and "::" in base_name:
@@ -2667,9 +2744,12 @@ class MetalToCrossGLConverter:
 
     def metal_array_type_parts(self, metal_type):
         base_name, generic_args = self.generic_type_parts(metal_type)
-        if base_name != "array" or len(generic_args) < 2:
+        if not self.is_metal_array_type_name(base_name) or len(generic_args) < 2:
             return None
         return generic_args[0].strip(), generic_args[1].strip()
+
+    def is_metal_array_type_name(self, base_name):
+        return base_name in {"array", "metal::array", "c10::metal::array"}
 
     def metal_vector_type_parts(self, metal_type):
         base_name, generic_args = self.generic_type_parts(metal_type)
@@ -3201,35 +3281,22 @@ class MetalToCrossGLConverter:
         for case in node.cases:
             case_value = self.generate_expression(case.value, is_main)
             code += "    " * (indent + 1) + f"case {case_value}:\n"
-
-            for stmt in case.statements:
-                code += "    " * (indent + 2)
-                if isinstance(stmt, SwitchNode):
-                    code += self.generate_switch_statement(stmt, indent + 2, is_main)
-                elif isinstance(stmt, IfNode):
-                    code += self.generate_if_statement(stmt, indent + 2, is_main)
-                elif isinstance(stmt, ForNode):
-                    code += self.generate_for_loop(stmt, indent + 2, is_main)
-                else:
-                    code += self.generate_expression(stmt, is_main) + ";\n"
-
-            code += "    " * (indent + 2) + "break;\n"
+            code += self.generate_function_body(case.statements, indent + 2, is_main)
+            if not self.switch_case_has_explicit_terminator(case.statements):
+                code += "    " * (indent + 2) + "break;\n"
 
         if node.default:
             code += "    " * (indent + 1) + "default:\n"
-
-            for stmt in node.default:
-                code += "    " * (indent + 2)
-                if isinstance(stmt, SwitchNode):
-                    code += self.generate_switch_statement(stmt, indent + 2, is_main)
-                elif isinstance(stmt, IfNode):
-                    code += self.generate_if_statement(stmt, indent + 2, is_main)
-                elif isinstance(stmt, ForNode):
-                    code += self.generate_for_loop(stmt, indent + 2, is_main)
-                else:
-                    code += self.generate_expression(stmt, is_main) + ";\n"
-
-            code += "    " * (indent + 2) + "break;\n"
+            code += self.generate_function_body(node.default, indent + 2, is_main)
+            if not self.switch_case_has_explicit_terminator(node.default):
+                code += "    " * (indent + 2) + "break;\n"
 
         code += "    " * indent + "}\n"
         return code
+
+    def switch_case_has_explicit_terminator(self, statements):
+        if not statements:
+            return False
+        return isinstance(
+            statements[-1], (BreakNode, ContinueNode, DiscardNode, ReturnNode)
+        )

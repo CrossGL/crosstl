@@ -28,6 +28,22 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "6b9f98ff90facc35306a0ba643dfecb59a870156",
     },
+    "shader-slang/slang-master-2026-06-09": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "142e00d9342eccf0613ed1b18d81cb003c5d6f09",
+    },
+    "shader-slang/slang-current-2026-06-10": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "0658ed79219d6e4ee526182104ce71d476f787be",
+    },
+    "shader-slang/slang-master-2026-06-10": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "29e69b0bf626f87500be73a7fb3764db25658c66",
+    },
+    "shader-slang/slang-main-2026-06-09-dyn-interface": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "1fc15d23f67005325103a888a175a96ba1782ac2",
+    },
     "shader-slang/slang-main-2026-06-08-anonymous-struct": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
@@ -92,6 +108,18 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang-rhi",
         "commit": "9aa67530649c52b4a057a2fba185cf9247c33ec0",
     },
+    "shader-slang/neural-shading-s25": {
+        "url": "https://github.com/shader-slang/neural-shading-s25",
+        "commit": "9daf14df2cb4d665c706c76b4b9641a49a117610",
+    },
+    "shader-slang/slangpy": {
+        "url": "https://github.com/shader-slang/slangpy",
+        "commit": "d1c765ea0430c055a14463c2e2446e3decad97df",
+    },
+    "shader-slang/slang-torch": {
+        "url": "https://github.com/shader-slang/slang-torch",
+        "commit": "e936b1df49cbb9b3ef23d570455622d5ed67332f",
+    },
     "NVIDIAGameWorks/Falcor": {
         "url": "https://github.com/NVIDIAGameWorks/Falcor",
         "commit": "eb540f6748774680ce0039aaf3ac9279266ec521",
@@ -99,6 +127,10 @@ EXTERNAL_REPOS = {
     "HenriMichelon/vireo_samples": {
         "url": "https://github.com/HenriMichelon/vireo_samples",
         "commit": "e2d788909cc73a7f515380792796cebaaed53a7e",
+    },
+    "libretro/slang-shaders": {
+        "url": "https://github.com/libretro/slang-shaders",
+        "commit": "d5c053a87337766144ea68a7bc94bfecf889f7ec",
     },
     "NVIDIAGameWorks/RTXGI": {
         "url": "https://github.com/NVIDIAGameWorks/RTXGI",
@@ -144,6 +176,36 @@ EXTERNAL_FIXTURES = [
             "return helper(val) + helper(val, 256);",
         ],
         "not_contains": ["int a, = , 16", "int a = 16"],
+    },
+    {
+        "id": "slang_gfx_link_time_conditional_if_let_binding",
+        "repo": "shader-slang/slang-master-2026-06-09",
+        "path": "tools/gfx-unit-test/link-time-logical-operators.slang",
+        "source": (
+            """
+            struct ConditionalValue
+            {
+                float get() { return 1.0f; }
+            }
+
+            float sum(ConditionalValue notValue)
+            {
+                float result = 0.0f;
+
+                if (let v = notValue.get())
+                    result += v;
+
+                return result;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "let v = notValue.get();",
+            "if (v) {",
+            "result += v;",
+        ],
+        "not_contains": ["if (let v"],
     },
     {
         "id": "slang_autodiff_generic_where_clause",
@@ -247,6 +309,77 @@ EXTERNAL_FIXTURES = [
             "a += 10;",
             "outputBuffer[index] = a;",
         ],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 142e00d9342eccf0613ed1b18d81cb003c5d6f09
+        # Path: tests/bugs/inf-float-literal.slang
+        "id": "slang_inf_float_literal_from_bug_fixture",
+        "repo": "shader-slang/slang-master-2026-06-09",
+        "path": "tests/bugs/inf-float-literal.slang",
+        "source": (
+            """
+            RWStructuredBuffer<float> outputBuffer;
+
+            [numthreads(4, 1, 1)]
+            void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+            {
+                int idx = int(dispatchThreadID.x);
+                float a;
+
+                switch (idx)
+                {
+                    default:
+                    case 0: a = 1.#INF; break;
+                    case 1: a = 2.4#INFf; break;
+                    case 2: a = float(234.5#INFl); break;
+                    case 3: a = -1.#INF; break;
+                }
+
+                outputBuffer[idx] = a;
+            }
+        """
+        ),
+        # CrossGL's frontend numeric grammar does not currently accept
+        # HLSL-style #INF spellings, so keep this as a Slang backend
+        # parse/codegen regression.
+        "crossgl": False,
+        "contains": [
+            "switch (idx) {",
+            "a = 1.#INF;",
+            "a = 2.4#INFf;",
+            "a = float(234.5#INFl);",
+            "a = -1.#INF;",
+            "outputBuffer[idx] = a;",
+        ],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 29e69b0bf626f87500be73a7fb3764db25658c66
+        # Path: tests/bugs/infer-var-type-constant-folding.slang
+        "id": "slang_inferred_static_const_globals_codegen_reparse",
+        "repo": "shader-slang/slang-master-2026-06-10",
+        "path": "tests/bugs/infer-var-type-constant-folding.slang",
+        "source": (
+            """
+            RWStructuredBuffer<int> outputBuffer;
+
+            static const let C = float(3);
+            static const let D = int(4 + 4 + int(C));
+
+            void computeMain()
+            {
+                outputBuffer[0] = D;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "static const float C = float(3);",
+            "static const int D = int(4 + 4 + int(C));",
+            "outputBuffer[0] = D;",
+        ],
+        "not_contains": ["static const let", "static const var"],
     },
     {
         # Source: https://github.com/shader-slang/slang
@@ -607,6 +740,42 @@ EXTERNAL_FIXTURES = [
             "cbuffer tbuf2 @register(t1)",
             "sampler2D texture2D;",
         ],
+    },
+    {
+        "id": "slang_spirv_spec_constant_enum_typedef_alias_reparse",
+        "repo": "shader-slang/slang-master-2026-06-09",
+        "path": "tests/spirv/spec-constant-enum-typedef.slang",
+        "source": (
+            """
+            enum class Mode : uint32_t
+            {
+                Add = 2,
+                Multiply = 9,
+            }
+
+            typedef Mode ModeTypedef;
+
+            [vk::constant_id(5)]
+            const ModeTypedef mode = Mode::Add;
+
+            RWStructuredBuffer<uint> outputBuffer;
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void main(uint3 id : SV_DispatchThreadID)
+            {
+                outputBuffer[id.x] = (uint)mode;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "enum Mode {",
+            "typealias ModeTypedef = Mode;",
+            "const ModeTypedef mode = Mode::Add;",
+            "outputBuffer[id.x] = uint(mode);",
+        ],
+        "not_contains": ["typedef Mode ModeTypedef;"],
     },
     {
         "id": "slang_func_keyword_default_parameter_from_current_docs",
@@ -1317,6 +1486,30 @@ EXTERNAL_FIXTURES = [
         ],
     },
     {
+        "id": "slang_2026_dyn_interface_parameter_codegen_reparse",
+        "repo": "shader-slang/slang-main-2026-06-09-dyn-interface",
+        "path": "tests/compute/interface-qualifiers/lang-2026-implicit-some.slang",
+        "source": (
+            """
+            interface IFoo
+            {
+                int get();
+            }
+
+            int callFooDyn(dyn IFoo x)
+            {
+                return x.get();
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "int callFooDyn(IFoo x)",
+            "return x.get();",
+        ],
+        "not_contains": ["dyn IFoo"],
+    },
+    {
         "id": "slang_hlsl_intrinsic_mul_matrix_vector",
         "repo": "shader-slang/slang-generated-2026",
         "path": (
@@ -1656,6 +1849,132 @@ EXTERNAL_FIXTURES = [
         ],
     },
     {
+        # Source: https://github.com/shader-slang/slang
+        # Path: tests/spirv/mesh-primitive.slang
+        "id": "slang_spirv_mesh_primitive_const_static_reparse",
+        "repo": "shader-slang/slang-main-2026-06-09",
+        "path": "tests/spirv/mesh-primitive.slang",
+        "source": (
+            """
+            const static uint MAX_VERTS = 6;
+            const static uint MAX_PRIMS = 2;
+
+            const static float2 positions[MAX_VERTS] = {
+              float2(0.0, -0.5),
+              float2(0.5, 0),
+              float2(-0.5, 0),
+              float2(0.0, 0.5),
+              float2(0.5, 0),
+              float2(-0.5, 0),
+            };
+
+            struct Vertex
+            {
+              float4 pos : SV_Position;
+            };
+
+            struct Primitive
+            {
+              [[vk::location(0)]] float3 color;
+            }
+
+            [outputtopology("triangle")]
+            [numthreads(MAX_VERTS, 1, 1)]
+            [shader("mesh")]
+            void entry_mesh(
+                in uint tig : SV_GroupThreadID,
+                OutputVertices<Vertex, MAX_VERTS> verts,
+                OutputIndices<uint3, MAX_PRIMS> triangles,
+                OutputPrimitives<Primitive, MAX_PRIMS> primitives)
+            {
+                const uint numVertices = MAX_VERTS;
+                const uint numPrimitives = MAX_PRIMS;
+                SetMeshOutputCounts(numVertices, numPrimitives);
+
+                if(tig < numVertices) {
+                    verts[tig] = {float4(positions[tig], 0, 1)};
+                }
+
+                if(tig < numPrimitives) {
+                    triangles[tig] = uint3(0,1,2) + tig * 3;
+                    primitives[tig] = { float3(1,0,0) };
+                }
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "static const uint MAX_VERTS = 6;",
+            "static const uint MAX_PRIMS = 2;",
+            "static const vec2 positions[MAX_VERTS]",
+            "mesh {",
+            "void entry_mesh(in uint tig @ gl_LocalInvocationID",
+            "SetMeshOutputCounts(numVertices, numPrimitives);",
+        ],
+        "not_contains": ["const static"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Path: tests/language-feature/struct-field-initializers/
+        # struct-field-initializer-extension.slang
+        "id": "slang_struct_field_initializer_extension_constructor_reparse",
+        "repo": "shader-slang/slang-main-2026-06-09",
+        "path": (
+            "tests/language-feature/struct-field-initializers/"
+            "struct-field-initializer-extension.slang"
+        ),
+        "source": (
+            """
+            RWStructuredBuffer<int> outputBuffer;
+
+            struct DefaultStructNoInit
+            {
+                int data0 = 2;
+                int data1 = 2;
+            };
+            extension DefaultStructNoInit
+            {
+            }
+
+            struct DefaultStructWithInit
+            {
+                int data0;
+                int data1 = 3;
+                int data2;
+            };
+            extension DefaultStructWithInit
+            {
+                __init()
+                {
+                    data0 = 3;
+                    data2 = 3;
+                }
+            }
+
+            [numthreads(1, 1, 1)]
+            void computeMain(uint3 dispatchThreadID: SV_DispatchThreadID)
+            {
+                DefaultStructNoInit noInit = DefaultStructNoInit();
+                DefaultStructWithInit withInit = DefaultStructWithInit();
+                outputBuffer[0] = true
+                    && noInit.data0 == 2
+                    && noInit.data1 == 2
+                    && withInit.data0 == 3
+                    && withInit.data1 == 3
+                    && withInit.data2 == 3;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "struct DefaultStructNoInit {",
+            "int data0 = 2;",
+            "struct DefaultStructWithInit {",
+            "void __init()",
+            "outputBuffer[0] = true && noInit.data0 == 2",
+        ],
+    },
+    {
         "id": "slang_rhi_root_parameter_block_attributes",
         "repo": "shader-slang/slang-rhi",
         "path": "tests/test-root-shader-parameter.slang",
@@ -1856,6 +2175,93 @@ EXTERNAL_FIXTURES = [
         "not_contains": ["Expected SEMICOLON, got MODULE", " module;"],
     },
     {
+        "id": "libretro_crt_consumer_identifier_multiply_expression",
+        "repo": "libretro/slang-shaders",
+        "path": "crt/shaders/crt-consumer.slang",
+        "source": (
+            """
+            void main()
+            {
+                vec3 Mask = vec3(1.0);
+                float l = 0.5;
+                Mask * l * 0.9;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "Mask * l * 0.9;",
+        ],
+        "not_contains": [
+            "Unexpected token in declaration: MULTIPLY",
+        ],
+    },
+    {
+        "id": "slangpy_glsl_extension_spirv_asm_target_switch",
+        "repo": "shader-slang/slangpy",
+        "path": "slangpy/slang/atomics.slang",
+        "source": (
+            """
+            extension vector<half, 2>
+            {
+                __glsl_extension(GL_EXT_shader_explicit_arithmetic_types)
+                uint asuint(vector<half, 2> a)
+                {
+                    __target_switch
+                    {
+                    case glsl:
+                        __intrinsic_asm "packFloat2x16";
+                    case spirv:
+                        return spirv_asm { result:$$uint = OpBitcast $a;};
+                    default:
+                        return 1u;
+                    }
+                }
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "uint asuint(half2 a)",
+            "return 1u;",
+        ],
+        "not_contains": [
+            "__glsl_extension",
+            "spirv_asm",
+            "$$uint",
+        ],
+    },
+    {
+        "id": "neural_shading_hex_float_literal_codegen_reparse",
+        "repo": "shader-slang/neural-shading-s25",
+        "path": "network/step_01_basicnetwork.slang",
+        "source": (
+            """
+            float next_float(uint state)
+            {
+                return (state >> 8) * 0x1p-24;
+            }
+
+            RWStructuredBuffer<float> outputBuffer;
+
+            [numthreads(1, 1, 1)]
+            void computeMain()
+            {
+                outputBuffer[0] = next_float(1664525u);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "return (state >> 8) * 0.000000059604644775390625;",
+            "outputBuffer[0] = next_float(1664525u);",
+        ],
+        "not_contains": [
+            "0x1p-24",
+            "Expected SEMICOLON, got IDENTIFIER",
+        ],
+    },
+    {
         # Source: https://github.com/shader-slang/slang
         # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
         # Path: docs/generated/tests/design/ast-reference/statements/
@@ -1981,6 +2387,93 @@ EXTERNAL_FIXTURES = [
             "__generic_value_param",
             "Expected semantic name",
         ],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 0658ed79219d6e4ee526182104ce71d476f787be
+        # Path: tests/spirv/storage-image-multi-sample-read-write.slang
+        "id": "slang_spirv_multisample_storage_image_scalar_literal_swizzle",
+        "repo": "shader-slang/slang-current-2026-06-10",
+        "path": "tests/spirv/storage-image-multi-sample-read-write.slang",
+        "source": (
+            """
+            RWTexture2DMS<float> tex;
+
+            [shader("fragment")]
+            float main()
+            {
+                return tex.Load(0.xx, 0);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "image2DMS tex;",
+            "return imageLoad(tex, 0.xx, 0);",
+        ],
+        "not_contains": ["Expected COMMA or RPAREN"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 0658ed79219d6e4ee526182104ce71d476f787be
+        # Path: tests/diagnostics/entry-point-uniform-banned-types.slang
+        "id": "slang_entry_point_constant_buffer_parameter_register_reparse",
+        "repo": "shader-slang/slang-current-2026-06-10",
+        "path": "tests/diagnostics/entry-point-uniform-banned-types.slang",
+        "source": (
+            """
+            struct Params
+            {
+                float x;
+            }
+
+            ConstantBuffer<Params> g_params;
+
+            [shader("fragment")]
+            float4 main(ConstantBuffer<Params> p : register(b1)) : SV_Target
+            {
+                return float4(g_params.x + p.x, 0, 0, 0);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "vec4 main(Params p @register(b1)) @ Out_Color",
+            "return vec4(g_params.x + p.x, 0, 0, 0);",
+        ],
+        "not_contains": [
+            "Expected semantic name",
+            "ConstantBuffer<Params> p : register(b1)",
+        ],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 0658ed79219d6e4ee526182104ce71d476f787be
+        # Path: tools/gfx-unit-test/pointer-in-buffer-double-ptr-roundtrip.slang
+        "id": "slang_gfx_structured_buffer_pointer_element_reparse",
+        "repo": "shader-slang/slang-current-2026-06-10",
+        "path": "tools/gfx-unit-test/pointer-in-buffer-double-ptr-roundtrip.slang",
+        "source": (
+            """
+            StructuredBuffer<int**> ptrs;
+            RWStructuredBuffer<int> output;
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void computeMain()
+            {
+                int** pp = ptrs[0];
+                output[0] = **pp;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "buffer<int**> ptrs;",
+            "int** pp = ptrs[0];",
+            "output[0] = **pp;",
+        ],
+        "not_contains": ["StructuredBuffer<int**> ptrs;"],
     },
 ]
 
@@ -2310,3 +2803,19 @@ def test_core_meta_generic_vector_conversion_constructor_parse():
     ] == [("ToType", "implicit", "FromType")]
     assert extension.methods[0].is_declaration is True
     assert extension.methods[1].is_declaration is False
+
+
+def test_slang_torch_factor_placeholder_template_is_out_of_scope():
+    # Source: shader-slang/slang-torch tests/multiply_template.slang at
+    # e936b1df49cbb9b3ef23d570455622d5ed67332f.  The repository's tests
+    # replace %FACTOR% before passing the file to Slang, so the raw template
+    # is not valid Slang source.
+    source = """
+        float computeOutputValue(TensorView<float> A, uint2 loc)
+        {
+            return A[loc] * %FACTOR%;
+        }
+    """
+
+    with pytest.raises(SyntaxError, match="Unexpected token in expression: MOD"):
+        parse_slang(source)

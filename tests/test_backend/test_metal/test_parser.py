@@ -452,6 +452,31 @@ def test_parse_block_scope_typedef_alias_from_mlx_fp_quantized():
     assert body[2].left.array_sizes == ["8"]
 
 
+def test_parse_template_struct_default_bool_relational_from_tinygrad_metal():
+    # Reduced from:
+    # Repo: https://github.com/tinygrad/tinygrad
+    # Commit: f9d88d3c3a6536ae28b054fe8881d1c3064e25fd
+    # Path: extra/thunder/metal/include/common/common.metal
+    code = """
+    template<int Start, int End, int Stride, bool=(Start<End)>
+    struct unroll_i_in_range {
+        template<class F, typename... Args>
+        static METAL_FUNC void run(F f, Args... args) {
+            return;
+        }
+    };
+    """
+    ast = parse_ok(code)
+    struct = ast.structs[0]
+
+    assert struct.name == "unroll_i_in_range"
+    assert struct.template_parameters == [
+        ("value", "Start"),
+        ("value", "End"),
+        ("value", "Stride"),
+    ]
+
+
 def test_parse_comma_separated_pointer_declarators_keep_own_suffixes():
     code = """
     void main() {
@@ -1270,6 +1295,34 @@ def test_parse_class_helper_with_access_labels_from_public_metal_shader():
     assert ast.functions[0].body[0].vtype == "FpMersenne31"
 
 
+def test_parse_virtual_methods_and_destructor_from_current_mlx_allocator_header():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: 01368d8e7888d6989969aa82bc36f2ba09dc5ced
+    # Path: mlx/backend/metal/allocator.h
+    code = """
+    class MetalAllocator : public allocator::Allocator {
+    public:
+        virtual Buffer malloc(size_t size) override;
+        virtual size_t size(Buffer buffer) const override;
+
+    private:
+        ~MetalAllocator();
+        size_t active_memory_{0};
+    };
+    """
+    ast = parse_ok(code)
+    class_node = ast.structs[0]
+
+    assert class_node.name == "MetalAllocator"
+    assert getattr(class_node, "aggregate_kind", None) == "class"
+    assert class_node.base_types == ["public allocator::Allocator"]
+    assert [(member.vtype, member.name) for member in class_node.members] == [
+        ("size_t", "active_memory_")
+    ]
+    assert isinstance(class_node.members[0].default_value, InitializerListNode)
+
+
 def test_parse_scoped_call_operator_definition_from_mlx_unary_ops():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx
@@ -1475,6 +1528,25 @@ def test_parse_sizeof_and_cast():
     parse_ok(code)
 
 
+def test_parse_sizeof_dependent_typename_from_tinygrad_tile_copy():
+    code = """
+    template<typename ST>
+    METAL_FUNC void load(threadgroup ST &dst) {
+        constexpr const int elem_per_memcpy =
+            sizeof(read_vector) / sizeof(typename ST::dtype);
+        return;
+    }
+    """
+    ast = parse_ok(code)
+
+    sizeof_calls = [
+        node
+        for node in iter_ast_nodes(ast)
+        if isinstance(node, FunctionCallNode) and node.name == "sizeof"
+    ]
+    assert any(call.args == ["ST::dtype"] for call in sizeof_calls)
+
+
 def test_parse_pointer_member_access():
     code = """
     struct Uniforms {
@@ -1491,6 +1563,35 @@ def test_parse_pointer_member_access():
     ]
 
     assert any(node.member == "mvp" and node.is_pointer for node in member_accesses)
+
+
+def test_parse_stage_keyword_member_access_from_naga_ray_query_msl():
+    # Reduced from:
+    # Repo: https://github.com/gfx-rs/naga
+    # Commit: d0f28c0b1a3c772e55e68db1c47eff5131cb6732
+    # Path: tests/out/msl/ray-query.msl
+    code = """
+    struct Result {
+        uint type;
+        float distance;
+    };
+    struct RayQuery {
+        Result intersection;
+    };
+    void main_() {
+        RayQuery rq;
+        uint kind = rq.intersection.type;
+        float t = rq.intersection.distance;
+    }
+    """
+    ast = parse_ok(code)
+    member_accesses = [
+        node for node in iter_ast_nodes(ast) if isinstance(node, MemberAccessNode)
+    ]
+
+    assert any(node.member == "intersection" for node in member_accesses)
+    assert any(node.member == "type" for node in member_accesses)
+    assert any(node.member == "distance" for node in member_accesses)
 
 
 def test_parse_single_statement_if_with_discard_fragment():
@@ -1939,6 +2040,24 @@ def test_parse_cxx14_digit_separator_numeric_literals_from_msl_spec():
     assert body[3].right == "1.602'176e-19f"
 
 
+def test_parse_hex_float_literals_from_msl_cxx_base():
+    # MSL is C++14 based, so hexadecimal floating literals use a p/P exponent.
+    code = """
+    kernel void main(device float* out [[buffer(0)]]) {
+        float tiny = 0x1.0p-14f;
+        half one = 0x1p+0h;
+        float separated = 0x1'0.8p+2f;
+        out[0] = tiny + float(one) + separated;
+    }
+    """
+    ast = parse_ok(code)
+    body = ast.functions[0].body
+
+    assert body[0].right == "0x1.0p-14f"
+    assert body[1].right == "0x1p+0h"
+    assert body[2].right == "0x1'0.8p+2f"
+
+
 def test_parse_bfloat_literal_suffixes_from_msl_spec():
     # Apple MSL Specification, section 2.2, documents 0.5bf and 0.5BF.
     code = """
@@ -2338,6 +2457,26 @@ def test_parse_restrict_parameter_qualifier_from_vllm_metal():
     assert params[1].name == "out"
 
 
+def test_parse_materialx_out_parameter_qualifier_from_xcode_genmsl():
+    # Reduced from Xcode's bundled MaterialX MSL library:
+    # /Applications/Xcode.app/.../USDLib_FormatLoaderProxy_Xcode.framework/
+    # Resources/libraries/stdlib/genmsl/mx_normalmap.metal
+    code = """
+    void mx_normalmap_vector2(vec3 value,
+                              int map_space,
+                              vec2 normal_scale,
+                              out vec3 result) {
+        result = value;
+    }
+    """
+    ast = parse_ok(code)
+    result_param = ast.functions[0].params[-1]
+
+    assert result_param.vtype == "vec3"
+    assert result_param.name == "result"
+    assert result_param.qualifiers == ["out"]
+
+
 def test_parse_pragma_and_type_trait_expression_from_llama_cpp():
     code = """
     void reduce(uint j, uint limit, device float* dst_row) {
@@ -2416,6 +2555,21 @@ def test_parse_function_pointer_typedef_from_llama_cpp():
     assert ast.typedefs[0].alias_type == "void"
 
 
+def test_parse_enum_return_prototype_from_llama_cpp_context_header():
+    code = """
+    typedef struct ggml_metal * ggml_metal_t;
+
+    enum ggml_status ggml_metal_graph_compute(
+        ggml_metal_t ctx,
+        struct ggml_cgraph * gf);
+    """
+    ast = parse_ok(code)
+
+    assert ast.functions == []
+    assert ast.structs == []
+    assert ast.enums == []
+
+
 def test_parse_struct_forward_declaration_from_mlx_complex_header():
     code = """
     struct complex64_t;
@@ -2484,6 +2638,39 @@ def test_parse_variadic_function_parameter_pack_from_mlx_integral_constant():
     assert isinstance(pack_call.args[0], UnaryOpNode)
     assert pack_call.args[0].op == "post..."
     assert pack_call.args[0].operand.name == "us"
+
+
+def test_parse_dependent_enable_if_return_type_from_tinygrad_metal():
+    # Reduced from:
+    # Repo: https://github.com/tinygrad/tinygrad
+    # Commit: 12addee14f1d728793648ceca307a5fde2b24cea
+    # Path: extra/thunder/metal/include/ops/group/memory/tile/shared_to_register.metal
+    code = """
+    template<typename RT, typename ST>
+    METAL_FUNC static typename metal::enable_if<
+        ducks::is_row_register_tile<RT>() && ducks::is_shared_tile<ST>(),
+        void>::type
+    load(thread RT &dst, threadgroup const ST &src, const int threadIdx) {
+        return;
+    }
+    """
+    ast = parse_ok(code)
+    function = ast.functions[0]
+
+    assert function.name == "load"
+    assert function.template_parameters == [("typename", "RT"), ("typename", "ST")]
+    assert function.return_type == (
+        "metal::enable_if<"
+        "ducks::is_row_register_tile<RT>()&&ducks::is_shared_tile<ST>(),void"
+        ">::type"
+    )
+    assert [
+        (param.vtype, param.name, param.qualifiers) for param in function.params
+    ] == [
+        ("RT&", "dst", ["thread"]),
+        ("ST&", "src", ["threadgroup", "const"]),
+        ("int", "threadIdx", ["const"]),
+    ]
 
 
 def test_parse_multiline_macro_invocation_from_mlx_bf16_math_header():
@@ -2797,6 +2984,26 @@ def test_parse_template_id_value_expression_with_member_args_from_mlx_gemm_gathe
     assert assignment.right.name == "gemm_loop<T,SM,kAlignedM.value,AccumType>"
     assert isinstance(if_node, IfNode)
     assert if_node.condition.member == "value"
+
+
+def test_parse_raw_string_view_shader_template_from_mlx_jit_indexing_header():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: 968d264f2903d578e699c4452a4dbf48633921aa
+    # Path: mlx/backend/metal/jit/indexing.h
+    code = """
+    constexpr std::string_view masked_assign_kernel = R"(
+    template [[host_name("{0}")]] [[kernel]]
+    decltype(masked_assign_impl<{1}, {2}>) masked_assign_impl<{1}, {2}>;
+    )";
+    """
+    ast = parse_ok(code)
+    assignment = ast.global_variables[0]
+
+    assert isinstance(assignment, AssignmentNode)
+    assert assignment.left.vtype == "std::string_view"
+    assert assignment.left.name == "masked_assign_kernel"
+    assert str(assignment.right).startswith('R"(')
 
 
 def test_parse_preprocessor_define():

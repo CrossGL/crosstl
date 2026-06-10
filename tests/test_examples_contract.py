@@ -32,7 +32,10 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
     ("graphics/ComplexShader.cgl", "opengl"),
 )
 
-ADDITIONAL_FIXED_CASES = ()
+ADDITIONAL_FIXED_CASES = (
+    ("cross_platform/UniversalPBRShader.cgl", "mojo"),
+    ("cross_platform/UniversalPBRShader.cgl", "slang"),
+)
 
 GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES = (
     ("advanced/GenericPatternMatching.cgl", "vulkan", "SPIR-V"),

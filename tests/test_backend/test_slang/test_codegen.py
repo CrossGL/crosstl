@@ -44,6 +44,39 @@ def test_struct_codegen():
         pytest.fail("Struct parsing or code generation not implemented.")
 
 
+def test_class_declaration_codegen_from_slang_cpu_program():
+    # Source: shader-slang/slang@142e00d9342eccf0613ed1b18d81cb003c5d6f09
+    # tests/cpu-program/class.slang
+    code = """
+    class MyClass
+    {
+        int intMember;
+        __init()
+        {
+            intMember = 0;
+        }
+        int method()
+        {
+            return intMember;
+        }
+    }
+
+    int main()
+    {
+        return 0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct MyClass" in generated_code
+    assert "int intMember;" in generated_code
+    assert "int main()" in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_import_and_include_paths_codegen():
     code = """
     import MyApp.Shadowing;
@@ -185,6 +218,29 @@ def test_struct_array_member_codegen():
     assert "vec4 colors[2][3]" in generated_code
 
 
+def test_struct_trailing_variable_initializer_codegen_reparse_from_slang_docs():
+    # Source: Slang declarations docs, Structure Types section, documents a
+    # C-style struct declaration used as a variable declaration.
+    code = """
+    struct Association
+    {
+        int from;
+        int to;
+    } associations[] =
+    {
+        { 1, 1 },
+        { 2, 4 },
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct Association" in generated_code
+    assert "Association associations[] = {{1, 1}, {2, 4}};" in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_forward_struct_declaration_codegen_from_generated_conformance_sample():
     # Source: shader-slang/slang@52339028a2aa703271533454c6b9528a534bac31
     # docs/generated/tests/conformance/types-struct/struct-no-body-decl.slang
@@ -215,6 +271,35 @@ def test_forward_struct_declaration_codegen_from_generated_conformance_sample():
     assert "int x;" in generated_code
     assert "ForwardDeclared fd;" in generated_code
     assert "output[0] = fd.x;" in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_uninitialized_global_const_codegen_reparse_from_slang_bug_fixture():
+    # Source: shader-slang/slang@29e69b0bf626f87500be73a7fb3764db25658c66
+    # tests/bugs/static-const-without-default-value.slang
+    code = """
+    static const int globalVar;
+    extern static const int externVar;
+    static const int initializedVar = 42;
+    const int nonStaticVar;
+    static int nonConstVar;
+
+    [numthreads(1,1,1)]
+    void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+    {
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "static const int globalVar;" in generated_code
+    assert "extern static const int externVar;" in generated_code
+    assert "static const int initializedVar = 42;" in generated_code
+    assert "int nonStaticVar;" in generated_code
+    assert "static int nonConstVar;" in generated_code
+    assert "const int nonStaticVar;" not in generated_code
     cgl_translator.parse(generated_code)
 
 
@@ -316,6 +401,95 @@ def test_typealias_logical_not_generic_argument_codegen_reparse():
     assert "typedef ValueHolder<TRUE_VAL&&not_FALSE_VAL> TestAnd;" in generated_code
     assert "typedef ValueHolder<FALSE_VAL||not_FALSE_VAL> TestOr;" in generated_code
     assert "ValueHolder<!FALSE_VAL>" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_generic_value_expression_argument_codegen_reparse_from_slang_bug_fixture():
+    # Source: shader-slang/slang@29e69b0bf626f87500be73a7fb3764db25658c66
+    # tests/bugs/generic-uint-value-param.slang
+    code = """
+    struct BoolG<let v : bool>
+    { }
+
+    struct Test<let v : uint>
+    {
+        int arr[v];
+    }
+
+    static const uint uv = 5;
+
+    void t()
+    {
+        BoolG<true> gt;
+        BoolG<bool(1)> gt2;
+        BoolG<1 != 2> gt3;
+        Test<uv> v;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "BoolG<true> gt;" in generated_code
+    assert "BoolG<value_bool_1> gt2;" in generated_code
+    assert "BoolG<1!=2> gt3;" in generated_code
+    assert "Test<uv> v;" in generated_code
+    assert "BoolG<bool(1)>" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_invalid_value_expression_type_specialization_codegen_reparse_timeout_guard():
+    # Source: shader-slang/slang@29e69b0bf626f87500be73a7fb3764db25658c66
+    # tests/diagnostics/generic-invalid-type-specialization.slang. The source
+    # is a negative Slang diagnostic, but the importer must not emit CrossGL
+    # that sends the frontend generic parser into an expression loop.
+    code = """
+    RWStructuredBuffer<int> outputBuffer;
+
+    struct Check<T>
+    {
+        T v;
+    };
+
+    [numthreads(4, 1, 1)]
+    void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+    {
+        int index = dispatchThreadID.x;
+        Check<2 + 2> v;
+        outputBuffer[index] = index;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "Check<value_2_plus_2> v;" in generated_code
+    assert "Check<2+2>" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_generic_static_member_scope_codegen_reparse_from_upstream_diagnostic():
+    # Reduced from shader-slang/slang@4511c96d89ae80b211fd286040ce5032d716d98d
+    # tests/language-feature/generics/recursive-generic-eval-budget.slang.
+    code = """
+    struct Loop<let x : int>
+    {
+        static const int value = Loop<x + 1>::value;
+    }
+
+    int useValue = Loop<0>::value;
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "static const int value = Loop<x+1>.value;" in generated_code
+    assert "int useValue = Loop<0>.value;" in generated_code
+    assert "Loop<x+1>::value" not in generated_code
+    assert "Loop<0>::value" not in generated_code
     cgl_translator.parse(generated_code)
 
 
@@ -917,6 +1091,38 @@ def test_precise_output_parameter_modifier_codegen_from_hlsl_variable_syntax():
     cgl_translator.parse(generated_code)
 
 
+def test_non_tessellation_output_patch_parameter_codegen_reparse_from_slang_bug():
+    # Source: shader-slang/slang@29e69b0bf626f87500be73a7fb3764db25658c66
+    # tests/bugs/gh-8920-domain-shaders.slang
+    code = """
+    struct PatchOut {
+        int nothing;
+    }
+
+    struct VOut {
+        int dummy;
+    };
+
+    [[shader("vertex")]]
+    VOut main(
+        const OutputPatch<PatchOut, 1> bp
+    ) {
+        VOut v;
+        v.dummy = bp[0].nothing;
+        return v;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "VOut main(PatchOut bp[1])" in generated_code
+    assert "v.dummy = bp[0].nothing;" in generated_code
+    assert "OutputPatch<PatchOut, 1> bp" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_struct_methods_do_not_break_field_codegen():
     code = """
     struct Primitive {
@@ -1362,6 +1568,41 @@ def test_reverse_codegen_rejects_extension_conformance_constructs():
 
     message = str(exc.value)
     assert "extension MyType : IBar" in message
+
+
+def test_reverse_codegen_rejects_generic_prefixed_extension_after_parse():
+    # Reduced from shader-slang/slang@0658ed79219d6e4ee526182104ce71d476f787be
+    # tests/autodiff/force-unroll-late-specialization.slang.
+    code = """
+    __generic<T : __BuiltinFloatingPointType, A : IDiffTensorWrapper>
+    extension DiffTensorView<T, A>
+    {
+        [Differentiable]
+        __generic<let M : int, let R : int, let N : int>
+        vector<T, M> loadVecOnce(vector<uint, N> x)
+        {
+            vector<T, M> result;
+            [ForceUnroll]
+            for (int j = 0; j < M; j++)
+            {
+                result[j] = this.loadOnce(x);
+                x[R] += 1;
+            }
+            return result;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(
+        NotImplementedError,
+        match="interface/conformance constructs",
+    ) as exc:
+        generate_code(ast)
+
+    assert "extension DiffTensorView<T, A>" in str(exc.value)
 
 
 def test_reverse_codegen_erases_builtin_generic_where_constraints_from_wave_matrix():
@@ -3058,6 +3299,25 @@ def test_initialized_top_level_global_codegen():
     assert "gain = 1f" not in generated_code
 
 
+def test_const_static_globals_codegen_canonicalizes_for_crossgl_reparse():
+    # Source pattern: shader-slang/slang tests/spirv/mesh-primitive.slang.
+    code = """
+    const static uint MAX_VERTS = 6;
+    const static float2 positions[MAX_VERTS] = {
+        float2(0.0, -0.5),
+        float2(0.5, 0.0),
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "static const uint MAX_VERTS = 6;" in generated_code
+    assert "static const vec2 positions[MAX_VERTS]" in generated_code
+    assert "const static" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_extern_static_const_globals_codegen_from_link_time_constant_tests():
     # Source: shader-slang/slang link-time constant tests.
     code = """
@@ -3092,6 +3352,24 @@ def test_initializer_list_declaration_codegen():
     assert "float local_[2] = {0.5, 1.0};" in generated_code
     assert "vec4 colors[1] = {vec4(1.0, 0.5, 0.0, 1.0)};" in generated_code
     assert "{.5f, 1f" not in generated_code
+
+
+def test_bracket_array_literal_codegen_from_slang_generic_lambda_issue_reparse():
+    # Source: shader-slang/slang#10866.
+    code = """
+    void upsample()
+    {
+        let positions = [int2(0,0), int2(1, 0), int2(-1, 0),];
+        var first = positions[0];
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let positions = {ivec2(0, 0), ivec2(1, 0), ivec2(-1, 0)};" in generated_code
+    assert "var first = positions[0];" in generated_code
+    cgl_translator.parse(generated_code)
 
 
 def test_typed_brace_constructor_codegen():
@@ -3614,6 +3892,8 @@ def test_numeric_literal_codegen_normalizes_crossgl_float_forms():
         float leading = .5f;
         float trailing = 1.;
         float whole = 1f;
+        float hexScale = 0x1p-24;
+        float hexHalf = 0x1.8p+2f;
         uint mask = 0xffu;
         uint count = 123u;
     }
@@ -3627,11 +3907,15 @@ def test_numeric_literal_codegen_normalizes_crossgl_float_forms():
     assert "float leading = 0.5;" in generated_code
     assert "float trailing = 1.0;" in generated_code
     assert "float whole = 1.0;" in generated_code
+    assert "float hexScale = 0.000000059604644775390625;" in generated_code
+    assert "float hexHalf = 6.0;" in generated_code
     assert "uint mask = 0xffu;" in generated_code
     assert "uint count = 123u;" in generated_code
     assert "1e-3f" not in generated_code
     assert ".5f" not in generated_code
     assert "1f" not in generated_code
+    assert "0x1p-24" not in generated_code
+    cgl_translator.parse(generated_code)
 
 
 def test_binary_integer_literals_codegen_from_generated_conformance_sample():

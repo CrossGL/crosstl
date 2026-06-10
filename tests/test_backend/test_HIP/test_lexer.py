@@ -7,7 +7,7 @@ class TestHipLexer:
         code = """
         __global__ __device__ __host__ __shared__ __constant__ __restrict __restrict__
         __forceinline__ __noinline__ __launch_bounds__ inline __inline__ template typename class
-        struct union enum namespace using extern static const
+        struct union enum namespace using extern static register const
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
@@ -28,6 +28,7 @@ class TestHipLexer:
         assert "TYPENAME" in token_types
         assert "CLASS" in token_types
         assert "STRUCT" in token_types
+        assert "REGISTER" in token_types
 
     def test_launch_bounds_attribute_tokenization(self):
         code = """
@@ -182,6 +183,38 @@ class TestHipLexer:
         assert "RSHIFT_ASSIGN" in token_types
         assert "ARROW" in token_types
         assert "SCOPE" in token_types
+
+    def test_cpp_alternative_operator_tokenization(self):
+        # Sibling CUDA fixture provenance: NVIDIA/cutlass@1fc71b3,
+        # examples/common/dist_gemm_helpers.h, uses C++ alternative `not`.
+        code = "not ready and valid or fallback not_eq failed bitand mask bitor value compl bits xor other and_eq flag or_eq done xor_eq lane"
+        lexer = HipLexer(code)
+        tokens = [(token.type, token.value) for token in lexer.tokenize()]
+
+        assert tokens == [
+            ("NOT", "not"),
+            ("IDENTIFIER", "ready"),
+            ("AND", "and"),
+            ("IDENTIFIER", "valid"),
+            ("OR", "or"),
+            ("IDENTIFIER", "fallback"),
+            ("NE", "not_eq"),
+            ("IDENTIFIER", "failed"),
+            ("AMPERSAND", "bitand"),
+            ("IDENTIFIER", "mask"),
+            ("PIPE", "bitor"),
+            ("IDENTIFIER", "value"),
+            ("TILDE", "compl"),
+            ("IDENTIFIER", "bits"),
+            ("XOR", "xor"),
+            ("IDENTIFIER", "other"),
+            ("AND_ASSIGN", "and_eq"),
+            ("IDENTIFIER", "flag"),
+            ("OR_ASSIGN", "or_eq"),
+            ("IDENTIFIER", "done"),
+            ("XOR_ASSIGN", "xor_eq"),
+            ("IDENTIFIER", "lane"),
+        ]
 
     def test_numeric_literals(self):
         code = """

@@ -1,8 +1,8 @@
 #include <hip/device_functions.h>
+#include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
 #include <hip/hip_runtime_api.h>
 #include <hip/math_functions.h>
-
 __device__ inline float4 cgl_float4_mul(float4 lhs, float4 rhs) {
   return make_float4((lhs.x * rhs.x), (lhs.y * rhs.y), (lhs.z * rhs.z),
                      (lhs.w * rhs.w));

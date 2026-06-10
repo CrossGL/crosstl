@@ -2,12 +2,6 @@
 from math import *
 from gpu import *
 
-# CrossGL builtin placeholders
-var global_invocation_id: SIMD[DType.uint32, 4] = SIMD[DType.uint32, 4](0, 0, 0, 0)
-var local_invocation_id: SIMD[DType.uint32, 4] = SIMD[DType.uint32, 4](0, 0, 0, 0)
-var num_workgroups: SIMD[DType.uint32, 4] = SIMD[DType.uint32, 4](0, 0, 0, 0)
-var workgroup_id: SIMD[DType.uint32, 4] = SIMD[DType.uint32, 4](0, 0, 0, 0)
-
 # CrossGL synchronization placeholders
 fn _crossgl_workgroup_barrier():
     pass
@@ -66,12 +60,12 @@ var matrix_B: UnsafePointer[Float32] = UnsafePointer[Float32]()
 var matrix_C: UnsafePointer[Float32] = UnsafePointer[Float32]()
 # CrossGL shader stage: compute
 fn matmul_tiled() -> None:
-    var tile_A = List[List[Float32]]()
-    var tile_B = List[List[Float32]]()
-    var tx: Int32 = Int32(local_invocation_id[0])
-    var ty: Int32 = Int32(local_invocation_id[1])
-    var bx: Int32 = Int32(workgroup_id[0])
-    var by: Int32 = Int32(workgroup_id[1])
+    var tile_A = InlineArray[InlineArray[Float32, TILE_SIZE], TILE_SIZE](unsafe_uninitialized=True)
+    var tile_B = InlineArray[InlineArray[Float32, TILE_SIZE], TILE_SIZE](unsafe_uninitialized=True)
+    var tx: Int32 = Int32(thread_idx_uint.x)
+    var ty: Int32 = Int32(thread_idx_uint.y)
+    var bx: Int32 = Int32(block_idx_uint.x)
+    var by: Int32 = Int32(block_idx_uint.y)
     var row: Int32 = ((by * TILE_SIZE) + ty)
     var col: Int32 = ((bx * TILE_SIZE) + tx)
     var result: Float32 = 0.0
@@ -113,10 +107,10 @@ var C: UnsafePointer[Float32] = UnsafePointer[Float32]()
 fn matmul_square() -> None:
     var shared_A = InlineArray[InlineArray[Float32, 16], 16](unsafe_uninitialized=True)
     var shared_B = InlineArray[InlineArray[Float32, 16], 16](unsafe_uninitialized=True)
-    var tx: Int32 = Int32(local_invocation_id[0])
-    var ty: Int32 = Int32(local_invocation_id[1])
-    var bx: Int32 = Int32(workgroup_id[0])
-    var by: Int32 = Int32(workgroup_id[1])
+    var tx: Int32 = Int32(thread_idx_uint.x)
+    var ty: Int32 = Int32(thread_idx_uint.y)
+    var bx: Int32 = Int32(block_idx_uint.x)
+    var by: Int32 = Int32(block_idx_uint.y)
     var row: Int32 = ((by * 16) + ty)
     var col: Int32 = ((bx * 16) + tx)
     var sum: Float32 = 0.0
@@ -144,10 +138,10 @@ var matrix_C_vec: UnsafePointer[SIMD[DType.float32, 4]] = UnsafePointer[SIMD[DTy
 fn matmul_vectorized() -> None:
     var shared_A_vec = InlineArray[InlineArray[SIMD[DType.float32, 4], 8], 8](unsafe_uninitialized=True)
     var shared_B_vec = InlineArray[InlineArray[SIMD[DType.float32, 4], 8], 8](unsafe_uninitialized=True)
-    var tx: Int32 = Int32(local_invocation_id[0])
-    var ty: Int32 = Int32(local_invocation_id[1])
-    var bx: Int32 = Int32(workgroup_id[0])
-    var by: Int32 = Int32(workgroup_id[1])
+    var tx: Int32 = Int32(thread_idx_uint.x)
+    var ty: Int32 = Int32(thread_idx_uint.y)
+    var bx: Int32 = Int32(block_idx_uint.x)
+    var by: Int32 = Int32(block_idx_uint.y)
     var row: Int32 = ((by * 8) + ty)
     var col: Int32 = ((bx * 8) + tx)
     var result: SIMD[DType.float32, 4] = SIMD[DType.float32, 4](0.0)
@@ -183,11 +177,11 @@ var batch_C: UnsafePointer[Float32] = UnsafePointer[Float32]()
 fn matmul_batched() -> None:
     var tile_A = InlineArray[InlineArray[Float32, 16], 16](unsafe_uninitialized=True)
     var tile_B = InlineArray[InlineArray[Float32, 16], 16](unsafe_uninitialized=True)
-    var tx: Int32 = Int32(local_invocation_id[0])
-    var ty: Int32 = Int32(local_invocation_id[1])
-    var bx: Int32 = Int32(workgroup_id[0])
-    var by: Int32 = Int32(workgroup_id[1])
-    var bz: Int32 = Int32(workgroup_id[2])
+    var tx: Int32 = Int32(thread_idx_uint.x)
+    var ty: Int32 = Int32(thread_idx_uint.y)
+    var bx: Int32 = Int32(block_idx_uint.x)
+    var by: Int32 = Int32(block_idx_uint.y)
+    var bz: Int32 = Int32(block_idx_uint.z)
     var batch_id: Int32 = bz
     if (batch_id >= batch_size):
         return None
@@ -221,12 +215,12 @@ fn matmul_batched() -> None:
 # Compute Shader
 # CrossGL shader stage: compute
 fn matmul_warp_optimized() -> None:
-    var warp_id: Int32 = Int32(local_invocation_id[0])
-    var global_id: Int32 = Int32(global_invocation_id[0])
-    var elements_per_warp: Int32 = ((matrix_size * matrix_size) / (Int32(num_workgroups[0]) * 32))
+    var warp_id: Int32 = Int32(thread_idx_uint.x)
+    var global_id: Int32 = Int32(global_idx_uint.x)
+    var elements_per_warp: Int32 = ((matrix_size * matrix_size) / (Int32(grid_dim_uint.x) * 32))
     var elem: Int32 = 0
     while (elem < elements_per_warp):
-        var linear_id: Int32 = (global_id + ((elem * Int32(num_workgroups[0])) * 32))
+        var linear_id: Int32 = (global_id + ((elem * Int32(grid_dim_uint.x)) * 32))
         if (linear_id >= (matrix_size * matrix_size)):
             break
         var row: Int32 = (linear_id / matrix_size)

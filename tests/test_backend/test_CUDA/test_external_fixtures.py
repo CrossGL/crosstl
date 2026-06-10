@@ -3,18 +3,22 @@ import shutil
 import subprocess
 
 from crosstl.backend.CUDA.CudaAst import (
+    AssignmentNode,
     AtomicOperationNode,
     CastNode,
     EnumNode,
     ForNode,
     FunctionCallNode,
     IfNode,
+    KernelLaunchNode,
     MemberAccessNode,
     ReturnNode,
     SharedMemoryNode,
     StructNode,
     TypeAliasNode,
+    UnaryOpNode,
     VariableNode,
+    WhileNode,
 )
 from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
@@ -70,6 +74,23 @@ EXTERNAL_SAMPLES = [
     },
     {
         "repo": "https://github.com/NVIDIA/cccl",
+        "commit": "03e7b555e34480302bca1681bd7caff88aa155a9",
+        "paths": [
+            "examples/cudax/vector_add/vector_add.cu",
+            "cudax/examples/stf/linear_algebra/cg_dense_2D.cu",
+            "examples/ccclrt/kernel_launch_patterns/kernel.cu",
+        ],
+    },
+    {
+        "repo": "https://github.com/NVIDIA/cccl",
+        "commit": "3632bcc762ab095c0f3221d7f019fb14c0c1e18b",
+        "paths": [
+            "cub/cub/device/dispatch/kernels/kernel_transform.cuh",
+            "thrust/thrust/detail/type_traits.h",
+        ],
+    },
+    {
+        "repo": "https://github.com/NVIDIA/cccl",
         "commit": "5ea5d42567693aad8c0e5d6316155ecc612fdc71",
         "paths": ["thrust/examples/uninitialized_vector.cu"],
     },
@@ -87,6 +108,11 @@ EXTERNAL_SAMPLES = [
         "paths": ["c/parallel/src/jit_templates/traits.h"],
     },
     {
+        "repo": "https://github.com/NVIDIA/cccl",
+        "commit": "17869e1d46314036843a9ff9a0cb726de560e94e",
+        "paths": ["libcudacxx/include/cuda/std/__utility/pair.h"],
+    },
+    {
         "repo": "https://github.com/NVIDIA/cutlass",
         "commit": "2599f2975b06a67d5ee25e4a7292afeda1475c9b",
         "paths": [
@@ -100,9 +126,14 @@ EXTERNAL_SAMPLES = [
         "paths": ["include/cute/stride.hpp"],
     },
     {
+        "repo": "https://github.com/NVIDIA/cutlass",
+        "commit": "1fc71b3ed1cab3541f7482c68ee19d0e40ef69d3",
+        "paths": ["examples/common/dist_gemm_helpers.h"],
+    },
+    {
         "repo": "https://github.com/NVlabs/tiny-cuda-nn",
         "commit": "749dd70c5afc5a9dadb85e5652ed65d55e0ba187",
-        "paths": ["src/fully_fused_mlp.cu"],
+        "paths": ["src/fully_fused_mlp.cu", "src/object.cu"],
     },
     {
         "repo": "https://github.com/NVIDIA/CUDALibrarySamples",
@@ -111,6 +142,11 @@ EXTERNAL_SAMPLES = [
             "MathDx/cuFFTDx/02_simple_fft_block/simple_fft_block.cu",
             "cuTENSOR/reduction.cu",
         ],
+    },
+    {
+        "repo": "https://github.com/llvm/llvm-project",
+        "commit": "6d5c94203652a52b51b37ad4768bc1a7066f029c",
+        "paths": ["clang/test/SemaCUDA/consteval-func.cu"],
     },
     {
         "repo": "https://github.com/NVIDIA/nvidia-hpcg",
@@ -182,12 +218,374 @@ def compile_cuda_if_nvcc_available(cuda_code, tmp_path):
     return True
 
 
+COMPILER_MANUAL_SAMPLER_FIXTURE = """
+shader DirectXMixedManualSamplerUsageUnsupportedShader {
+  compute {
+    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+    layout(set = 0, binding = 0) buffer vec4* values;
+    layout(set = 0, binding = 2) uniform sampler2DShadow shadowMap;
+    layout(set = 0, binding = 3) uniform sampler2DArrayShadow shadowAtlas;
+    layout(set = 0, binding = 5) sampler sharedShadowSampler;
+
+    void main() {
+      float visibility =
+          textureCompare(shadowMap, sharedShadowSampler,
+                         vec2(0.5, 0.5), 0.25);
+      float manualVisibility =
+          textureCompareLodManual(shadowAtlas, sharedShadowSampler,
+                                  vec3(0.25, 0.5, 1.0), 0.33, 2.0,
+                                  less_equal);
+      values[0] = vec4(visibility, manualVisibility, 0.0, 1.0);
+      return;
+    }
+  }
+}
+"""
+
+
+COMPILER_MATRIX_CONSTRUCTOR_FIXTURE = """
+shader MatrixConstructorComputeShader {
+  compute {
+    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+    layout(set = 0, binding = 0) buffer float* values;
+
+    void keep(mat2 flattened, mat2 diagonal, mat3 expanded, mat3 basis) {
+      values[0] = 1.0;
+      return;
+    }
+
+    void main() {
+      mat2 flattened = mat2(1.0, 2.0, 3.0, 4.0);
+      mat2 diagonal = mat2(5.0);
+      mat3 expanded = mat3(flattened);
+      vec3 c0 = vec3(1.0, 2.0, 3.0);
+      vec3 c1 = vec3(4.0, 5.0, 6.0);
+      vec3 c2 = vec3(7.0, 8.0, 9.0);
+      mat3 basis = mat3(c0, c1, c2);
+      keep(flattened, diagonal, expanded, basis);
+      return;
+    }
+  }
+}
+"""
+
+
+def assert_cuda_fixture_reverse_codegen_prunes_generated_matrix_helpers(source):
+    cuda_code = crossgl_to_cuda(source)
+    assert "struct float2x2" in cuda_code
+
+    crossgl = cuda_to_crossgl(cuda_code)
+
+    assert "struct float2x2" not in crossgl
+    assert "operator_multiply" not in crossgl
+    assert "CGL_COLUMNS" not in crossgl
+    assert_crossgl_reparse(crossgl)
+    return crossgl
+
+
 def test_external_fixture_metadata_records_repositories_and_commits():
     assert all(
         sample["repo"].startswith("https://github.com/") for sample in EXTERNAL_SAMPLES
     )
     assert all(len(sample["commit"]) == 40 for sample in EXTERNAL_SAMPLES)
     assert all(sample["paths"] for sample in EXTERNAL_SAMPLES)
+
+
+def test_compiler_manual_sampler_fixture_reverse_codegen_prunes_cuda_helpers():
+    # Reduced from CrossGL-Compiler/tests/fixtures/
+    # DirectXMixedManualSamplerUsageUnsupportedShader.cgl.
+    crossgl = assert_cuda_fixture_reverse_codegen_prunes_generated_matrix_helpers(
+        COMPILER_MANUAL_SAMPLER_FIXTURE
+    )
+
+    assert len(crossgl) < 2_000
+    assert "textureCompareLodManual(" in crossgl
+    assert "var visibility: f32 = 0.0f;" in crossgl
+
+
+def test_compiler_matrix_constructor_fixture_reverse_codegen_prunes_cuda_helpers():
+    # Reduced from CrossGL-Compiler/tests/fixtures/MatrixConstructorComputeShader.cgl.
+    crossgl = assert_cuda_fixture_reverse_codegen_prunes_generated_matrix_helpers(
+        COMPILER_MATRIX_CONSTRUCTOR_FIXTURE
+    )
+
+    assert len(crossgl) < 2_000
+    assert (
+        "void keep(mat2 flattened, mat2 diagonal, mat3 expanded, mat3 basis)" in crossgl
+    )
+    assert "var flattened: mat2 = mat2(1.0, 2.0, 3.0, 4.0);" in crossgl
+    assert "var basis: mat3 = mat3(c0, c1, c2);" in crossgl
+
+
+def test_llvm_cuda_consteval_device_function_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/llvm/llvm-project
+    # commit: 6d5c94203652a52b51b37ad4768bc1a7066f029c
+    # path: clang/test/SemaCUDA/consteval-func.cu
+    source = """
+    __device__ consteval int f() { return 0; }
+    int main() { return f(); }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    function_signatures = [
+        (function.name, function.return_type, function.qualifiers)
+        for function in ast.functions
+    ]
+    assert function_signatures == [
+        ("f", "int", ["__device__", "consteval"]),
+        ("main", "int", []),
+    ]
+    assert "i32 f()" in crossgl
+    assert "i32 main()" in crossgl
+    assert "return f();" in crossgl
+    assert "consteval" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_function_try_block_main_parses_and_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 03e7b555e34480302bca1681bd7caff88aa155a9
+    # path: examples/cudax/vector_add/vector_add.cu
+    source = """
+    __global__ void vectorAdd(float* C) {
+        C[0] = 1.0f;
+    }
+
+    int main(void) try {
+        vectorAdd<<<1, 1>>>(nullptr);
+        return 0;
+    } catch (const std::exception& e) {
+        return 1;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert [function.name for function in ast.functions] == ["main"]
+    assert [kernel.name for kernel in ast.kernels] == ["vectorAdd"]
+    assert isinstance(ast.functions[0].body[0], KernelLaunchNode)
+    assert isinstance(ast.functions[0].body[1], ReturnNode)
+    assert "i32 main()" in crossgl
+    assert "Kernel launch: vectorAdd<<<1, 1>>>()" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_three_way_operator_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 17869e1d46314036843a9ff9a0cb726de560e94e
+    # path: libcudacxx/include/cuda/std/__utility/pair.h
+    source = """
+    template <class _T1, class _T2>
+    _CCCL_API constexpr int operator<=>(const pair<_T1, _T2>& __x,
+                                        const pair<_T1, _T2>& __y)
+    {
+      return compare(__x.first, __y.first);
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    function = ast.functions[0]
+    assert function.name == "operator<=>"
+    assert function.qualifiers == ["_CCCL_API", "constexpr"]
+    assert [(param.vtype, param.name) for param in function.params] == [
+        ("const pair<_T1, _T2> &", "__x"),
+        ("const pair<_T1, _T2> &", "__y"),
+    ]
+    assert "i32 operator_three_way(pair<_T1, _T2> __x, pair<_T1, _T2> __y)" in crossgl
+    assert "i32 operator<=>" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_exec_check_macro_prefixed_template_constructor_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 17869e1d46314036843a9ff9a0cb726de560e94e
+    # path: libcudacxx/include/cuda/std/__utility/pair.h
+    source = """
+    template <class _T1, class _T2,
+              bool = __must_synthesize_assignment_v<_T1>
+                     || __must_synthesize_assignment_v<_T2>>
+    struct __pair_base
+    {
+      _T1 first;
+      _T2 second;
+
+      _CCCL_EXEC_CHECK_DISABLE
+      template <class _Constraints = __pair_constraints<_T1, _T2>,
+                enable_if_t<_Constraints::__explicit_default_constructible, int> = 0>
+      _CCCL_API explicit constexpr __pair_base() noexcept(
+        is_nothrow_default_constructible_v<_T1>
+        && is_nothrow_default_constructible_v<_T2>)
+          : first()
+          , second()
+      {}
+
+      _CCCL_EXEC_CHECK_DISABLE
+      _CCCL_HIDE_FROM_ABI constexpr __pair_base(const __pair_base&) = default;
+    };
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    pair_base = ast.structs[0]
+    assert pair_base.name == "__pair_base"
+    assert [(member.vtype, member.name) for member in pair_base.members] == [
+        ("_T1", "first"),
+        ("_T2", "second"),
+    ]
+    assert "struct pair_base" in crossgl
+    assert "_CCCL_EXEC_CHECK_DISABLE" not in crossgl
+    assert "_CCCL_HIDE_FROM_ABI" not in crossgl
+    assert "__pair_base()" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_requires_requires_struct_specialization_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 17869e1d46314036843a9ff9a0cb726de560e94e
+    # path: libcudacxx/include/cuda/std/__utility/pair.h
+    source = """
+    template <class _T1, class _T2, class _U1, class _U2>
+      requires requires {
+        typename pair<common_type_t<_T1, _U1>, common_type_t<_T2, _U2>>;
+      }
+    struct common_type<pair<_T1, _T2>, pair<_U1, _U2>>
+    {
+      using type = pair<common_type_t<_T1, _U1>,
+                        common_type_t<_T2, _U2>>;
+    };
+
+    __device__ int keep_after_requires(int value) {
+        return value;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.structs[0].name == "common_type<pair<_T1, _T2>, pair<_U1, _U2>>"
+    assert ast.functions[0].name == "keep_after_requires"
+    assert "struct common_type_pair__T1__T2_pair__U1__U2 {" in crossgl
+    assert "i32 keep_after_requires(i32 value)" in crossgl
+    assert "requires requires" not in crossgl
+    assert "typename pair" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_mutable_template_member_declaration_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 03e7b555e34480302bca1681bd7caff88aa155a9
+    # path: cudax/examples/stf/linear_algebra/cg_dense_2D.cu
+    source = """
+    template <typename T>
+    struct solver_state {
+      size_t N;
+      mutable std::vector<std::shared_ptr<logical_data<slice<double>>>> handles;
+    };
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.structs[0].name == "solver_state"
+    assert [(member.vtype, member.name) for member in ast.structs[0].members] == [
+        ("size_t", "N"),
+        ("std::vector<std::shared_ptr<logical_data<slice<double>>>>", "handles"),
+    ]
+    assert ast.structs[0].members[1].qualifiers == ["mutable"]
+    assert "std_vector<std_shared_ptr<logical_data<slice<double>>>> handles;" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_class_elaborated_parameter_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 03e7b555e34480302bca1681bd7caff88aa155a9
+    # path: cudax/examples/stf/linear_algebra/cg_dense_2D.cu
+    source = """
+    class vector {
+    public:
+      size_t nblocks;
+    };
+
+    void dot(vector& a, class vector& b) {
+      return;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    dot = ast.functions[0]
+    assert [(param.vtype, param.name) for param in dot.params] == [
+        ("vector &", "a"),
+        ("class vector &", "b"),
+    ]
+    assert "void dot(vector a, vector b)" in crossgl
+    assert "class vector" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cutlass_alternative_not_operator_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cutlass
+    # commit: 1fc71b3ed1cab3541f7482c68ee19d0e40ef69d3
+    # path: examples/common/dist_gemm_helpers.h
+    source = """
+    using AtomicBoolean = cuda::atomic<bool>;
+
+    __global__ void delay_kernel(const AtomicBoolean* atomic_flag_ptr) {
+      while (not atomic_flag_ptr->load()) {
+        __nanosleep(40);
+      }
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+    loop = ast.kernels[0].body[0]
+
+    assert isinstance(loop, WhileNode)
+    assert isinstance(loop.condition, UnaryOpNode)
+    assert loop.condition.op == "!"
+    assert "while ((!atomic_flag_ptr->load()))" in crossgl
+    assert "not atomic_flag_ptr" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_tiny_cuda_nn_fmt_named_argument_string_literal_suffix_parse():
+    # Upstream source:
+    # repo: https://github.com/NVlabs/tiny-cuda-nn
+    # commit: 749dd70c5afc5a9dadb85e5652ed65d55e0ba187
+    # path: src/object.cu
+    source = """
+    void build(const char* device_function) {
+        auto kernel = dfmt(0,
+                           R"(template body)",
+                           "DEVICE_FUNCTION"_a = device_function);
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+    dfmt_call = ast.functions[0].body[0].value
+
+    assert isinstance(dfmt_call.args[2], AssignmentNode)
+    assert dfmt_call.args[2].left == '"DEVICE_FUNCTION"_a'
+    assert dfmt_call.args[2].right == "device_function"
+    assert '"DEVICE_FUNCTION"_a = device_function' in crossgl
+    assert_crossgl_reparse(crossgl)
 
 
 def test_cccl_libcudacxx_concept_emulation_declaration_is_skipped():
@@ -620,6 +1018,31 @@ def test_cuda_samples_interval_buffer_parameter_keyword_codegen_reparse():
     assert "buffer_: array<T>" in crossgl
     assert "buffer_[gl_LocalInvocationID.x] = index;" in crossgl
     assert " buffer:" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_tiny_cuda_nn_precision_parameter_keyword_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVlabs/tiny-cuda-nn
+    # commit: 749dd70c5afc5a9dadb85e5652ed65d55e0ba187
+    # path: include/tiny-cuda-nn/common_device.h
+    source = """
+    template <typename T>
+    __global__ void cast_from(const uint32_t num_elements,
+                              const T* __restrict__ precision,
+                              float* __restrict__ full_precision) {
+        const uint32_t i = threadIdx.x + blockIdx.x * blockDim.x;
+        if (i >= num_elements) return;
+
+        full_precision[i] = (float)precision[i];
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "var<storage, read_write> precision_: array<T>" in crossgl
+    assert "full_precision[i] = f32(precision_[i]);" in crossgl
+    assert " precision:" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 
@@ -1174,6 +1597,29 @@ def test_cupy_double_longlong_bit_reinterpret_intrinsics_codegen_reparse():
     assert "return longBitsToDouble(bits);" in crossgl
     assert "__double_as_longlong" not in crossgl
     assert "__longlong_as_double" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_multiword_integer_spellings_codegen_reparse():
+    # Reduced from NVIDIA/cccl@01499a8daf1bc8568aa86f90467fc70bf9a58989:
+    # cudax/examples/stf/1f1b.cu and
+    # cudax/examples/stf/graph_algorithms/tricount.cu.
+    source = """
+    __device__ unsigned long long int triangle_count(long long int clock_cnt,
+                                                     signed char lane) {
+        unsigned long long int count = 1ull;
+        long long int delta = (long long int)clock_cnt;
+        return count + (unsigned long long int)delta
+                     + (unsigned long long int)lane;
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "u64 triangle_count(i64 clock_cnt, i8 lane)" in crossgl
+    assert "var count: u64 = 1u;" in crossgl
+    assert "var delta: i64 = i64(clock_cnt);" in crossgl
+    assert "u64(delta)" in crossgl
     assert_crossgl_reparse(crossgl)
 
 
@@ -3112,4 +3558,410 @@ def test_cccl_jit_traits_requires_expression_condition_codegen_reparse():
     assert body[0].condition == "true"
     assert "if (true)" in crossgl
     assert "Traits::template special" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_cub_trailing_requires_after_return_type_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 3632bcc762ab095c0f3221d7f019fb14c0c1e18b
+    # path: cub/cub/device/dispatch/kernels/kernel_transform.cuh
+    source = """
+    template <class PolicySelector>
+    __launch_bounds__(128)
+    __global__ auto transform_kernel(int* out) noexcept -> void
+      requires transform_policy_selector<PolicySelector>
+    {
+      out[threadIdx.x] = 1;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.kernels[0].name == "transform_kernel"
+    assert ast.kernels[0].return_type == "void"
+    assert "fn transform_kernel" in crossgl
+    assert "requires transform_policy_selector" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_thrust_variable_template_ternary_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 3632bcc762ab095c0f3221d7f019fb14c0c1e18b
+    # path: thrust/thrust/detail/type_traits.h
+    source = """
+    template <typename T>
+    inline constexpr bool is_proxy_reference_v = false;
+
+    __device__ int proxy_score() {
+      return is_proxy_reference_v<int> ? 1 : 0;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.global_variables[0].name == "is_proxy_reference_v"
+    assert ast.functions[0].body[0].value.condition == "is_proxy_reference_v<int>"
+    assert "return (is_proxy_reference_v<int> ? 1 : 0);" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_forceinline_function_annotation_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 3632bcc762ab095c0f3221d7f019fb14c0c1e18b
+    # path: libcudacxx/include/cuda/__bit/bit_reverse.h
+    source = """
+    _CCCL_FORCEINLINE __host__ __device__ unsigned int bit_reverse(
+        unsigned int value) {
+      return value;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.functions[0].name == "bit_reverse"
+    assert ast.functions[0].return_type == "unsigned int"
+    assert ast.functions[0].qualifiers == [
+        "_CCCL_FORCEINLINE",
+        "__host__",
+        "__device__",
+    ]
+    assert "u32 bit_reverse(u32 value)" in crossgl
+    assert "_CCCL_FORCEINLINE" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_unique_ptr_deleted_template_alias_annotations_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 087c594872d4d08b62ea51f3b87c1e36bfdb8f8c
+    # path: libcudacxx/include/cuda/std/__memory/unique_ptr.h
+    source = """
+    template <class _Tp, class... _Args>
+    _CCCL_API inline typename __unique_if<_Tp>::__unique_array_known_bound
+    make_unique(_Args&&...) = delete;
+
+    template <class _Tp, class _Dp>
+    struct hash<unique_ptr<_Tp, _Dp>>
+    {
+      using argument_type = CCCL_DEPRECATED unique_ptr<_Tp, _Dp>;
+      using result_type = CCCL_DEPRECATED size_t;
+
+      _CCCL_API inline size_t operator()(const unique_ptr<_Tp, _Dp>& __ptr) const
+      {
+        using pointer = typename unique_ptr<_Tp, _Dp>::pointer;
+        return hash<pointer>()(__ptr.get());
+      }
+    };
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.functions[0].name == "make_unique"
+    assert ast.functions[0].body is None
+    assert ast.structs[0].name == "hash<unique_ptr<_Tp, _Dp>>"
+    assert "make_unique" not in crossgl
+    assert "CCCL_DEPRECATED" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_no_unique_address_member_attribute_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 087c594872d4d08b62ea51f3b87c1e36bfdb8f8c
+    # path: libcudacxx/include/cuda/std/__algorithm/in_fun_result.h
+    source = """
+    template <class _InIter1, class _Func1>
+    struct in_fun_result
+    {
+      _CCCL_NO_UNIQUE_ADDRESS _InIter1 in;
+      _CCCL_NO_UNIQUE_ADDRESS _Func1 fun;
+
+      _CCCL_TEMPLATE(class _InIter2, class _Func2)
+      _CCCL_REQUIRES(convertible_to<const _InIter1&, _InIter2> _CCCL_AND convertible_to<const _Func1&, _Func2>)
+      _CCCL_API constexpr operator in_fun_result<_InIter2, _Func2>() const&
+      {
+        return {in, fun};
+      }
+    };
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert [(member.vtype, member.name) for member in ast.structs[0].members] == [
+        ("_InIter1", "in"),
+        ("_Func1", "fun"),
+    ]
+    assert "_InIter1 in_;" in crossgl
+    assert "_CCCL_NO_UNIQUE_ADDRESS" not in crossgl
+    assert "operator" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_void_constexpr_method_qualifier_order_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 087c594872d4d08b62ea51f3b87c1e36bfdb8f8c
+    # path: cub/cub/detail/warpspeed/sync_handler.cuh
+    source = """
+    struct SyncHandler
+    {
+      _CCCL_HOST_DEVICE_API void constexpr registerPhase(
+          int resourceHandle,
+          int numOwningThreads,
+          uint64_t* ptrBar)
+      {
+        int curPhase = mNumPhases[resourceHandle];
+        mNumOwningThreads[resourceHandle][curPhase] = numOwningThreads;
+        mPtrBar[resourceHandle][curPhase] = ptrBar;
+      }
+    };
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.structs[0].name == "SyncHandler"
+    assert ast.structs[0].members == []
+    assert "registerPhase" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_global_cuda_std_array_parameter_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 087c594872d4d08b62ea51f3b87c1e36bfdb8f8c
+    # path: cub/cub/detail/warpspeed/squad/squad.cuh
+    source = """
+    template <int numSquads, class F>
+    _CCCL_DEVICE_API void squadDispatch(
+        SpecialRegisters sr,
+        ::cuda::std::array<SquadDesc, numSquads> squads,
+        F f,
+        int warpIdxStart) {
+      squadDispatch<numSquads>(sr, squads.__elems_, f, warpIdxStart);
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.functions[0].params[1].vtype == (
+        "::cuda::std::array<SquadDesc, numSquads>"
+    )
+    assert "array<SquadDesc, numSquads> squads" in crossgl
+    assert "::cuda::std" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_hip_tests_member_function_pointer_typedef_and_ull_reparse():
+    # Upstream source:
+    # repo: https://github.com/ROCm/hip-tests
+    # commit: a618b48f0a29cfbd8c990fa72ab772483f61d381
+    # path: catch/perftests/compute/hipPerfMandelbrot.cc
+    source = """
+    struct coordRec {
+      double x;
+      double y;
+      double width;
+    };
+
+    class hipPerfMandelBrot {
+     public:
+      typedef void (hipPerfMandelBrot::*funPtr)(uint* out, uint width);
+    };
+
+    coordRec coords[] = {{0.0, 0.0, 4.0}};
+    unsigned long long expectedIters[] = {203277748ull, 2147483648ull};
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.structs[1].name == "hipPerfMandelBrot"
+    assert ast.structs[1].members == []
+    assert "funPtr" not in crossgl
+    assert "203277748ull" not in crossgl
+    assert "var expectedIters: array<u64> = {203277748u, 2147483648u};" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_hip_tests_typedef_class_and_reserved_enum_value_reparse():
+    # Upstream sources:
+    # repo: https://github.com/ROCm/hip-tests
+    # commit: a618b48f0a29cfbd8c990fa72ab772483f61d381
+    # paths:
+    #   catch/unit/graph/hipGraphAddChildGraphNode.cc
+    #   catch/unit/graph/hipGraphAddKernelNode.cc
+    source = """
+    enum fnType { normal, object };
+
+    typedef class nestedGraph {
+      const int N = 1024;
+      hipGraph_t graph[4];
+    } nestedGraph;
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert isinstance(ast.structs[0], EnumNode)
+    assert ast.structs[0].members == [("normal", None), ("object", None)]
+    assert ast.structs[1].name == "nestedGraph"
+    assert [(member.vtype, member.name) for member in ast.structs[1].members] == [
+        ("const int", "N"),
+        ("hipGraph_t[4]", "graph"),
+    ]
+    assert "object_," in crossgl
+    assert "object," not in crossgl
+    assert "struct nestedGraph" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_scalar_brace_initializer_scoped_call_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 01499a8daf1bc8568aa86f90467fc70bf9a58989
+    # path: libcudacxx/include/cuda/std/__utility/typeid.h
+    source = """
+    template <class _Tp>
+    struct __pretty_name_begin {
+      struct __pretty_name_end;
+    };
+
+    struct __type_info {
+      int __name_;
+    };
+
+    template <class _Tp>
+    int __pretty_nameof() {
+      return ::cuda::std::__pretty_nameof_helper<
+          typename __pretty_name_begin<_Tp>::__pretty_name_end>();
+    }
+
+    template <class _Tp>
+    constexpr __type_info __typeid_v = {::cuda::std::__pretty_nameof<_Tp>()};
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.global_variables[0].name == "__typeid_v"
+    assert "var __typeid_v: __type_info = cuda_std___pretty_nameof__Tp();" in crossgl
+    assert "cuda_std___pretty_nameof_helper_typename___pretty_name_begin" in crossgl
+    assert "{::cuda::std" not in crossgl
+    assert "::cuda::std" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cutlass_decltype_scoped_value_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cutlass
+    # commit: 1fc71b3ed1cab3541f7482c68ee19d0e40ef69d3
+    # path: include/cute/util/type_traits.hpp
+    source = """
+    template <class Index>
+    __device__ int cutlass_value(Index idx) {
+      int value = decltype(idx)::value;
+      return value;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+    initializer = ast.functions[0].body[0].value
+
+    assert initializer == "decltype(idx)::value"
+    assert "var value: i32 = decltype_idx_value;" in crossgl
+    assert "decltype(idx)::value" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cutlass_postfix_volatile_alias_specializations_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cutlass
+    # commit: 1fc71b3ed1cab3541f7482c68ee19d0e40ef69d3
+    # path: include/cute/util/type_traits.hpp
+    sources = [
+        """
+        template <class Src, class Dst>
+        struct copy_cv<Src volatile, Dst> {
+          using type = Dst volatile;
+        };
+        """,
+        """
+        template <class Src, class Dst>
+        struct copy_cv<Src const volatile, Dst> {
+          using type = Dst const volatile;
+        };
+        """,
+    ]
+
+    for source in sources:
+        ast = parse_cuda(source)
+        crossgl = cuda_to_crossgl(source)
+
+        assert ast.structs[0].name.startswith("copy_cv<Src")
+        assert "volatile" in ast.structs[0].name
+        assert "struct copy_cv_Src_Dst" in crossgl
+        assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_scoped_enum_value_is_not_sanitized_codegen_reparse():
+    source = """
+    enum class Mode { kA = 0 };
+
+    __device__ int selected_mode() {
+      int value = Mode::kA;
+      return value;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.structs[0].name == "Mode"
+    assert ast.functions[0].body[0].value == "Mode::kA"
+    assert "var value: i32 = Mode::kA;" in crossgl
+    assert "Mode_kA" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_pair_visibility_and_alias_macros_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 17869e1d46314036843a9ff9a0cb726de560e94e
+    # path: libcudacxx/include/cuda/std/__utility/pair.h
+    source = """
+    template <class _T1, class _T2>
+    struct _CCCL_TYPE_VISIBILITY_DEFAULT pair {
+      _CCCL_API inline _CCCL_CONSTEXPR_CXX20 void swap(pair& __p) noexcept {
+        using ::cuda::std::swap;
+        swap(first, __p.first);
+      }
+      _T1 first;
+    };
+
+    template <class _Tp, class _Up>
+    struct _CCCL_TYPE_VISIBILITY_DEFAULT tuple_element<0, pair<_Tp, _Up>> {
+      using type _CCCL_NODEBUG_ALIAS = _Tp;
+    };
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.structs[0].name == "pair"
+    assert ast.structs[1].name == "tuple_element<0, pair<_Tp, _Up>>"
+    assert "struct pair" in crossgl
+    assert "struct tuple_element_type_0_pair__Tp__Up" in crossgl
+    assert "_CCCL_TYPE_VISIBILITY_DEFAULT" not in crossgl
+    assert "_CCCL_NODEBUG_ALIAS" not in crossgl
     assert_crossgl_reparse(crossgl)
