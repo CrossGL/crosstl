@@ -502,6 +502,13 @@ def validate_catalogs(backends_data, features_data):
     validate_feature_catalog(features_data, backend_ids)
 
 
+def backend_target_aliases(backend):
+    target_aliases = list(backend.get("target_aliases", []))
+    if backend_source_kind(backend) == "target-only":
+        return [*backend.get("aliases", []), *target_aliases]
+    return target_aliases
+
+
 def backend_inventory(backend):
     tests = backend.get("tests", [])
     scanned_paths = backend_signal_paths(backend)
@@ -509,7 +516,7 @@ def backend_inventory(backend):
         "id": backend["id"],
         "name": backend["name"],
         "aliases": backend.get("aliases", []),
-        "target_aliases": backend.get("target_aliases", []),
+        "target_aliases": backend_target_aliases(backend),
         "target_profiles": backend.get("target_profiles", []),
         "source_kind": backend_source_kind(backend),
         "target_extension": backend.get("target_extension"),

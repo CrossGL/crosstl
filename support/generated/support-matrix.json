@@ -352,7 +352,11 @@
         ]
       },
       "source_kind": "target-only",
-      "target_aliases": [],
+      "target_aliases": [
+        "webgl2",
+        "essl",
+        "glsl-es"
+      ],
       "target_extension": ".webgl.glsl",
       "target_profiles": [],
       "tests": {
@@ -472,7 +476,9 @@
         ]
       },
       "source_kind": "target-only",
-      "target_aliases": [],
+      "target_aliases": [
+        "webgpu"
+      ],
       "target_extension": ".wgsl",
       "target_profiles": [],
       "tests": {

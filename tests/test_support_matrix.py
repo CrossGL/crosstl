@@ -175,6 +175,18 @@ def test_current_supported_rows_have_evidence():
     assert rows == []
 
 
+def test_generated_target_only_backend_aliases_are_visible_as_target_aliases():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    backends = {backend["id"]: backend for backend in matrix["backends"]}
+
+    assert backends["webgl"]["target_aliases"] == ["webgl2", "essl", "glsl-es"]
+    assert backends["wgsl"]["target_aliases"] == ["webgpu"]
+
+
 def test_project_report_inspection_is_first_class_support_feature():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(
@@ -2978,6 +2990,7 @@ def test_validate_backend_catalog_accepts_target_only_backends():
 
     assert backend_ids == {"webgl"}
     assert matrix["backends"][0]["source_kind"] == "target-only"
+    assert matrix["backends"][0]["target_aliases"] == ["webgl2"]
     assert matrix["backends"][0]["native_backend"] == {
         "path": None,
         "exists": False,
