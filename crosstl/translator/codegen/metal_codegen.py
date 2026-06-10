@@ -707,6 +707,7 @@ class MetalCodeGen:
         self.current_unused_local_declaration_names = set()
         self.current_metal_wave_lane_index_parameter = None
         self.current_metal_wave_lane_count_parameter = None
+        self.current_metal_graphics_builtin_parameter_names = {}
         self.current_metal_compute_builtin_parameter_names = {}
         self.required_glsl_buffer_aggregate_load_helpers = {}
         self.unsupported_glsl_buffer_block_variables = set()
@@ -1061,6 +1062,7 @@ class MetalCodeGen:
 
         self.semantic_map = {
             # Vertex inputs
+            "gl_VertexIndex": "vertex_id",
             "gl_VertexID": "vertex_id",
             "SV_VertexID": "vertex_id",
             "SV_VertexId": "vertex_id",
@@ -1439,6 +1441,7 @@ class MetalCodeGen:
         self.required_metal_ray_desc_runtime = False
         self.required_metal_ray_query_helpers = set()
         self.local_variable_types = {}
+        self.current_metal_graphics_builtin_parameter_names = {}
         (
             self.lowered_glsl_buffer_blocks,
             self.glsl_buffer_block_lowering_failures,
@@ -3383,6 +3386,9 @@ class MetalCodeGen:
         previous_metal_wave_lane_count_parameter = (
             self.current_metal_wave_lane_count_parameter
         )
+        previous_metal_graphics_builtin_parameter_names = (
+            self.current_metal_graphics_builtin_parameter_names
+        )
         previous_metal_compute_builtin_parameter_names = (
             self.current_metal_compute_builtin_parameter_names
         )
@@ -3422,6 +3428,7 @@ class MetalCodeGen:
         self.current_readonly_metal_parameter_reasons = {}
         self.current_metal_wave_lane_index_parameter = None
         self.current_metal_wave_lane_count_parameter = None
+        self.current_metal_graphics_builtin_parameter_names = {}
         self.current_metal_compute_builtin_parameter_names = {}
         self.local_variable_types = {}
         self.current_address_space_variables = {}
@@ -3610,6 +3617,30 @@ class MetalCodeGen:
                     self.format_structured_buffer_counter_parameter(p.name, array_size)
                 )
 
+        if shader_type == "vertex":
+            explicit_stage_builtins = self.explicit_graphics_stage_builtin_parameters(
+                param_list, shader_type
+            )
+            if explicit_stage_builtins.get("vertex_id"):
+                self.current_metal_graphics_builtin_parameter_names[
+                    "gl_VertexIndex"
+                ] = explicit_stage_builtins["vertex_id"]
+            reserved_builtin_names = set(reserved_parameter_names)
+            reserved_builtin_names.update(self.metal_function_local_variable_names(func))
+            for (
+                builtin_name,
+                name,
+                param_type,
+                attribute,
+            ) in self.required_metal_vertex_builtin_parameters(
+                func, reserved_builtin_names, explicit_stage_builtins
+            ):
+                params.append(f"{param_type} {name} [[{attribute}]]")
+                reserved_parameter_names.add(name)
+                self.current_metal_graphics_builtin_parameter_names[
+                    builtin_name
+                ] = name
+
         if shader_type == "compute":
             existing_param_names = {getattr(p, "name", None) for p in param_list}
             explicit_stage_builtins = self.explicit_compute_stage_builtin_parameters(
@@ -3794,6 +3825,9 @@ class MetalCodeGen:
             self.current_metal_wave_lane_count_parameter = (
                 previous_metal_wave_lane_count_parameter
             )
+            self.current_metal_graphics_builtin_parameter_names = (
+                previous_metal_graphics_builtin_parameter_names
+            )
             self.current_metal_compute_builtin_parameter_names = (
                 previous_metal_compute_builtin_parameter_names
             )
@@ -3880,6 +3914,9 @@ class MetalCodeGen:
             )
             self.current_metal_wave_lane_count_parameter = (
                 previous_metal_wave_lane_count_parameter
+            )
+            self.current_metal_graphics_builtin_parameter_names = (
+                previous_metal_graphics_builtin_parameter_names
             )
             self.current_metal_compute_builtin_parameter_names = (
                 previous_metal_compute_builtin_parameter_names
@@ -4192,6 +4229,9 @@ class MetalCodeGen:
         self.current_metal_wave_lane_count_parameter = (
             previous_metal_wave_lane_count_parameter
         )
+        self.current_metal_graphics_builtin_parameter_names = (
+            previous_metal_graphics_builtin_parameter_names
+        )
         self.current_function_name = previous_function_name
         self.current_function_return_type = previous_function_return_type
         self.current_function_return_wrapper = previous_function_return_wrapper
@@ -4268,6 +4308,28 @@ class MetalCodeGen:
         if name is None:
             return name
         return self.current_metal_compute_builtin_parameter_names.get(name, name)
+
+    def metal_graphics_builtin_expression_name(self, name):
+        if name is None or name in self.local_variable_types:
+            return name
+        return self.current_metal_graphics_builtin_parameter_names.get(name, name)
+
+    def metal_builtin_expression_name(self, name):
+        graphics_name = self.metal_graphics_builtin_expression_name(name)
+        if graphics_name != name:
+            return graphics_name
+        return self.metal_compute_builtin_expression_name(name)
+
+    def metal_graphics_builtin_result_type(self, name):
+        if (
+            name is None
+            or name in self.local_variable_types
+            or name not in self.current_metal_graphics_builtin_parameter_names
+        ):
+            return None
+        if name == "gl_VertexIndex":
+            return "uint"
+        return None
 
     def metal_compute_builtin_result_type(self, name):
         if name is None:
@@ -4546,6 +4608,60 @@ class MetalCodeGen:
         if self.map_type(return_type) == "void":
             return diagnostic
         return f"{self.diagnostic_zero_value_for_type(return_type)} {diagnostic}"
+
+    def metal_vertex_builtin_parameter_specs(self):
+        return [
+            ("gl_VertexIndex", "uint", "vertex_id"),
+        ]
+
+    def explicit_graphics_stage_builtin_parameters(self, parameters, stage_name):
+        if stage_name != "vertex":
+            return {}
+        stage_parameters = {}
+        builtin_attributes = {
+            attribute
+            for _builtin_name, _param_type, attribute in (
+                self.metal_vertex_builtin_parameter_specs()
+            )
+        }
+        for parameter in parameters or []:
+            semantic = self.semantic_from_node(parameter)
+            metal_semantic = self.canonical_metal_semantic(semantic)
+            if metal_semantic in builtin_attributes:
+                stage_parameters[metal_semantic] = getattr(parameter, "name", None)
+        return stage_parameters
+
+    def required_metal_vertex_builtin_parameters(
+        self, func, reserved_names=None, explicit_stage_builtins=None
+    ):
+        used_names = self.used_metal_vertex_builtin_names(getattr(func, "body", []))
+        reserved_names = set(reserved_names or ())
+        explicit_stage_builtins = explicit_stage_builtins or {}
+        required_parameters = []
+        for (
+            builtin_name,
+            param_type,
+            attribute,
+        ) in self.metal_vertex_builtin_parameter_specs():
+            if builtin_name not in used_names or attribute in explicit_stage_builtins:
+                continue
+            name = self.unique_metal_generated_name("_crossglVertexID", reserved_names)
+            reserved_names.add(name)
+            required_parameters.append((builtin_name, name, param_type, attribute))
+        return required_parameters
+
+    def used_metal_vertex_builtin_names(self, body):
+        builtin_names = {"gl_VertexIndex"}
+        used_names = set()
+        for node in self.iter_ast_nodes(body):
+            class_name = node.__class__.__name__
+            if "Identifier" not in class_name:
+                continue
+            name = getattr(node, "name", "")
+            base_name = name.split(".", 1)[0]
+            if base_name in builtin_names:
+                used_names.add(base_name)
+        return used_names
 
     def validate_graphics_builtin_parameter_types(self, parameters, stage_name):
         expected_types = {
@@ -6721,6 +6837,9 @@ class MetalCodeGen:
         if expr is None:
             return None
         if isinstance(expr, IdentifierNode):
+            builtin_type = self.metal_graphics_builtin_result_type(expr.name)
+            if builtin_type is not None:
+                return builtin_type
             builtin_type = self.metal_compute_builtin_result_type(expr.name)
             if builtin_type is not None:
                 return builtin_type
@@ -6729,6 +6848,9 @@ class MetalCodeGen:
             ) or self.metal_program_scope_value_global_types.get(expr.name)
         if isinstance(expr, VariableNode):
             name = getattr(expr, "name", None)
+            builtin_type = self.metal_graphics_builtin_result_type(name)
+            if builtin_type is not None:
+                return builtin_type
             builtin_type = self.metal_compute_builtin_result_type(name)
             if builtin_type is not None:
                 return builtin_type
@@ -7825,7 +7947,7 @@ class MetalCodeGen:
         if expr is None:
             return ""
         elif isinstance(expr, str):
-            builtin_name = self.metal_compute_builtin_expression_name(expr)
+            builtin_name = self.metal_builtin_expression_name(expr)
             if builtin_name != expr:
                 return builtin_name
             if expr.rsplit("::", 1)[-1] == "None":
@@ -7835,7 +7957,7 @@ class MetalCodeGen:
             return expr
         elif isinstance(expr, IdentifierNode):
             name = expr.name
-            builtin_name = self.metal_compute_builtin_expression_name(name)
+            builtin_name = self.metal_builtin_expression_name(name)
             if builtin_name != name:
                 return builtin_name
             if isinstance(name, str) and name.rsplit("::", 1)[-1] == "None":
@@ -7882,7 +8004,7 @@ class MetalCodeGen:
             if unsupported_value is not None:
                 return unsupported_value
             if hasattr(expr, "name"):
-                builtin_name = self.metal_compute_builtin_expression_name(expr.name)
+                builtin_name = self.metal_builtin_expression_name(expr.name)
                 if builtin_name != expr.name:
                     return builtin_name
                 if (
