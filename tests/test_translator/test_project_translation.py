@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -170,6 +171,7 @@ def test_project_config_accepts_single_string_sequence_fields(tmp_path):
         exclude_patterns=[],
         targets="CGL",
         include_dirs="includes",
+        defines={"MODE": "debug"},
         variants={"debug": {}},
         selected_variants="debug",
     )
@@ -181,13 +183,55 @@ def test_project_config_accepts_single_string_sequence_fields(tmp_path):
     assert config.exclude_patterns == []
     assert config.targets == ["CGL"]
     assert config.include_dirs == ["includes"]
+    assert config.defines == {"MODE": "debug"}
     assert config.selected_variants == ["debug"]
     assert payload["project"]["sourceRoots"] == ["shaders"]
     assert payload["project"]["includePatterns"] == ["shaders/*.cgl"]
     assert payload["project"]["targets"] == ["cgl"]
     assert payload["project"]["includeDirs"] == ["includes"]
+    assert payload["project"]["defines"] == {"MODE": "debug"}
     assert payload["project"]["selectedVariants"] == ["debug"]
     assert payload["summary"]["unitCount"] == 1
+
+
+@pytest.mark.parametrize(
+    ("project_config_kwargs", "message"),
+    [
+        (
+            {"defines": ["USE_FAST_PATH=1"]},
+            "ProjectConfig.defines must be a mapping",
+        ),
+        (
+            {"defines": {"USE_FAST_PATH": 1}},
+            "ProjectConfig.defines entries must map non-empty strings to strings",
+        ),
+        (
+            {"variants": ["debug"]},
+            "ProjectConfig.variants must be a mapping",
+        ),
+        (
+            {"variants": {"debug": "USE_FAST_PATH=1"}},
+            "ProjectConfig.variants.debug must be a mapping",
+        ),
+        (
+            {"variants": {"debug": {"USE_FAST_PATH": 1}}},
+            (
+                "ProjectConfig.variants.debug entries must map non-empty "
+                "strings to strings"
+            ),
+        ),
+    ],
+)
+def test_project_config_rejects_malformed_direct_define_and_variant_maps(
+    tmp_path,
+    project_config_kwargs,
+    message,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(ValueError, match=re.escape(message)):
+        project_api.ProjectConfig(root=repo, **project_config_kwargs)
 
 
 def test_project_config_normalizes_direct_relative_path_separators(tmp_path):

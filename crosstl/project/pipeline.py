@@ -3385,6 +3385,28 @@ class ProjectConfig:
                 )
             ),
         )
+        if not isinstance(self.defines, Mapping):
+            raise ValueError("ProjectConfig.defines must be a mapping")
+        object.__setattr__(
+            self,
+            "defines",
+            _as_str_mapping(self.defines, field_name="ProjectConfig.defines"),
+        )
+        if not isinstance(self.variants, Mapping):
+            raise ValueError("ProjectConfig.variants must be a mapping")
+        variants: dict[str, dict[str, str]] = {}
+        for name, defines in self.variants.items():
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(
+                    "ProjectConfig.variants keys must be non-empty strings"
+                )
+            if not isinstance(defines, Mapping):
+                raise ValueError(f"ProjectConfig.variants.{name} must be a mapping")
+            variants[name] = _as_str_mapping(
+                defines,
+                field_name=f"ProjectConfig.variants.{name}",
+            )
+        object.__setattr__(self, "variants", variants)
         if self.external_corpus_manifest is not None:
             external_corpus_manifest = os.fspath(self.external_corpus_manifest)
             if not isinstance(external_corpus_manifest, str):
