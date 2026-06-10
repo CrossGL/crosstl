@@ -1494,6 +1494,80 @@ class GLSLCodeGen:
             return True
         return version_number >= 420
 
+    def glsl_version_line_with_minimum(self, version_line, minimum_version):
+        version_number = self.glsl_version_number(version_line)
+        if version_number is None or version_number >= minimum_version:
+            return version_line
+
+        parts = str(version_line or "").strip().split()
+        profile_parts = parts[2:] if len(parts) > 2 else []
+        if "es" in profile_parts:
+            es_minimum = 300 if minimum_version <= 330 else 320
+            if version_number >= es_minimum:
+                return version_line
+            return f"#version {es_minimum} es"
+
+        profile = next(
+            (part for part in profile_parts if part in {"core", "compatibility"}),
+            "core",
+        )
+        return f"#version {minimum_version} {profile}"
+
+    def generated_stage_io_layout_minimum_version(self, code):
+        minimum_version = None
+        for line in str(code or "").splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("layout("):
+                continue
+
+            end = stripped.find(")")
+            if end == -1:
+                continue
+            layout_parts = {
+                part.partition("=")[0].strip()
+                for part in stripped[len("layout(") : end].split(",")
+            }
+            if "component" in layout_parts:
+                minimum_version = max(minimum_version or 0, 440)
+            if layout_parts & {"location", "index"}:
+                minimum_version = max(minimum_version or 0, 330)
+        return minimum_version
+
+    def glsl_layout_minimum_satisfied_by_extensions(self, minimum_version):
+        if minimum_version is None:
+            return True
+        if minimum_version <= 330 and self.glsl_extension_enabled(
+            "GL_ARB_explicit_attrib_location"
+        ):
+            return True
+        if minimum_version <= 440 and self.glsl_extension_enabled(
+            "GL_ARB_enhanced_layouts"
+        ):
+            return True
+        return False
+
+    def ensure_glsl_version_supports_generated_layouts(self, code):
+        minimum_version = self.generated_stage_io_layout_minimum_version(code)
+        if self.glsl_layout_minimum_satisfied_by_extensions(minimum_version):
+            return code
+
+        lines = str(code).splitlines(keepends=True)
+        for index, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped.startswith("#version"):
+                continue
+            upgraded = self.glsl_version_line_with_minimum(stripped, minimum_version)
+            if upgraded == stripped:
+                return code
+            line_end = "\n" if line.endswith("\n") else ""
+            lines[index] = f"{upgraded}{line_end}"
+            self.current_glsl_version_line = upgraded
+            self.current_glsl_resource_binding_layouts_supported = (
+                self.glsl_resource_binding_layouts_supported(upgraded)
+            )
+            return "".join(lines)
+        return code
+
     def should_emit_resource_binding_layouts(self):
         return getattr(
             self,
@@ -3120,7 +3194,7 @@ class GLSLCodeGen:
                     stage_code = f"// {stage_name.title()} Shader\n" + stage_code
                     code += self.wrap_stage_guard(stage_code, stage_name)
 
-        return code
+        return self.ensure_glsl_version_supports_generated_layouts(code)
 
     def collect_stage_deferred_top_level_helpers(self, ast, functions, target_stage):
         if target_stage is None or not getattr(ast, "stages", None):
