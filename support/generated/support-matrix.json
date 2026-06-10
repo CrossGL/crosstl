@@ -10867,6 +10867,134 @@
     },
     {
       "category": "project",
+      "description": "Emit deterministic host loader scaffold metadata from runtime loader manifests without rewriting host code or executing device code.",
+      "id": "project.runtime_host_loader_scaffolds",
+      "name": "Runtime host loader scaffolds",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_loader_scaffolds_from_loader_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_reject_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_sanitize_target_and_unit_paths",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_json_writes_output"
+          ],
+          "notes": "scaffold-host-loaders builds crosstl-runtime-host-loader-scaffolds JSON, text, and SARIF output from a runtime loader manifest, writes host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files for ready load units, preserves package-relative artifact paths, source-remap handoff paths, hostInterface metadata, requiredTools, hostResponsibilities, and ordered loadSteps, reports blocked load units such as resolve-host-interface-metadata without emitting runnable loader metadata for them, validates wrong-kind and malformed loader manifest inputs with structured diagnostics, and sanitizes target and load-unit derived output paths. The scaffolds do not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_loader_scaffolds_from_loader_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_reject_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_sanitize_target_and_unit_paths",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_json_writes_output"
+          ],
+          "notes": "scaffold-host-loaders builds crosstl-runtime-host-loader-scaffolds JSON, text, and SARIF output from a runtime loader manifest, writes host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files for ready load units, preserves package-relative artifact paths, source-remap handoff paths, hostInterface metadata, requiredTools, hostResponsibilities, and ordered loadSteps, reports blocked load units such as resolve-host-interface-metadata without emitting runnable loader metadata for them, validates wrong-kind and malformed loader manifest inputs with structured diagnostics, and sanitizes target and load-unit derived output paths. The scaffolds do not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_loader_scaffolds_from_loader_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_reject_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_sanitize_target_and_unit_paths",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_json_writes_output"
+          ],
+          "notes": "scaffold-host-loaders builds crosstl-runtime-host-loader-scaffolds JSON, text, and SARIF output from a runtime loader manifest, writes host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files for ready load units, preserves package-relative artifact paths, source-remap handoff paths, hostInterface metadata, requiredTools, hostResponsibilities, and ordered loadSteps, reports blocked load units such as resolve-host-interface-metadata without emitting runnable loader metadata for them, validates wrong-kind and malformed loader manifest inputs with structured diagnostics, and sanitizes target and load-unit derived output paths. The scaffolds do not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_loader_scaffolds_from_loader_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_reject_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_sanitize_target_and_unit_paths",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_json_writes_output"
+          ],
+          "notes": "scaffold-host-loaders builds crosstl-runtime-host-loader-scaffolds JSON, text, and SARIF output from a runtime loader manifest, writes host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files for ready load units, preserves package-relative artifact paths, source-remap handoff paths, hostInterface metadata, requiredTools, hostResponsibilities, and ordered loadSteps, reports blocked load units such as resolve-host-interface-metadata without emitting runnable loader metadata for them, validates wrong-kind and malformed loader manifest inputs with structured diagnostics, and sanitizes target and load-unit derived output paths. The scaffolds do not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_loader_scaffolds_from_loader_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_reject_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_sanitize_target_and_unit_paths",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_json_writes_output"
+          ],
+          "notes": "scaffold-host-loaders builds crosstl-runtime-host-loader-scaffolds JSON, text, and SARIF output from a runtime loader manifest, writes host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files for ready load units, preserves package-relative artifact paths, source-remap handoff paths, hostInterface metadata, requiredTools, hostResponsibilities, and ordered loadSteps, reports blocked load units such as resolve-host-interface-metadata without emitting runnable loader metadata for them, validates wrong-kind and malformed loader manifest inputs with structured diagnostics, and sanitizes target and load-unit derived output paths. The scaffolds do not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_loader_scaffolds_from_loader_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_reject_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_sanitize_target_and_unit_paths",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_json_writes_output"
+          ],
+          "notes": "scaffold-host-loaders builds crosstl-runtime-host-loader-scaffolds JSON, text, and SARIF output from a runtime loader manifest, writes host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files for ready load units, preserves package-relative artifact paths, source-remap handoff paths, hostInterface metadata, requiredTools, hostResponsibilities, and ordered loadSteps, reports blocked load units such as resolve-host-interface-metadata without emitting runnable loader metadata for them, validates wrong-kind and malformed loader manifest inputs with structured diagnostics, and sanitizes target and load-unit derived output paths. The scaffolds do not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_loader_scaffolds_from_loader_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_reject_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_sanitize_target_and_unit_paths",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_json_writes_output"
+          ],
+          "notes": "scaffold-host-loaders builds crosstl-runtime-host-loader-scaffolds JSON, text, and SARIF output from a runtime loader manifest, writes host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files for ready load units, preserves package-relative artifact paths, source-remap handoff paths, hostInterface metadata, requiredTools, hostResponsibilities, and ordered loadSteps, reports blocked load units such as resolve-host-interface-metadata without emitting runnable loader metadata for them, validates wrong-kind and malformed loader manifest inputs with structured diagnostics, and sanitizes target and load-unit derived output paths. The scaffolds do not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_loader_scaffolds_from_loader_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_reject_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_sanitize_target_and_unit_paths",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_json_writes_output"
+          ],
+          "notes": "scaffold-host-loaders builds crosstl-runtime-host-loader-scaffolds JSON, text, and SARIF output from a runtime loader manifest, writes host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files for ready load units, preserves package-relative artifact paths, source-remap handoff paths, hostInterface metadata, requiredTools, hostResponsibilities, and ordered loadSteps, reports blocked load units such as resolve-host-interface-metadata without emitting runnable loader metadata for them, validates wrong-kind and malformed loader manifest inputs with structured diagnostics, and sanitizes target and load-unit derived output paths. The scaffolds do not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_loader_scaffolds_from_loader_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_reject_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_sanitize_target_and_unit_paths",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_json_writes_output"
+          ],
+          "notes": "scaffold-host-loaders builds crosstl-runtime-host-loader-scaffolds JSON, text, and SARIF output from a runtime loader manifest, writes host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files for ready load units, preserves package-relative artifact paths, source-remap handoff paths, hostInterface metadata, requiredTools, hostResponsibilities, and ordered loadSteps, reports blocked load units such as resolve-host-interface-metadata without emitting runnable loader metadata for them, validates wrong-kind and malformed loader manifest inputs with structured diagnostics, and sanitizes target and load-unit derived output paths. The scaffolds do not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_loader_scaffolds_from_loader_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_reject_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_runtime_host_loader_scaffolds_sanitize_target_and_unit_paths",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scaffold_host_loaders_json_writes_output"
+          ],
+          "notes": "scaffold-host-loaders builds crosstl-runtime-host-loader-scaffolds JSON, text, and SARIF output from a runtime loader manifest, writes host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files for ready load units, preserves package-relative artifact paths, source-remap handoff paths, hostInterface metadata, requiredTools, hostResponsibilities, and ordered loadSteps, reports blocked load units such as resolve-host-interface-metadata without emitting runnable loader metadata for them, validates wrong-kind and malformed loader manifest inputs with structured diagnostics, and sanitizes target and load-unit derived output paths. The scaffolds do not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Inspect existing project portability reports as concise JSON, text, or SARIF summaries for triage and migration planning.",
       "id": "project.report_inspection",
       "name": "Project report inspection",
@@ -13556,12 +13684,12 @@
   "summary": {
     "backend_count": 10,
     "backlog_count": 30,
-    "feature_count": 61,
+    "feature_count": 62,
     "status_counts": {
       "cuda": {
         "diagnostic": 7,
         "partial": 3,
-        "supported": 51,
+        "supported": 52,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -13569,7 +13697,7 @@
       "directx": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 56,
+        "supported": 57,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -13577,7 +13705,7 @@
       "hip": {
         "diagnostic": 7,
         "partial": 3,
-        "supported": 51,
+        "supported": 52,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -13585,7 +13713,7 @@
       "metal": {
         "diagnostic": 3,
         "partial": 3,
-        "supported": 55,
+        "supported": 56,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -13593,7 +13721,7 @@
       "mojo": {
         "diagnostic": 5,
         "partial": 3,
-        "supported": 53,
+        "supported": 54,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -13601,7 +13729,7 @@
       "opengl": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 56,
+        "supported": 57,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -13609,7 +13737,7 @@
       "rust": {
         "diagnostic": 4,
         "partial": 3,
-        "supported": 54,
+        "supported": 55,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -13617,7 +13745,7 @@
       "slang": {
         "diagnostic": 3,
         "partial": 3,
-        "supported": 55,
+        "supported": 56,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -13625,7 +13753,7 @@
       "vulkan": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 56,
+        "supported": 57,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -13633,7 +13761,7 @@
       "webgl": {
         "diagnostic": 22,
         "partial": 3,
-        "supported": 27,
+        "supported": 28,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 9

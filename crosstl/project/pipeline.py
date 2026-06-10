@@ -35,6 +35,7 @@ RUNTIME_HOST_BINDING_PLAN_KIND = "crosstl-runtime-host-binding-plan"
 RUNTIME_PACKAGE_INSPECTION_KIND = "crosstl-runtime-package-inspection"
 RUNTIME_ADAPTER_PLAN_KIND = "crosstl-runtime-adapter-plan"
 RUNTIME_LOADER_MANIFEST_KIND = "crosstl-runtime-loader-manifest"
+RUNTIME_HOST_LOADER_SCAFFOLDS_KIND = "crosstl-runtime-host-loader-scaffolds"
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
 RUNTIME_LOADER_PLAN_CONTRACT = "runtime-loader-plan-v1"
@@ -46,6 +47,7 @@ RUNTIME_HOST_BINDING_PLAN_SCOPE = "host-binding-planning"
 RUNTIME_PACKAGE_INSPECTION_SCOPE = "runtime-package-readiness-inspection"
 RUNTIME_ADAPTER_PLAN_SCOPE = "runtime-adapter-integration-planning"
 RUNTIME_LOADER_MANIFEST_SCOPE = "runtime-loader-metadata-contract"
+RUNTIME_HOST_LOADER_SCAFFOLDS_SCOPE = "host-loader-scaffold-generation"
 RUNTIME_INTEGRATION_PLAN_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
@@ -81,6 +83,12 @@ RUNTIME_ADAPTER_PLAN_NON_GOALS = (
     "target-sdk-installation",
 )
 RUNTIME_LOADER_MANIFEST_NON_GOALS = (
+    "host-code-rewriting",
+    "device-execution",
+    "runtime-framework-generation",
+    "target-sdk-installation",
+)
+RUNTIME_HOST_LOADER_SCAFFOLDS_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
     "runtime-framework-generation",
@@ -539,6 +547,74 @@ RUNTIME_LOADER_MANIFEST_LOAD_UNIT_FIELDS = frozenset(
 )
 RUNTIME_LOADER_MANIFEST_LOAD_STEP_FIELDS = frozenset(
     ("kind", "message", "target", "packagePath", "tools", "hostInterfaceStatus")
+)
+RUNTIME_HOST_LOADER_SCAFFOLDS_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourceLoaderManifest",
+        "sourceLoaderManifestHash",
+        "generatedAt",
+        "success",
+        "status",
+        "scope",
+        "nonGoals",
+        "scaffoldRoot",
+        "scaffoldManifest",
+        "integrationGuide",
+        "project",
+        "summary",
+        "targets",
+        "scaffolds",
+        "actions",
+        "runtimePlan",
+        "loaderManifest",
+        "generatedFiles",
+        "diagnosticCounts",
+        "diagnostics",
+    )
+)
+RUNTIME_HOST_LOADER_SCAFFOLDS_TARGET_FIELDS = frozenset(
+    (
+        "target",
+        "status",
+        "adapterKind",
+        "loadUnitCount",
+        "readyLoadUnitCount",
+        "blockedLoadUnitCount",
+        "runtimeReferenceCount",
+        "requiredTools",
+        "loaderResponsibilities",
+        "packagePaths",
+        "loadUnitIds",
+        "scaffoldFiles",
+    )
+)
+RUNTIME_HOST_LOADER_SCAFFOLDS_SCAFFOLD_FIELDS = frozenset(
+    (
+        "id",
+        "target",
+        "status",
+        "adapterKind",
+        "artifactFormat",
+        "packagePath",
+        "sourcePath",
+        "sourceBackend",
+        "variant",
+        "defines",
+        "loadUnit",
+        "outputPath",
+        "scaffoldKind",
+        "sourceRemap",
+        "hostInterface",
+        "requiredTools",
+        "hostResponsibilities",
+        "loadSteps",
+        "blockers",
+    )
+)
+RUNTIME_HOST_LOADER_SCAFFOLDS_GENERATED_FILE_FIELDS = frozenset(
+    ("path", "kind", "target")
 )
 REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
 REPORT_PROJECT_FIELDS = frozenset(
@@ -10453,6 +10529,571 @@ def build_runtime_loader_manifest(
             else []
         ),
     }
+
+
+def _runtime_host_loader_scaffold_slug(value: Any, fallback: str) -> str:
+    text = value if isinstance(value, str) else ""
+    text = text.strip().lower()
+    text = re.sub(r"[^a-z0-9._-]+", "-", text)
+    text = re.sub(r"-+", "-", text).strip(".-_")
+    text = re.sub(r"-+\.", ".", text)
+    return text or fallback
+
+
+def _runtime_host_loader_scaffold_unique_slug(
+    value: Any, fallback: str, used: set[str]
+) -> str:
+    slug = _runtime_host_loader_scaffold_slug(value, fallback)
+    candidate = slug
+    index = 2
+    while candidate in used:
+        candidate = f"{slug}-{index}"
+        index += 1
+    used.add(candidate)
+    return candidate
+
+
+def _runtime_host_loader_scaffold_load_manifest(
+    path: Path,
+) -> tuple[Mapping[str, Any], list[ProjectDiagnostic]]:
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return {}, [
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-host-loader-scaffolds.manifest-read-failed",
+                message=f"Runtime loader manifest could not be read: {exc}",
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-host-loader-scaffolds",
+            )
+        ]
+    except json.JSONDecodeError as exc:
+        return {}, [
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-host-loader-scaffolds.manifest-json-invalid",
+                message=f"Runtime loader manifest is not valid JSON: {exc}",
+                location=SourceLocation(
+                    file=str(path), line=exc.lineno, column=exc.colno
+                ),
+                check_kind="runtime-host-loader-scaffolds",
+            )
+        ]
+    if not isinstance(manifest, Mapping):
+        return {}, [
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-host-loader-scaffolds.manifest-invalid",
+                message="Runtime loader manifest must be a JSON object.",
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-host-loader-scaffolds",
+            )
+        ]
+    return manifest, []
+
+
+def _runtime_host_loader_scaffold_manifest_diagnostics(
+    path: Path, manifest: Mapping[str, Any]
+) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    if manifest.get("schemaVersion") != REPORT_SCHEMA_VERSION:
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-host-loader-scaffolds.manifest-schema-invalid",
+                message=f"Runtime loader manifest schemaVersion must be {REPORT_SCHEMA_VERSION}.",
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-host-loader-scaffolds",
+            )
+        )
+    if manifest.get("kind") != RUNTIME_LOADER_MANIFEST_KIND:
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-host-loader-scaffolds.manifest-kind-invalid",
+                message=(
+                    "Host loader scaffold input must be a "
+                    f"{RUNTIME_LOADER_MANIFEST_KIND} document."
+                ),
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-host-loader-scaffolds",
+            )
+        )
+    if manifest.get("success") is not True:
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-host-loader-scaffolds.manifest-failed",
+                message=(
+                    "Runtime loader manifest must be successful before host "
+                    "loader scaffolds can be generated."
+                ),
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-host-loader-scaffolds",
+            )
+        )
+    if not isinstance(manifest.get("loadUnits"), list):
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-host-loader-scaffolds.load-units-invalid",
+                message="Runtime loader manifest loadUnits must be a list.",
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-host-loader-scaffolds",
+            )
+        )
+    return diagnostics
+
+
+def _runtime_host_loader_scaffold_status(
+    ready_count: int, blocked_count: int, *, failed: bool = False
+) -> str:
+    if failed:
+        return "failed"
+    if blocked_count and ready_count:
+        return "partial"
+    if blocked_count:
+        return "blocked"
+    if ready_count:
+        return "ready"
+    return "empty"
+
+
+def _runtime_host_loader_scaffold_generated_file(
+    path: str, kind: str, target: str | None = None
+) -> dict[str, Any]:
+    return {"path": path, "kind": kind, "target": target}
+
+
+def _runtime_host_loader_scaffold_record(
+    load_unit: Mapping[str, Any],
+    output_path: str | None,
+) -> dict[str, Any]:
+    blockers = [
+        dict(blocker)
+        for blocker in _record_sequence(load_unit.get("blockers"))
+        if isinstance(blocker, Mapping)
+    ]
+    validation = (
+        load_unit.get("validation")
+        if isinstance(load_unit.get("validation"), Mapping)
+        else {}
+    )
+    ready = not blockers and validation.get("loadReady") is True
+    source_remap = load_unit.get("sourceRemap")
+    host_interface = load_unit.get("hostInterface")
+    return {
+        "id": f"{load_unit.get('id') or 'load-unit'}:host-loader",
+        "target": load_unit.get("target"),
+        "status": "ready" if ready else "blocked",
+        "adapterKind": load_unit.get("adapterKind"),
+        "artifactFormat": load_unit.get("artifactFormat"),
+        "packagePath": load_unit.get("packagePath"),
+        "sourcePath": load_unit.get("sourcePath"),
+        "sourceBackend": load_unit.get("sourceBackend"),
+        "variant": load_unit.get("variant"),
+        "defines": (
+            dict(load_unit.get("defines"))
+            if isinstance(load_unit.get("defines"), Mapping)
+            else {}
+        ),
+        "loadUnit": load_unit.get("id"),
+        "outputPath": output_path if ready else None,
+        "scaffoldKind": "host-loader-metadata",
+        "sourceRemap": (
+            dict(source_remap) if isinstance(source_remap, Mapping) else None
+        ),
+        "hostInterface": (
+            dict(host_interface) if isinstance(host_interface, Mapping) else None
+        ),
+        "requiredTools": [
+            tool
+            for tool in _record_sequence(load_unit.get("requiredTools"))
+            if _is_non_empty_string(tool)
+        ],
+        "hostResponsibilities": [
+            responsibility
+            for responsibility in _record_sequence(
+                load_unit.get("hostResponsibilities")
+            )
+            if _is_non_empty_string(responsibility)
+        ],
+        "loadSteps": [
+            dict(step)
+            for step in _record_sequence(load_unit.get("loadSteps"))
+            if isinstance(step, Mapping)
+        ],
+        "blockers": blockers,
+    }
+
+
+def _runtime_host_loader_scaffold_unit_payload(
+    scaffold: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": "crosstl-runtime-host-loader-unit",
+        "scaffold": scaffold.get("id"),
+        "status": scaffold.get("status"),
+        "target": scaffold.get("target"),
+        "adapterKind": scaffold.get("adapterKind"),
+        "artifactFormat": scaffold.get("artifactFormat"),
+        "packagePath": scaffold.get("packagePath"),
+        "sourceRemap": scaffold.get("sourceRemap"),
+        "hostInterface": scaffold.get("hostInterface"),
+        "requiredTools": (
+            list(scaffold.get("requiredTools"))
+            if isinstance(scaffold.get("requiredTools"), list)
+            else []
+        ),
+        "hostResponsibilities": (
+            list(scaffold.get("hostResponsibilities"))
+            if isinstance(scaffold.get("hostResponsibilities"), list)
+            else []
+        ),
+        "loadSteps": (
+            list(scaffold.get("loadSteps"))
+            if isinstance(scaffold.get("loadSteps"), list)
+            else []
+        ),
+    }
+
+
+def _runtime_host_loader_scaffold_target(
+    target: Mapping[str, Any],
+    scaffolds: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    target_name = target.get("target")
+    target_scaffolds = [
+        scaffold for scaffold in scaffolds if scaffold.get("target") == target_name
+    ]
+    ready_scaffolds = [
+        scaffold for scaffold in target_scaffolds if scaffold.get("status") == "ready"
+    ]
+    blocked_scaffolds = [
+        scaffold for scaffold in target_scaffolds if scaffold.get("status") == "blocked"
+    ]
+    return {
+        "target": target_name,
+        "status": _runtime_host_loader_scaffold_status(
+            len(ready_scaffolds), len(blocked_scaffolds)
+        ),
+        "adapterKind": target.get("adapterKind"),
+        "loadUnitCount": len(target_scaffolds),
+        "readyLoadUnitCount": len(ready_scaffolds),
+        "blockedLoadUnitCount": len(blocked_scaffolds),
+        "runtimeReferenceCount": target.get("runtimeReferenceCount", 0),
+        "requiredTools": (
+            list(target.get("requiredTools"))
+            if isinstance(target.get("requiredTools"), list)
+            else []
+        ),
+        "loaderResponsibilities": (
+            list(target.get("loaderResponsibilities"))
+            if isinstance(target.get("loaderResponsibilities"), list)
+            else []
+        ),
+        "packagePaths": [
+            scaffold.get("packagePath")
+            for scaffold in target_scaffolds
+            if _is_non_empty_string(scaffold.get("packagePath"))
+        ],
+        "loadUnitIds": [
+            scaffold.get("loadUnit")
+            for scaffold in target_scaffolds
+            if _is_non_empty_string(scaffold.get("loadUnit"))
+        ],
+        "scaffoldFiles": [
+            scaffold.get("outputPath")
+            for scaffold in ready_scaffolds
+            if _is_non_empty_string(scaffold.get("outputPath"))
+        ],
+    }
+
+
+def _runtime_host_loader_scaffold_guide(payload: Mapping[str, Any]) -> str:
+    summary = (
+        payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
+    )
+    lines = [
+        "# CrossTL Runtime Host Loader Scaffolds",
+        "",
+        "This bundle contains metadata files for host loader or build-system tooling.",
+        "",
+        f"- Source loader manifest: {payload.get('sourceLoaderManifest')}",
+        f"- Scaffold manifest: {payload.get('scaffoldManifest')}",
+        f"- Status: {payload.get('status')}",
+        f"- Load units: {summary.get('loadUnitCount', 0)}",
+        f"- Ready load units: {summary.get('readyLoadUnitCount', 0)}",
+        f"- Blocked load units: {summary.get('blockedLoadUnitCount', 0)}",
+        "",
+        "Scope",
+        "",
+        "The scaffold records artifact paths, source-remap handoff paths, host interface metadata, required tools, host responsibilities, loader steps, and blockers.",
+        "It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+        "",
+        "Targets",
+    ]
+    targets = payload.get("targets")
+    if isinstance(targets, list) and targets:
+        for target in targets:
+            if not isinstance(target, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"{target.get('target', 'unknown')}: {target.get('status', 'unknown')}, "
+                f"{target.get('readyLoadUnitCount', 0)} ready, "
+                f"{target.get('blockedLoadUnitCount', 0)} blocked"
+            )
+    else:
+        lines.append("- <none>")
+
+    scaffolds = payload.get("scaffolds")
+    ready_scaffolds = [
+        scaffold
+        for scaffold in _record_sequence(scaffolds)
+        if isinstance(scaffold, Mapping) and scaffold.get("status") == "ready"
+    ]
+    blocked_scaffolds = [
+        scaffold
+        for scaffold in _record_sequence(scaffolds)
+        if isinstance(scaffold, Mapping) and scaffold.get("status") == "blocked"
+    ]
+    lines.extend(["", "Ready loader metadata"])
+    if ready_scaffolds:
+        for scaffold in ready_scaffolds:
+            lines.append(
+                "- "
+                f"{scaffold.get('target', 'unknown')}: "
+                f"{scaffold.get('outputPath')} loads "
+                f"{scaffold.get('packagePath') or '<missing package path>'}"
+            )
+    else:
+        lines.append("- <none>")
+
+    lines.extend(["", "Blocked load units"])
+    if blocked_scaffolds:
+        for scaffold in blocked_scaffolds:
+            blockers = [
+                blocker
+                for blocker in _record_sequence(scaffold.get("blockers"))
+                if isinstance(blocker, Mapping)
+            ]
+            blocker_labels = [
+                blocker.get("kind")
+                for blocker in blockers
+                if _is_non_empty_string(blocker.get("kind"))
+            ]
+            suffix = f": {', '.join(blocker_labels)}" if blocker_labels else ""
+            lines.append(
+                "- "
+                f"{scaffold.get('target', 'unknown')}: "
+                f"{scaffold.get('packagePath') or '<missing package path>'}"
+                f"{suffix}"
+            )
+    else:
+        lines.append("- <none>")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def build_runtime_host_loader_scaffolds(
+    loader_manifest_path: str | os.PathLike[str],
+    scaffold_dir: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Build deterministic host loader scaffold metadata from a loader manifest."""
+
+    manifest_file = _filesystem_path_arg(
+        loader_manifest_path, field_name="Runtime loader manifest path"
+    )
+    scaffold_root = _filesystem_path_arg(
+        scaffold_dir, field_name="Runtime host loader scaffold dir"
+    )
+    manifest, diagnostics = _runtime_host_loader_scaffold_load_manifest(manifest_file)
+    if manifest:
+        diagnostics.extend(
+            _runtime_host_loader_scaffold_manifest_diagnostics(manifest_file, manifest)
+        )
+
+    load_units = [
+        load_unit
+        for load_unit in _record_sequence(manifest.get("loadUnits"))
+        if isinstance(load_unit, Mapping)
+    ]
+    targets = [
+        target
+        for target in _record_sequence(manifest.get("targets"))
+        if isinstance(target, Mapping)
+    ]
+    target_names = [
+        target.get("target")
+        for target in targets
+        if _is_non_empty_string(target.get("target"))
+    ]
+    for load_unit in load_units:
+        target_name = load_unit.get("target")
+        if _is_non_empty_string(target_name) and target_name not in target_names:
+            targets.append({"target": target_name, "adapterKind": None})
+            target_names.append(target_name)
+
+    target_slugs: dict[Any, str] = {}
+    used_target_slugs: set[str] = set()
+    for target_name in target_names:
+        target_slugs[target_name] = _runtime_host_loader_scaffold_unique_slug(
+            target_name, "target", used_target_slugs
+        )
+
+    used_unit_slugs_by_target: dict[str, set[str]] = {}
+    scaffolds: list[dict[str, Any]] = []
+    generated_files: list[dict[str, Any]] = []
+    if not diagnostics:
+        generated_files.extend(
+            [
+                _runtime_host_loader_scaffold_generated_file(
+                    "host-loader-scaffolds.json",
+                    "host-loader-scaffold-manifest",
+                    None,
+                ),
+                _runtime_host_loader_scaffold_generated_file(
+                    "HOST_LOADERS.md",
+                    "host-loader-integration-guide",
+                    None,
+                ),
+            ]
+        )
+    for load_unit in load_units:
+        target_name = load_unit.get("target")
+        target_slug = target_slugs.get(target_name, "target")
+        unit_slugs = used_unit_slugs_by_target.setdefault(target_slug, set())
+        unit_slug = _runtime_host_loader_scaffold_unique_slug(
+            load_unit.get("packagePath") or load_unit.get("id"),
+            "load-unit",
+            unit_slugs,
+        )
+        output_path = f"targets/{target_slug}/{unit_slug}.loader.json"
+        scaffold = _runtime_host_loader_scaffold_record(load_unit, output_path)
+        if scaffold["status"] == "ready" and not diagnostics:
+            generated_files.append(
+                _runtime_host_loader_scaffold_generated_file(
+                    output_path, "host-loader-unit", scaffold.get("target")
+                )
+            )
+        scaffolds.append(scaffold)
+
+    ready_count = sum(1 for scaffold in scaffolds if scaffold.get("status") == "ready")
+    blocked_count = sum(
+        1 for scaffold in scaffolds if scaffold.get("status") == "blocked"
+    )
+    scaffold_count = ready_count if not diagnostics else 0
+    failed = any(diagnostic.severity == "error" for diagnostic in diagnostics)
+    manifest_summary = (
+        manifest.get("summary") if isinstance(manifest.get("summary"), Mapping) else {}
+    )
+    manifest_diagnostics = (
+        [dict(diagnostic) for diagnostic in manifest.get("diagnostics", [])]
+        if isinstance(manifest.get("diagnostics"), list)
+        else []
+    )
+    current_diagnostics = [diagnostic.to_json() for diagnostic in diagnostics]
+    diagnostic_counts = (
+        _diagnostic_counts(diagnostics)
+        if diagnostics
+        else (
+            dict(manifest.get("diagnosticCounts"))
+            if isinstance(manifest.get("diagnosticCounts"), Mapping)
+            else {"note": 0, "warning": 0, "error": 0}
+        )
+    )
+    payload = {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_HOST_LOADER_SCAFFOLDS_KIND,
+        "sourceLoaderManifest": str(manifest_file),
+        "sourceLoaderManifestHash": _optional_source_hash(manifest_file),
+        "generatedAt": int(time.time()),
+        "success": not failed,
+        "status": _runtime_host_loader_scaffold_status(
+            ready_count, blocked_count, failed=failed
+        ),
+        "scope": RUNTIME_HOST_LOADER_SCAFFOLDS_SCOPE,
+        "nonGoals": list(RUNTIME_HOST_LOADER_SCAFFOLDS_NON_GOALS),
+        "scaffoldRoot": str(scaffold_root),
+        "scaffoldManifest": "host-loader-scaffolds.json",
+        "integrationGuide": "HOST_LOADERS.md",
+        "project": (
+            dict(manifest.get("project"))
+            if isinstance(manifest.get("project"), Mapping)
+            else {"targets": []}
+        ),
+        "summary": {
+            "targetCount": len(targets),
+            "loadUnitCount": len(load_units),
+            "readyLoadUnitCount": ready_count,
+            "blockedLoadUnitCount": blocked_count,
+            "scaffoldCount": scaffold_count,
+            "generatedFileCount": len(generated_files),
+            "actionCount": (
+                len(manifest.get("actions"))
+                if isinstance(manifest.get("actions"), list)
+                else 0
+            ),
+            "runtimeReferenceCount": manifest_summary.get("runtimeReferenceCount", 0),
+        },
+        "targets": [
+            _runtime_host_loader_scaffold_target(target, scaffolds)
+            for target in targets
+        ],
+        "scaffolds": scaffolds,
+        "actions": (
+            [dict(action) for action in manifest.get("actions", [])]
+            if isinstance(manifest.get("actions"), list)
+            else []
+        ),
+        "runtimePlan": (
+            dict(manifest.get("runtimePlan"))
+            if isinstance(manifest.get("runtimePlan"), Mapping)
+            else {}
+        ),
+        "loaderManifest": {
+            "kind": manifest.get("kind"),
+            "success": manifest.get("success"),
+            "loadUnitCount": manifest_summary.get("loadUnitCount", 0),
+            "readyLoadUnitCount": manifest_summary.get("readyLoadUnitCount", 0),
+            "blockedLoadUnitCount": manifest_summary.get("blockedLoadUnitCount", 0),
+        },
+        "generatedFiles": generated_files,
+        "diagnosticCounts": diagnostic_counts,
+        "diagnostics": manifest_diagnostics + current_diagnostics,
+    }
+
+    if not failed:
+        scaffold_root.mkdir(parents=True, exist_ok=True)
+        for scaffold in scaffolds:
+            output_path = scaffold.get("outputPath")
+            if scaffold.get("status") != "ready" or not _is_non_empty_string(
+                output_path
+            ):
+                continue
+            target_path = scaffold_root / Path(output_path)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(
+                json.dumps(
+                    _runtime_host_loader_scaffold_unit_payload(scaffold),
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        (scaffold_root / "host-loader-scaffolds.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (scaffold_root / "HOST_LOADERS.md").write_text(
+            _runtime_host_loader_scaffold_guide(payload),
+            encoding="utf-8",
+        )
+    return payload
 
 
 def _inspection_artifact_matrix_summary(
