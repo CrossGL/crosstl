@@ -124,6 +124,24 @@ def test_directx_compute_rootsignature_attribute_is_not_return_semantic():
     assert "allMemoryBarrier();" not in generated_code
 
 
+def test_directx_compute_metal_max_total_threads_attribute_is_not_return_semantic():
+    shader = """
+    shader MetalThreadgroupMetadataCompute {
+        compute {
+            void main() @max_total_threads_per_threadgroup(1024) {
+                int value = 1;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "[numthreads(1, 1, 1)]" in generated_code
+    assert "return semantic 'max_total_threads_per_threadgroup'" not in generated_code
+    assert "max_total_threads_per_threadgroup" not in generated_code
+
+
 def test_hlsl_stencil_ref_return_semantic_codegen():
     shader = """
     shader StencilOut {

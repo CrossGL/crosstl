@@ -16389,6 +16389,7 @@ class GLSLCodeGen:
             "local_size_z",
             "max_vertices",
             "max_primitives",
+            "max_total_threads_per_threadgroup",
             "maxprimitivecount",
             "maxvertexcount",
             "numthreads",

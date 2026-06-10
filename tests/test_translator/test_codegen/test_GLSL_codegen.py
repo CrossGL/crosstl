@@ -3757,6 +3757,27 @@ def test_glsl_void_function_return_semantics_are_rejected(stage, semantic):
         GLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
 
 
+def test_glsl_compute_metal_max_total_threads_attribute_is_not_return_semantic():
+    code = """
+    shader MetalThreadgroupMetadataCompute {
+        compute {
+            void main() @max_total_threads_per_threadgroup(1024) {
+                int value = 1;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+
+    assert (
+        "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;"
+        in generated
+    )
+    assert "return semantic 'max_total_threads_per_threadgroup'" not in generated
+    assert "max_total_threads_per_threadgroup" not in generated
+
+
 def test_glsl_geometry_inputtopology_metadata_lowers_to_input_layout():
     code = """
     shader GeometryInputTopology {
