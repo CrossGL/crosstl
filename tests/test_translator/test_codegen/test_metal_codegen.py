@@ -104,6 +104,45 @@ def test_metal_codegen_skips_resource_array_hint_walk_without_resource_arrays():
     assert "return mix(backdrop, blendedColor, intensity);" in generated_code
 
 
+def test_glsl_vertex_layout_locations_lower_to_metal_attributes(tmp_path):
+    shader = """
+    #version 330 core
+    layout(location = 0) in vec3 Position;
+    layout(location = 3) in vec3 Color;
+
+    out vec3 vertColor;
+    uniform mat4 MVP;
+
+    void main() {
+        vertColor = Color;
+        gl_Position = MVP * vec4(Position, 1.0);
+    }
+    """
+    shader_path = tmp_path / "flat-color.vert"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "float3 Position [[attribute(0)]];" in generated_code
+    assert "float3 Color [[attribute(3)]];" in generated_code
+    assert "[[location" not in generated_code
+    xcrun = shutil.which("xcrun")
+    if xcrun is not None:
+        lookup = subprocess.run(
+            [xcrun, "-f", "metal"],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        if lookup.returncode == 0:
+            compile_with_metal_if_available(generated_code)
+
+
 def test_metal_resource_array_size_expression_function_calls_do_not_leak_ast_nodes():
     shader = """
     shader MetalResourceArrayExpressionSize {
