@@ -21,4 +21,3 @@ void main() {
     out_UV = in_UV;
     return;
 }
-
