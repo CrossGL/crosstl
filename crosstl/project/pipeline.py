@@ -1332,8 +1332,12 @@ RUNTIME_REFERENCE_RULES = (
         "opengl",
         "runtime-api",
         re.compile(
-            r"\b(gl(?:BindBuffer|CompileShader|CreateProgram|CreateShader|"
-            r"DispatchCompute|GetUniformLocation|ShaderSource|UseProgram)[A-Za-z0-9_]*)\b"
+            r"\b(gl(?:ActiveTexture|AttachShader|Bind(?:Buffer|Texture|VertexArray)|"
+            r"BufferData|CompileShader|CreateProgram|CreateShader|DeleteShader|"
+            r"DispatchCompute|Draw(?:Arrays|Elements)|EnableVertexAttribArray|"
+            r"Gen(?:Buffers|Textures|VertexArrays)|GetUniformLocation|LinkProgram|"
+            r"ShaderSource|Tex(?:Image2D|Parameteri)|Uniform(?:Matrix[2-4]fv|"
+            r"[1-4][fi](?:v)?)|UseProgram|VertexAttribPointer)[A-Za-z0-9_]*)\b"
         ),
         None,
     ),
@@ -1352,13 +1356,21 @@ RUNTIME_REFERENCE_RULES = (
     (
         "webgl",
         "runtime-api",
+        re.compile(r"(?<=\.)(getContext)(?=\s*\(\s*['\"]webgl2?['\"]\s*(?:,|\)))"),
+        None,
+    ),
+    (
+        "webgl",
+        "runtime-api",
         re.compile(
             r"\b(?:gl|ctx|context|webgl|webgl2)\."
-            r"(attachShader|bindBuffer|bufferData|compileShader|createBuffer|"
-            r"createProgram|createShader|drawArrays|drawElements|"
+            r"(activeTexture|attachShader|bindBuffer|bindTexture|bindVertexArray|"
+            r"bufferData|compileShader|createBuffer|createProgram|createShader|"
+            r"createTexture|createVertexArray|drawArrays|drawElements|"
             r"enableVertexAttribArray|getAttribLocation|getProgramInfoLog|"
             r"getProgramParameter|getShaderInfoLog|getShaderParameter|linkProgram|"
-            r"shaderSource|uniform(?:[1234][fi]v?|Matrix[234]fv)|useProgram|"
+            r"shaderSource|texImage2D|texParameteri|"
+            r"uniform(?:[1234][fi]v?|Matrix[234]fv)|useProgram|"
             r"vertexAttribPointer)(?=\s*\()"
         ),
         None,

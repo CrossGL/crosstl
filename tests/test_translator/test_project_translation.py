@@ -1607,7 +1607,8 @@ def test_scan_report_records_webgl_host_runtime_reference_evidence(tmp_path):
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
     (repo / "host.ts").write_text(
         textwrap.dedent("""
-            function render(gl: WebGL2RenderingContext, vertices) {
+            function render(canvas, vertices, image) {
+              const gl: WebGL2RenderingContext = canvas.getContext("webgl2");
               const shader = gl.createShader(gl.VERTEX_SHADER);
               gl.shaderSource(shader, source);
               gl.compileShader(shader);
@@ -1620,6 +1621,13 @@ def test_scan_report_records_webgl_host_runtime_reference_evidence(tmp_path):
               gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
               gl.enableVertexAttribArray(0);
               gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+              const texture = gl.createTexture();
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, texture);
+              gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+              const vao = gl.createVertexArray();
+              gl.bindVertexArray(vao);
               gl.drawElements(gl.TRIANGLES, 3, gl.UNSIGNED_SHORT, 0);
             }
             """).strip(),
@@ -1631,21 +1639,25 @@ def test_scan_report_records_webgl_host_runtime_reference_evidence(tmp_path):
             renderer.createProgram();
             glish.createShader();
             contextual.createProgram();
+            canvas.getContext("2d");
+            renderPass.getContext("webgl2Extra");
+            gl.createTextureHandle();
             """).strip(),
         encoding="utf-8",
     )
 
     payload = scan_project(repo).to_report(targets=["webgl"]).to_json()
 
-    assert payload["migration"]["runtimeReferenceCount"] == 14
-    assert payload["migration"]["runtimeReferencesByBackend"] == {"webgl": 14}
-    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 14}
-    assert payload["migration"]["runtimeReferencesByPath"] == {"host.ts": 14}
+    assert payload["migration"]["runtimeReferenceCount"] == 22
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"webgl": 22}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 22}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.ts": 22}
     assert [
         (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
         for ref in payload["migration"]["actions"][0]["runtimeReferences"]
     ] == [
         ("host.ts", "webgl", "runtime-api", "WebGL2RenderingContext"),
+        ("host.ts", "webgl", "runtime-api", "getContext"),
         ("host.ts", "webgl", "runtime-api", "createShader"),
         ("host.ts", "webgl", "runtime-api", "shaderSource"),
         ("host.ts", "webgl", "runtime-api", "compileShader"),
@@ -1658,7 +1670,84 @@ def test_scan_report_records_webgl_host_runtime_reference_evidence(tmp_path):
         ("host.ts", "webgl", "runtime-api", "bufferData"),
         ("host.ts", "webgl", "runtime-api", "enableVertexAttribArray"),
         ("host.ts", "webgl", "runtime-api", "vertexAttribPointer"),
+        ("host.ts", "webgl", "runtime-api", "createTexture"),
+        ("host.ts", "webgl", "runtime-api", "activeTexture"),
+        ("host.ts", "webgl", "runtime-api", "bindTexture"),
+        ("host.ts", "webgl", "runtime-api", "texImage2D"),
+        ("host.ts", "webgl", "runtime-api", "texParameteri"),
+        ("host.ts", "webgl", "runtime-api", "createVertexArray"),
+        ("host.ts", "webgl", "runtime-api", "bindVertexArray"),
         ("host.ts", "webgl", "runtime-api", "drawElements"),
+    ]
+
+
+def test_scan_report_records_opengl_host_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            void render(GLuint program, GLuint vertexShader, GLuint texture) {
+              glGenVertexArrays(1, &vao);
+              glBindVertexArray(vao);
+              glGenBuffers(1, &buffer);
+              glBindBuffer(GL_ARRAY_BUFFER, buffer);
+              glBufferData(GL_ARRAY_BUFFER, size, data, GL_STATIC_DRAW);
+              glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+              glEnableVertexAttribArray(0);
+              glAttachShader(program, vertexShader);
+              glLinkProgram(program);
+              glDeleteShader(vertexShader);
+              glUseProgram(program);
+              glUniformMatrix4fv(location, 1, GL_FALSE, matrix);
+              glActiveTexture(GL_TEXTURE0);
+              glBindTexture(GL_TEXTURE_2D, texture);
+              glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
+                           GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+              glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+              glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, nullptr);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.cpp").write_text(
+        textwrap.dedent("""
+            void helper() {
+              auto glBind = 0;
+              glCreatePipeline();
+              notglDrawElements();
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 17
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"opengl": 17}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 17}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.cpp": 17}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.cpp", "opengl", "runtime-api", "glGenVertexArrays"),
+        ("host.cpp", "opengl", "runtime-api", "glBindVertexArray"),
+        ("host.cpp", "opengl", "runtime-api", "glGenBuffers"),
+        ("host.cpp", "opengl", "runtime-api", "glBindBuffer"),
+        ("host.cpp", "opengl", "runtime-api", "glBufferData"),
+        ("host.cpp", "opengl", "runtime-api", "glVertexAttribPointer"),
+        ("host.cpp", "opengl", "runtime-api", "glEnableVertexAttribArray"),
+        ("host.cpp", "opengl", "runtime-api", "glAttachShader"),
+        ("host.cpp", "opengl", "runtime-api", "glLinkProgram"),
+        ("host.cpp", "opengl", "runtime-api", "glDeleteShader"),
+        ("host.cpp", "opengl", "runtime-api", "glUseProgram"),
+        ("host.cpp", "opengl", "runtime-api", "glUniformMatrix4fv"),
+        ("host.cpp", "opengl", "runtime-api", "glActiveTexture"),
+        ("host.cpp", "opengl", "runtime-api", "glBindTexture"),
+        ("host.cpp", "opengl", "runtime-api", "glTexImage2D"),
+        ("host.cpp", "opengl", "runtime-api", "glTexParameteri"),
+        ("host.cpp", "opengl", "runtime-api", "glDrawElements"),
     ]
 
 
