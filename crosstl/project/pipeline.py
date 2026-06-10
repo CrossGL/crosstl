@@ -4075,7 +4075,16 @@ def load_project_config(
     root_path = Path(root).resolve()
     explicit_config = config is not None
     if explicit_config:
-        config_value = os.fspath(config)
+        try:
+            config_value = os.fspath(config)
+        except TypeError as exc:
+            raise ValueError(
+                "Project config path must be a string or path-like object returning str"
+            ) from exc
+        if not isinstance(config_value, str):
+            raise ValueError(
+                "Project config path must be a string or path-like object returning str"
+            )
         if not config_value.strip():
             raise ValueError("Project config path must be non-empty")
         config_path = _project_config_path(root_path, config_value).resolve()
@@ -4085,6 +4094,8 @@ def load_project_config(
         if explicit_config:
             raise ValueError(f"Project config not found: {config_path}")
         return ProjectConfig(root=root_path, config_path=None)
+    if not config_path.is_file():
+        raise ValueError(f"Project config path is not a file: {config_path}")
 
     raw = _load_toml(config_path)
     project = raw.get("project", raw)

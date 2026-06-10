@@ -1317,6 +1317,32 @@ def test_project_config_normalizes_explicit_config_path_separators(tmp_path):
     assert config.output_dir == "generated"
 
 
+@pytest.mark.parametrize(
+    ("config_path", "message"),
+    [
+        ("", "Project config path must be non-empty"),
+        (
+            b"custom.toml",
+            "Project config path must be a string or path-like object returning str",
+        ),
+        (
+            object(),
+            "Project config path must be a string or path-like object returning str",
+        ),
+    ],
+)
+def test_project_config_rejects_invalid_explicit_config_path_values(
+    tmp_path,
+    config_path,
+    message,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(ValueError, match=re.escape(message)):
+        load_project_config(repo, config_path)
+
+
 def test_project_config_rejects_missing_explicit_config_path(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1325,6 +1351,22 @@ def test_project_config_rejects_missing_explicit_config_path(tmp_path):
         load_project_config(repo, "missing.toml")
 
     assert str(repo.resolve() / "missing.toml") in str(excinfo.value)
+
+
+@pytest.mark.parametrize("config_path", [None, "config"])
+def test_project_config_rejects_config_path_directories(tmp_path, config_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    directory = repo / (
+        project_pipeline.DEFAULT_CONFIG_NAME if config_path is None else config_path
+    )
+    directory.mkdir()
+
+    with pytest.raises(ValueError) as excinfo:
+        load_project_config(repo, config_path)
+
+    assert "Project config path is not a file" in str(excinfo.value)
+    assert str(directory.resolve()) in str(excinfo.value)
 
 
 def test_scan_project_reports_missing_include_dirs_without_hiding_units(tmp_path):
