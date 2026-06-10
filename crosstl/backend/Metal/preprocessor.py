@@ -130,9 +130,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             template = templates_by_name.get(instantiation.function_name)
             if template is None:
                 continue
-            materialized = self._materialize_template_function(
-                template, instantiation
-            )
+            materialized = self._materialize_template_function(template, instantiation)
             if materialized:
                 template.materializations.append(materialized)
 
@@ -194,9 +192,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             host_name = self._evaluate_metal_string_expression(match.group("host"))
             function_name = match.group("function").split("::")[-1]
-            template_arguments = self._split_top_level_commas(
-                code[args_start:args_end]
-            )
+            template_arguments = self._split_top_level_commas(code[args_start:args_end])
             if not host_name or not template_arguments:
                 continue
             instantiations.append(
