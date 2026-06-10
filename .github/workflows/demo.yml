@@ -156,6 +156,8 @@ jobs:
             --case apple-modern-rendering-mesh-viewdir \
             --case metal-performance-testing-matmul \
             --case nvidia-cuda-samples-vector-add \
+            --case nvpro-vk-mini-samples-rectangle \
+            --case ogl-samples-flat-color \
             --case opencl-sdk-saxpy \
             --case raylib-base-fragment \
             --case raylib-base-vertex \
@@ -167,6 +169,7 @@ jobs:
             --case sascha-willems-vulkan-headless-compute \
             --case slang-hello-world-compute \
             --case spirv-tools-basic-src \
+            --case vulkan-tools-cube \
             --target metal \
             --reports-dir support/generated/demo-reports/macos-metal
         shell: bash
@@ -185,13 +188,16 @@ jobs:
             demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/metal/shaders.metal \
             demos/open-source-porting/cases/directx-shader-compiler-neg1/crosstl-out/metal/neg1.metal \
             demos/open-source-porting/cases/directx-sdk-samples-tutorial02/crosstl-out/metal/Tutorial02.metal \
-            demos/open-source-porting/cases/glslang-push-constant-vertex/crosstl-out/metal/spv.pushConstant.metal \
             demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/metal/batch.frag.metal \
             demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/metal/batch.vert.metal \
             demos/open-source-porting/cases/lonelydevil-vulkan-tutorial-triangle/crosstl-out/metal/shader.frag.metal \
             demos/open-source-porting/cases/lonelydevil-vulkan-tutorial-triangle/crosstl-out/metal/shader.vert.metal \
             demos/open-source-porting/cases/metal-performance-testing-matmul/crosstl-out/metal/mat_mul_simple1.metal \
             demos/open-source-porting/cases/nvidia-cuda-samples-vector-add/crosstl-out/metal/vectorAdd_kernel.metal \
+            demos/open-source-porting/cases/nvpro-vk-mini-samples-rectangle/crosstl-out/metal/rectangle.frag.metal \
+            demos/open-source-porting/cases/nvpro-vk-mini-samples-rectangle/crosstl-out/metal/rectangle.vert.metal \
+            demos/open-source-porting/cases/ogl-samples-flat-color/crosstl-out/metal/flat-color.frag.metal \
+            demos/open-source-porting/cases/ogl-samples-flat-color/crosstl-out/metal/flat-color.vert.metal \
             demos/open-source-porting/cases/opencl-sdk-saxpy/crosstl-out/metal/saxpy.metal \
             demos/open-source-porting/cases/raylib-base-fragment/crosstl-out/metal/base.metal \
             demos/open-source-porting/cases/raylib-base-vertex/crosstl-out/metal/base.metal \
@@ -203,7 +209,9 @@ jobs:
             demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/metal/headless.metal \
             demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/metal/hello-world.metal \
             demos/open-source-porting/cases/spirv-tools-basic-src/crosstl-out/metal/basic_src.metal \
-            demos/open-source-porting/cases/vulkan-samples-dynamic-line-grid/crosstl-out/metal/grid.metal
+            demos/open-source-porting/cases/vulkan-samples-dynamic-line-grid/crosstl-out/metal/grid.metal \
+            demos/open-source-porting/cases/vulkan-tools-cube/crosstl-out/metal/cube.frag.metal \
+            demos/open-source-porting/cases/vulkan-tools-cube/crosstl-out/metal/cube.vert.metal
           do
             output="$(printf '%s' "$shader" | tr '/.' '__').air"
             xcrun -sdk macosx metal -c "$shader" -o "$out_dir/$output"

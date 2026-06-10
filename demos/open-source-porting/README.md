@@ -59,8 +59,8 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `arm-opengl-es-sdk-cube` | `ARM-software/opengl-es-sdk-for-android` at `c3caf759bb2e71fa9a118b3e3abd996cf00e660a` | MIT | GLSL ES | CrossGL, Metal, DirectX, Vulkan | Uses the upstream cube shader pair unchanged. OpenGL reserved identifier lowering is tracked in issue #820. |
 | `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. DirectX output validation is tracked in issue #807. |
 | `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, Metal, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. Host launch and memory-management integration remain outside the demo scope. |
-| `nvpro-vk-mini-samples-rectangle` | `nvpro-samples/vk_mini_samples` at `994ac9f446ef44962c563b9600c8e9f117a3725d` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream rectangle shader pair unchanged. Metal attribute lowering is tracked in issue #817. |
-| `ogl-samples-flat-color` | `g-truc/ogl-samples` at `38cada7a9458864265e25415ae61586d500ff5fc` | MIT | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream GLSL 330 flat-color shader pair unchanged. Metal attribute lowering is tracked in issue #817. |
+| `nvpro-vk-mini-samples-rectangle` | `nvpro-samples/vk_mini_samples` at `994ac9f446ef44962c563b9600c8e9f117a3725d` | Apache-2.0 | GLSL | CrossGL, Metal, OpenGL, Vulkan | Uses the upstream rectangle shader pair unchanged. |
+| `ogl-samples-flat-color` | `g-truc/ogl-samples` at `38cada7a9458864265e25415ae61586d500ff5fc` | MIT | GLSL | CrossGL, Metal, OpenGL, Vulkan | Uses the upstream GLSL 330 flat-color shader pair unchanged. |
 | `openframeworks-noise-shader` | `openframeworks/openFrameworks` at `63eb03828c40de713b85db7810f1c519d8b9b0cc` | MIT | GLSL | CrossGL, Vulkan | Uses the upstream noise shader pair with whitespace normalization. Metal and DirectX `gl_FragCoord` lowering is tracked in issue #840; OpenGL version-compatible layout qualifiers are tracked in issue #841. |
 | `opencl-sdk-saxpy` | `KhronosGroup/OpenCL-SDK` at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` | Apache-2.0 | OpenCL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream SAXPY compute kernel unchanged. |
 | `rocm-examples-add-kernel` | `ROCm/rocm-examples` at `cf369da68f209c315074204bd0eb61d1a5c015d1` | MIT | HIP | CrossGL, Metal, Vulkan | Uses the upstream sphinx-marked add-kernel slice. Host HIP runtime setup remains outside the demo scope. |
@@ -74,7 +74,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `sascha-willems-vulkan-headless-compute` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, Metal, DirectX, Vulkan | Uses the upstream headless compute shader unchanged. OpenGL specialization-constant validation is tracked in issue #780. |
 | `slang-hello-world-compute` | `shader-slang/slang` at `29e69b0bf626f87500be73a7fb3764db25658c66` | Apache-2.0 WITH LLVM-exception | Slang | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream compute shader unchanged. |
 | `spirv-tools-basic-src` | `KhronosGroup/SPIRV-Tools` at `199cb207b911501ddd76dcddf100a6e21c15ef23` | Apache-2.0 | SPIR-V assembly | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream SPIR-V assembly fixture unchanged. |
-| `vulkan-tools-cube` | `KhronosGroup/Vulkan-Tools` at `68749eafbf27114a1dd807d6c870e53306673e64` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream cube demo shader pair unchanged. DirectX reserved-keyword lowering is tracked in issue #819. |
+| `vulkan-tools-cube` | `KhronosGroup/Vulkan-Tools` at `68749eafbf27114a1dd807d6c870e53306673e64` | Apache-2.0 | GLSL | CrossGL, Metal, OpenGL, Vulkan | Uses the upstream cube demo shader pair unchanged. DirectX reserved-keyword lowering is tracked in issue #819. |
 
 ## Source adjustments
 
@@ -144,6 +144,9 @@ constant semantics without placeholder output.
 The checked `KhronosGroup/glslang` push-constant vertex shader currently
 excludes DirectX output because the generated HLSL declares `SV_POSITION` but
 does not write it on all paths. That translator issue is tracked in issue #813.
+The Metal target remains in structural smoke coverage, but direct Metal
+compile-reference CI excludes this artifact until its vertex output includes a
+`[[position]]` member, tracked in issue #856.
 
 The `DiligentGraphics/DiligentSamples` Tutorial02 Cube shaders from
 `Tutorials/Tutorial02_Cube/assets/cube.vsh` and
@@ -163,21 +166,15 @@ in issue #826, so the fragment stage is intentionally excluded until unsupported
 fragment-density semantics are diagnosed or lowered correctly.
 
 The `g-truc/ogl-samples` flat-color shader pair is checked for CrossGL,
-OpenGL, and Vulkan output. Metal output is intentionally excluded because
-GLSL vertex layout locations are currently emitted as Metal `[[location]]`
-attributes instead of `[[attribute(n)]]` bindings. That translator issue is
-tracked in issue #817.
+Metal, OpenGL, and Vulkan output.
 
 The `nvpro-samples/vk_mini_samples` rectangle shader pair is checked for
-CrossGL, OpenGL, and Vulkan output. Metal output is intentionally excluded for
-the same GLSL vertex layout-location lowering issue tracked in issue #817.
+CrossGL, Metal, OpenGL, and Vulkan output.
 
 The `KhronosGroup/Vulkan-Tools` cube demo shaders are checked for CrossGL,
-OpenGL, and Vulkan output. DirectX output is intentionally excluded because
+Metal, OpenGL, and Vulkan output. DirectX output is intentionally excluded because
 GLSL identifiers that collide with HLSL reserved words are currently emitted
-unchanged. That translator issue is tracked in issue #819. Metal output is
-also left out of the checked target set until GLSL location metadata lowering
-is resolved under issue #817.
+unchanged. That translator issue is tracked in issue #819.
 
 The `ARM-software/opengl-es-sdk-for-android` cube shaders are checked for
 CrossGL, Metal, DirectX, and Vulkan output. OpenGL output is intentionally

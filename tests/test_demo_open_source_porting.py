@@ -110,10 +110,7 @@ def test_open_source_demo_workflow_runs_platform_toolchain_smokes():
     assert "Windows DirectX compile references" in workflow
     assert 'dxc -T "$profile" -E "$entry"' in workflow
     assert "spirv-tools-basic-src/crosstl-out/metal/basic_src.metal" in workflow
-    assert (
-        "glslang-push-constant-vertex/crosstl-out/metal/spv.pushConstant.metal"
-        in workflow
-    )
+    assert "vulkan-tools-cube/crosstl-out/metal/cube.vert.metal" in workflow
     assert "demo-reports-${{ matrix.os }}" in workflow
 
 
@@ -204,6 +201,8 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "lonelydevil-vulkan-tutorial-triangle",
         "metal-performance-testing-matmul",
         "nvidia-cuda-samples-vector-add",
+        "nvpro-vk-mini-samples-rectangle",
+        "ogl-samples-flat-color",
         "opencl-sdk-saxpy",
         "raylib-base-fragment",
         "raylib-base-vertex",
@@ -216,6 +215,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "slang-hello-world-compute",
         "spirv-tools-basic-src",
         "vulkan-samples-dynamic-line-grid",
+        "vulkan-tools-cube",
     }
     assert _workflow_step_cases(workflow, "Windows DirectX smoke checks") == {
         "angle-simple-texture-2d",
@@ -271,6 +271,7 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
         not in {
             "apple-modern-rendering-mesh-viewdir",
             "directx-graphics-samples-hello-triangle",
+            "glslang-push-constant-vertex",
             "sascha-willems-vulkan-conservative-triangle",
         }
     } == metal_paths
