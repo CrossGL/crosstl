@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/neg1.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 135,
+        "file": "crosstl-out/cgl/neg1.cgl",
+        "length": 135,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 126,
+        "file": "neg1.hlsl",
+        "length": 126,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

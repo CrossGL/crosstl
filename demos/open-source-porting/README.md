@@ -44,6 +44,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | --- | --- | --- | --- | --- | --- |
 | `directx-graphics-samples-hello-triangle` | `microsoft/DirectX-Graphics-Samples` at `31ae3c91160d8634264004cdaf4e41a99c41243e` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Hello Triangle shader file without source edits. |
 | `directx-graphics-samples-hello-texture` | `microsoft/DirectX-Graphics-Samples` at `31ae3c91160d8634264004cdaf4e41a99c41243e` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Hello Texture shader file without source edits. Host texture setup remains outside the demo scope. |
+| `directx-shader-compiler-neg1` | `microsoft/DirectXShaderCompiler` at `d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652` | University of Illinois/NCSA | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream negated swizzle pixel shader unchanged. |
 | `glslang-push-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream push-constant vertex shader unchanged. DirectX validation is tracked in issue #813. |
 | `lonelydevil-vulkan-tutorial-triangle` | `lonelydevil/vulkan-tutorial-C-implementation` at `780ff146a6eccd7064a10e86363f3c2f7323825d` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream triangle shader pair unchanged. |
 | `spirv-cross-round-fragment` | `KhronosGroup/SPIRV-Cross` at `146679ff8255a6068518685599d7fb8761d1b570` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream fragment reference shader unchanged. |
@@ -69,8 +70,8 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 
 ## Source adjustments
 
-The ARM OpenGL ES SDK, DirectX, glslang, Metal performance, NVIDIA CUDA
-Samples, nvpro-samples, ogl-samples, OpenCL-SDK, Rust-GPU
+The ARM OpenGL ES SDK, DirectX, DirectXShaderCompiler, glslang, Metal
+performance, NVIDIA CUDA Samples, nvpro-samples, ogl-samples, OpenCL-SDK, Rust-GPU
 VulkanShaderExamples, SPIRV-Cross, SPIRV-Tools, Vulkan-Tools, raylib,
 SaschaWillems triangle, and Slang cases keep upstream source files unchanged
 apart from repository

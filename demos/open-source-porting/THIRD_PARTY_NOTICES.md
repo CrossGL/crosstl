@@ -26,6 +26,15 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/microsoft/DirectX-Graphics-Samples/blob/31ae3c91160d8634264004cdaf4e41a99c41243e/LICENSE
 
+## microsoft/DirectXShaderCompiler
+
+- Repository: https://github.com/microsoft/DirectXShaderCompiler
+- Commit: `d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652`
+- Source path: `tools/clang/test/CodeGenHLSL/neg1.hlsl`
+- License: University of Illinois/NCSA Open Source License
+- License URL:
+  https://github.com/microsoft/DirectXShaderCompiler/blob/d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652/LICENSE.TXT
+
 ## KhronosGroup/Vulkan-Samples
 
 - Repository: https://github.com/KhronosGroup/Vulkan-Samples
