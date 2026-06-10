@@ -117,7 +117,7 @@ class WebGLCodeGen(GLSLCodeGen):
         if not func_name:
             return None
         args = list(getattr(expr, "arguments", getattr(expr, "args", [])) or [])
-        dynamic_info = self.webgl_dynamic_sampler_array_call_info(func_name, args)
+        dynamic_info = self.webgl_dynamic_sampler_call_info(func_name, args)
         if dynamic_info is None:
             return None
 
@@ -136,6 +136,38 @@ class WebGLCodeGen(GLSLCodeGen):
             "index_expr": dynamic_info["index_expr"],
             "cases": cases,
             "return_type": self.expression_result_type(expr),
+        }
+
+    def webgl_dynamic_sampler_call_info(self, func_name, args):
+        direct_info = self.webgl_direct_dynamic_sampler_array_call_info(func_name, args)
+        if direct_info is not None:
+            return direct_info
+        return self.webgl_dynamic_sampler_array_call_info(func_name, args)
+
+    def webgl_direct_dynamic_sampler_array_call_info(self, func_name, args):
+        if (
+            not args
+            or func_name in self.STORAGE_IMAGE_INTRINSIC_NAMES
+            or func_name not in self.texture_resource_operation_names()
+        ):
+            return None
+
+        dynamic_info = self.glsl_dynamic_resource_array_access_info(
+            args[0],
+            self.current_resource_aliases,
+        )
+        if dynamic_info is None:
+            return None
+
+        texture_type = self.texture_declared_resource_type(dynamic_info["array_expr"])
+        if texture_type is None:
+            texture_type = self.expression_result_type(args[0])
+        if not self.is_sampled_texture_type(texture_type):
+            return None
+
+        return {
+            "arg_index": 0,
+            **dynamic_info,
         }
 
     def webgl_dynamic_sampler_array_call_info(self, func_name, args):
@@ -177,7 +209,7 @@ class WebGLCodeGen(GLSLCodeGen):
             if not func_name:
                 continue
             args = list(getattr(node, "arguments", getattr(node, "args", [])) or [])
-            dynamic_info = self.webgl_dynamic_sampler_array_call_info(func_name, args)
+            dynamic_info = self.webgl_dynamic_sampler_call_info(func_name, args)
             if dynamic_info is None:
                 continue
             dispatch = self.glsl_dynamic_resource_call_dispatch_info(node)

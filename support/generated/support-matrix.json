@@ -359,7 +359,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_webgl_codegen.py"
         ],
-        "test_count": 27
+        "test_count": 29
       },
       "translator_codegen": {
         "exists": true,

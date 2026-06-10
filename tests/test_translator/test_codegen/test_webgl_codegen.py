@@ -360,6 +360,60 @@ def test_webgl_codegen_lowers_nested_dynamic_sampler_array_assignment():
     assert "color = (crossgl_dynamic_sampler_value * 0.5);" in generated
 
 
+def test_webgl_codegen_lowers_direct_dynamic_sampler_array_texture_return():
+    shader = """
+    shader WebGLDirectDynamicSamplerReturn {
+        const int MAP_COUNT = 2;
+
+        fragment {
+            uniform sampler2D colorMaps[MAP_COUNT];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(colorMaps[colorIndex], uv);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "texture(colorMaps[colorIndex]" not in generated
+    assert "switch (colorIndex)" in generated
+    assert "fragColor = texture(colorMaps[0], uv);" in generated
+    assert "fragColor = texture(colorMaps[1], uv);" in generated
+    assert "fragColor = vec4(0.0);" in generated
+    assert "return;" in generated
+
+
+def test_webgl_codegen_lowers_nested_direct_dynamic_sampler_array_texture_call():
+    shader = """
+    shader WebGLNestedDirectDynamicSampler {
+        const int MAP_COUNT = 2;
+
+        fragment {
+            uniform sampler2D colorMaps[MAP_COUNT];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec4 color = texture(colorMaps[colorIndex], uv) + vec4(0.25);
+                return color;
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "texture(colorMaps[colorIndex]" not in generated
+    assert "vec4 crossgl_dynamic_sampler_value;" in generated
+    assert "switch (colorIndex)" in generated
+    assert "crossgl_dynamic_sampler_value = texture(colorMaps[0], uv);" in generated
+    assert "crossgl_dynamic_sampler_value = texture(colorMaps[1], uv);" in generated
+    assert "vec4 color;" in generated
+    assert "color = (crossgl_dynamic_sampler_value + vec4(0.25));" in generated
+
+
 def test_webgl_codegen_lowers_dynamic_sampler_array_stage_return():
     shader = """
     shader WebGLDynamicSamplerReturn {
