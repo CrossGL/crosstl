@@ -12996,16 +12996,21 @@ def test_compute_stage_validates_system_value_parameter_types():
         )
 
     dispatch_vec2_code = """
-    shader BadComputeDispatchThreadId {
+    shader NarrowComputeDispatchThreadId {
         compute {
-            void main(uvec2 dispatchId @ SV_DispatchThreadID) { }
+            void main(uvec2 dispatchId @ SV_DispatchThreadID) {
+                uint x = dispatchId.x;
+            }
         }
     }
     """
-    with pytest.raises(ValueError, match="SV_DispatchThreadID.*uint3"):
-        HLSLCodeGen().generate_stage(
-            crosstl.translator.parse(dispatch_vec2_code), "compute"
-        )
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(dispatch_vec2_code), "compute"
+    )
+    assert "uint3 dispatchId_dispatchThreadID : SV_DispatchThreadID" in generated
+    assert "uint2 dispatchId = dispatchId_dispatchThreadID.xy;" in generated
+    assert "uint x = dispatchId.x;" in generated
+    assert "uint2 dispatchId : SV_DispatchThreadID" not in generated
 
     signed_group_id_code = """
     shader BadComputeSignedGroupId {
