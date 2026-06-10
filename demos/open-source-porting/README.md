@@ -73,6 +73,12 @@ generation after GLSL-to-CrossGL conversion. That translator issue is tracked
 in issue #766, and the case is intentionally not checked in until keyword-safe
 identifier handling preserves the shader output.
 
+The `microsoft/DirectXShaderCompiler` scalar-splat compute test was tested as
+a candidate and exposed target semantic gaps for HLSL scalar swizzles and
+`groupshared` storage. That translator issue is tracked in issue #767, and the
+case is intentionally not checked in until target output preserves the compute
+semantics rather than emitting placeholder comments.
+
 The `KhronosGroup/OpenCL-SDK` SAXPY kernel was also tested as a candidate and
 exposed OpenCL lowering gaps for OpenGL and DirectX artifacts. That translator
 issue is tracked in issue #751, and the case is intentionally not checked in
