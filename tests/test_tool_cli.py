@@ -99,7 +99,7 @@ TOOLS = [
 )
 def test_crosstl_module_cli_help_surface(args, expected_stdout):
     result = subprocess.run(
-        [sys.executable, "-m", "crosstl._crosstl", *args, "--help"],
+        [sys.executable, "-m", "crosstl", *args, "--help"],
         cwd=str(ROOT),
         capture_output=True,
         text=True,
