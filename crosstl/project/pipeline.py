@@ -39,6 +39,9 @@ RUNTIME_HOST_LOADER_SCAFFOLDS_KIND = "crosstl-runtime-host-loader-scaffolds"
 RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_KIND = (
     "crosstl-runtime-host-loader-scaffolds-inspection"
 )
+RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_KIND = (
+    "crosstl-runtime-host-loader-consumption-plan"
+)
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
 RUNTIME_LOADER_PLAN_CONTRACT = "runtime-loader-plan-v1"
@@ -54,6 +57,7 @@ RUNTIME_HOST_LOADER_SCAFFOLDS_SCOPE = "host-loader-scaffold-generation"
 RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_SCOPE = (
     "host-loader-scaffold-readiness-inspection"
 )
+RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_SCOPE = "host-loader-consumption-planning"
 RUNTIME_INTEGRATION_PLAN_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
@@ -101,6 +105,12 @@ RUNTIME_HOST_LOADER_SCAFFOLDS_NON_GOALS = (
     "target-sdk-installation",
 )
 RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_NON_GOALS = (
+    "host-code-rewriting",
+    "device-execution",
+    "runtime-framework-generation",
+    "target-sdk-installation",
+)
+RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
     "runtime-framework-generation",
@@ -710,6 +720,74 @@ RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_SCAFFOLD_FIELDS = frozenset(
 )
 RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_GENERATED_FILE_FIELDS = frozenset(
     ("path", "kind", "target", "status", "diagnostics")
+)
+RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourceScaffoldManifest",
+        "sourceScaffoldManifestHash",
+        "generatedAt",
+        "success",
+        "status",
+        "scope",
+        "nonGoals",
+        "scaffoldRoot",
+        "project",
+        "summary",
+        "targets",
+        "loaderUnits",
+        "actions",
+        "scaffoldInspection",
+        "diagnosticCounts",
+        "diagnostics",
+    )
+)
+RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_TARGET_FIELDS = frozenset(
+    (
+        "target",
+        "status",
+        "loaderUnitCount",
+        "readyLoaderUnitCount",
+        "blockedLoaderUnitCount",
+        "failedLoaderUnitCount",
+        "actionCount",
+        "requiredTools",
+        "hostResponsibilities",
+        "packagePaths",
+        "scaffoldFiles",
+    )
+)
+RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_LOADER_UNIT_FIELDS = frozenset(
+    (
+        "id",
+        "target",
+        "status",
+        "scaffold",
+        "outputPath",
+        "packagePath",
+        "adapterKind",
+        "artifactFormat",
+        "requiredTools",
+        "hostResponsibilities",
+        "loadSteps",
+        "hostInterface",
+        "blockers",
+        "diagnostics",
+    )
+)
+RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_ACTION_FIELDS = frozenset(
+    (
+        "kind",
+        "severity",
+        "message",
+        "target",
+        "loaderUnit",
+        "scaffold",
+        "packagePath",
+        "outputPath",
+        "tools",
+    )
 )
 REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
 REPORT_PROJECT_FIELDS = frozenset(
@@ -8147,7 +8225,7 @@ def _runtime_plan_action_for_reference(
     target_label = ", ".join(targets) if targets else "requested targets"
     message = (
         f"Review {backend or 'unknown'} {kind or 'runtime'} reference "
-        f"{symbol or '<unknown>'} before integrating {target_label} runtime setup."
+        f"{symbol or '<unknown>'} before consuming {target_label} runtime setup."
     )
     return {
         "kind": "review-runtime-reference",
@@ -12606,6 +12684,575 @@ def inspect_runtime_host_loader_scaffolds(
         },
         "diagnosticCounts": _diagnostic_counts(diagnostics),
         "diagnostics": [diagnostic.to_json() for diagnostic in diagnostics],
+    }
+
+
+def _runtime_host_loader_consumption_diagnostic(
+    path: Path,
+    code: str,
+    message: str,
+    *,
+    severity: str = "error",
+    target: Any = None,
+) -> ProjectDiagnostic:
+    return ProjectDiagnostic(
+        severity=severity,
+        code=f"project.runtime-host-loader-consumption-plan.{code}",
+        message=message,
+        location=SourceLocation(file=str(path)),
+        target=target if _is_non_empty_string(target) else None,
+        check_kind="runtime-host-loader-consumption-plan",
+    )
+
+
+def _runtime_host_loader_consumption_resolve_path(
+    inspection_path: Path,
+    root: Path,
+    relative_path: Any,
+    *,
+    field_name: str,
+    code_prefix: str,
+    target: Any = None,
+) -> tuple[Path | None, list[ProjectDiagnostic]]:
+    if not _is_non_empty_string(relative_path):
+        return None, [
+            _runtime_host_loader_consumption_diagnostic(
+                inspection_path,
+                f"{code_prefix}-path-missing",
+                f"{field_name} must be a non-empty relative path.",
+                target=target,
+            )
+        ]
+    if _is_absolute_or_windows_drive_path(relative_path):
+        return None, [
+            _runtime_host_loader_consumption_diagnostic(
+                inspection_path,
+                f"{code_prefix}-path-absolute",
+                f"{field_name} must be relative to the scaffold root.",
+                target=target,
+            )
+        ]
+    candidate = root / Path(relative_path)
+    if not _is_relative_to(candidate, root):
+        return None, [
+            _runtime_host_loader_consumption_diagnostic(
+                inspection_path,
+                f"{code_prefix}-path-outside-root",
+                f"{field_name} resolves outside the scaffold root.",
+                target=target,
+            )
+        ]
+    return candidate, []
+
+
+def _runtime_host_loader_consumption_load_unit(
+    inspection_path: Path,
+    unit_path: Path,
+    scaffold: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[ProjectDiagnostic]]:
+    target = scaffold.get("target")
+    try:
+        unit = json.loads(unit_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return {}, [
+            _runtime_host_loader_consumption_diagnostic(
+                inspection_path,
+                "unit-read-failed",
+                f"Host loader unit could not be read: {exc}",
+                target=target,
+            )
+        ]
+    except json.JSONDecodeError as exc:
+        return {}, [
+            _runtime_host_loader_consumption_diagnostic(
+                inspection_path,
+                "unit-json-invalid",
+                f"Host loader unit is not valid JSON: {exc}",
+                target=target,
+            )
+        ]
+    if not isinstance(unit, dict):
+        return {}, [
+            _runtime_host_loader_consumption_diagnostic(
+                inspection_path,
+                "unit-invalid",
+                "Host loader unit must be a JSON object.",
+                target=target,
+            )
+        ]
+
+    diagnostics: list[ProjectDiagnostic] = []
+    if unit.get("schemaVersion") != REPORT_SCHEMA_VERSION:
+        diagnostics.append(
+            _runtime_host_loader_consumption_diagnostic(
+                inspection_path,
+                "unit-schema-invalid",
+                f"Host loader unit schemaVersion must be {REPORT_SCHEMA_VERSION}.",
+                target=target,
+            )
+        )
+    if unit.get("kind") != "crosstl-runtime-host-loader-unit":
+        diagnostics.append(
+            _runtime_host_loader_consumption_diagnostic(
+                inspection_path,
+                "unit-kind-invalid",
+                "Host loader unit kind must be crosstl-runtime-host-loader-unit.",
+                target=target,
+            )
+        )
+    expected_pairs = (
+        ("scaffold", scaffold.get("id"), "unit-scaffold-mismatch"),
+        ("target", scaffold.get("target"), "unit-target-mismatch"),
+        ("packagePath", scaffold.get("packagePath"), "unit-package-path-mismatch"),
+    )
+    for field_name, expected_value, code in expected_pairs:
+        if unit.get(field_name) != expected_value:
+            diagnostics.append(
+                _runtime_host_loader_consumption_diagnostic(
+                    inspection_path,
+                    code,
+                    f"Host loader unit {field_name} does not match inspection record.",
+                    target=target,
+                )
+            )
+    return unit, diagnostics
+
+
+def _runtime_host_loader_consumption_blockers(
+    scaffold: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    diagnostics = [
+        diagnostic
+        for diagnostic in _record_sequence(scaffold.get("diagnostics"))
+        if _is_non_empty_string(diagnostic)
+    ]
+    blockers: list[dict[str, Any]] = []
+    if scaffold.get("status") == "blocked":
+        blocker_count = scaffold.get("blockerCount")
+        message = (
+            "Resolve loader scaffold blockers recorded during scaffold generation "
+            f"for {scaffold.get('packagePath') or '<missing package path>'}."
+        )
+        if _is_non_negative_int(blocker_count) and blocker_count:
+            message += f" Blocker count: {blocker_count}."
+        blockers.append(
+            {
+                "kind": "resolve-loader-scaffold-blockers",
+                "severity": "warning",
+                "message": message,
+            }
+        )
+    for diagnostic in diagnostics:
+        blockers.append(
+            {
+                "kind": "resolve-loader-scaffold-diagnostic",
+                "severity": "warning",
+                "message": f"Resolve host loader scaffold diagnostic: {diagnostic}.",
+            }
+        )
+    return blockers
+
+
+def _runtime_host_loader_consumption_unit(
+    inspection_path: Path,
+    scaffold_root: Path,
+    scaffold: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[ProjectDiagnostic]]:
+    target = scaffold.get("target")
+    diagnostics: list[ProjectDiagnostic] = []
+    output_path = scaffold.get("outputPath")
+    blockers = _runtime_host_loader_consumption_blockers(scaffold)
+    if scaffold.get("status") != "ready":
+        status = (
+            scaffold.get("status")
+            if _is_non_empty_string(scaffold.get("status"))
+            else "blocked"
+        )
+        return (
+            {
+                "id": scaffold.get("id"),
+                "target": target,
+                "status": status,
+                "scaffold": scaffold.get("id"),
+                "outputPath": output_path,
+                "packagePath": scaffold.get("packagePath"),
+                "adapterKind": None,
+                "artifactFormat": None,
+                "requiredTools": [],
+                "hostResponsibilities": [],
+                "loadSteps": [],
+                "hostInterface": None,
+                "blockers": blockers,
+                "diagnostics": [
+                    diagnostic
+                    for diagnostic in _record_sequence(scaffold.get("diagnostics"))
+                    if _is_non_empty_string(diagnostic)
+                ],
+            },
+            diagnostics,
+        )
+
+    unit_path, path_diagnostics = _runtime_host_loader_consumption_resolve_path(
+        inspection_path,
+        scaffold_root,
+        output_path,
+        field_name="host loader unit outputPath",
+        code_prefix="unit",
+        target=target,
+    )
+    diagnostics.extend(path_diagnostics)
+    unit: dict[str, Any] = {}
+    if unit_path is not None and not path_diagnostics:
+        if not unit_path.is_file():
+            diagnostics.append(
+                _runtime_host_loader_consumption_diagnostic(
+                    inspection_path,
+                    "unit-missing",
+                    f"Host loader unit is missing: {output_path}.",
+                    target=target,
+                )
+            )
+        else:
+            unit, unit_diagnostics = _runtime_host_loader_consumption_load_unit(
+                inspection_path, unit_path, scaffold
+            )
+            diagnostics.extend(unit_diagnostics)
+
+    failed = any(diagnostic.severity == "error" for diagnostic in diagnostics)
+    required_tools = [
+        tool
+        for tool in _record_sequence(unit.get("requiredTools"))
+        if _is_non_empty_string(tool)
+    ]
+    host_responsibilities = [
+        responsibility
+        for responsibility in _record_sequence(unit.get("hostResponsibilities"))
+        if _is_non_empty_string(responsibility)
+    ]
+    load_steps = [
+        dict(step)
+        for step in _record_sequence(unit.get("loadSteps"))
+        if isinstance(step, Mapping)
+    ]
+    return (
+        {
+            "id": scaffold.get("id"),
+            "target": target,
+            "status": "failed" if failed else "ready",
+            "scaffold": unit.get("scaffold", scaffold.get("id")),
+            "outputPath": output_path,
+            "packagePath": unit.get("packagePath", scaffold.get("packagePath")),
+            "adapterKind": unit.get("adapterKind"),
+            "artifactFormat": unit.get("artifactFormat"),
+            "requiredTools": required_tools,
+            "hostResponsibilities": host_responsibilities,
+            "loadSteps": load_steps,
+            "hostInterface": (
+                dict(unit.get("hostInterface"))
+                if isinstance(unit.get("hostInterface"), Mapping)
+                else None
+            ),
+            "blockers": blockers,
+            "diagnostics": [diagnostic.code for diagnostic in diagnostics],
+        },
+        diagnostics,
+    )
+
+
+def _runtime_host_loader_consumption_actions(
+    unit: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    target = unit.get("target")
+    unit_id = unit.get("id")
+    output_path = unit.get("outputPath")
+    package_path = unit.get("packagePath")
+    actions: list[dict[str, Any]] = []
+    if unit.get("status") == "ready":
+        actions.append(
+            {
+                "kind": "consume-host-loader-unit",
+                "severity": "note",
+                "message": (
+                    f"Consume host loader scaffold {output_path} into the host build "
+                    f"or runtime bootstrap for target {target}."
+                ),
+                "target": target,
+                "loaderUnit": unit_id,
+                "scaffold": unit.get("scaffold"),
+                "packagePath": package_path,
+                "outputPath": output_path,
+                "tools": [],
+            }
+        )
+        for step in _record_sequence(unit.get("loadSteps")):
+            if not isinstance(step, Mapping):
+                continue
+            tools = [
+                tool
+                for tool in _record_sequence(step.get("tools"))
+                if _is_non_empty_string(tool)
+            ]
+            actions.append(
+                {
+                    "kind": step.get("kind") or "run-loader-step",
+                    "severity": "note",
+                    "message": step.get("message") or "Run host loader step.",
+                    "target": target,
+                    "loaderUnit": unit_id,
+                    "scaffold": unit.get("scaffold"),
+                    "packagePath": step.get("packagePath") or package_path,
+                    "outputPath": output_path,
+                    "tools": tools,
+                }
+            )
+        for responsibility in _record_sequence(unit.get("hostResponsibilities")):
+            if not _is_non_empty_string(responsibility):
+                continue
+            actions.append(
+                {
+                    "kind": "satisfy-host-responsibility",
+                    "severity": "note",
+                    "message": (
+                        f"Account for host responsibility before enabling {target}: "
+                        f"{responsibility}."
+                    ),
+                    "target": target,
+                    "loaderUnit": unit_id,
+                    "scaffold": unit.get("scaffold"),
+                    "packagePath": package_path,
+                    "outputPath": output_path,
+                    "tools": [],
+                }
+            )
+        return actions
+
+    blockers = [
+        blocker
+        for blocker in _record_sequence(unit.get("blockers"))
+        if isinstance(blocker, Mapping)
+    ]
+    if not blockers:
+        fallback_kind = (
+            "repair-host-loader-scaffold"
+            if unit.get("status") == "failed"
+            else "resolve-host-loader-unit"
+        )
+        blockers = [
+            {
+                "kind": fallback_kind,
+                "severity": "warning",
+                "message": (
+                    f"Resolve host loader unit readiness for target {target} "
+                    f"before consuming {package_path or '<missing package path>'}."
+                ),
+            }
+        ]
+    for blocker in blockers:
+        actions.append(
+            {
+                "kind": blocker.get("kind") or "resolve-host-loader-unit",
+                "severity": blocker.get("severity") or "warning",
+                "message": blocker.get("message") or "Resolve host loader unit.",
+                "target": target,
+                "loaderUnit": unit_id,
+                "scaffold": unit.get("scaffold"),
+                "packagePath": package_path,
+                "outputPath": output_path,
+                "tools": [],
+            }
+        )
+    return actions
+
+
+def _runtime_host_loader_consumption_target(
+    target_name: str,
+    units: Sequence[Mapping[str, Any]],
+    actions: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    target_units = [unit for unit in units if unit.get("target") == target_name]
+    ready_units = [unit for unit in target_units if unit.get("status") == "ready"]
+    blocked_units = [unit for unit in target_units if unit.get("status") == "blocked"]
+    failed_units = [unit for unit in target_units if unit.get("status") == "failed"]
+    target_actions = [
+        action for action in actions if action.get("target") == target_name
+    ]
+    required_tools = sorted(
+        {
+            tool
+            for unit in target_units
+            for tool in _record_sequence(unit.get("requiredTools"))
+            if _is_non_empty_string(tool)
+        }
+    )
+    host_responsibilities = sorted(
+        {
+            responsibility
+            for unit in target_units
+            for responsibility in _record_sequence(unit.get("hostResponsibilities"))
+            if _is_non_empty_string(responsibility)
+        }
+    )
+    return {
+        "target": target_name,
+        "status": _runtime_host_loader_scaffold_status(
+            len(ready_units),
+            len(blocked_units),
+            failed=bool(failed_units),
+        ),
+        "loaderUnitCount": len(target_units),
+        "readyLoaderUnitCount": len(ready_units),
+        "blockedLoaderUnitCount": len(blocked_units),
+        "failedLoaderUnitCount": len(failed_units),
+        "actionCount": len(target_actions),
+        "requiredTools": required_tools,
+        "hostResponsibilities": host_responsibilities,
+        "packagePaths": [
+            unit.get("packagePath")
+            for unit in target_units
+            if _is_non_empty_string(unit.get("packagePath"))
+        ],
+        "scaffoldFiles": [
+            unit.get("outputPath")
+            for unit in target_units
+            if _is_non_empty_string(unit.get("outputPath"))
+        ],
+    }
+
+
+def plan_runtime_host_loader_consumption(
+    scaffold_manifest_path: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Build a read-only host loader consumption plan from scaffold inspection."""
+
+    manifest_path = _filesystem_path_arg(
+        scaffold_manifest_path,
+        field_name="Host loader scaffold manifest path",
+    )
+    inspection = inspect_runtime_host_loader_scaffolds(manifest_path)
+    diagnostics_payload = [
+        dict(diagnostic)
+        for diagnostic in _record_sequence(inspection.get("diagnostics"))
+        if isinstance(diagnostic, Mapping)
+    ]
+    scaffold_root_value = inspection.get("scaffoldRoot")
+    scaffold_root = (
+        Path(scaffold_root_value)
+        if _is_non_empty_string(scaffold_root_value)
+        else manifest_path.parent
+    )
+    units: list[dict[str, Any]] = []
+    unit_diagnostics: list[ProjectDiagnostic] = []
+    if inspection.get("success") is True:
+        for scaffold in _record_sequence(inspection.get("scaffolds")):
+            if not isinstance(scaffold, Mapping):
+                continue
+            unit, current_diagnostics = _runtime_host_loader_consumption_unit(
+                manifest_path, scaffold_root, scaffold
+            )
+            units.append(unit)
+            unit_diagnostics.extend(current_diagnostics)
+    diagnostics_payload.extend(diagnostic.to_json() for diagnostic in unit_diagnostics)
+
+    actions: list[dict[str, Any]] = []
+    for unit in units:
+        actions.extend(_runtime_host_loader_consumption_actions(unit))
+
+    ready_count = sum(1 for unit in units if unit.get("status") == "ready")
+    blocked_count = sum(1 for unit in units if unit.get("status") == "blocked")
+    failed_count = sum(1 for unit in units if unit.get("status") == "failed")
+    target_names = sorted(
+        {
+            unit.get("target")
+            for unit in units
+            if _is_non_empty_string(unit.get("target"))
+        }
+    )
+    failed = any(
+        diagnostic.get("severity") == "error" for diagnostic in diagnostics_payload
+    )
+    required_tools = sorted(
+        {
+            tool
+            for unit in units
+            for tool in _record_sequence(unit.get("requiredTools"))
+            if _is_non_empty_string(tool)
+        }
+    )
+    host_responsibilities = sorted(
+        {
+            responsibility
+            for unit in units
+            for responsibility in _record_sequence(unit.get("hostResponsibilities"))
+            if _is_non_empty_string(responsibility)
+        }
+    )
+    load_step_count = sum(
+        len(_record_sequence(unit.get("loadSteps"))) for unit in units
+    )
+    summary = {
+        "targetCount": len(target_names),
+        "loaderUnitCount": len(units),
+        "readyLoaderUnitCount": ready_count,
+        "blockedLoaderUnitCount": blocked_count,
+        "failedLoaderUnitCount": failed_count,
+        "actionCount": len(actions),
+        "requiredToolCount": len(required_tools),
+        "hostResponsibilityCount": len(host_responsibilities),
+        "loadStepCount": load_step_count,
+    }
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_KIND,
+        "sourceScaffoldManifest": str(manifest_path),
+        "sourceScaffoldManifestHash": _optional_source_hash(manifest_path),
+        "generatedAt": int(time.time()),
+        "success": not failed,
+        "status": (
+            _runtime_host_loader_scaffold_status(
+                ready_count,
+                blocked_count,
+                failed=bool(failed_count),
+            )
+            if not failed
+            else "failed"
+        ),
+        "scope": RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_SCOPE,
+        "nonGoals": list(RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_NON_GOALS),
+        "scaffoldRoot": str(scaffold_root),
+        "project": (
+            dict(inspection.get("project"))
+            if isinstance(inspection.get("project"), Mapping)
+            else {"targets": []}
+        ),
+        "summary": summary,
+        "targets": [
+            _runtime_host_loader_consumption_target(target_name, units, actions)
+            for target_name in target_names
+        ],
+        "loaderUnits": units,
+        "actions": actions,
+        "scaffoldInspection": {
+            "kind": inspection.get("kind"),
+            "success": inspection.get("success"),
+            "status": inspection.get("status"),
+            "readyScaffoldCount": (
+                inspection.get("summary", {}).get("readyScaffoldCount", 0)
+                if isinstance(inspection.get("summary"), Mapping)
+                else 0
+            ),
+            "blockedScaffoldCount": (
+                inspection.get("summary", {}).get("blockedScaffoldCount", 0)
+                if isinstance(inspection.get("summary"), Mapping)
+                else 0
+            ),
+            "failedScaffoldCount": (
+                inspection.get("summary", {}).get("failedScaffoldCount", 0)
+                if isinstance(inspection.get("summary"), Mapping)
+                else 0
+            ),
+        },
+        "diagnosticCounts": _diagnostic_payload_counts(diagnostics_payload),
+        "diagnostics": diagnostics_payload,
     }
 
 

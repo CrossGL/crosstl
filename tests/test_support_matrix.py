@@ -1062,6 +1062,64 @@ def test_project_runtime_host_loader_scaffold_inspection_is_first_class_support_
         ) in backend_support["evidence"]
 
 
+def test_project_runtime_host_loader_consumption_plan_is_first_class_support_feature():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.runtime_host_loader_consumption_plan"]
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Runtime host loader consumption plan"
+    assert set(feature["support"]) == {backend["id"] for backend in matrix["backends"]}
+    for backend_support in feature["support"].values():
+        assert backend_support["status"] == "supported"
+        assert "crosstl-runtime-host-loader-consumption-plan" in (
+            backend_support["notes"]
+        )
+        assert "plan-host-loader-consumption" in backend_support["notes"]
+        assert "host loader scaffold manifest" in backend_support["notes"]
+        assert "runs scaffold inspection before consumption planning" in (
+            backend_support["notes"]
+        )
+        assert "reads ready target-scoped host loader unit JSON files" in (
+            backend_support["notes"]
+        )
+        assert "promotes loadSteps into actionable consumption records" in (
+            backend_support["notes"]
+        )
+        assert "requiredTools" in backend_support["notes"]
+        assert "hostResponsibilities" in backend_support["notes"]
+        assert "resolve-loader-scaffold-blockers" in backend_support["notes"]
+        assert "failed scaffold inspection diagnostics" in backend_support["notes"]
+        assert "keeps planning read-only" in backend_support["notes"]
+        assert "does not rewrite host application code" in backend_support["notes"]
+        assert "execute device code" in backend_support["notes"]
+        assert "install target SDKs" in backend_support["notes"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_plan_runtime_host_loader_consumption_reports_ready_units"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_plan_runtime_host_loader_consumption_carries_blocked_units"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_plan_runtime_host_loader_consumption_rejects_failed_inspection"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_plan_host_loader_consumption_text_outputs_actions"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_plan_host_loader_consumption_json_writes_output"
+        ) in backend_support["evidence"]
+
+
 def test_project_include_resolution_documents_status_reporting():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(

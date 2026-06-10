@@ -3333,6 +3333,47 @@
     },
     {
       "category": "project",
+      "description": "Plan read-only consumption of inspected host loader scaffold bundles by host build and runtime integration tooling.",
+      "id": "project.runtime_host_loader_consumption_plan",
+      "name": "Runtime host loader consumption plan",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_loader_consumption_reports_ready_units",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_loader_consumption_carries_blocked_units",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_loader_consumption_rejects_failed_inspection",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_loader_consumption_text_outputs_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_loader_consumption_json_writes_output"
+          ],
+          "notes": "plan-host-loader-consumption builds crosstl-runtime-host-loader-consumption-plan JSON, text, and SARIF output from a host loader scaffold manifest, runs scaffold inspection before consumption planning, reads ready target-scoped host loader unit JSON files, promotes loadSteps into actionable consumption records, carries requiredTools and hostResponsibilities into the plan, reports blocked scaffold records as resolve-loader-scaffold-blockers actions, reports failed scaffold inspection diagnostics without reading unsafe unit files, and keeps planning read-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_loader_consumption_reports_ready_units",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_loader_consumption_carries_blocked_units",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_loader_consumption_rejects_failed_inspection",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_loader_consumption_text_outputs_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_loader_consumption_json_writes_output"
+          ],
+          "notes": "plan-host-loader-consumption builds crosstl-runtime-host-loader-consumption-plan JSON, text, and SARIF output from a host loader scaffold manifest, runs scaffold inspection before consumption planning, reads ready target-scoped host loader unit JSON files, promotes loadSteps into actionable consumption records, carries requiredTools and hostResponsibilities into the plan, reports blocked scaffold records as resolve-loader-scaffold-blockers actions, reports failed scaffold inspection diagnostics without reading unsafe unit files, and keeps planning read-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_loader_consumption_reports_ready_units",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_loader_consumption_carries_blocked_units",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_loader_consumption_rejects_failed_inspection",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_loader_consumption_text_outputs_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_loader_consumption_json_writes_output"
+          ],
+          "notes": "plan-host-loader-consumption builds crosstl-runtime-host-loader-consumption-plan JSON, text, and SARIF output from a host loader scaffold manifest, runs scaffold inspection before consumption planning, reads ready target-scoped host loader unit JSON files, promotes loadSteps into actionable consumption records, carries requiredTools and hostResponsibilities into the plan, reports blocked scaffold records as resolve-loader-scaffold-blockers actions, reports failed scaffold inspection diagnostics without reading unsafe unit files, and keeps planning read-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Inspect existing project portability reports as concise JSON, text, or SARIF summaries for triage and migration planning.",
       "id": "project.report_inspection",
       "name": "Project report inspection",
@@ -4184,12 +4225,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 63,
+    "feature_count": 64,
     "status_counts": {
       "directx": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 58,
+        "supported": 59,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -4197,7 +4238,7 @@
       "metal": {
         "diagnostic": 3,
         "partial": 3,
-        "supported": 57,
+        "supported": 58,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -4205,7 +4246,7 @@
       "opengl": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 58,
+        "supported": 59,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

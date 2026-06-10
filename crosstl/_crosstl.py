@@ -1719,6 +1719,138 @@ def _run_inspect_host_loader_scaffolds(args):
     return 0 if payload["success"] else 1
 
 
+def _format_runtime_host_loader_consumption_plan(payload):
+    lines = [
+        f"Runtime host loader consumption plan: {payload.get('sourceScaffoldManifest')}"
+    ]
+    for header_line in (
+        _format_payload_schema_version(payload, "Consumption plan schema version"),
+        _format_payload_kind(payload, "Consumption plan kind"),
+        _format_payload_generated_at(payload, "Consumption plan generated at"),
+        _format_payload_hash(
+            payload, "sourceScaffoldManifestHash", "Source scaffold manifest hash"
+        ),
+    ):
+        if header_line:
+            lines.append(header_line)
+    lines.append(f"Status: {payload.get('status', 'failed')}")
+    scaffold_root = payload.get("scaffoldRoot")
+    if isinstance(scaffold_root, str) and scaffold_root:
+        lines.append(f"Scaffold root: {scaffold_root}")
+    scope = payload.get("scope")
+    if isinstance(scope, str) and scope:
+        lines.append(f"Consumption scope: {scope}")
+    non_goals = payload.get("nonGoals")
+    if isinstance(non_goals, list):
+        non_goal_labels = [
+            non_goal for non_goal in non_goals if isinstance(non_goal, str) and non_goal
+        ]
+        if non_goal_labels:
+            lines.append(f"Consumption non-goals: {', '.join(non_goal_labels)}")
+
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        lines.append(
+            "Summary: "
+            f"{summary.get('targetCount', 0)} targets, "
+            f"{summary.get('loaderUnitCount', 0)} loader units, "
+            f"{summary.get('readyLoaderUnitCount', 0)} ready, "
+            f"{summary.get('blockedLoaderUnitCount', 0)} blocked, "
+            f"{summary.get('failedLoaderUnitCount', 0)} failed, "
+            f"{summary.get('actionCount', 0)} actions"
+        )
+
+    targets = payload.get("targets", [])
+    if targets:
+        lines.append("Runtime host loader consumption targets:")
+        for target in targets:
+            if not isinstance(target, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"{target.get('target', 'unknown')}: "
+                f"{target.get('status', 'unknown')}, "
+                f"{target.get('readyLoaderUnitCount', 0)} ready, "
+                f"{target.get('blockedLoaderUnitCount', 0)} blocked, "
+                f"{target.get('failedLoaderUnitCount', 0)} failed"
+            )
+
+    loader_units = payload.get("loaderUnits", [])
+    if loader_units:
+        lines.append("Runtime host loader units:")
+        for unit in loader_units:
+            if not isinstance(unit, Mapping):
+                continue
+            details = [f"status: {unit.get('status', 'unknown')}"]
+            blockers = unit.get("blockers")
+            if isinstance(blockers, list) and blockers:
+                details.append(f"blockers: {len(blockers)}")
+            load_steps = unit.get("loadSteps")
+            if isinstance(load_steps, list) and load_steps:
+                details.append(f"load steps: {len(load_steps)}")
+            tools = unit.get("requiredTools")
+            if isinstance(tools, list) and tools:
+                details.append(f"tools: {', '.join(str(tool) for tool in tools)}")
+            lines.append(
+                "- "
+                f"{unit.get('target', 'unknown')}: "
+                f"{unit.get('packagePath') or '<missing package path>'} "
+                f"[{'; '.join(details)}]"
+            )
+
+    actions = payload.get("actions", [])
+    if actions:
+        lines.append("Runtime host loader consumption actions:")
+        for action in actions:
+            if not isinstance(action, Mapping):
+                continue
+            details = []
+            severity = action.get("severity")
+            if isinstance(severity, str) and severity:
+                details.append(f"severity: {severity}")
+            target = action.get("target")
+            if isinstance(target, str) and target:
+                details.append(f"target: {target}")
+            loader_unit = action.get("loaderUnit")
+            if isinstance(loader_unit, str) and loader_unit:
+                details.append(f"unit: {loader_unit}")
+            suffix = f" [{'; '.join(details)}]" if details else ""
+            lines.append(
+                "- "
+                f"{action.get('kind', 'unknown')}{suffix}: "
+                f"{action.get('message', '')}"
+            )
+
+    diagnostics = payload.get("diagnostics", [])
+    if diagnostics:
+        lines.append("Diagnostics:")
+        for diagnostic in diagnostics:
+            if isinstance(diagnostic, Mapping):
+                lines.append(_format_project_diagnostic_line(diagnostic))
+    return "\n".join(lines) + "\n"
+
+
+def _run_plan_host_loader_consumption(args):
+    from .project import plan_runtime_host_loader_consumption
+
+    payload = plan_runtime_host_loader_consumption(args.scaffold_manifest)
+    if args.format == "sarif":
+        _write_json_payload(
+            _format_project_diagnostics_sarif(
+                payload, tool_name="CrossTL runtime host loader consumption planning"
+            ),
+            args.output,
+        )
+    elif args.format == "text":
+        _write_text_payload(
+            _format_runtime_host_loader_consumption_plan(payload),
+            args.output,
+        )
+    else:
+        _write_json_payload(payload, args.output)
+    return 0 if payload["success"] else 1
+
+
 def _format_count_rollup(label, counts, *, include_zero=True):
     if not isinstance(counts, Mapping):
         return None
@@ -5409,6 +5541,26 @@ def _build_parser():
     )
     host_loader_inspection_parser.set_defaults(func=_run_inspect_host_loader_scaffolds)
 
+    host_loader_consumption_parser = subparsers.add_parser(
+        "plan-host-loader-consumption",
+        help="Build a read-only host loader consumption plan from scaffold metadata",
+    )
+    host_loader_consumption_parser.add_argument(
+        "scaffold_manifest", help="Host loader scaffold manifest JSON"
+    )
+    host_loader_consumption_parser.add_argument(
+        "--format",
+        choices=("json", "text", "sarif"),
+        default="json",
+        help="Host loader consumption plan output format",
+    )
+    host_loader_consumption_parser.add_argument(
+        "--output",
+        "-o",
+        help="Write host loader consumption plan; use '-' for stdout",
+    )
+    host_loader_consumption_parser.set_defaults(func=_run_plan_host_loader_consumption)
+
     report_parser = subparsers.add_parser(
         "report", help="Emit a scan-only project portability report"
     )
@@ -5444,6 +5596,7 @@ def _use_legacy_cli(argv):
         "runtime-loader-manifest",
         "scaffold-host-loaders",
         "inspect-host-loader-scaffolds",
+        "plan-host-loader-consumption",
         "report",
     }
     if not argv or argv[0] in {"-h", "--help"}:
