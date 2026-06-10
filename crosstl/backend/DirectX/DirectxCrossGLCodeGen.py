@@ -3197,7 +3197,13 @@ class HLSLToCrossGLConverter:
                     stage_entry=(
                         entry_name is None
                         and func.name != "main"
-                        and stage_name != "fragment"
+                        and (
+                            stage_name != "fragment"
+                            or (
+                                stage_name == "fragment"
+                                and str(func.name).lower().startswith("ps")
+                            )
+                        )
                     ),
                 )
                 code += "    }\n\n"

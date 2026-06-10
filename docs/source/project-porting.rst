@@ -434,12 +434,36 @@ packaged artifact frontend is available, and ``wire-runtime-adapter`` actions
 for host loader or build-system tooling. When host interface metadata is
 unavailable or not ready, the plan emits ``resolve-host-interface-metadata``
 actions so host and build tooling can provide reflection or backend-specific
-binding metadata before wiring the adapter. It also carries through package
-inspection diagnostics and
+binding metadata before wiring the adapter. Source targets with registered
+frontends can contribute parser-derived interface summaries; formats that need
+compiled reflection, such as SPIR-V handoff artifacts without reflected entry
+point/resource data, remain explicit follow-up actions. The plan also carries
+through package inspection diagnostics and
 ``review-runtime-references`` actions when the source repository contained
 runtime API references. The plan is a target-scoped integration contract; it
 does not rewrite host application code, execute device code, generate runtime
 framework code, or install target SDKs.
+
+Build a runtime loader manifest from a runtime package manifest:
+
+.. code-block:: bash
+
+   python -m crosstl runtime-loader-manifest \
+     crosstl-runtime-package/runtime-package.json \
+     --format text
+
+Runtime loader manifests emit a ``crosstl-runtime-loader-manifest`` JSON
+document derived from runtime adapter planning. The manifest groups per-target
+load units with package-relative artifact paths, adapter kind, artifact format,
+source-remap handoff paths, parser-derived ``hostInterface`` metadata when
+available, required target tools, host responsibilities, ordered loader steps,
+and blockers that must be resolved before a host loader or build-system adapter
+can consume the artifact safely. Unavailable interface reflection remains an
+explicit ``resolve-host-interface-metadata`` blocker instead of being hidden or
+treated as generated host code. The manifest carries package inspection
+diagnostics and runtime-reference review actions forward, and it remains a
+metadata contract only: it does not rewrite host application code, execute
+device code, generate runtime framework code, or install target SDKs.
 
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a

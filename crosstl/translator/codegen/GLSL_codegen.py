@@ -962,7 +962,9 @@ class GLSLCodeGen:
             "sv_instanceid": "gl_InstanceID",
             "gl_IsFrontFace": "gl_FrontFacing",
             "gl_PrimitiveID": "gl_PrimitiveID",
+            "Position": "layout(location = 0)",
             "POSITION": "layout(location = 0)",
+            "Color": "layout(location = 13)",
             "COLOR": "layout(location = 13)",
             "COLOR0": "layout(location = 13)",
             "COLOR1": "layout(location = 14)",
@@ -972,17 +974,29 @@ class GLSLCodeGen:
             "COLOR5": "layout(location = 18)",
             "COLOR6": "layout(location = 19)",
             "COLOR7": "layout(location = 20)",
+            "Normal": "layout(location = 1)",
             "NORMAL": "layout(location = 1)",
+            "Tangent": "layout(location = 2)",
             "TANGENT": "layout(location = 2)",
+            "Binormal": "layout(location = 3)",
             "BINORMAL": "layout(location = 3)",
+            "TexCoord": "layout(location = 4)",
             "TEXCOORD": "layout(location = 4)",
+            "TexCoord0": "layout(location = 5)",
             "TEXCOORD0": "layout(location = 5)",
+            "TexCoord1": "layout(location = 6)",
             "TEXCOORD1": "layout(location = 6)",
+            "TexCoord2": "layout(location = 7)",
             "TEXCOORD2": "layout(location = 7)",
+            "TexCoord3": "layout(location = 8)",
             "TEXCOORD3": "layout(location = 8)",
+            "TexCoord4": "layout(location = 9)",
             "TEXCOORD4": "layout(location = 9)",
+            "TexCoord5": "layout(location = 10)",
             "TEXCOORD5": "layout(location = 10)",
+            "TexCoord6": "layout(location = 11)",
             "TEXCOORD6": "layout(location = 11)",
+            "TexCoord7": "layout(location = 12)",
             "TEXCOORD7": "layout(location = 12)",
             # Vertex outputs
             "gl_Position": "gl_Position",
@@ -16532,6 +16546,8 @@ class GLSLCodeGen:
     def map_stage_input_semantic(self, semantic, stage_name=None):
         mapped = self.map_semantic(semantic)
         if normalize_stage_name(stage_name) == "fragment":
+            if mapped == "gl_Position":
+                return "gl_FragCoord"
             semantic_text = str(semantic).lower() if semantic is not None else ""
             if semantic_text in {
                 "sv_coverage",

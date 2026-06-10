@@ -901,6 +901,52 @@ def test_project_runtime_adapter_plan_is_first_class_support_feature():
         ) in backend_support["evidence"]
 
 
+def test_project_runtime_loader_manifest_is_first_class_support_feature():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.runtime_loader_manifest"]
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Runtime loader manifest"
+    assert set(feature["support"]) == {backend["id"] for backend in matrix["backends"]}
+    for backend_support in feature["support"].values():
+        assert backend_support["status"] == "supported"
+        assert "crosstl-runtime-loader-manifest" in backend_support["notes"]
+        assert "runtime package manifest" in backend_support["notes"]
+        assert "load units" in backend_support["notes"]
+        assert "adapterKind" in backend_support["notes"]
+        assert "artifactFormat" in backend_support["notes"]
+        assert "source-remap handoff paths" in backend_support["notes"]
+        assert "hostInterface" in backend_support["notes"]
+        assert "requiredTools" in backend_support["notes"]
+        assert "hostResponsibilities" in backend_support["notes"]
+        assert "loadSteps" in backend_support["notes"]
+        assert "resolve-host-interface-metadata" in backend_support["notes"]
+        assert "does not rewrite host application code" in backend_support["notes"]
+        assert "execute device code" in backend_support["notes"]
+        assert "install target SDKs" in backend_support["notes"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_build_runtime_loader_manifest_from_runtime_package"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_runtime_loader_manifest_reports_blocked_host_interface_metadata"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_runtime_loader_manifest_text_outputs_load_units"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_runtime_loader_manifest_json_writes_output"
+        ) in backend_support["evidence"]
+
+
 def test_project_include_resolution_documents_status_reporting():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(

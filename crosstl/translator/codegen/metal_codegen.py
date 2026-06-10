@@ -1083,18 +1083,31 @@ class MetalCodeGen:
             "SV_PrimitiveId": "primitive_id",
             "sv_primitive_id": "primitive_id",
             "sv_primitiveid": "primitive_id",
+            "Position": "attribute(0)",
             "POSITION": "attribute(0)",
+            "Normal": "attribute(1)",
             "NORMAL": "attribute(1)",
+            "Tangent": "attribute(2)",
             "TANGENT": "attribute(2)",
+            "Binormal": "attribute(3)",
             "BINORMAL": "attribute(3)",
+            "TexCoord": "attribute(4)",
             "TEXCOORD": "attribute(4)",
+            "TexCoord0": "attribute(5)",
             "TEXCOORD0": "attribute(5)",
+            "TexCoord1": "attribute(6)",
             "TEXCOORD1": "attribute(6)",
+            "TexCoord2": "attribute(7)",
             "TEXCOORD2": "attribute(7)",
+            "TexCoord3": "attribute(8)",
             "TEXCOORD3": "attribute(8)",
+            "TexCoord4": "attribute(9)",
             "TEXCOORD4": "attribute(9)",
+            "TexCoord5": "attribute(10)",
             "TEXCOORD5": "attribute(10)",
+            "TexCoord6": "attribute(11)",
             "TEXCOORD6": "attribute(11)",
+            "TexCoord7": "attribute(12)",
             "TEXCOORD7": "attribute(12)",
             # Vertex outputs
             "gl_Position": "position",
@@ -3309,8 +3322,8 @@ class MetalCodeGen:
         texture_parameter_raw_types = {}
         texture_parameter_array_sizes = {}
         image_format_parameters = {}
-        stage_builtin_parameter_alias_declarations = []
         vertex_stage_input_parameters = []
+        stage_builtin_parameter_alias_declarations = []
         vertex_stage_input_alias_declarations = []
         stage_output_parameters = []
         stage_output_struct_name = None
@@ -3595,6 +3608,17 @@ class MetalCodeGen:
             declaration = self.format_parameter_declaration(
                 raw_param_type, param_type, p.name, p, shader_type
             )
+            if self.should_wrap_metal_vertex_stage_input_parameter(
+                raw_param_type, shader_type, p
+            ):
+                vertex_stage_input_parameters.append(
+                    {
+                        "name": p.name,
+                        "declaration": declaration,
+                        "attribute": param_attr,
+                    }
+                )
+                continue
             params.append(f"{declaration}{param_attr}")
             if self.structured_buffer_parameter_requires_length(
                 self.current_function_name, p.name
@@ -4798,10 +4822,13 @@ class MetalCodeGen:
     ):
         code = f"struct {struct_name} {{\n"
         for attribute_index, parameter in enumerate(parameters):
-            field_decl = format_c_style_array_declaration(
-                parameter["mapped_type"], parameter["name"]
-            )
-            code += f"    {field_decl} [[attribute({attribute_index})]];\n"
+            if "declaration" in parameter:
+                code += f"    {parameter['declaration']}{parameter['attribute']};\n"
+            else:
+                field_decl = format_c_style_array_declaration(
+                    parameter["mapped_type"], parameter["name"]
+                )
+                code += f"    {field_decl} [[attribute({attribute_index})]];\n"
         code += "};\n\n"
         return code
 
@@ -4810,9 +4837,11 @@ class MetalCodeGen:
     ):
         declarations = []
         for parameter in parameters:
-            declaration = format_c_style_array_declaration(
-                parameter["mapped_type"], parameter["name"]
-            )
+            declaration = parameter.get("declaration")
+            if declaration is None:
+                declaration = format_c_style_array_declaration(
+                    parameter["mapped_type"], parameter["name"]
+                )
             declarations.append(
                 f"{declaration} = {input_parameter_name}.{parameter['name']};"
             )
@@ -15422,6 +15451,23 @@ class MetalCodeGen:
         if not params_str:
             return declaration
         return f"{params_str}, {declaration}"
+
+    def should_wrap_metal_vertex_stage_input_parameter(
+        self, raw_param_type, shader_type, parameter
+    ):
+        if shader_type != "vertex":
+            return False
+        if self.is_resource_parameter_type(raw_param_type):
+            return False
+        if self.is_sampler_type(raw_param_type):
+            return False
+        if self.type_name_string(raw_param_type) in self.structs_by_name:
+            return False
+        if self.is_metal_ray_stage(shader_type):
+            return False
+        if self.is_graphics_stage_output_parameter(parameter, shader_type):
+            return False
+        return True
 
     def all_functions(self, ast):
         functions = list(getattr(ast, "functions", []) or [])

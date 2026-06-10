@@ -20,6 +20,7 @@ from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.project import (
     build_runtime_artifact_manifest,
+    build_runtime_loader_manifest,
     build_runtime_package,
     inspect_project_report,
     inspect_runtime_package,
@@ -61,6 +62,59 @@ def assert_spirv_asm_validates_if_available(spv_code, tmp_path):
         check=False,
     )
     assert validate.returncode == 0, validate.stderr
+
+
+def assert_metal_validates_if_available(metal_code, tmp_path):
+    xcrun = shutil.which("xcrun")
+    if not xcrun:
+        return
+
+    probe = subprocess.run(
+        [xcrun, "-sdk", "macosx", "-f", "metal"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if probe.returncode != 0:
+        return
+
+    shader_path = tmp_path / "shader.metal"
+    output_path = tmp_path / "shader.air"
+    shader_path.write_text(metal_code, encoding="utf-8")
+
+    compile_result = subprocess.run(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compile_result.returncode == 0, compile_result.stderr
+
+
+def assert_guarded_glsl_validates_if_available(glsl_code, tmp_path):
+    glslang = shutil.which("glslangValidator")
+    if not glslang:
+        return
+
+    shader_path = tmp_path / "shader.glsl"
+    shader_path.write_text(glsl_code, encoding="utf-8")
+    for stage in ("vert", "frag"):
+        result = subprocess.run(
+            [glslang, "-S", stage, str(shader_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 SIMPLE_CROSSL = textwrap.dedent("""
@@ -137,6 +191,7 @@ def test_project_package_exposes_public_api_surface():
         "ProjectScan",
         "ProjectTranslationUnit",
         "build_runtime_artifact_manifest",
+        "build_runtime_loader_manifest",
         "build_runtime_package",
         "inspect_runtime_package",
         "inspect_project_report",
@@ -367,6 +422,44 @@ def test_translate_project_accepts_path_like_output_dir(tmp_path):
     assert payload["project"]["outputDir"] == str((repo / "translated").resolve())
     assert payload["summary"]["translatedCount"] == 1
     assert (repo / "translated" / "cgl" / "simple.cgl").exists()
+
+
+@pytest.mark.parametrize("target_backend", ("opengl", "metal"))
+def test_translate_project_lowers_slang_default_parameter_calls(
+    tmp_path, target_backend
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "default-parameter.slang").write_text(
+        textwrap.dedent("""
+        RWStructuredBuffer<int> result;
+
+        int helper(int val, int a = 16)
+        {
+            return val + a;
+        }
+
+        [shader("compute")]
+        [numthreads(1,1,1)]
+        void computeMain(uint3 threadId : SV_DispatchThreadID)
+        {
+            int val = int(threadId.x);
+            result[threadId.x] = helper(val);
+            result[threadId.x + 1] = helper(val, 4);
+        }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=[target_backend], output_dir="translated")
+    payload = report.to_json()
+    artifact_path = repo / payload["artifacts"][0]["path"]
+    generated = artifact_path.read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert "helper(val, 16)" in generated
+    assert "helper(val);" not in generated
+    assert "int helper(int val, int a = 16)" not in generated
 
 
 def test_project_apis_accept_single_target_strings(tmp_path):
@@ -4359,6 +4452,112 @@ def test_translate_project_honors_source_backend_overrides(tmp_path):
     assert payload["units"][0]["sourceOverride"] == "cgl"
     assert payload["artifacts"][0]["sourceBackend"] == "cgl"
     assert payload["artifacts"][0]["path"] == "translated/opengl/gpu/kernel.glsl"
+
+
+def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "hello_texture.hlsl").write_text(
+        textwrap.dedent("""
+            struct PSInput
+            {
+                float4 position : SV_POSITION;
+                float2 uv : TEXCOORD;
+            };
+
+            Texture2D g_texture : register(t0);
+            SamplerState g_sampler : register(s0);
+
+            PSInput VSMain(float4 position : POSITION, float2 uv : TEXCOORD)
+            {
+                PSInput result;
+                result.position = position;
+                result.uv = uv;
+                return result;
+            }
+
+            float4 PSMain(PSInput input) : SV_TARGET
+            {
+                return g_texture.Sample(g_sampler, input.uv);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu"]
+            include = ["gpu/*.hlsl"]
+            targets = ["cgl", "opengl", "metal", "directx", "vulkan"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    cgl = (repo / "translated" / "cgl" / "gpu" / "hello_texture.cgl").read_text(
+        encoding="utf-8"
+    )
+    opengl = (repo / "translated" / "opengl" / "gpu" / "hello_texture.glsl").read_text(
+        encoding="utf-8"
+    )
+    metal = (repo / "translated" / "metal" / "gpu" / "hello_texture.metal").read_text(
+        encoding="utf-8"
+    )
+    directx = (
+        repo / "translated" / "directx" / "gpu" / "hello_texture.hlsl"
+    ).read_text(encoding="utf-8")
+    vulkan = (
+        repo / "translated" / "vulkan" / "gpu" / "hello_texture.spvasm"
+    ).read_text(encoding="utf-8")
+
+    assert payload["summary"]["unitCount"] == 1
+    assert payload["summary"]["translatedCount"] == 5
+    assert payload["summary"]["failedCount"] == 0
+    assert len(payload["artifacts"]) == 5
+
+    assert "PSInput VSMain(vec4 position @ Position, vec2 uv @ TexCoord)" in cgl
+    assert "vec4 PSMain(PSInput input) @ gl_FragColor @ stage_entry" in cgl
+    assert "return texture(g_texture, g_sampler, input.uv);" in cgl
+
+    assert "struct VSMain_Input" in metal
+    assert "float4 position [[attribute(0)]];" in metal
+    assert "float2 uv [[attribute(4)]];" in metal
+    assert "VSMain_Input _crossglInput [[stage_in]]" in metal
+    assert "float4 position = _crossglInput.position;" in metal
+    assert "float2 uv = _crossglInput.uv;" in metal
+    assert "fragment float4 PSMain(PSInput input [[stage_in]]" in metal
+    assert "g_texture.sample(g_sampler, input.uv)" in metal
+    assert "[[Position]]" not in metal
+    assert "[[TexCoord]]" not in metal
+    assert "fragment void fragment_main" not in metal
+
+    assert "layout(location = 4) out vec2 out_uv;" in opengl
+    assert "layout(location = 4) in vec2 in_out_uv;" in opengl
+    assert "layout(location = 0) out vec4 fragColor;" in opengl
+    assert "fragColor = texture(g_texture, in_out_uv);" in opengl
+    assert "vec4 PSMain(PSInput input)" not in opengl
+    assert "void main() {\n}" not in opengl
+    assert "PSInput" not in opengl
+
+    assert "float4 PSMain(PSInput input): SV_TARGET" in directx
+    assert "g_texture.Sample(g_sampler, input.uv)" in directx
+    assert "void PSMain_2()" not in directx
+
+    assert "OpEntryPoint Fragment" in vulkan
+    assert '"PSMain"' in vulkan
+    assert "BuiltIn FragCoord" in vulkan
+    assert "OpImageSampleImplicitLod" in vulkan
+    assert "WARNING: SPIR-V builtin gl_Position" not in vulkan
+
+    assert_metal_validates_if_available(metal, tmp_path)
+    assert_guarded_glsl_validates_if_available(opengl, tmp_path)
+    assert_spirv_asm_validates_if_available(vulkan, tmp_path)
 
 
 def test_translate_project_preserves_anonymous_glsl_ssbo_shape_for_targets(tmp_path):
@@ -10327,6 +10526,90 @@ def test_opengl_toolchain_smoke_command_selects_glslang_stage(tmp_path):
     assert project_pipeline._toolchain_smoke_command(
         "opengl", ["glslangValidator"], vertex_shader
     ) == (["glslangValidator", "--stdin", "-S", "vert"], "artifact")
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl", ["glslangValidator"], fragment_shader
+    ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
+
+
+def test_opengl_toolchain_smoke_command_uses_generated_stage_comment(tmp_path):
+    vertex_shader = tmp_path / "generated.glsl"
+    vertex_shader.write_text(
+        "\n".join(
+            [
+                "#version 450 core",
+                "layout(location = 0) in vec3 position;",
+                "out vec3 out_position;",
+                "// Vertex Shader",
+                "void main() {",
+                "  out_position = position;",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl",
+        ["glslangValidator"],
+        vertex_shader,
+        artifact={"source": "AAPLMeshRenderer.metal", "sourceBackend": "metal"},
+    ) == (["glslangValidator", "--stdin", "-S", "vert"], "artifact")
+
+    guarded_shader = tmp_path / "guarded.glsl"
+    guarded_shader.write_text(
+        "\n".join(
+            [
+                "#version 450 core",
+                "#ifdef GL_FRAGMENT_SHADER",
+                "out vec4 fragColor;",
+                "void main() {",
+                "  fragColor = vec4(1.0);",
+                "}",
+                "#endif",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl", ["glslangValidator"], guarded_shader
+    ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
+
+
+def test_opengl_toolchain_smoke_command_uses_global_stage_io_direction(tmp_path):
+    vertex_shader = tmp_path / "stage_io.glsl"
+    vertex_shader.write_text(
+        "\n".join(
+            [
+                "#version 450 core",
+                "layout(location = 0) in vec3 position;",
+                "out vec3 out_position;",
+                "void main() {",
+                "  out_position = position;",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl", ["glslangValidator"], vertex_shader
+    ) == (["glslangValidator", "--stdin", "-S", "vert"], "artifact")
+
+    fragment_shader = tmp_path / "fragment_output_only.glsl"
+    fragment_shader.write_text(
+        "\n".join(
+            [
+                "#version 450 core",
+                "out vec4 fragColor;",
+                "void main() {",
+                "  fragColor = vec4(1.0);",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
     assert project_pipeline._toolchain_smoke_command(
         "opengl", ["glslangValidator"], fragment_shader
     ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
@@ -23818,6 +24101,123 @@ def test_inspect_runtime_package_reports_host_interface_resources(tmp_path):
     assert host_interface["diagnostics"] == []
 
 
+def test_inspect_runtime_package_uses_registered_target_parser_for_host_interface(
+    tmp_path,
+):
+    source = textwrap.dedent("""
+        shader ResourceShader {
+            layout(set = 1, binding = 2) uniform sampler2D sourceTexture;
+
+            cbuffer Camera {
+                mat4 viewProj;
+            }
+
+            fragment {
+                vec4 main() {
+                    return vec4(1.0);
+                }
+            }
+        }
+        """).strip()
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path,
+        source=source,
+        source_name="resource.cgl",
+        targets=("opengl",),
+    )
+
+    payload = inspect_runtime_package(package_dir / "runtime-package.json")
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["source"] == "package-artifact"
+    assert host_interface["parser"] == "opengl"
+    assert host_interface["entryPointCount"] == 1
+    assert host_interface["entryPoints"] == [
+        {
+            "name": "main",
+            "stage": "fragment",
+            "executionConfig": {},
+        }
+    ]
+    assert host_interface["resourceCount"] == 2
+    assert host_interface["resources"] == [
+        {
+            "name": "Camera",
+            "kind": "constant-buffer",
+            "type": "Camera",
+            "set": None,
+            "binding": 0,
+            "access": "read",
+        },
+        {
+            "name": "sourceTexture",
+            "kind": "texture",
+            "type": "sampler2D",
+            "set": None,
+            "binding": 1026,
+            "access": None,
+        },
+    ]
+    assert host_interface["diagnostics"] == []
+
+
+def test_inspect_runtime_package_reports_entry_point_parameter_resources(tmp_path):
+    source = textwrap.dedent("""
+        shader ResourceShader {
+            layout(set = 1, binding = 2) uniform sampler2D sourceTexture;
+
+            cbuffer Camera {
+                mat4 viewProj;
+            }
+
+            fragment {
+                vec4 main() {
+                    return vec4(1.0);
+                }
+            }
+        }
+        """).strip()
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path,
+        source=source,
+        source_name="resource.cgl",
+        targets=("metal",),
+    )
+
+    payload = inspect_runtime_package(package_dir / "runtime-package.json")
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["parser"] == "metal"
+    assert host_interface["entryPoints"] == [
+        {
+            "name": "fragment_main",
+            "stage": "fragment",
+            "executionConfig": {},
+        }
+    ]
+    assert host_interface["resources"] == [
+        {
+            "name": "camera",
+            "kind": "constant-buffer",
+            "type": "Camera&",
+            "set": None,
+            "binding": 0,
+            "access": "read",
+        },
+        {
+            "name": "sourceTexture",
+            "kind": "texture",
+            "type": "texture2d<float>",
+            "set": None,
+            "binding": 0,
+            "access": None,
+        },
+    ]
+    assert host_interface["diagnostics"] == []
+
+
 def test_inspect_runtime_package_detects_missing_packaged_artifact(tmp_path):
     _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
     (package_dir / "artifacts" / "out" / "cgl" / "simple.cgl").unlink()
@@ -24357,7 +24757,7 @@ def test_plan_runtime_adapters_from_runtime_package(tmp_path):
     }
 
 
-def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target(
+def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface(
     tmp_path,
 ):
     _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("opengl",))
@@ -24371,7 +24771,7 @@ def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_ta
         "readyBindingCount": 1,
         "failedBindingCount": 0,
         "adapterCount": 1,
-        "actionCount": 3,
+        "actionCount": 2,
         "runtimeReferenceCount": 1,
     }
     assert payload["targets"][0]["target"] == "opengl"
@@ -24380,17 +24780,61 @@ def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_ta
     adapter = payload["adapters"][0]
     assert adapter["target"] == "opengl"
     assert adapter["adapterKind"] == "opengl-glsl-adapter"
+    assert adapter["hostInterface"]["status"] == "ready"
+    assert adapter["hostInterface"] == {
+        "status": "ready",
+        "source": "package-artifact",
+        "parser": "opengl",
+        "entryPointCount": 1,
+        "resourceCount": 0,
+        "entryPoints": [
+            {
+                "name": "main",
+                "stage": "vertex",
+                "executionConfig": {},
+            }
+        ],
+        "resources": [],
+        "diagnostics": [],
+    }
+    assert [action["kind"] for action in payload["actions"]] == [
+        "wire-runtime-adapter",
+        "review-runtime-references",
+    ]
+
+
+def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty(
+    tmp_path,
+):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
+
+    payload = plan_runtime_adapters(package_dir / "runtime-package.json")
+
+    assert payload["success"] is True
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "bindingCount": 1,
+        "readyBindingCount": 1,
+        "failedBindingCount": 0,
+        "adapterCount": 1,
+        "actionCount": 3,
+        "runtimeReferenceCount": 1,
+    }
+    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["adapterKind"] == "vulkan-shader-adapter"
+    assert len(payload["adapters"]) == 1
+    adapter = payload["adapters"][0]
+    assert adapter["target"] == "vulkan"
+    assert adapter["adapterKind"] == "vulkan-shader-adapter"
     assert adapter["hostInterface"] == {
         "status": "unavailable",
         "source": "package-artifact",
-        "parser": None,
+        "parser": "vulkan",
         "entryPointCount": 0,
         "resourceCount": 0,
         "entryPoints": [],
         "resources": [],
-        "diagnostics": [
-            "project.runtime-package-inspection.host-interface-parser-unavailable"
-        ],
+        "diagnostics": ["project.runtime-package-inspection.host-interface-empty"],
     }
     assert [action["kind"] for action in payload["actions"]] == [
         "wire-runtime-adapter",
@@ -24402,12 +24846,12 @@ def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_ta
         project_pipeline.RUNTIME_ADAPTER_PLAN_ACTION_FIELDS
     )
     assert host_interface_action["severity"] == "warning"
-    assert host_interface_action["target"] == "opengl"
+    assert host_interface_action["target"] == "vulkan"
     assert host_interface_action["adapter"] == adapter["id"]
     assert host_interface_action["binding"] == adapter["binding"]
     assert host_interface_action["packagePath"] == adapter["packagePath"]
     assert "status is unavailable" in host_interface_action["message"]
-    assert "host-interface-parser-unavailable" in host_interface_action["message"]
+    assert "host-interface-empty" in host_interface_action["message"]
 
 
 def test_plan_runtime_adapters_reports_webgpu_wgsl_adapter_metadata(tmp_path):
@@ -24531,7 +24975,7 @@ def test_project_cli_plan_runtime_adapters_text_outputs_adapters(tmp_path):
 def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status(
     tmp_path,
 ):
-    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("opengl",))
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
     package_manifest = package_dir / "runtime-package.json"
 
     result = subprocess.run(
@@ -24553,7 +24997,7 @@ def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status(
     assert result.returncode == 0
     assert "Runtime adapters:" in result.stdout
     assert "interface: unavailable" in result.stdout
-    assert "host-interface-parser-unavailable" in result.stdout
+    assert "host-interface-empty" in result.stdout
     assert "Runtime adapter actions:" in result.stdout
     assert "resolve-host-interface-metadata" in result.stdout
 
@@ -24584,6 +25028,171 @@ def test_project_cli_plan_runtime_adapters_json_writes_output(tmp_path):
     assert payload["kind"] == project_pipeline.RUNTIME_ADAPTER_PLAN_KIND
     assert payload["summary"]["adapterCount"] == 1
     assert payload["adapters"][0]["adapterKind"] == "crossgl-source-adapter"
+
+
+def test_build_runtime_loader_manifest_from_runtime_package(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
+
+    payload = build_runtime_loader_manifest(package_dir / "runtime-package.json")
+
+    assert set(payload) == project_pipeline.RUNTIME_LOADER_MANIFEST_FIELDS
+    assert payload["kind"] == project_pipeline.RUNTIME_LOADER_MANIFEST_KIND
+    assert payload["success"] is True
+    assert payload["scope"] == project_pipeline.RUNTIME_LOADER_MANIFEST_SCOPE
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_LOADER_MANIFEST_NON_GOALS
+    )
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "bindingCount": 1,
+        "loadUnitCount": 1,
+        "readyLoadUnitCount": 1,
+        "blockedLoadUnitCount": 0,
+        "actionCount": 2,
+        "runtimeReferenceCount": 1,
+    }
+    assert len(payload["targets"]) == 1
+    assert set(payload["targets"][0]) == (
+        project_pipeline.RUNTIME_LOADER_MANIFEST_TARGET_FIELDS
+    )
+    assert payload["targets"][0]["target"] == "cgl"
+    assert payload["targets"][0]["adapterKind"] == "crossgl-source-adapter"
+    assert payload["targets"][0]["readyLoadUnitCount"] == 1
+    assert payload["targets"][0]["blockedLoadUnitCount"] == 0
+    assert payload["targets"][0]["packagePaths"] == ["artifacts/out/cgl/simple.cgl"]
+    assert len(payload["loadUnits"]) == 1
+    load_unit = payload["loadUnits"][0]
+    assert set(load_unit) == project_pipeline.RUNTIME_LOADER_MANIFEST_LOAD_UNIT_FIELDS
+    assert load_unit["target"] == "cgl"
+    assert load_unit["adapterKind"] == "crossgl-source-adapter"
+    assert load_unit["artifactFormat"] == "CrossGL source"
+    assert load_unit["packagePath"] == "artifacts/out/cgl/simple.cgl"
+    assert load_unit["hostInterface"]["status"] == "ready"
+    assert load_unit["blockers"] == []
+    assert load_unit["validation"]["loadReady"] is True
+    assert load_unit["validation"]["hostInterface"] == "ready"
+    assert [step["kind"] for step in load_unit["loadSteps"]] == [
+        "load-package-artifact",
+        "load-source-remap",
+        "bind-host-interface",
+    ]
+    for load_step in load_unit["loadSteps"]:
+        assert (
+            set(load_step) == project_pipeline.RUNTIME_LOADER_MANIFEST_LOAD_STEP_FIELDS
+        )
+    assert payload["adapterPlan"] == {
+        "kind": project_pipeline.RUNTIME_ADAPTER_PLAN_KIND,
+        "success": True,
+        "adapterCount": 1,
+        "actionCount": 2,
+    }
+    assert payload["packageInspection"] == {
+        "kind": project_pipeline.RUNTIME_PACKAGE_INSPECTION_KIND,
+        "success": True,
+        "readyBindingCount": 1,
+        "failedBindingCount": 0,
+    }
+
+
+def test_runtime_loader_manifest_reports_blocked_host_interface_metadata(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
+
+    payload = build_runtime_loader_manifest(package_dir / "runtime-package.json")
+
+    assert payload["success"] is True
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "bindingCount": 1,
+        "loadUnitCount": 1,
+        "readyLoadUnitCount": 0,
+        "blockedLoadUnitCount": 1,
+        "actionCount": 3,
+        "runtimeReferenceCount": 1,
+    }
+    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["adapterKind"] == "vulkan-shader-adapter"
+    assert payload["targets"][0]["readyLoadUnitCount"] == 0
+    assert payload["targets"][0]["blockedLoadUnitCount"] == 1
+    load_unit = payload["loadUnits"][0]
+    assert load_unit["target"] == "vulkan"
+    assert load_unit["hostInterface"]["status"] == "unavailable"
+    assert load_unit["validation"]["loadReady"] is False
+    assert load_unit["validation"]["hostInterface"] == "unavailable"
+    assert [step["kind"] for step in load_unit["loadSteps"]] == [
+        "load-package-artifact",
+        "validate-target-toolchain",
+    ]
+    assert len(load_unit["blockers"]) == 1
+    assert load_unit["blockers"][0]["kind"] == "resolve-host-interface-metadata"
+    assert load_unit["blockers"][0]["severity"] == "warning"
+    assert "host-interface-empty" in load_unit["blockers"][0]["message"]
+
+
+def test_project_cli_runtime_loader_manifest_text_outputs_load_units(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
+    package_manifest = package_dir / "runtime-package.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "runtime-loader-manifest",
+            str(package_manifest),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Runtime loader manifest: {package_manifest}" in result.stdout
+    assert "Status: ok" in result.stdout
+    assert "Loader scope: runtime-loader-metadata-contract" in result.stdout
+    assert (
+        "Loader non-goals: host-code-rewriting, device-execution, "
+        "runtime-framework-generation, target-sdk-installation"
+    ) in result.stdout
+    assert "Summary: 1 targets, 1 load units, 0 ready, 1 blocked" in result.stdout
+    assert "Adapter plan: ok, 1 adapters, 3 actions" in result.stdout
+    assert "- vulkan: vulkan-shader-adapter, 0 ready, 1 blocked" in result.stdout
+    assert "Runtime loader units:" in result.stdout
+    assert "via vulkan-shader-adapter [interface: unavailable; blockers: 1" in (
+        result.stdout
+    )
+    assert "Runtime loader actions:" in result.stdout
+    assert "resolve-host-interface-metadata" in result.stdout
+
+
+def test_project_cli_runtime_loader_manifest_json_writes_output(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
+    output_path = package_dir / "runtime-loader-manifest.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "runtime-loader-manifest",
+            str(package_dir / "runtime-package.json"),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == project_pipeline.RUNTIME_LOADER_MANIFEST_KIND
+    assert payload["summary"]["loadUnitCount"] == 1
+    assert payload["loadUnits"][0]["validation"]["loadReady"] is True
 
 
 def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp_path):

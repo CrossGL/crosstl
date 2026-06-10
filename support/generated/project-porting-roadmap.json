@@ -5050,6 +5050,8 @@
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_host_interface_resources",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_entry_point_parameter_resources",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
@@ -5057,13 +5059,15 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
           ],
-          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged CrossGL artifacts, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged artifacts with registered source frontends and records explicit metadata diagnostics when parsed artifacts do not expose usable interface data, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "directx": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_host_interface_resources",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_entry_point_parameter_resources",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
@@ -5071,13 +5075,15 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
           ],
-          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged CrossGL artifacts, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged artifacts with registered source frontends and records explicit metadata diagnostics when parsed artifacts do not expose usable interface data, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "hip": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_host_interface_resources",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_entry_point_parameter_resources",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
@@ -5085,13 +5091,15 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
           ],
-          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged CrossGL artifacts, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged artifacts with registered source frontends and records explicit metadata diagnostics when parsed artifacts do not expose usable interface data, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "metal": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_host_interface_resources",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_entry_point_parameter_resources",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
@@ -5099,13 +5107,15 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
           ],
-          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged CrossGL artifacts, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged artifacts with registered source frontends and records explicit metadata diagnostics when parsed artifacts do not expose usable interface data, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "mojo": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_host_interface_resources",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_entry_point_parameter_resources",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
@@ -5113,13 +5123,15 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
           ],
-          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged CrossGL artifacts, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged artifacts with registered source frontends and records explicit metadata diagnostics when parsed artifacts do not expose usable interface data, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "opengl": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_host_interface_resources",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_entry_point_parameter_resources",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
@@ -5127,13 +5139,15 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
           ],
-          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged CrossGL artifacts, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged artifacts with registered source frontends and records explicit metadata diagnostics when parsed artifacts do not expose usable interface data, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "rust": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_host_interface_resources",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_entry_point_parameter_resources",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
@@ -5141,13 +5155,15 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
           ],
-          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged CrossGL artifacts, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged artifacts with registered source frontends and records explicit metadata diagnostics when parsed artifacts do not expose usable interface data, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "slang": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_host_interface_resources",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_entry_point_parameter_resources",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
@@ -5155,13 +5171,15 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
           ],
-          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged CrossGL artifacts, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged artifacts with registered source frontends and records explicit metadata diagnostics when parsed artifacts do not expose usable interface data, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "vulkan": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_host_interface_resources",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_entry_point_parameter_resources",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
@@ -5169,13 +5187,15 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
           ],
-          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged CrossGL artifacts, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged artifacts with registered source frontends and records explicit metadata diagnostics when parsed artifacts do not expose usable interface data, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "webgl": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_host_interface_resources",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_entry_point_parameter_resources",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
             "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
@@ -5183,7 +5203,7 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
           ],
-          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged CrossGL artifacts, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, records parser-derived hostInterface entry point and resource summaries for packaged artifacts with registered source frontends and records explicit metadata diagnostics when parsed artifacts do not expose usable interface data, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "wgsl": {
@@ -5361,7 +5381,8 @@
         "cuda": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
-            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
@@ -5373,7 +5394,8 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
-            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
@@ -5385,7 +5407,8 @@
         "hip": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
-            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
@@ -5397,7 +5420,8 @@
         "metal": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
-            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
@@ -5409,7 +5433,8 @@
         "mojo": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
-            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
@@ -5421,7 +5446,8 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
-            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
@@ -5433,7 +5459,8 @@
         "rust": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
-            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
@@ -5445,7 +5472,8 @@
         "slang": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
-            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
@@ -5457,7 +5485,8 @@
         "vulkan": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
-            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
@@ -5469,7 +5498,8 @@
         "webgl": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
-            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
@@ -5486,6 +5516,124 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_json_writes_output"
           ],
           "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, and hostResponsibilities metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
+      "description": "Emit runtime loader manifests from runtime package manifests without rewriting host code or executing device code.",
+      "id": "project.runtime_loader_manifest",
+      "name": "Runtime loader manifest",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ],
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ],
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ],
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ],
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ],
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ],
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ],
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ],
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ],
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ],
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "wgsl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ],
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         }
       }
@@ -8453,12 +8601,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 17,
+    "feature_count": 18,
     "status_counts": {
       "cuda": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 13,
+        "supported": 14,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -8466,7 +8614,7 @@
       "directx": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 13,
+        "supported": 14,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -8474,7 +8622,7 @@
       "hip": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 13,
+        "supported": 14,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -8482,7 +8630,7 @@
       "metal": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 13,
+        "supported": 14,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -8490,7 +8638,7 @@
       "mojo": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 13,
+        "supported": 14,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -8498,7 +8646,7 @@
       "opengl": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 13,
+        "supported": 14,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -8506,7 +8654,7 @@
       "rust": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 13,
+        "supported": 14,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -8514,7 +8662,7 @@
       "slang": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 13,
+        "supported": 14,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -8522,7 +8670,7 @@
       "vulkan": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 13,
+        "supported": 14,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -8530,7 +8678,7 @@
       "webgl": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 13,
+        "supported": 14,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -8538,7 +8686,7 @@
       "wgsl": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 13,
+        "supported": 14,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

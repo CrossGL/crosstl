@@ -34,6 +34,7 @@ RUNTIME_PACKAGE_KIND = "crosstl-runtime-package"
 RUNTIME_HOST_BINDING_PLAN_KIND = "crosstl-runtime-host-binding-plan"
 RUNTIME_PACKAGE_INSPECTION_KIND = "crosstl-runtime-package-inspection"
 RUNTIME_ADAPTER_PLAN_KIND = "crosstl-runtime-adapter-plan"
+RUNTIME_LOADER_MANIFEST_KIND = "crosstl-runtime-loader-manifest"
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
 RUNTIME_LOADER_PLAN_CONTRACT = "runtime-loader-plan-v1"
@@ -44,6 +45,7 @@ RUNTIME_PACKAGE_SCOPE = "runtime-artifact-handoff-package"
 RUNTIME_HOST_BINDING_PLAN_SCOPE = "host-binding-planning"
 RUNTIME_PACKAGE_INSPECTION_SCOPE = "runtime-package-readiness-inspection"
 RUNTIME_ADAPTER_PLAN_SCOPE = "runtime-adapter-integration-planning"
+RUNTIME_LOADER_MANIFEST_SCOPE = "runtime-loader-metadata-contract"
 RUNTIME_INTEGRATION_PLAN_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
@@ -73,6 +75,12 @@ RUNTIME_PACKAGE_INSPECTION_NON_GOALS = (
     "target-sdk-installation",
 )
 RUNTIME_ADAPTER_PLAN_NON_GOALS = (
+    "host-code-rewriting",
+    "device-execution",
+    "runtime-framework-generation",
+    "target-sdk-installation",
+)
+RUNTIME_LOADER_MANIFEST_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
     "runtime-framework-generation",
@@ -471,6 +479,66 @@ RUNTIME_ADAPTER_PLAN_ACTION_FIELDS = frozenset(
         "binding",
         "packagePath",
     )
+)
+RUNTIME_LOADER_MANIFEST_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourcePackage",
+        "sourcePackageHash",
+        "generatedAt",
+        "success",
+        "scope",
+        "nonGoals",
+        "packageRoot",
+        "project",
+        "summary",
+        "targets",
+        "loadUnits",
+        "actions",
+        "runtimePlan",
+        "adapterPlan",
+        "packageInspection",
+        "diagnosticCounts",
+        "diagnostics",
+    )
+)
+RUNTIME_LOADER_MANIFEST_TARGET_FIELDS = frozenset(
+    (
+        "target",
+        "adapterKind",
+        "loadUnitCount",
+        "readyLoadUnitCount",
+        "blockedLoadUnitCount",
+        "runtimeReferenceCount",
+        "requiredTools",
+        "loaderResponsibilities",
+        "packagePaths",
+        "loadUnits",
+    )
+)
+RUNTIME_LOADER_MANIFEST_LOAD_UNIT_FIELDS = frozenset(
+    (
+        "id",
+        "target",
+        "adapterKind",
+        "artifactFormat",
+        "packagePath",
+        "sourcePath",
+        "sourceBackend",
+        "variant",
+        "defines",
+        "sourceRemap",
+        "hostInterface",
+        "requiredTools",
+        "hostResponsibilities",
+        "loadSteps",
+        "blockers",
+        "validation",
+    )
+)
+RUNTIME_LOADER_MANIFEST_LOAD_STEP_FIELDS = frozenset(
+    ("kind", "message", "target", "packagePath", "tools", "hostInterfaceStatus")
 )
 REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
 REPORT_PROJECT_FIELDS = frozenset(
@@ -9187,14 +9255,50 @@ def _runtime_host_interface_empty(
     }
 
 
+_RUNTIME_HOST_INTERFACE_STAGE_NAMES = frozenset(
+    {
+        "vertex",
+        "fragment",
+        "compute",
+        "geometry",
+        "tessellation_control",
+        "tessellation_evaluation",
+        "mesh",
+        "task",
+        "ray_generation",
+        "ray_intersection",
+        "ray_any_hit",
+        "ray_closest_hit",
+        "ray_miss",
+        "ray_callable",
+    }
+)
+
+
 def _runtime_host_interface_stage_name(stage: Any) -> str | None:
     if hasattr(stage, "value"):
         value = getattr(stage, "value")
-        return str(value) if value else None
+        if not value:
+            return None
+        stage = value
     if stage is None:
         return None
     label = str(stage)
-    return label.rsplit(".", 1)[-1].lower() if label else None
+    if not label:
+        return None
+    label = label.rsplit(".", 1)[-1].lower().replace("-", "_")
+    return {
+        "frag": "fragment",
+        "fs": "fragment",
+        "vert": "vertex",
+        "vs": "vertex",
+        "comp": "compute",
+        "cs": "compute",
+        "geom": "geometry",
+        "gs": "geometry",
+        "tess_control": "tessellation_control",
+        "tess_eval": "tessellation_evaluation",
+    }.get(label, label)
 
 
 def _runtime_host_interface_json_value(value: Any) -> Any:
@@ -9258,11 +9362,22 @@ def _runtime_host_interface_type_name(type_node: Any) -> str | None:
 
 def _runtime_host_interface_attribute_value(node: Any, names: Sequence[str]) -> Any:
     normalized_names = {name.lower() for name in names}
+    for layout_name in ("layout", "interface_layout"):
+        layout = getattr(node, layout_name, None)
+        if not isinstance(layout, Mapping):
+            continue
+        for key, value in layout.items():
+            if str(key).lower() in normalized_names:
+                return _runtime_host_interface_json_value(value)
     for attribute in getattr(node, "attributes", []) or []:
         attribute_name = str(getattr(attribute, "name", "")).lower()
         if attribute_name not in normalized_names:
             continue
-        arguments = getattr(attribute, "arguments", []) or []
+        arguments = (
+            getattr(attribute, "arguments", None)
+            or getattr(attribute, "args", None)
+            or []
+        )
         if not arguments:
             return None
         return _runtime_host_interface_json_value(arguments[0])
@@ -9293,7 +9408,7 @@ def _runtime_host_interface_resource_access(node: Any) -> str | None:
         return "read_write"
     if qualifiers & {"writeonly", "write_only"}:
         return "write"
-    if qualifiers & {"readonly", "read_only"}:
+    if qualifiers & {"readonly", "read_only", "constant"}:
         return "read"
     return None
 
@@ -9307,7 +9422,11 @@ def _runtime_host_interface_resource_kind(node: Any) -> str | None:
     if class_name == "SamplerNode":
         return "sampler"
 
-    type_name = _runtime_host_interface_type_name(getattr(node, "var_type", None)) or ""
+    type_name = (
+        _runtime_host_interface_type_name(getattr(node, "var_type", None))
+        or _runtime_host_interface_type_name(getattr(node, "vtype", None))
+        or ""
+    )
     type_label = type_name.lower()
     qualifiers = {
         str(qualifier).lower() for qualifier in getattr(node, "qualifiers", [])
@@ -9326,13 +9445,15 @@ def _runtime_host_interface_resource_kind(node: Any) -> str | None:
         or "uav" in attribute_names
     ):
         return "storage-texture"
+    if "constant" in qualifiers:
+        return "constant-buffer"
     if (
         "texture" in type_label
         or "sampler2d" in type_label
         or "texture" in attribute_names
     ):
         return "texture"
-    if "buffer" in type_label or "buffer" in qualifiers:
+    if "buffer" in type_label or "buffer" in qualifiers or "buffer" in attribute_names:
         return "buffer"
     if "uniform" in qualifiers:
         return "uniform"
@@ -9340,18 +9461,22 @@ def _runtime_host_interface_resource_kind(node: Any) -> str | None:
 
 
 def _runtime_host_interface_resource_from_node(node: Any) -> dict[str, Any] | None:
+    if _is_non_empty_string(getattr(node, "interface_block", None)):
+        return None
     kind = _runtime_host_interface_resource_kind(node)
     if kind is None:
         return None
 
+    type_name = (
+        _runtime_host_interface_type_name(getattr(node, "buffer_type", None))
+        or getattr(node, "texture_type", None)
+        or _runtime_host_interface_type_name(getattr(node, "var_type", None))
+        or _runtime_host_interface_type_name(getattr(node, "vtype", None))
+    )
     return {
         "name": getattr(node, "name", None),
         "kind": kind,
-        "type": (
-            _runtime_host_interface_type_name(getattr(node, "buffer_type", None))
-            or getattr(node, "texture_type", None)
-            or _runtime_host_interface_type_name(getattr(node, "var_type", None))
-        ),
+        "type": type_name,
         "set": (
             getattr(node, "set", None)
             if isinstance(getattr(node, "set", None), int)
@@ -9361,7 +9486,7 @@ def _runtime_host_interface_resource_from_node(node: Any) -> dict[str, Any] | No
             getattr(node, "binding", None)
             if isinstance(getattr(node, "binding", None), int)
             else _runtime_host_interface_int_attribute(
-                node, ("binding", "texture", "sampler", "uav")
+                node, ("binding", "buffer", "texture", "sampler", "uav")
             )
         ),
         "access": _runtime_host_interface_resource_access(node),
@@ -9377,6 +9502,45 @@ def _runtime_host_interface_cbuffer_resource(node: Any) -> dict[str, Any]:
         "binding": _runtime_host_interface_int_attribute(node, ("binding",)),
         "access": "read",
     }
+
+
+def _runtime_host_interface_resource_from_interface_block(
+    node: Any,
+) -> dict[str, Any] | None:
+    if not getattr(node, "interface_block", False):
+        return None
+    qualifiers = {
+        str(qualifier).lower()
+        for qualifier in getattr(node, "interface_qualifiers", []) or []
+    }
+    if "uniform" in qualifiers:
+        kind = "constant-buffer"
+        access = "read"
+    elif "buffer" in qualifiers:
+        kind = "buffer"
+        access = _runtime_host_interface_resource_access(node) or "read_write"
+    else:
+        return None
+    return {
+        "name": getattr(node, "name", None),
+        "kind": kind,
+        "type": getattr(node, "name", None),
+        "set": _runtime_host_interface_int_attribute(node, ("set", "space")),
+        "binding": _runtime_host_interface_int_attribute(node, ("binding",)),
+        "access": access,
+    }
+
+
+def _runtime_host_interface_function_stage(function: Any, ast: Any) -> str | None:
+    for qualifier in getattr(function, "qualifiers", []) or []:
+        stage = _runtime_host_interface_stage_name(qualifier)
+        if stage in _RUNTIME_HOST_INTERFACE_STAGE_NAMES:
+            return stage
+    if getattr(function, "name", None) == "main":
+        stage = _runtime_host_interface_stage_name(getattr(ast, "shader_type", None))
+        if stage in _RUNTIME_HOST_INTERFACE_STAGE_NAMES:
+            return stage
+    return None
 
 
 def _runtime_host_interface_entry_points(ast: Any) -> list[dict[str, Any]]:
@@ -9396,6 +9560,28 @@ def _runtime_host_interface_entry_points(ast: Any) -> list[dict[str, Any]]:
                 ),
             }
         )
+    seen = {
+        (
+            entry_point.get("name"),
+            entry_point.get("stage"),
+        )
+        for entry_point in entry_points
+    }
+    for function in getattr(ast, "functions", []) or []:
+        stage = _runtime_host_interface_function_stage(function, ast)
+        if stage is None:
+            continue
+        key = (getattr(function, "name", None), stage)
+        if key in seen:
+            continue
+        seen.add(key)
+        entry_points.append(
+            {
+                "name": getattr(function, "name", None),
+                "stage": stage,
+                "executionConfig": {},
+            }
+        )
     return entry_points
 
 
@@ -9403,10 +9589,22 @@ def _runtime_host_interface_resources(ast: Any) -> list[dict[str, Any]]:
     resources: list[dict[str, Any]] = []
     for cbuffer in getattr(ast, "cbuffers", []) or []:
         resources.append(_runtime_host_interface_cbuffer_resource(cbuffer))
-    for variable in getattr(ast, "global_variables", []) or []:
-        resource = _runtime_host_interface_resource_from_node(variable)
+    for struct in getattr(ast, "structs", []) or []:
+        resource = _runtime_host_interface_resource_from_interface_block(struct)
         if resource is not None:
             resources.append(resource)
+    for variable_group in ("global_variables", "uniforms"):
+        for variable in getattr(ast, variable_group, []) or []:
+            resource = _runtime_host_interface_resource_from_node(variable)
+            if resource is not None:
+                resources.append(resource)
+    for function in getattr(ast, "functions", []) or []:
+        if _runtime_host_interface_function_stage(function, ast) is None:
+            continue
+        for parameter in getattr(function, "params", []) or []:
+            resource = _runtime_host_interface_resource_from_node(parameter)
+            if resource is not None:
+                resources.append(resource)
 
     stages = getattr(ast, "stages", None)
     stage_values = stages.values() if hasattr(stages, "values") else []
@@ -9443,15 +9641,25 @@ def _runtime_package_inspection_host_interface(
 ) -> dict[str, Any]:
     target = artifact.get("target")
     target_name = str(target).lower() if _is_non_empty_string(target) else ""
+    parser_name = None
+    source_spec = None
+    try:
+        register_default_sources()
+        parser_name = SOURCE_REGISTRY.resolve_name(target_name) if target_name else None
+        source_spec = SOURCE_REGISTRY.get(parser_name) if parser_name else None
+    except Exception:
+        parser_name = None
+        source_spec = None
+
     if artifact_diagnostics:
         return _runtime_host_interface_empty(
             "not-inspected",
-            parser="cgl" if target_name in {"cgl", "crossgl"} else None,
+            parser=parser_name,
             diagnostics=(
                 "project.runtime-package-inspection.host-interface-artifact-not-ready",
             ),
         )
-    if target_name not in {"cgl", "crossgl"}:
+    if source_spec is None:
         return _runtime_host_interface_empty(
             "unavailable",
             diagnostics=(
@@ -9463,7 +9671,7 @@ def _runtime_package_inspection_host_interface(
     if not _is_non_empty_string(package_relative_path):
         return _runtime_host_interface_empty(
             "not-inspected",
-            parser="cgl",
+            parser=parser_name,
             diagnostics=(
                 "project.runtime-package-inspection.host-interface-artifact-not-ready",
             ),
@@ -9473,23 +9681,13 @@ def _runtime_package_inspection_host_interface(
     if not _is_relative_to(artifact_path, package_root) or not artifact_path.is_file():
         return _runtime_host_interface_empty(
             "not-inspected",
-            parser="cgl",
+            parser=parser_name,
             diagnostics=(
                 "project.runtime-package-inspection.host-interface-artifact-not-ready",
             ),
         )
 
     try:
-        register_default_sources()
-        source_spec = SOURCE_REGISTRY.get("cgl")
-        if source_spec is None:
-            return _runtime_host_interface_empty(
-                "unavailable",
-                parser="cgl",
-                diagnostics=(
-                    "project.runtime-package-inspection.host-interface-parser-unavailable",
-                ),
-            )
         ast = source_spec.parse(
             artifact_path.read_text(encoding="utf-8"),
             file_path=str(artifact_path),
@@ -9497,12 +9695,19 @@ def _runtime_package_inspection_host_interface(
     except Exception:
         return _runtime_host_interface_empty(
             "failed",
-            parser="cgl",
+            parser=parser_name,
             diagnostics=(
                 "project.runtime-package-inspection.host-interface-parse-failed",
             ),
         )
-    return _runtime_host_interface_from_ast(ast, parser="cgl")
+    host_interface = _runtime_host_interface_from_ast(ast, parser=parser_name or "")
+    if host_interface["entryPointCount"] == 0 and host_interface["resourceCount"] == 0:
+        return _runtime_host_interface_empty(
+            "unavailable",
+            parser=parser_name,
+            diagnostics=("project.runtime-package-inspection.host-interface-empty",),
+        )
+    return host_interface
 
 
 def _runtime_package_inspection_binding(
@@ -10017,6 +10222,298 @@ def plan_runtime_adapters(
         "diagnostics": (
             [dict(diagnostic) for diagnostic in inspection.get("diagnostics", [])]
             if isinstance(inspection.get("diagnostics"), list)
+            else []
+        ),
+    }
+
+
+def _runtime_loader_manifest_load_steps(
+    adapter: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    package_path = adapter.get("packagePath")
+    target = adapter.get("target")
+    steps = [
+        {
+            "kind": "load-package-artifact",
+            "message": (
+                f"Load {adapter.get('artifactFormat')} artifact "
+                f"{package_path} for target {target}."
+            ),
+            "target": target,
+            "packagePath": package_path,
+            "tools": [],
+            "hostInterfaceStatus": None,
+        }
+    ]
+    source_remap = adapter.get("sourceRemap")
+    if isinstance(source_remap, Mapping) and _is_non_empty_string(
+        source_remap.get("packagePath")
+    ):
+        steps.append(
+            {
+                "kind": "load-source-remap",
+                "message": (
+                    "Load source-remap metadata "
+                    f"{source_remap.get('packagePath')} for diagnostics and "
+                    "provenance."
+                ),
+                "target": target,
+                "packagePath": source_remap.get("packagePath"),
+                "tools": [],
+                "hostInterfaceStatus": None,
+            }
+        )
+
+    host_interface = adapter.get("hostInterface")
+    interface_status = (
+        host_interface.get("status") if isinstance(host_interface, Mapping) else None
+    )
+    if interface_status == "ready":
+        steps.append(
+            {
+                "kind": "bind-host-interface",
+                "message": (
+                    "Bind "
+                    f"{host_interface.get('entryPointCount', 0)} entry points and "
+                    f"{host_interface.get('resourceCount', 0)} resources from "
+                    "host-interface metadata."
+                ),
+                "target": target,
+                "packagePath": package_path,
+                "tools": [],
+                "hostInterfaceStatus": interface_status,
+            }
+        )
+
+    required_tools = [
+        tool
+        for tool in _record_sequence(adapter.get("requiredTools"))
+        if _is_non_empty_string(tool)
+    ]
+    if required_tools:
+        steps.append(
+            {
+                "kind": "validate-target-toolchain",
+                "message": (
+                    "Validate the loaded artifact with available target tools: "
+                    f"{', '.join(required_tools)}."
+                ),
+                "target": target,
+                "packagePath": package_path,
+                "tools": required_tools,
+                "hostInterfaceStatus": interface_status,
+            }
+        )
+    return steps
+
+
+def _runtime_loader_manifest_blockers(
+    adapter: Mapping[str, Any], actions: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    adapter_id = adapter.get("id")
+    return [
+        dict(action)
+        for action in actions
+        if action.get("adapter") == adapter_id
+        and action.get("kind") == "resolve-host-interface-metadata"
+    ]
+
+
+def _runtime_loader_manifest_load_unit(
+    adapter: Mapping[str, Any], actions: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    blockers = _runtime_loader_manifest_blockers(adapter, actions)
+    host_interface = adapter.get("hostInterface")
+    host_interface_status = (
+        host_interface.get("status") if isinstance(host_interface, Mapping) else None
+    )
+    validation = (
+        dict(adapter.get("validation"))
+        if isinstance(adapter.get("validation"), Mapping)
+        else {}
+    )
+    validation["hostInterface"] = (
+        host_interface_status
+        if _is_non_empty_string(host_interface_status)
+        else "not-inspected"
+    )
+    validation["loadReady"] = not blockers
+    return {
+        "id": adapter.get("id"),
+        "target": adapter.get("target"),
+        "adapterKind": adapter.get("adapterKind"),
+        "artifactFormat": adapter.get("artifactFormat"),
+        "packagePath": adapter.get("packagePath"),
+        "sourcePath": adapter.get("sourcePath"),
+        "sourceBackend": adapter.get("sourceBackend"),
+        "variant": adapter.get("variant"),
+        "defines": (
+            dict(adapter.get("defines"))
+            if isinstance(adapter.get("defines"), Mapping)
+            else {}
+        ),
+        "sourceRemap": (
+            dict(adapter.get("sourceRemap"))
+            if isinstance(adapter.get("sourceRemap"), Mapping)
+            else None
+        ),
+        "hostInterface": (
+            dict(host_interface)
+            if isinstance(host_interface, Mapping)
+            else _runtime_host_interface_empty(
+                "not-inspected",
+                diagnostics=(
+                    "project.runtime-package-inspection.host-interface-not-recorded",
+                ),
+            )
+        ),
+        "requiredTools": [
+            tool
+            for tool in _record_sequence(adapter.get("requiredTools"))
+            if _is_non_empty_string(tool)
+        ],
+        "hostResponsibilities": [
+            responsibility
+            for responsibility in _record_sequence(adapter.get("hostResponsibilities"))
+            if _is_non_empty_string(responsibility)
+        ],
+        "loadSteps": _runtime_loader_manifest_load_steps(adapter),
+        "blockers": blockers,
+        "validation": validation,
+    }
+
+
+def _runtime_loader_manifest_target(
+    target: Mapping[str, Any], load_units: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    target_name = target.get("target")
+    target_load_units = [
+        load_unit for load_unit in load_units if load_unit.get("target") == target_name
+    ]
+    blocked_units = [
+        load_unit for load_unit in target_load_units if load_unit.get("blockers")
+    ]
+    ready_units = [
+        load_unit for load_unit in target_load_units if not load_unit.get("blockers")
+    ]
+    return {
+        "target": target_name,
+        "adapterKind": target.get("adapterKind"),
+        "loadUnitCount": len(target_load_units),
+        "readyLoadUnitCount": len(ready_units),
+        "blockedLoadUnitCount": len(blocked_units),
+        "runtimeReferenceCount": target.get("runtimeReferenceCount", 0),
+        "requiredTools": (
+            list(target.get("requiredTools"))
+            if isinstance(target.get("requiredTools"), list)
+            else []
+        ),
+        "loaderResponsibilities": (
+            list(target.get("loaderResponsibilities"))
+            if isinstance(target.get("loaderResponsibilities"), list)
+            else []
+        ),
+        "packagePaths": [
+            load_unit.get("packagePath")
+            for load_unit in target_load_units
+            if _is_non_empty_string(load_unit.get("packagePath"))
+        ],
+        "loadUnits": [load_unit.get("id") for load_unit in target_load_units],
+    }
+
+
+def build_runtime_loader_manifest(
+    package_manifest_path: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Build a runtime loader manifest from a runtime package manifest."""
+
+    package_path = _filesystem_path_arg(
+        package_manifest_path, field_name="Runtime package manifest path"
+    )
+    adapter_plan = plan_runtime_adapters(package_path)
+    actions = [
+        action
+        for action in _record_sequence(adapter_plan.get("actions"))
+        if isinstance(action, Mapping)
+    ]
+    adapters = [
+        adapter
+        for adapter in _record_sequence(adapter_plan.get("adapters"))
+        if isinstance(adapter, Mapping)
+    ]
+    targets = [
+        target
+        for target in _record_sequence(adapter_plan.get("targets"))
+        if isinstance(target, Mapping)
+    ]
+    load_units = [
+        _runtime_loader_manifest_load_unit(adapter, actions) for adapter in adapters
+    ]
+    ready_load_unit_count = sum(
+        1 for load_unit in load_units if not load_unit.get("blockers")
+    )
+    blocked_load_unit_count = sum(
+        1 for load_unit in load_units if load_unit.get("blockers")
+    )
+    adapter_summary = (
+        adapter_plan.get("summary")
+        if isinstance(adapter_plan.get("summary"), Mapping)
+        else {}
+    )
+    package_inspection = (
+        dict(adapter_plan.get("packageInspection"))
+        if isinstance(adapter_plan.get("packageInspection"), Mapping)
+        else {}
+    )
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_LOADER_MANIFEST_KIND,
+        "sourcePackage": str(package_path),
+        "sourcePackageHash": _optional_source_hash(package_path),
+        "generatedAt": int(time.time()),
+        "success": bool(adapter_plan.get("success")),
+        "scope": RUNTIME_LOADER_MANIFEST_SCOPE,
+        "nonGoals": list(RUNTIME_LOADER_MANIFEST_NON_GOALS),
+        "packageRoot": adapter_plan.get("packageRoot"),
+        "project": (
+            dict(adapter_plan.get("project"))
+            if isinstance(adapter_plan.get("project"), Mapping)
+            else {"targets": []}
+        ),
+        "summary": {
+            "targetCount": adapter_summary.get("targetCount", 0),
+            "bindingCount": adapter_summary.get("bindingCount", 0),
+            "loadUnitCount": len(load_units),
+            "readyLoadUnitCount": ready_load_unit_count,
+            "blockedLoadUnitCount": blocked_load_unit_count,
+            "actionCount": len(actions),
+            "runtimeReferenceCount": adapter_summary.get("runtimeReferenceCount", 0),
+        },
+        "targets": [
+            _runtime_loader_manifest_target(target, load_units) for target in targets
+        ],
+        "loadUnits": load_units,
+        "actions": [dict(action) for action in actions],
+        "runtimePlan": (
+            dict(adapter_plan.get("runtimePlan"))
+            if isinstance(adapter_plan.get("runtimePlan"), Mapping)
+            else {}
+        ),
+        "adapterPlan": {
+            "kind": adapter_plan.get("kind"),
+            "success": adapter_plan.get("success"),
+            "adapterCount": adapter_summary.get("adapterCount", 0),
+            "actionCount": len(actions),
+        },
+        "packageInspection": package_inspection,
+        "diagnosticCounts": (
+            dict(adapter_plan.get("diagnosticCounts"))
+            if isinstance(adapter_plan.get("diagnosticCounts"), Mapping)
+            else {}
+        ),
+        "diagnostics": (
+            [dict(diagnostic) for diagnostic in adapter_plan.get("diagnostics", [])]
+            if isinstance(adapter_plan.get("diagnostics"), list)
             else []
         ),
     }
@@ -17959,6 +18456,53 @@ GLSLANG_STAGE_BY_SUFFIX = {
 GLSLANG_STAGE_FILENAME_SUFFIXES = tuple(
     (f"_{suffix[1:]}", stage) for suffix, stage in GLSLANG_STAGE_BY_SUFFIX.items()
 )
+GLSLANG_STAGE_BY_GENERATED_COMMENT = {
+    "vertex": "vert",
+    "fragment": "frag",
+    "compute": "comp",
+    "geometry": "geom",
+    "tessellation_control": "tesc",
+    "tessellation_evaluation": "tese",
+    "mesh": "mesh",
+    "task": "task",
+    "ray_generation": "rgen",
+    "ray_intersection": "rint",
+    "ray_any_hit": "rahit",
+    "ray_closest_hit": "rchit",
+    "ray_miss": "rmiss",
+    "ray_callable": "rcall",
+}
+GLSLANG_STAGE_BY_GUARD_MACRO = {
+    "GL_VERTEX_SHADER": "vert",
+    "GL_FRAGMENT_SHADER": "frag",
+    "GL_COMPUTE_SHADER": "comp",
+    "GL_GEOMETRY_SHADER": "geom",
+    "GL_TESS_CONTROL_SHADER": "tesc",
+    "GL_TESS_EVALUATION_SHADER": "tese",
+    "GL_MESH_SHADER_EXT": "mesh",
+    "GL_TASK_SHADER_EXT": "task",
+    "GL_RAYGEN_SHADER_EXT": "rgen",
+    "GL_INTERSECTION_SHADER_EXT": "rint",
+    "GL_ANY_HIT_SHADER_EXT": "rahit",
+    "GL_CLOSEST_HIT_SHADER_EXT": "rchit",
+    "GL_MISS_SHADER_EXT": "rmiss",
+    "GL_CALLABLE_SHADER_EXT": "rcall",
+}
+GLSLANG_GENERATED_STAGE_COMMENT_RE = re.compile(
+    r"^\s*//\s*([A-Za-z_ -]+)\s+Shader\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+GLSLANG_STAGE_GUARD_RE = re.compile(
+    r"^\s*#\s*(?:if|ifdef)\s+" r"(GL_[A-Z0-9_]+(?:_SHADER|_SHADER_EXT))\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+GLSLANG_GLOBAL_STAGE_IO_RE = re.compile(
+    r"^\s*"
+    r"(?:layout\s*\([^;\n]*\)\s*)?"
+    r"(?:(?:flat|smooth|noperspective|centroid|sample|patch|invariant|precise)\s+)*"
+    r"(in|out)\s+\w",
+    re.MULTILINE,
+)
 
 
 def _glslang_stage(
@@ -17977,6 +18521,10 @@ def _glslang_stage(
     except OSError:
         return "comp"
 
+    generated_stage = _glslang_stage_from_generated_source(source)
+    if generated_stage:
+        return generated_stage
+
     if "local_size_" in source or "gl_globalinvocationid" in source:
         return "comp"
     if "gl_position" in source or "vertex shader" in source:
@@ -17987,7 +18535,31 @@ def _glslang_stage(
         or "fragment shader" in source
     ):
         return "frag"
+    stage_io_directions = _glslang_global_stage_io_directions(source)
+    if "in" in stage_io_directions:
+        return "vert"
+    if "out" in stage_io_directions:
+        return "frag"
     return "comp"
+
+
+def _glslang_stage_from_generated_source(source: str) -> str | None:
+    for match in GLSLANG_GENERATED_STAGE_COMMENT_RE.finditer(source):
+        stage_name = match.group(1).strip().lower().replace("-", "_").replace(" ", "_")
+        stage = GLSLANG_STAGE_BY_GENERATED_COMMENT.get(stage_name)
+        if stage:
+            return stage
+
+    for match in GLSLANG_STAGE_GUARD_RE.finditer(source):
+        stage = GLSLANG_STAGE_BY_GUARD_MACRO.get(match.group(1).upper())
+        if stage:
+            return stage
+
+    return None
+
+
+def _glslang_global_stage_io_directions(source: str) -> set[str]:
+    return {match.group(1) for match in GLSLANG_GLOBAL_STAGE_IO_RE.finditer(source)}
 
 
 def _glslang_source_stage(artifact: Mapping[str, Any] | None) -> str | None:
