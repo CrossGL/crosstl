@@ -700,6 +700,10 @@ def backend_implementation_paths(backend: dict[str, Any]) -> list[str]:
     return paths
 
 
+def backend_source_kind(backend: dict[str, Any]) -> str:
+    return backend.get("source_kind", "native")
+
+
 def split_identifier(token: str) -> list[str]:
     parts: list[str] = []
     for chunk in re.split(r"[_\W]+", token):
@@ -1632,6 +1636,7 @@ def build_report(
             {
                 "id": backend["id"],
                 "name": backend["name"],
+                "source_kind": backend_source_kind(backend),
                 "implementation_paths": backend_implementation_paths(backend),
                 "test_paths": backend.get("tests", []),
             }

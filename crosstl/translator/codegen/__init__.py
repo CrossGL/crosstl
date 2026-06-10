@@ -14,6 +14,7 @@ from .registry import (
     get_codegen,
     normalize_backend_name,
     register_backend,
+    source_backend_names,
 )
 from .rust_codegen import RustCodeGen
 from .SPIRV_codegen import VulkanSPIRVCodeGen
@@ -110,6 +111,7 @@ if _SlangCodeGen is not None:
     )
 
 __all__ = [
+    "BackendSpec",
     "CudaCodeGen",
     "HLSLCodeGen",
     "GLSLCodeGen",
@@ -122,7 +124,9 @@ __all__ = [
     "get_codegen",
     "get_backend_extension",
     "normalize_backend_name",
+    "register_backend",
     "backend_names",
+    "source_backend_names",
 ]
 
 if "_SlangCodeGen" in globals() and _SlangCodeGen is not None:
