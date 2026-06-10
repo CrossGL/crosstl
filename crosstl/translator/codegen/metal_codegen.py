@@ -643,6 +643,7 @@ class MetalCodeGen:
         self.cbuffer_parameter_names = {}
         self.cbuffer_member_references = {}
         self.ambiguous_cbuffer_members = set()
+        self.hlsl_program_constant_global_ids = set()
         self.cbuffers_by_name = {}
         self.user_function_names = set()
         self.function_parameter_names = {}
@@ -1232,7 +1233,11 @@ class MetalCodeGen:
         self.metal_fragment_entry_output_struct_names = set()
         self.metal_stage_io_struct_names = set()
         self.metal_stage_io_member_lowerings = {}
-        self.cbuffer_variables = getattr(ast, "cbuffers", []) or []
+        self.hlsl_program_constant_global_ids = set()
+        self.cbuffer_variables = list(getattr(ast, "cbuffers", []) or [])
+        hlsl_program_constants = self.synthetic_hlsl_program_constants_cbuffer(ast)
+        if hlsl_program_constants is not None:
+            self.cbuffer_variables.append(hlsl_program_constants)
         self.cbuffer_binding_indices = {}
         self.cbuffers_by_name = {
             cbuffer.name: cbuffer
@@ -1711,6 +1716,8 @@ class MetalCodeGen:
                 array_suffix = ""
 
             var_name = getattr(node, "name", getattr(node, "variable_name", None))
+            if id(node) in self.hlsl_program_constant_global_ids:
+                continue
             if self.is_metal_function_constant_variable(node):
                 continue
 
@@ -2138,7 +2145,7 @@ class MetalCodeGen:
             self.collect_function_stage_parameter_dependencies(ast, target_stage)
         )
 
-        cbuffers = getattr(ast, "cbuffers", [])
+        cbuffers = self.cbuffer_variables
         if cbuffers:
             code += "// Constant Buffers\n"
             code += self.generate_cbuffers(ast)
@@ -2570,9 +2577,48 @@ class MetalCodeGen:
             return "false"
         return value_code
 
+    def synthetic_hlsl_program_constants_cbuffer(self, ast):
+        members = []
+        self.hlsl_program_constant_global_ids = set()
+        for node in getattr(ast, "global_variables", []) or []:
+            if not self.is_hlsl_program_constant_global(node):
+                continue
+            members.append(node)
+            self.hlsl_program_constant_global_ids.add(id(node))
+
+        if not members:
+            return None
+
+        cbuffer = StructNode(
+            self.unique_hlsl_program_constants_cbuffer_name(ast),
+            members,
+        )
+        cbuffer.is_cbuffer = True
+        cbuffer.buffer_kind = "cbuffer"
+        cbuffer.is_synthetic_hlsl_program_constants = True
+        return cbuffer
+
+    def is_hlsl_program_constant_global(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() == "hlsl_program_constant":
+                return True
+        return False
+
+    def unique_hlsl_program_constants_cbuffer_name(self, ast):
+        reserved_names = {
+            getattr(node, "name", None)
+            for node in (
+                list(getattr(ast, "structs", []) or [])
+                + list(getattr(ast, "cbuffers", []) or [])
+                + list(getattr(ast, "global_variables", []) or [])
+            )
+            if getattr(node, "name", None)
+        }
+        return self.unique_metal_generated_name("HlslProgramConstants", reserved_names)
+
     def generate_cbuffers(self, ast):
         code = ""
-        cbuffers = getattr(ast, "cbuffers", [])
+        cbuffers = self.cbuffer_variables or getattr(ast, "cbuffers", [])
         duplicate_names = collect_duplicate_cbuffer_names(cbuffers)
         if duplicate_names:
             names = ", ".join(sorted(duplicate_names))
