@@ -832,6 +832,20 @@ def _normalize_project_relative_path_mapping(
     }
 
 
+def _normalize_source_override_mapping(paths: Mapping[str, str]) -> dict[str, str]:
+    if paths:
+        register_default_sources()
+        discover_backend_plugins()
+
+    result: dict[str, str] = {}
+    for path, backend in paths.items():
+        backend_name = backend.strip()
+        result[_normalize_project_relative_path(path)] = (
+            SOURCE_REGISTRY.resolve_name(backend_name) or backend_name
+        )
+    return result
+
+
 def _project_config_path(root: Path, path: str) -> Path:
     if _is_absolute_or_windows_drive_path(path):
         return Path(path)
@@ -3478,7 +3492,7 @@ class ProjectConfig:
         object.__setattr__(
             self,
             "source_overrides",
-            _normalize_project_relative_path_mapping(
+            _normalize_source_override_mapping(
                 _as_non_empty_str_mapping(
                     self.source_overrides,
                     field_name="ProjectConfig.source_overrides",
@@ -10551,6 +10565,61 @@ def _current_include_scan_diagnostic_contract_reasons(
     return reasons
 
 
+def _current_project_config_diagnostic_contract_reasons(
+    diagnostics: Sequence[Any],
+    *,
+    root_path: Path | None,
+    project: Mapping[str, Any] | None,
+) -> list[str]:
+    config = _project_config_for_scan_validation(project, root_path)
+    if config is None:
+        return []
+
+    try:
+        current_scan = scan_project(config)
+    except (OSError, ValueError):
+        return []
+
+    reported_diagnostic_counts = Counter(
+        key
+        for diagnostic in diagnostics
+        for key in (_diagnostic_identity_key(diagnostic),)
+        if key is not None
+    )
+    if not reported_diagnostic_counts and diagnostics:
+        return []
+
+    expected_diagnostics = [
+        diagnostic
+        for diagnostic in current_scan.diagnostics
+        if diagnostic.code.startswith("project.config.")
+    ]
+    expected_diagnostic_counts = Counter(
+        key
+        for diagnostic in expected_diagnostics
+        for key in (_diagnostic_identity_key(diagnostic),)
+        if key is not None
+    )
+    missing = expected_diagnostic_counts - reported_diagnostic_counts
+    if not missing:
+        return []
+
+    labels_by_key = {
+        key: _diagnostic_identity_label(diagnostic)
+        for diagnostic in expected_diagnostics
+        for key in (_diagnostic_identity_key(diagnostic),)
+        if key is not None
+    }
+    reasons = []
+    for key, count in sorted(missing.items(), key=lambda item: labels_by_key[item[0]]):
+        suffix = f" ({count} records)" if count > 1 else ""
+        reasons.append(
+            "diagnostics must include current project config diagnostic "
+            f"{labels_by_key[key]}{suffix}"
+        )
+    return reasons
+
+
 def _unit_include_dependencies_contract_reasons(
     index: int,
     unit: Mapping[str, Any],
@@ -14203,6 +14272,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     f"diagnostics[{index}].missingCapabilities must be a list of strings"
                 )
         if has_summary and isinstance(units, list) and isinstance(project, Mapping):
+            reasons.extend(
+                _current_project_config_diagnostic_contract_reasons(
+                    diagnostics,
+                    root_path=root_path,
+                    project=project,
+                )
+            )
             reasons.extend(
                 _current_include_scan_diagnostic_contract_reasons(
                     units,

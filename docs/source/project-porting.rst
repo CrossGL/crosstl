@@ -381,7 +381,8 @@ discovery, so override-only files do not require broad include globs. CLI source
 roots replace the configured source roots before scan, report, or translation.
 CLI source overrides are merged with this configuration before scan, report, or
 translation.
-Invalid override backend names are reported as configuration diagnostics.
+Known override backend aliases are canonicalized in reports; invalid override
+backend names are reported as configuration diagnostics.
 Explicit broad include patterns may also match compiled shader artifacts or
 known source formats that CrossTL cannot parse yet. Project scans keep those
 files in the skipped-file rollups and emit structured diagnostics with the

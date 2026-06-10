@@ -496,7 +496,7 @@ def test_project_config_normalizes_direct_relative_path_separators(tmp_path):
         exclude_patterns=r"ignored\*",
         targets="cgl",
         output_dir=ProjectPathLike(r"generated\out"),
-        source_overrides={r"gpu\shaders\*.shader": "cgl"},
+        source_overrides={r"gpu\shaders\*.shader": " CrossGL "},
         include_dirs=r"gpu\include",
         external_corpus_manifest=ProjectPathLike(r"corpus\manifest.json"),
     )
@@ -657,6 +657,20 @@ def _diagnostic_location(file):
         "endColumn": 1,
         "endOffset": 0,
     }
+
+
+def _clear_report_diagnostics(payload):
+    empty_counts = {"note": 0, "warning": 0, "error": 0}
+    payload["diagnostics"] = []
+    payload["diagnosticCounts"] = dict(empty_counts)
+    if "summary" in payload:
+        payload["summary"]["diagnosticCounts"] = dict(empty_counts)
+        payload["summary"]["diagnosticsByCode"] = {}
+        payload["summary"]["diagnosticsByTarget"] = {}
+        payload["summary"]["diagnosticsBySourceBackend"] = {}
+        payload["summary"]["diagnosticsByVariant"] = {}
+        payload["summary"]["diagnosticsByCheckKind"] = {}
+        payload["summary"]["missingCapabilityCounts"] = {}
 
 
 def _write_count_balanced_artifact_gap_report(repo, *, omit_artifact_matrix=False):
@@ -1145,6 +1159,41 @@ def test_scan_project_reports_include_patterns_outside_project(tmp_path):
     )
 
 
+def test_validate_project_report_rejects_missing_current_config_pattern_diagnostics(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside"
+    repo.mkdir()
+    outside.mkdir()
+    (outside / "external.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    absolute_pattern = (outside / "*.cgl").as_posix()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(f"""
+            [project]
+            include = ["{absolute_pattern}", "../outside/*.cgl"]
+            exclude = []
+            """).strip(),
+        encoding="utf-8",
+    )
+    payload = scan_project(load_project_config(repo)).to_report().to_json()
+    _clear_report_diagnostics(payload)
+    report_path = repo / "missing-config-diagnostics-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "diagnostics must include current project config diagnostic "
+        "project.config.include-pattern-outside-project at crosstl.toml:1:1"
+    ) in diagnostic["message"]
+    assert absolute_pattern in diagnostic["message"]
+    assert "../outside/*.cgl" in diagnostic["message"]
+
+
 def test_scan_project_reports_drive_relative_include_patterns(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1453,7 +1502,7 @@ def test_project_config_normalizes_relative_path_separators(tmp_path):
             external_corpus_manifest = 'corpus\manifest.json'
 
             [project.sources]
-            'gpu\shaders\*.shader' = "cgl"
+            'gpu\shaders\*.shader' = "CrossGL"
             """).strip(),
         encoding="utf-8",
     )
@@ -4096,7 +4145,7 @@ def test_translate_project_honors_source_backend_overrides(tmp_path):
             output_dir = "translated"
 
             [project.sources]
-            "gpu/*.shader" = "cgl"
+            "gpu/*.shader" = "CrossGL"
             """).strip(),
         encoding="utf-8",
     )
@@ -4127,7 +4176,7 @@ def test_scan_project_reports_unsupported_source_overrides(tmp_path):
             source_roots = ["gpu"]
 
             [project.sources]
-            "gpu/*.shader" = "unknown-backend"
+            "gpu/*.shader" = " unknown-backend "
             """).strip(),
         encoding="utf-8",
     )
@@ -8929,6 +8978,41 @@ def test_translate_project_records_external_corpus_manifest_outside_project(
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.config.external-corpus-outside-project"
     assert diagnostic["severity"] == "error"
+    assert "outside the repository" in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_missing_external_corpus_boundary_diagnostic(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (tmp_path / "corpus.json").write_text(
+        json.dumps({"schemaVersion": 1, "entries": []}),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            external_corpus_manifest = "../corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+    payload = translate_project(load_project_config(repo)).to_json()
+    _clear_report_diagnostics(payload)
+    report_path = repo / "missing-external-corpus-diagnostic-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "diagnostics must include current project config diagnostic "
+        "project.config.external-corpus-outside-project at crosstl.toml:1:1"
+    ) in diagnostic["message"]
     assert "outside the repository" in diagnostic["message"]
 
 
