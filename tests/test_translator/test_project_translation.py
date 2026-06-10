@@ -155,6 +155,41 @@ def test_project_apis_accept_single_target_strings(tmp_path):
     assert (repo / "out" / "cgl" / "simple.cgl").exists()
 
 
+def test_project_config_accepts_single_string_sequence_fields(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    include_dir = repo / "includes"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir()
+    (shader_dir / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    config = project_api.ProjectConfig(
+        root=repo,
+        source_roots="shaders",
+        include_patterns="shaders/*.cgl",
+        exclude_patterns=[],
+        targets="CGL",
+        include_dirs="includes",
+        variants={"debug": {}},
+        selected_variants="debug",
+    )
+    scan = scan_project(config)
+    payload = scan.to_report().to_json()
+
+    assert config.source_roots == ["shaders"]
+    assert config.include_patterns == ["shaders/*.cgl"]
+    assert config.exclude_patterns == []
+    assert config.targets == ["CGL"]
+    assert config.include_dirs == ["includes"]
+    assert config.selected_variants == ["debug"]
+    assert payload["project"]["sourceRoots"] == ["shaders"]
+    assert payload["project"]["includePatterns"] == ["shaders/*.cgl"]
+    assert payload["project"]["targets"] == ["cgl"]
+    assert payload["project"]["includeDirs"] == ["includes"]
+    assert payload["project"]["selectedVariants"] == ["debug"]
+    assert payload["summary"]["unitCount"] == 1
+
+
 def _source_hash_status_counts(**overrides):
     counts = {
         "missing": 0,

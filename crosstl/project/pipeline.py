@@ -3322,16 +3322,16 @@ class ProjectConfig:
 
     root: Path | str | os.PathLike[str]
     config_path: Path | str | os.PathLike[str] | None = None
-    source_roots: Sequence[str] = (".",)
-    include_patterns: Sequence[str] = ()
-    exclude_patterns: Sequence[str] = DEFAULT_EXCLUDE_PATTERNS
+    source_roots: Sequence[str] | str = (".",)
+    include_patterns: Sequence[str] | str = ()
+    exclude_patterns: Sequence[str] | str = DEFAULT_EXCLUDE_PATTERNS
     targets: Sequence[str] | str = ()
     output_dir: str = DEFAULT_OUTPUT_DIR
     source_overrides: Mapping[str, str] = field(default_factory=dict)
-    include_dirs: Sequence[str] = ()
+    include_dirs: Sequence[str] | str = ()
     defines: Mapping[str, str] = field(default_factory=dict)
     variants: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
-    selected_variants: Sequence[str] = ()
+    selected_variants: Sequence[str] | str = ()
     external_corpus_manifest: str | None = None
 
     def __post_init__(self) -> None:
@@ -3341,6 +3341,22 @@ class ProjectConfig:
                 self,
                 "config_path",
                 Path(os.fspath(self.config_path)).resolve(),
+            )
+        for field_name in (
+            "source_roots",
+            "include_patterns",
+            "exclude_patterns",
+            "targets",
+            "include_dirs",
+            "selected_variants",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                _as_str_list(
+                    getattr(self, field_name),
+                    field_name=f"ProjectConfig.{field_name}",
+                ),
             )
 
     def normalized_targets(self) -> list[str]:
