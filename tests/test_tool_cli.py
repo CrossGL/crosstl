@@ -187,13 +187,15 @@ def test_public_docs_use_root_package_cli_entrypoint():
     docs = {
         "README.md": (ROOT / "README.md").read_text(encoding="utf-8"),
         "docs/source/quickstart.rst": (
-            ROOT / "docs" / "source" / "quickstart.rst"
-        ).read_text(encoding="utf-8"),
+            (ROOT / "docs" / "source" / "quickstart.rst").read_text(encoding="utf-8")
+        ),
         "docs/source/project-porting.rst": (
-            ROOT / "docs" / "source" / "project-porting.rst"
-        ).read_text(encoding="utf-8"),
-        "support/README.md": (ROOT / "support" / "README.md").read_text(
-            encoding="utf-8"
+            (ROOT / "docs" / "source" / "project-porting.rst").read_text(
+                encoding="utf-8"
+            )
+        ),
+        "support/README.md": (
+            (ROOT / "support" / "README.md").read_text(encoding="utf-8")
         ),
     }
 

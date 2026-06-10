@@ -78,7 +78,7 @@ def test_project_config_accepts_path_like_values_when_constructed_directly(tmp_p
     repo = tmp_path / "repo"
     repo.mkdir()
     config_path = repo / "crosstl.toml"
-    config_path.write_text("[project]\noutput_dir = \"out\"\n", encoding="utf-8")
+    config_path.write_text('[project]\noutput_dir = "out"\n', encoding="utf-8")
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
 
     config = project_api.ProjectConfig(
