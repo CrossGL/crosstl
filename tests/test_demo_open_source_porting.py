@@ -68,6 +68,30 @@ def test_open_source_demo_workflow_runs_platform_toolchain_smokes():
     assert "demo-reports-${{ matrix.os }}" in workflow
 
 
+def test_open_source_demo_artifact_comparison_normalizes_platform_text(tmp_path):
+    runner = _load_demo_runner()
+    lf_text = tmp_path / "shader.glsl"
+    crlf_text = tmp_path / "shader-windows.glsl"
+    lf_source_map = tmp_path / "shader.source-remap.json"
+    windows_source_map = tmp_path / "shader-windows.source-remap.json"
+
+    lf_text.write_bytes(b"void main() {\n}\n")
+    crlf_text.write_bytes(b"void main() {\r\n}\r\n\r\n")
+    lf_source_map.write_text(
+        json.dumps({"generatedFile": "crosstl-out/cgl/shader.cgl"}) + "\n",
+        encoding="utf-8",
+    )
+    windows_source_map.write_text(
+        json.dumps({"generatedFile": r"crosstl-out\cgl\shader.cgl"}) + "\r\n",
+        encoding="utf-8",
+    )
+
+    assert runner._comparison_bytes(lf_text) == runner._comparison_bytes(crlf_text)
+    assert runner._comparison_bytes(lf_source_map) == runner._comparison_bytes(
+        windows_source_map
+    )
+
+
 def test_open_source_demo_runner_verifies_fast_reference_subset():
     result = subprocess.run(
         [

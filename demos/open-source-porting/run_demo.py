@@ -177,7 +177,28 @@ def _artifact_files(output_dir: Path, targets: list[str]) -> dict[Path, Path]:
 
 
 def _comparison_bytes(path: Path) -> bytes:
-    return path.read_bytes().rstrip(b"\r\n")
+    data = path.read_bytes().replace(b"\r\n", b"\n").rstrip(b"\n")
+    if path.suffix == ".json":
+        try:
+            payload = json.loads(data.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return data
+        return json.dumps(
+            _normalize_json_paths(payload),
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    return data
+
+
+def _normalize_json_paths(value: object) -> object:
+    if isinstance(value, str):
+        return value.replace("\\", "/")
+    if isinstance(value, list):
+        return [_normalize_json_paths(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _normalize_json_paths(item) for key, item in value.items()}
+    return value
 
 
 def _compare_artifacts(case_dir: Path, work_dir: Path, targets: list[str]) -> None:
