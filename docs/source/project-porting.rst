@@ -63,6 +63,27 @@ A typical first pass looks like:
      crosstl-out/portability-report.json \
      --format text
 
+The same project APIs are available to Python callers that need to integrate
+with existing automation:
+
+.. code-block:: python
+
+   from pathlib import Path
+
+   from crosstl.project import inspect_project_report, translate_project
+
+   report_path = Path("crosstl-out/portability-report.json")
+   report = translate_project(
+       "/path/to/repo",
+       targets=["metal", "opengl"],
+       output_dir=report_path.parent,
+       validate=True,
+   )
+   report.write_json(report_path)
+
+   inspection = inspect_project_report(report_path)
+   print(inspection["success"])
+
 Use these report fields to decide the next action:
 
 .. list-table::

@@ -5,6 +5,7 @@ import pytest
 import crosstl
 import crosstl.translator
 import crosstl.translator.codegen as codegen
+from crosstl.project import translate_project
 from crosstl.translator.ast import ShaderStage
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 
@@ -124,11 +125,13 @@ def test_cgl_translate_save_shader_preserves_source_line_endings(tmp_path):
 
 
 def test_root_package_exposes_documented_registry_helpers():
-    assert {"supported_backends", "supported_sources", "translate"}.issubset(
+    assert {"supported_backends", "supported_sources", "translate", "project"}.issubset(
         crosstl.__all__
     )
+    assert "project" in dir(crosstl)
     assert crosstl.supported_backends() == crosstl.translator.supported_backends()
     assert crosstl.supported_sources() == crosstl.translator.supported_sources()
+    assert crosstl.project.translate_project is translate_project
     assert "opengl" in crosstl.supported_backends()
     assert "cgl" in crosstl.supported_sources()
 

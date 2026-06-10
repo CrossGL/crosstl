@@ -1,6 +1,6 @@
 """Public package interface for CrossGL Translator."""
 
-__all__ = ["translate", "supported_backends", "supported_sources"]
+__all__ = ["translate", "supported_backends", "supported_sources", "project"]
 
 
 def supported_backends():
@@ -22,6 +22,10 @@ def __getattr__(name):
         from ._crosstl import translate
 
         return translate
+    if name == "project":
+        from . import project
+
+        return project
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
