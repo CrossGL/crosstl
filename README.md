@@ -56,11 +56,13 @@ CrossTL is a shader and compute program translator built around **CrossGL** — 
 
 ## Supported Translation Targets
 
-CrossTL provides bidirectional translation between CrossGL and:
+CrossTL provides translation from CrossGL to:
 
 - **Metal** - Apple's graphics and compute API
 - **DirectX (HLSL)** - Microsoft's graphics API
 - **OpenGL (GLSL)** - Cross-platform graphics
+- **WebGL (GLSL ES)** - Browser graphics through WebGL 2.0 compatible GLSL ES
+- **WebGPU (WGSL)** - Browser and native WebGPU shader output
 - **Vulkan (SPIRV)** - High-performance graphics and compute
 - **CUDA** - NVIDIA parallel computing
 - **HIP** - AMD GPU computing
@@ -68,6 +70,11 @@ CrossTL provides bidirectional translation between CrossGL and:
 - **Mojo** - Mojo shader/compute modules
 - **Slang** - Real-time shading language
 - **CrossGL (.cgl)** - The IR/interchange format itself
+
+Native source import is available for the bidirectional backends listed in the
+support matrix. WebGL and WGSL are currently target-only outputs; `.webgl.glsl`,
+`.wgsl`, and `.wesl` inputs are rejected until dedicated source frontends
+land.
 
 ## Backend Readiness: DirectX / Metal / OpenGL
 

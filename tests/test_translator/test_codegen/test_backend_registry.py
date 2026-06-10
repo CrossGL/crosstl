@@ -16,6 +16,7 @@ from crosstl.translator.source_registry import (
     HIP_ARTIFACT_UNSUPPORTED_MESSAGE,
     METAL_BINARY_UNSUPPORTED_MESSAGE,
     SOURCE_REGISTRY,
+    WEBGL_SOURCE_UNSUPPORTED_MESSAGE,
     WGSL_SOURCE_UNSUPPORTED_MESSAGE,
     register_default_sources,
 )
@@ -169,6 +170,7 @@ def test_backend_registry_tracks_target_only_backends_separately():
 
     assert registry.names() == ["wgsl"]
     assert registry.source_backend_names() == []
+    assert registry.target_backend_names_with_source_frontends() == []
     assert registry.resolve_name("shader.WGSL") == "wgsl"
     assert registry.get("webgpu").source_registry_name is None
 
@@ -187,8 +189,15 @@ def test_backend_registry_can_map_target_to_differently_named_source_frontend():
 
     assert registry.names() == ["webgl"]
     assert registry.source_backend_names() == ["webgl"]
+    assert registry.target_backend_names_with_source_frontends() == ["webgl"]
     assert registry.resolve_name("shader.webgl.glsl") == "webgl"
     assert registry.get("glsl-es").source_registry_name == "opengl"
+
+
+def test_global_registry_exposes_clear_source_frontend_target_names():
+    assert codegen.source_backend_names() == (
+        codegen.target_backend_names_with_source_frontends()
+    )
 
 
 @pytest.mark.parametrize(
@@ -272,6 +281,7 @@ def test_source_registry_recognizes_opencl_real_world_extensions(extension):
         (".metallib", METAL_BINARY_UNSUPPORTED_MESSAGE),
         (".wgsl", WGSL_SOURCE_UNSUPPORTED_MESSAGE),
         (".wesl", WGSL_SOURCE_UNSUPPORTED_MESSAGE),
+        (".webgl.glsl", WEBGL_SOURCE_UNSUPPORTED_MESSAGE),
         (".cso", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
         (".dxbc", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
         (".dxil", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
@@ -294,6 +304,8 @@ def test_source_registry_known_unsupported_extensions_raise_clear_diagnostic(
     ("filename", "message"),
     (
         ("shader.wgsl.json", WGSL_SOURCE_UNSUPPORTED_MESSAGE),
+        ("shader.webgl.glsl", WEBGL_SOURCE_UNSUPPORTED_MESSAGE),
+        ("shader.webgl.glsl.json", WEBGL_SOURCE_UNSUPPORTED_MESSAGE),
         ("shader.spv.json", BINARY_SPIRV_UNSUPPORTED_MESSAGE),
         ("shader.metallib.json", METAL_BINARY_UNSUPPORTED_MESSAGE),
         ("shader.dxil.json", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
@@ -363,6 +375,7 @@ def test_target_registry_real_world_extensions_match_source_and_formatter(
         ("rust", (".rs", ".rust")),
         ("vulkan", (".spvasm",)),
         ("webgl", (".webgl.glsl",)),
+        ("wgsl", (".wgsl",)),
     ),
 )
 def test_target_registry_resolves_file_extension_backend_spellings(backend, extensions):

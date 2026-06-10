@@ -2,6 +2,18 @@
 
 All notable changes to CrossTL are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Target-only WebGL/WebGL2 GLSL ES backend support.
+- Target-only WebGPU/WGSL backend support for vertex, fragment, and compute output.
+
+### Improved
+
+- Split target backend registration from native source frontend availability in the backend registry and support matrix.
+- Documented target-only source rejection for WebGL and WGSL outputs.
+
 ## [2.0.0] - 2026-06-01
 
 ### Breaking Changes

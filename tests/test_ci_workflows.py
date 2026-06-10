@@ -27,6 +27,7 @@ TRANSLATOR_TEST_MATRIX_NAMES = {
     **BACKEND_TEST_MATRIX_NAMES,
     "hip": "hip",
     "webgl": "webgl",
+    "wgsl": "wgsl",
 }
 
 

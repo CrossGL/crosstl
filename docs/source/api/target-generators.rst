@@ -11,6 +11,18 @@ GLSL
 .. autoclass:: crosstl.translator.codegen.GLSL_codegen.GLSLCodeGen
    :members: generate
 
+WebGL / GLSL ES
+---------------
+
+.. autoclass:: crosstl.translator.codegen.webgl_codegen.WebGLCodeGen
+   :members: generate
+
+WebGPU / WGSL
+-------------
+
+.. autoclass:: crosstl.translator.codegen.wgsl_codegen.WGSLCodeGen
+   :members: generate
+
 DirectX / HLSL
 --------------
 

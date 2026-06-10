@@ -23,9 +23,17 @@ Built-in targets
      - ``opengl``
      - ``glsl``, ``ogl``
      - ``.glsl``
+   * - WebGL / GLSL ES
+     - ``webgl``
+     - ``webgl2``, ``essl``, ``glsl-es``
+     - ``.webgl.glsl``
+   * - WebGPU / WGSL
+     - ``wgsl``
+     - ``webgpu``
+     - ``.wgsl``
    * - Metal
      - ``metal``
-     - ``metal``
+     - ``metal``, ``msl``
      - ``.metal``
    * - Vulkan SPIR-V
      - ``vulkan``
@@ -102,6 +110,25 @@ Built-in sources
      - ``slang``
      - ``.slang``
      - Yes
+
+Target-only sources
+-------------------
+
+Some targets are intentionally output-only while their native source frontends
+are still under development.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Target
+     - Output extension
+     - Source input behavior
+   * - WebGL / GLSL ES
+     - ``.webgl.glsl``
+     - Rejected as target-only output; use ``.glsl`` or ``.cgl`` as input.
+   * - WebGPU / WGSL
+     - ``.wgsl``
+     - Rejected until a dedicated WGSL/WESL source frontend lands.
 
 Runtime discovery
 -----------------

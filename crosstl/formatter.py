@@ -23,6 +23,7 @@ class ShaderLanguage(Enum):
     RUST = "rust"
     CUDA = "cuda"
     HIP = "hip"
+    WGSL = "wgsl"
     UNKNOWN = "unknown"
 
 
@@ -86,6 +87,8 @@ class CodeFormatter:
             return ShaderLanguage.METAL
         elif ext in [".spvasm", ".vulkan"]:
             return ShaderLanguage.SPIRV
+        elif ext in [".wgsl"]:
+            return ShaderLanguage.WGSL
         elif ext in [".slang", ".slangh"]:
             return ShaderLanguage.SLANG
         elif ext in [".mojo"]:
@@ -121,7 +124,7 @@ class CodeFormatter:
             return self._format_with_clang(code, language)
         elif language == ShaderLanguage.SPIRV:
             return self._format_spirv(code)
-        elif language == ShaderLanguage.MOJO:
+        elif language in [ShaderLanguage.MOJO, ShaderLanguage.WGSL]:
             return code
         else:
             logger.warning(f"No formatter available for {language}")
@@ -338,6 +341,8 @@ def format_shader_code(code, backend, output_path=None):
         "webgl2": ShaderLanguage.GLSL,
         "essl": ShaderLanguage.GLSL,
         "glsl-es": ShaderLanguage.GLSL,
+        "wgsl": ShaderLanguage.WGSL,
+        "webgpu": ShaderLanguage.WGSL,
         "vulkan": ShaderLanguage.SPIRV,
         "spirv": ShaderLanguage.SPIRV,
         "spv": ShaderLanguage.SPIRV,
@@ -393,6 +398,7 @@ def format_shader_code(code, backend, output_path=None):
         ".cuh": ShaderLanguage.CUDA,
         ".cuda": ShaderLanguage.CUDA,
         ".hip": ShaderLanguage.HIP,
+        ".wgsl": ShaderLanguage.WGSL,
         ".slang": ShaderLanguage.SLANG,
         ".slangh": ShaderLanguage.SLANG,
     }

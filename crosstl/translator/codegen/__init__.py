@@ -15,10 +15,12 @@ from .registry import (
     normalize_backend_name,
     register_backend,
     source_backend_names,
+    target_backend_names_with_source_frontends,
 )
 from .rust_codegen import RustCodeGen
 from .SPIRV_codegen import VulkanSPIRVCodeGen
 from .webgl_codegen import WebGLCodeGen
+from .wgsl_codegen import WGSLCodeGen
 
 register_backend(
     BackendSpec(
@@ -102,6 +104,16 @@ register_backend(
         has_source_frontend=False,
     )
 )
+register_backend(
+    BackendSpec(
+        name="wgsl",
+        codegen_class=WGSLCodeGen,
+        aliases=("webgpu",),
+        file_extensions=(".wgsl",),
+        format_backend="wgsl",
+        has_source_frontend=False,
+    )
+)
 
 # Import slang_codegen only if available
 try:
@@ -132,6 +144,7 @@ __all__ = [
     "RustCodeGen",
     "VulkanSPIRVCodeGen",
     "WebGLCodeGen",
+    "WGSLCodeGen",
     "get_backend",
     "get_codegen",
     "get_backend_extension",
@@ -139,6 +152,7 @@ __all__ = [
     "register_backend",
     "backend_names",
     "source_backend_names",
+    "target_backend_names_with_source_frontends",
 ]
 
 if "_SlangCodeGen" in globals() and _SlangCodeGen is not None:

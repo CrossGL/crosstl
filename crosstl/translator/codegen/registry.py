@@ -106,13 +106,17 @@ class BackendRegistry:
         """Return registered canonical backend names in sorted order."""
         return sorted(self._by_name.keys())
 
-    def source_backend_names(self) -> Sequence[str]:
-        """Return targets that also have native source frontends."""
+    def target_backend_names_with_source_frontends(self) -> Sequence[str]:
+        """Return target backends that also have native source frontends."""
         return sorted(
             name
             for name, spec in self._by_name.items()
             if spec.source_registry_name is not None
         )
+
+    def source_backend_names(self) -> Sequence[str]:
+        """Return target backends that also have native source frontends."""
+        return self.target_backend_names_with_source_frontends()
 
     def aliases(self) -> dict[str, str]:
         """Return a copy of the alias-to-backend mapping."""
@@ -148,7 +152,12 @@ def backend_names() -> Sequence[str]:
 
 def source_backend_names() -> Sequence[str]:
     """Return registered targets that also have native source frontends."""
-    return BACKEND_REGISTRY.source_backend_names()
+    return BACKEND_REGISTRY.target_backend_names_with_source_frontends()
+
+
+def target_backend_names_with_source_frontends() -> Sequence[str]:
+    """Return registered targets that also have native source frontends."""
+    return BACKEND_REGISTRY.target_backend_names_with_source_frontends()
 
 
 def get_backend_extension(name: str) -> str | None:

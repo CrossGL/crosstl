@@ -3022,6 +3022,7 @@ def test_support_matrix_covers_all_cataloged_backends():
         "rust",
         "slang",
         "webgl",
+        "wgsl",
     }
 
     assert matrix["summary"]["feature_count"] == len(matrix["features"])
