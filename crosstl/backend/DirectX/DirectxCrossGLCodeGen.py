@@ -445,6 +445,7 @@ class HLSLToCrossGLConverter:
         self.code = []
         self.shadow_texture_names = set()
         self.shadow_texture_declaration_ids = set()
+        self.hlsl_program_constant_global_ids = set()
         self.global_variable_types = {}
         self.global_resource_array_dims = {}
         self.current_variable_types = {}
@@ -3092,6 +3093,9 @@ class HLSLToCrossGLConverter:
         ) = self.collect_legacy_sampler_bindings(ast)
         self.legacy_bound_texture_types = self.collect_legacy_bound_texture_types(ast)
         self.shadow_texture_names = self.collect_shadow_texture_names(ast)
+        self.hlsl_program_constant_global_ids = (
+            self.collect_hlsl_program_constant_global_ids(ast)
+        )
         self.struct_type_names = {
             node.name
             for node in getattr(ast, "structs", []) or []
@@ -3477,6 +3481,8 @@ class HLSLToCrossGLConverter:
             )
         else:
             code = self.format_attributes(getattr(node, "attributes", []), 1)
+        if id(node) in self.hlsl_program_constant_global_ids:
+            code += "    @ hlsl_program_constant\n"
         code += self.format_resource_qualifier_attributes(node, 1)
         code += self.format_binding_attributes(node, 1)
         code += self.format_matrix_layout_attributes(node, 1)
@@ -3508,6 +3514,77 @@ class HLSLToCrossGLConverter:
             code + f"    {declaration_prefix}{variable_type} "
             f"{variable_name}{array_suffix}{initializer};\n"
         )
+
+    def is_hlsl_program_constant_global(self, node):
+        if getattr(node, "value", None) is not None:
+            return False
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        if getattr(node, "is_const", False) or qualifiers & {
+            "const",
+            "groupshared",
+            "static",
+            "shared",
+        }:
+            return False
+
+        type_name = getattr(node, "vtype", None)
+        base_type = self.raw_type_base(type_name)
+        if not base_type:
+            return False
+        if (
+            self.is_uav_resource_type(type_name)
+            or self.is_buffer_resource_type(type_name)
+            or base_type.startswith(("Texture", "FeedbackTexture"))
+            or base_type
+            in {
+                "Sampler",
+                "SamplerState",
+                "SamplerComparisonState",
+                "sampler",
+                "sampler_state",
+                "RaytracingAccelerationStructure",
+                "RayQuery",
+                "InputPatch",
+                "OutputPatch",
+                "PointStream",
+                "LineStream",
+                "TriangleStream",
+                "SubpassInput",
+            }
+        ):
+            return False
+        return True
+
+    def collect_hlsl_program_constant_global_ids(self, ast):
+        candidates = {
+            getattr(node, "name", None): node
+            for node in getattr(ast, "global_variables", []) or []
+            if self.is_hlsl_program_constant_global(node)
+            and getattr(node, "name", None)
+        }
+        if not candidates:
+            return set()
+
+        referenced_names = set()
+
+        def visit(node):
+            if node is None or isinstance(node, (int, float, bool)):
+                return
+            if isinstance(node, str):
+                if node in candidates:
+                    referenced_names.add(node)
+                return
+            if isinstance(node, VariableNode):
+                name = getattr(node, "name", None)
+                if name in candidates:
+                    referenced_names.add(name)
+            for child in self.iter_ast_children(node):
+                visit(child)
+
+        for func in getattr(ast, "functions", []) or []:
+            visit(getattr(func, "body", []))
+
+        return {id(candidates[name]) for name in referenced_names}
 
     def generate_cbuffers(self, ast):
         code = ""
