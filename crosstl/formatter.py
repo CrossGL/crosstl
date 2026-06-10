@@ -88,6 +88,8 @@ class CodeFormatter:
             return ShaderLanguage.SPIRV
         elif ext in [".slang", ".slangh"]:
             return ShaderLanguage.SLANG
+        elif ext in [".mojo"]:
+            return ShaderLanguage.MOJO
         elif ext in [".rs", ".rust"]:
             return ShaderLanguage.RUST
         elif ext in [".cu", ".cuh", ".cuda"]:
@@ -119,6 +121,8 @@ class CodeFormatter:
             return self._format_with_clang(code, language)
         elif language == ShaderLanguage.SPIRV:
             return self._format_spirv(code)
+        elif language == ShaderLanguage.MOJO:
+            return code
         else:
             logger.warning(f"No formatter available for {language}")
             return code

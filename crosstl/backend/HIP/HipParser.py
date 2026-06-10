@@ -119,7 +119,7 @@ class HipParser:
     }
     TYPE_PREFIX_TOKENS = {"TYPENAME"}
     TYPE_QUALIFIER_TOKENS = {"CONST", "VOLATILE", "UNSIGNED", "SIGNED", "__RESTRICT__"}
-    POSTFIX_TYPE_QUALIFIER_TOKENS = {"CONST", "__RESTRICT__"}
+    POSTFIX_TYPE_QUALIFIER_TOKENS = {"CONST", "VOLATILE", "__RESTRICT__"}
     TYPE_REFERENCE_TOKENS = {"AMPERSAND", "AND"}
     CPP_NAMED_CASTS = {"static_cast", "reinterpret_cast", "const_cast", "dynamic_cast"}
     ATOMIC_FUNCTION_TOKENS = {
@@ -418,13 +418,19 @@ class HipParser:
         "hipFloatComplex",
         "hipfftComplex",
         "hipfftDoubleComplex",
+        "coalesced_group",
+        "cluster_group",
         "__half",
         "__half2",
         "half",
         "half2",
+        "grid_group",
+        "multi_grid_group",
+        "thread_block",
         "float16_t",
         "float32_t",
         "float64_t",
+        "thread_group",
         "_Float16",
         "__int64",
         "int8_t",
@@ -502,7 +508,10 @@ class HipParser:
             if self.tokens[index].type == "__LAUNCH_BOUNDS__":
                 index = self.skip_launch_bounds_at_pos(index)
             else:
+                is_linkage_specifier = self.tokens[index].type == "EXTERN"
                 index += 1
+                if is_linkage_specifier:
+                    index = self.skip_linkage_language_string_at_pos(index)
             index = self.skip_newlines_at_pos(index)
             index = self.skip_type_attribute_prefixes_at_pos(index)
 
@@ -1784,8 +1793,11 @@ class HipParser:
             if self.match("__LAUNCH_BOUNDS__"):
                 attributes.append(self.parse_launch_bounds_attribute())
             else:
+                is_linkage_specifier = self.current_token.type == "EXTERN"
                 qualifiers.append(self.current_token.value)
                 self.advance()
+                if is_linkage_specifier and self.match("STRING"):
+                    self.advance()
 
         return_type = self.parse_type()
         self.skip_newlines()
@@ -1860,8 +1872,11 @@ class HipParser:
             self.match(*self.FUNCTION_DECLARATION_SPECIFIER_TOKENS)
             or self.is_identifier_function_specifier_token()
         ):
+            is_linkage_specifier = self.current_token.type == "EXTERN"
             qualifiers.append(self.current_token.value)
             self.advance()
+            if is_linkage_specifier and self.match("STRING"):
+                self.advance()
             self.skip_cpp_attributes()
 
         return_type = self.parse_type()
@@ -4927,7 +4942,10 @@ class HipParser:
             self.tokens[index].type in self.FUNCTION_DECLARATION_SPECIFIER_TOKENS
             or self.is_identifier_function_specifier_token(self.tokens[index])
         ):
+            is_linkage_specifier = self.tokens[index].type == "EXTERN"
             index += 1
+            if is_linkage_specifier:
+                index = self.skip_linkage_language_string_at_pos(index)
             index = self.skip_cpp_attributes_at_pos(index)
 
         index = self.skip_type_at_pos(
@@ -5458,6 +5476,11 @@ class HipParser:
         ):
             return index + 2
         return None
+
+    def skip_linkage_language_string_at_pos(self, index):
+        if index < len(self.tokens) and self.tokens[index].type == "STRING":
+            return index + 1
+        return index
 
     def skip_launch_bounds_at_pos(self, index):
         index += 1

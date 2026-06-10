@@ -321,6 +321,63 @@ class TestHipParser:
         assert isinstance(comma_expr.right.left, ArrayAccessNode)
         assert comma_expr.right.operator == "="
 
+    def test_public_hip_tests_noinline_before_extern_c_device_function(self):
+        # Reduced from ROCm/hip-tests@a618b48f0a29cfbd8c990fa72ab772483f61d381,
+        # catch/unit/deviceLib/DynamicAllocas.cc.
+        code = """
+        __noinline__ extern "C" __device__
+        void process_array_with_aligned_32_byte_buffer(int* a, int* b) {
+            a[0] = b[0];
+        }
+        """
+        ast = self.parse_code(code)
+
+        helper = ast.statements[0]
+
+        assert isinstance(helper, FunctionNode)
+        assert helper.name == "process_array_with_aligned_32_byte_buffer"
+        assert helper.qualifiers == ["__noinline__", "extern", "__device__"]
+
+    def test_public_hip_tests_coalesced_group_const_reference_declaration(self):
+        # Reduced from ROCm/hip-tests@a618b48f0a29cfbd8c990fa72ab772483f61d381,
+        # catch/unit/cooperativeGrps/coalesced_groups_shfl_down_old.cc.
+        code = """
+        __global__ void kernel_shfl_down(int* dResults) {
+            coalesced_group const& g = coalesced_threads();
+            dResults[0] = g.thread_rank();
+        }
+        """
+        ast = self.parse_code(code)
+
+        declaration = ast.statements[0].body[0]
+
+        assert isinstance(declaration, VariableNode)
+        assert declaration.vtype == "coalesced_group const &"
+        assert declaration.name == "g"
+
+    def test_public_rocprim_template_kernel_volatile_const_pointer_parameter(self):
+        # Reduced from ROCm/rocPRIM@14cd5e3c27a4b9ae7d510823a450723a03985ac0,
+        # test/rocprim/test_thread_algos.cpp.
+        code = """
+        template<class Type>
+        __global__
+        void thread_load_kernel(Type* volatile const device_input,
+                                Type* device_output) {
+            size_t index = blockIdx.x * blockDim.x + threadIdx.x;
+            device_output[index] = device_input[index];
+        }
+        """
+        ast = self.parse_code(code)
+
+        kernel = ast.statements[0]
+
+        assert isinstance(kernel, KernelNode)
+        assert kernel.name == "thread_load_kernel"
+        assert kernel.params[0] == {
+            "type": "Type * volatile const",
+            "name": "device_input",
+        }
+
     def test_public_rocm_examples_device_global_variables_parse_as_globals(self):
         code = """
         __device__ auto load_callback_dev = load_callback;

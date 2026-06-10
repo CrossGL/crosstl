@@ -343,6 +343,32 @@ class TestCudaCodeGen:
         assert "var d_shadow: ptr<u32>;" in result
         assert "d_output[0] = ((d_input[0] & 0xf00) >> 8);" in result
 
+    def test_public_llama_conv2d_kernel_parameter_reserved_name_reparse(self):
+        # Reduced from ggml-org/llama.cpp ggml/src/ggml-cuda/conv2d*.cu,
+        # where CUDA kernels use a pointer parameter named "kernel".
+        code = """
+        template <typename T>
+        __global__ void conv2d_kernel(
+            const float* input,
+            const T* kernel,
+            float* output) {
+            int idx = threadIdx.x;
+            output[idx] = input[idx] + kernel[idx];
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var<storage, read_write> kernel_: array<T>" in result
+        assert "output[idx] = (input[idx] + kernel_[idx]);" in result
+        assert "var<storage, read_write> kernel: array<T>" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_enum_class_declaration_conversion(self):
         code = """
         enum class MemoryMode : unsigned int

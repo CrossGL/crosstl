@@ -52,6 +52,9 @@ DIRECTX_SHADER_COMPILER_WORKGRAPH_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb9fc
 DIRECTX_SHADER_COMPILER_CONVERSION_SELECTOR_COMMIT = (
     "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 )
+DIRECTX_SHADER_COMPILER_TEMPLATE_VALUE_PATH_COMMIT = (
+    "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
+)
 DIRECTX_SHADER_COMPILER_VARMODS_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 DIRECTX_SHADER_COMPILER_UNSIGNED_SHORTHAND_COMMIT = (
     "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
@@ -1034,6 +1037,40 @@ EXTERNAL_FIXTURES = [
         contains=(
             "uint x = uint(1);",
             "return vec4(component, component, component, component);",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_template_value_path_reparse",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_TEMPLATE_VALUE_PATH_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/template/ackermann.hlsl",
+        code=textwrap.dedent("""
+            template<unsigned int M, unsigned int N>
+            struct Ackermann {
+              enum {
+                value = Ackermann<M - 1, Ackermann<M, N - 1>::value>::value
+              };
+            };
+
+            template<unsigned int M> struct Ackermann<M, 0> {
+              enum {
+                value = Ackermann<M - 1, 1>::value
+              };
+            };
+
+            template<> struct Ackermann<0, 0> {
+              enum {
+                value = 1
+              };
+            };
+
+            int main(int a : A) : SV_Target {
+              return Ackermann<3, 4>::value;
+            }
+        """).strip(),
+        contains=(
+            "value = Ackermann_M_1_Ackermann_M_N_1__value__value,",
+            "return Ackermann_3_4__value;",
         ),
     ),
     # Source repo: https://github.com/microsoft/DirectXShaderCompiler

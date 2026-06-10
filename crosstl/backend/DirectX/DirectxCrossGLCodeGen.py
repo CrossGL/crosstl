@@ -1425,7 +1425,14 @@ class HLSLToCrossGLConverter:
             return name
         if name in self.current_identifier_renames:
             return self.current_identifier_renames[name]
-        return self.global_identifier_renames.get(name, name)
+        rendered = self.global_identifier_renames.get(name, name)
+        if self.is_opaque_template_value_path(rendered):
+            return self.sanitize_scoped_identifier_name(rendered)
+        return rendered
+
+    def is_opaque_template_value_path(self, name):
+        """Return whether an HLSL template value path needs CrossGL-safe spelling."""
+        return isinstance(name, str) and "<" in name and ">" in name and "::" in name
 
     def function_parameter_renames(self, params):
         reserved_names = {param.name for param in params if param.name}
