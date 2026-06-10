@@ -1773,6 +1773,28 @@ def test_glsl_global_resource_binding_attributes_drive_layout_bindings():
     assert "layout(binding = 9) uniform sampler2D autoTex;" in generated_code
 
 
+def test_glsl_hlsl_sampler_register_metadata_maps_to_texture_binding():
+    code = """
+    shader LegacyHlslSamplerRegister {
+        sampler2D Texture @register(s0);
+        sampler2D NextTexture;
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                return texture(Texture, uv) + texture(NextTexture, uv);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(binding = 0) uniform sampler2D Texture;" in generated_code
+    assert "layout(binding = 1) uniform sampler2D NextTexture;" in generated_code
+
+
 def test_glsl_resource_binding_aliases_accept_equivalent_metadata():
     code = """
     shader EquivalentResourceBindings {

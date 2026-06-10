@@ -16021,6 +16021,15 @@ class GLSLCodeGen:
 
         return None, None
 
+    def accepts_hlsl_sampler_register_for_texture_binding(self, node):
+        vtype = self.resource_node_type(node)
+        mapped_type = self.map_resource_type_with_format(vtype, node)
+        return (
+            self.is_opaque_resource_type(mapped_type)
+            and not self.is_storage_image_type(vtype)
+            and mapped_type.startswith(("sampler", "isampler", "usampler"))
+        )
+
     def validate_resource_register_prefix(self, node, source):
         actual_prefix = self.resource_register_prefix(source)
         if actual_prefix is None:
@@ -16028,6 +16037,12 @@ class GLSLCodeGen:
 
         expected_prefix, namespace = self.expected_resource_register_prefix(node)
         if expected_prefix is None or actual_prefix == expected_prefix:
+            return
+        if (
+            expected_prefix == "t"
+            and actual_prefix == "s"
+            and self.accepts_hlsl_sampler_register_for_texture_binding(node)
+        ):
             return
 
         node_name = self.resource_node_name(node, "<unnamed>")
