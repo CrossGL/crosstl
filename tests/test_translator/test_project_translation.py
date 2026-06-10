@@ -24,6 +24,7 @@ from crosstl.project import (
     build_runtime_loader_manifest,
     build_runtime_package,
     inspect_project_report,
+    inspect_runtime_host_loader_scaffolds,
     inspect_runtime_package,
     load_project_config,
     plan_runtime_adapters,
@@ -166,6 +167,7 @@ def test_project_package_exposes_public_api_surface():
         "build_runtime_host_loader_scaffolds",
         "build_runtime_loader_manifest",
         "build_runtime_package",
+        "inspect_runtime_host_loader_scaffolds",
         "inspect_runtime_package",
         "inspect_project_report",
         "load_project_config",
@@ -24903,6 +24905,237 @@ def test_project_cli_scaffold_host_loaders_json_writes_output(tmp_path):
     assert payload["kind"] == project_pipeline.RUNTIME_HOST_LOADER_SCAFFOLDS_KIND
     assert payload["summary"]["scaffoldCount"] == 1
     assert (scaffold_dir / "host-loader-scaffolds.json").is_file()
+
+
+def _build_runtime_host_loader_scaffold_fixture(tmp_path, targets=("cgl",)):
+    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=targets)
+    loader_manifest_path = package_dir / "runtime-loader-manifest.json"
+    loader_manifest_path.write_text(
+        json.dumps(
+            build_runtime_loader_manifest(package_dir / "runtime-package.json"),
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    scaffold_dir = repo / "host-loader-scaffolds"
+    scaffold_payload = build_runtime_host_loader_scaffolds(
+        loader_manifest_path,
+        scaffold_dir,
+    )
+    return repo, scaffold_dir, scaffold_payload
+
+
+def test_inspect_runtime_host_loader_scaffolds_reports_ready_files(tmp_path):
+    _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(tmp_path)
+
+    payload = inspect_runtime_host_loader_scaffolds(
+        scaffold_dir / "host-loader-scaffolds.json"
+    )
+
+    assert (
+        set(payload) == project_pipeline.RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_FIELDS
+    )
+    assert (
+        payload["kind"]
+        == project_pipeline.RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_KIND
+    )
+    assert payload["success"] is True
+    assert payload["status"] == "ready"
+    assert payload["scope"] == (
+        project_pipeline.RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_SCOPE
+    )
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_NON_GOALS
+    )
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "scaffoldCount": 1,
+        "readyScaffoldCount": 1,
+        "blockedScaffoldCount": 0,
+        "failedScaffoldCount": 0,
+        "generatedFileCount": 3,
+        "verifiedGeneratedFileCount": 3,
+        "failedGeneratedFileCount": 0,
+        "blockerCount": 0,
+        "actionCount": 2,
+        "runtimeReferenceCount": 1,
+    }
+    assert set(payload["targets"][0]) == (
+        project_pipeline.RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_TARGET_FIELDS
+    )
+    assert payload["targets"][0]["target"] == "cgl"
+    assert payload["targets"][0]["status"] == "ready"
+    assert len(payload["scaffolds"]) == 1
+    scaffold = payload["scaffolds"][0]
+    assert set(scaffold) == (
+        project_pipeline.RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_SCAFFOLD_FIELDS
+    )
+    assert scaffold["status"] == "ready"
+    assert scaffold["fileStatus"] == "ready"
+    assert scaffold["unitKind"] == "crosstl-runtime-host-loader-unit"
+    assert scaffold["unitStatus"] == "ready"
+    assert scaffold["diagnostics"] == []
+    for generated_file in payload["generatedFiles"]:
+        assert set(generated_file) == (
+            project_pipeline.RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_GENERATED_FILE_FIELDS
+        )
+        assert generated_file["status"] == "ready"
+        assert generated_file["diagnostics"] == []
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+
+
+def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file(
+    tmp_path,
+):
+    _, scaffold_dir, scaffold_payload = _build_runtime_host_loader_scaffold_fixture(
+        tmp_path
+    )
+    unit_path = scaffold_dir / scaffold_payload["scaffolds"][0]["outputPath"]
+    unit_path.unlink()
+
+    payload = inspect_runtime_host_loader_scaffolds(
+        scaffold_dir / "host-loader-scaffolds.json"
+    )
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["summary"]["failedScaffoldCount"] == 1
+    assert payload["summary"]["failedGeneratedFileCount"] == 1
+    assert payload["scaffolds"][0]["status"] == "failed"
+    assert payload["scaffolds"][0]["fileStatus"] == "failed"
+    assert (
+        "project.runtime-host-loader-scaffolds-inspection.scaffold-missing"
+        in payload["scaffolds"][0]["diagnostics"]
+    )
+    assert (
+        "project.runtime-host-loader-scaffolds-inspection.generated-file-missing"
+        in payload["generatedFiles"][2]["diagnostics"]
+    )
+
+
+def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units(tmp_path):
+    _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
+        tmp_path, targets=("vulkan",)
+    )
+
+    payload = inspect_runtime_host_loader_scaffolds(
+        scaffold_dir / "host-loader-scaffolds.json"
+    )
+
+    assert payload["success"] is True
+    assert payload["status"] == "blocked"
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "scaffoldCount": 1,
+        "readyScaffoldCount": 0,
+        "blockedScaffoldCount": 1,
+        "failedScaffoldCount": 0,
+        "generatedFileCount": 2,
+        "verifiedGeneratedFileCount": 2,
+        "failedGeneratedFileCount": 0,
+        "blockerCount": 1,
+        "actionCount": 3,
+        "runtimeReferenceCount": 1,
+    }
+    assert payload["targets"][0]["status"] == "blocked"
+    assert payload["scaffolds"][0]["status"] == "blocked"
+    assert payload["scaffolds"][0]["fileStatus"] == "blocked"
+    assert payload["scaffolds"][0]["blockerCount"] == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+
+
+def test_inspect_runtime_host_loader_scaffolds_rejects_wrong_manifest_kind(
+    tmp_path,
+):
+    manifest_path = tmp_path / "host-loader-scaffolds.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-runtime-loader-manifest",
+                "success": True,
+                "scaffolds": [],
+                "generatedFiles": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = inspect_runtime_host_loader_scaffolds(manifest_path)
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["summary"]["scaffoldCount"] == 0
+    assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == (
+        "project.runtime-host-loader-scaffolds-inspection.manifest-kind-invalid"
+    )
+
+
+def test_project_cli_inspect_host_loader_scaffolds_text_outputs_readiness(tmp_path):
+    _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(tmp_path)
+    manifest_path = scaffold_dir / "host-loader-scaffolds.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-host-loader-scaffolds",
+            str(manifest_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Runtime host loader scaffold inspection: {manifest_path}" in result.stdout
+    assert "Status: ready" in result.stdout
+    assert (
+        "Inspection scope: host-loader-scaffold-readiness-inspection" in result.stdout
+    )
+    assert (
+        "Inspection non-goals: host-code-rewriting, device-execution, "
+        "runtime-framework-generation, target-sdk-installation"
+    ) in result.stdout
+    assert "Summary: 1 targets, 1 scaffolds, 1 ready, 0 blocked" in result.stdout
+    assert "Generated file checks:" in result.stdout
+    assert "Runtime host loader scaffold checks:" in result.stdout
+
+
+def test_project_cli_inspect_host_loader_scaffolds_json_writes_output(tmp_path):
+    repo, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(tmp_path)
+    output_path = repo / "host-loader-scaffold-inspection.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-host-loader-scaffolds",
+            str(scaffold_dir / "host-loader-scaffolds.json"),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert (
+        payload["kind"]
+        == project_pipeline.RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_KIND
+    )
+    assert payload["summary"]["readyScaffoldCount"] == 1
+    assert payload["generatedFiles"][0]["status"] == "ready"
 
 
 def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp_path):

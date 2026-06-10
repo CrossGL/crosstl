@@ -488,6 +488,26 @@ The bundle is metadata for integration tooling only: it does not rewrite host
 application code, execute device code, generate runtime framework code, or
 install target SDKs.
 
+Inspect host loader scaffold files before runtime tooling consumes them:
+
+.. code-block:: bash
+
+   python -m crosstl inspect-host-loader-scaffolds \
+     crosstl-host-loaders/host-loader-scaffolds.json \
+     --format text
+
+Host loader scaffold inspections emit a
+``crosstl-runtime-host-loader-scaffolds-inspection`` JSON document that verifies
+the scaffold manifest, integration guide, and target-scoped loader metadata
+files are present, readable, and consistent with the scaffold manifest. Ready
+loader metadata files are parsed and checked for matching scaffold identity,
+target, adapter kind, package path, and status. Blocked load units remain
+explicitly blocked without requiring target loader files. Missing, malformed,
+or mismatched scaffold files are reported as structured diagnostics before host
+loader or build-system tooling consumes the metadata. Inspection remains
+read-only and does not rewrite host application code, execute device code,
+generate runtime framework code, or install target SDKs.
+
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a
 related location. Remapped diagnostics also expose sanitized
