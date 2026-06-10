@@ -71,6 +71,7 @@ FIDELITYFX_SDK_REPO = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SD
 FIDELITYFX_SDK_COMMIT = "e236f2304dcda35f282fdddd085f41e2ff48c86a"
 WICKED_ENGINE_REPO = "https://github.com/turanszkij/WickedEngine"
 WICKED_ENGINE_COMMIT = "9df7a530aed53cc59b345f751939e513170ddf3c"
+WICKED_ENGINE_CONDITION_LOOKAHEAD_COMMIT = "448b0f1c4447f94bc328b712fbabce0e0ced8cba"
 UNITY_BUILT_IN_SHADERS_REPO = "https://github.com/TwoTailsGames/Unity-Built-in-Shaders"
 UNITY_BUILT_IN_SHADERS_COMMIT = "6a63f93bc1f20ce6cd47f981c7494e8328915621"
 
@@ -1670,6 +1671,40 @@ EXTERNAL_FIXTURES = [
             "@ register(u1)",
             "image2D output;",
             "imageStore(output, did, FFX_DNSR_Shadows_IsShadowReciever(did) ? pow(mean, rtao_power) : 1);",
+        ),
+    ),
+    ExternalFixture(
+        name="wickedengine_virtual_texture_residency_else_if_less_than",
+        repo=WICKED_ENGINE_REPO,
+        commit=WICKED_ENGINE_CONDITION_LOOKAHEAD_COMMIT,
+        path="WickedEngine/shaders/virtualTextureResidencyUpdateCS.hlsl",
+        code=textwrap.dedent("""
+            [numthreads(8, 8, 1)]
+            void main(uint3 DTid : SV_DispatchThreadID)
+            {
+                uint lod = 0;
+                uint minLod = 1;
+
+                if (lod == 0)
+                {
+                    minLod = 0xFF;
+                }
+                else if (lod < minLod)
+                {
+                    minLod = lod;
+                }
+
+                for (lod = 0; lod < 4; ++lod)
+                {
+                    uint2 write_coord = DTid.xy >> lod;
+                }
+            }
+        """).strip(),
+        contains=(
+            "@ numthreads(8, 8, 1)",
+            "else if (lod < minLod)",
+            "for (lod = 0; lod < 4; ++lod)",
+            "uvec2 write_coord = DTid.xy >> lod;",
         ),
     ),
     ExternalFixture(

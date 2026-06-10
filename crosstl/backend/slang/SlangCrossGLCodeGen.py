@@ -1109,10 +1109,15 @@ class SlangToCrossGLConverter:
             param, preserve_qualifiers
         )
         parameter_name = param.name or fallback_name or "_param"
+        parameter_type = self.map_parameter_type(param.vtype, function_qualifier)
+        array_suffix = self.format_array_suffixes(param)
+        array_suffix += self.non_tessellation_patch_parameter_array_suffix(
+            param.vtype, function_qualifier
+        )
         parameter = (
-            f"{qualifier_prefix}{self.map_parameter_type(param.vtype)} "
+            f"{qualifier_prefix}{parameter_type} "
             f"{self.format_identifier(parameter_name)}"
-            f"{self.format_array_suffixes(param)}"
+            f"{array_suffix}"
         )
         metadata = self.format_parameter_metadata(param)
         if metadata:
@@ -1938,9 +1943,63 @@ class SlangToCrossGLConverter:
         return slang_type
 
     def sanitize_generic_type_expression_arguments(self, type_name):
-        if "<" not in str(type_name):
+        text = str(type_name)
+        if "<" not in text:
             return type_name
-        return re.sub(r"!(?=[A-Za-z_])", "not_", str(type_name))
+
+        start = text.find("<")
+        if start < 0 or not text.endswith(">"):
+            return re.sub(r"!(?=[A-Za-z_])", "not_", text)
+
+        arguments = self.generic_type_arguments(text)
+        if not arguments:
+            return re.sub(r"!(?=[A-Za-z_])", "not_", text)
+
+        base_type = text[:start]
+        sanitized_arguments = [
+            self.sanitize_generic_type_argument(argument) for argument in arguments
+        ]
+        return f"{base_type}<{', '.join(sanitized_arguments)}>"
+
+    def sanitize_generic_type_argument(self, argument):
+        argument = re.sub(r"!(?=[A-Za-z_])", "not_", str(argument).strip())
+        if "<" in argument:
+            argument = self.sanitize_generic_type_expression_arguments(argument)
+        if not self.requires_generic_value_argument_encoding(argument):
+            return argument
+        return self.encode_generic_value_argument(argument)
+
+    def requires_generic_value_argument_encoding(self, argument):
+        return re.search(r"[()+\-*/%]", str(argument)) is not None
+
+    def encode_generic_value_argument(self, argument):
+        text = str(argument).strip()
+        replacements = [
+            ("&&", "_and_"),
+            ("||", "_or_"),
+            ("!=", "_ne_"),
+            ("==", "_eq_"),
+            ("<=", "_le_"),
+            (">=", "_ge_"),
+            ("::", "_"),
+            ("+", "_plus_"),
+            ("-", "_minus_"),
+            ("*", "_mul_"),
+            ("/", "_div_"),
+            ("%", "_mod_"),
+            ("<", "_lt_"),
+            (">", "_gt_"),
+            ("!", "not_"),
+        ]
+        for old, new in replacements:
+            text = text.replace(old, new)
+        text = re.sub(r"[^A-Za-z0-9_]+", "_", text)
+        text = re.sub(r"_+", "_", text).strip("_")
+        if not text or not re.match(r"[A-Za-z_]", text):
+            text = f"value_{text}" if text else "value"
+        elif not text.startswith("value_"):
+            text = f"value_{text}"
+        return text
 
     def map_pointer_element_buffer_type(self, slang_type, base_type):
         if base_type not in {"StructuredBuffer", "RWStructuredBuffer"}:
@@ -2015,9 +2074,51 @@ class SlangToCrossGLConverter:
             return None
         return f"{prefix}{rows}"
 
-    def map_parameter_type(self, slang_type):
+    def map_parameter_type(self, slang_type, function_qualifier=None):
         """Map Slang parameter wrapper types to CrossGL value/resource types."""
+        patch_element_type = self.non_tessellation_patch_parameter_element_type(
+            slang_type, function_qualifier
+        )
+        if patch_element_type:
+            return self.map_type(patch_element_type)
         return self.map_type(self.unwrap_resource_container_type(slang_type))
+
+    def non_tessellation_patch_parameter_array_suffix(
+        self, slang_type, function_qualifier
+    ):
+        patch_type = self.non_tessellation_patch_parameter_type_info(
+            slang_type, function_qualifier
+        )
+        if patch_type is None:
+            return ""
+        _element_type, control_points = patch_type
+        return f"[{control_points}]" if control_points else ""
+
+    def non_tessellation_patch_parameter_element_type(
+        self, slang_type, function_qualifier
+    ):
+        patch_type = self.non_tessellation_patch_parameter_type_info(
+            slang_type, function_qualifier
+        )
+        if patch_type is None:
+            return None
+        element_type, _control_points = patch_type
+        return element_type
+
+    def non_tessellation_patch_parameter_type_info(
+        self, slang_type, function_qualifier
+    ):
+        if function_qualifier in {"tessellation_control", "tessellation_evaluation"}:
+            return None
+        base_type = str(slang_type or "").split("<", 1)[0].strip()
+        if base_type not in {"InputPatch", "OutputPatch"}:
+            return None
+        arguments = self.generic_type_arguments(slang_type)
+        if not arguments:
+            return None
+        element_type = arguments[0]
+        control_points = arguments[1] if len(arguments) > 1 else None
+        return element_type, control_points
 
     def canonical_function_call_name(self, name):
         """Return the CrossGL-facing name for known namespace-qualified builtins."""

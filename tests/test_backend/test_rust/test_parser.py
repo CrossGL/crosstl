@@ -6415,6 +6415,118 @@ def test_if_let_dereference_conditions_stop_at_block_from_naga():
     assert isinstance(guarded_if.if_body[0], IfNode)
 
 
+def test_wgpu_deno_if_expression_with_local_unsafe_extern_function():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # deno_webgpu/buffer.rs GPUBuffer::get_mapped_range.
+    code = """
+    fn get_mapped_range(mode: MapMode) {
+        let bs = if mode == MapMode::Write {
+            unsafe extern "C" fn noop_deleter_callback(
+                _data: *mut std::ffi::c_void,
+                _byte_length: usize,
+            ) {
+            }
+
+            unsafe {
+                ArrayBuffer::new_backing_store_from_ptr(noop_deleter_callback)
+            }
+        } else {
+            ArrayBuffer::new_backing_store_from_vec(slice.to_vec())
+        };
+    }
+    """
+
+    ast = parse_code(code)
+    bs = ast.functions[0].body[0]
+
+    assert isinstance(bs, LetNode)
+    assert isinstance(bs.value, IfNode)
+    assert isinstance(bs.value.if_body.statements[0], FunctionNode)
+    assert bs.value.if_body.statements[0].is_unsafe is True
+    assert bs.value.if_body.statements[0].abi == "C"
+    assert isinstance(bs.value.if_body.expression, UnsafeBlockNode)
+
+
+def test_naga_struct_literal_shorthand_argument_in_if_let_condition():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # naga/src/back/spv/ray/pipeline.rs Writer::write_trace_ray.
+    code = """
+    impl Writer {
+        fn write_trace_ray(&self, payload: Payload) {
+            if let Some(&word) = self
+                .ray_tracing_functions
+                .get(&LookupRaytracingFunction::TraceRay { payload })
+            {
+                return word;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    condition = ast.impl_blocks[0].methods[0].body[0].condition
+    get_call = condition.expression
+    lookup = get_call.args[0].expression
+
+    assert isinstance(condition, LetPatternConditionNode)
+    assert isinstance(get_call, FunctionCallNode)
+    assert isinstance(get_call.args[0], ReferenceNode)
+    assert isinstance(lookup, StructInitializationNode)
+    assert lookup.struct_name == "LookupRaytracingFunction::TraceRay"
+    assert lookup.fields == [("payload", "payload")]
+
+
+def test_naga_double_reference_lifetime_type_and_closure_pattern():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # naga/src/proc/keyword_set.rs and wgpu-hal/src/vulkan/instance.rs.
+    code = """
+    fn debug_assert_ascii(s: &&'static str) {
+        debug_assert!(s.is_ascii())
+    }
+
+    fn collect_pointers(layers: Vec<&'static str>) {
+        let str_pointers = layers
+            .iter()
+            .map(|&s: &&'static _| { s.as_ptr() })
+            .collect::<Vec<_>>();
+    }
+    """
+
+    ast = parse_code(code)
+    debug_assert_ascii, collect_pointers = ast.functions
+    closure = collect_pointers.body[0].value.name.object.args[0]
+
+    assert debug_assert_ascii.params[0].vtype == "&&str"
+    assert isinstance(closure, ClosureNode)
+    assert closure.params[0].param_type == "&&_"
+    assert isinstance(closure.params[0].pattern, ReferenceNode)
+
+
+def test_wgpu_gles_block_local_unsafe_impl_items_are_skipped():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-hal/src/gles/wgl.rs create_temp_window.
+    code = """
+    fn create_temp_window() {
+        struct SendDc(Gdi::HDC);
+        unsafe impl Sync for SendDc {}
+        unsafe impl Send for SendDc {}
+
+        let dc = SendDc(raw_dc);
+    }
+    """
+
+    ast = parse_code(code)
+    body = ast.functions[0].body
+
+    assert len(body) == 1
+    assert isinstance(body[0], LetNode)
+    assert body[0].name == "dc"
+
+
 def test_error_handling():
     invalid_codes = [
         "fn incomplete(",

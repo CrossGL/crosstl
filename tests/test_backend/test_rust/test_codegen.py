@@ -11699,6 +11699,61 @@ def test_raw_string_macro_argument_codegen_reparse_from_rust_gpu_target_spec():
     crosstl.translator.parse(result)
 
 
+def test_wgpu_vulkan_const_generic_braces_codegen_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-hal/src/vulkan/mod.rs FramebufferKey.
+    code = """
+    const MAX_TOTAL_ATTACHMENTS: usize = crate::MAX_COLOR_ATTACHMENTS * 2 + 1;
+
+    struct ResourceIdentity<T> {
+        id: u64,
+        _phantom: PhantomData<T>,
+    }
+
+    struct FramebufferKey {
+        raw_pass: vk::RenderPass,
+        attachment_identities:
+            ArrayVec<ResourceIdentity<vk::ImageView>, { MAX_TOTAL_ATTACHMENTS }>,
+        attachment_views: ArrayVec<vk::ImageView, { MAX_TOTAL_ATTACHMENTS }>,
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "ArrayVec<ResourceIdentity<vk_ImageView>, MAX_TOTAL_ATTACHMENTS>" in result
+    assert "ArrayVec<vk_ImageView, MAX_TOTAL_ATTACHMENTS>" in result
+    assert "{MAX_TOTAL_ATTACHMENTS}" not in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
+def test_naga_parser_assert_macro_struct_payload_codegen_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # naga/src/front/glsl/parser_tests.rs version tests.
+    code = """
+    fn version(frontend: Frontend) {
+        assert_eq!(
+            frontend.parse(&Options::from(ShaderStage::Vertex), "#version 99000").err().unwrap(),
+            ParseErrors {
+                errors: vec![Error {
+                    kind: ErrorKind::InvalidVersion(99000),
+                    meta: Span::new(9, 14),
+                }],
+            },
+        );
+        assert_eq!(frontend.metadata().version, 450);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "assert_eq();" in result
+    assert "assert_eq(frontend.metadata().version, 450);" in result
+    assert "ParseErrors" not in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
 def test_error_handling():
     edge_cases = [
         "fn empty() {}",

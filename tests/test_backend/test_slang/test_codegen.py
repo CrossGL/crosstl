@@ -404,6 +404,72 @@ def test_typealias_logical_not_generic_argument_codegen_reparse():
     cgl_translator.parse(generated_code)
 
 
+def test_generic_value_expression_argument_codegen_reparse_from_slang_bug_fixture():
+    # Source: shader-slang/slang@29e69b0bf626f87500be73a7fb3764db25658c66
+    # tests/bugs/generic-uint-value-param.slang
+    code = """
+    struct BoolG<let v : bool>
+    { }
+
+    struct Test<let v : uint>
+    {
+        int arr[v];
+    }
+
+    static const uint uv = 5;
+
+    void t()
+    {
+        BoolG<true> gt;
+        BoolG<bool(1)> gt2;
+        BoolG<1 != 2> gt3;
+        Test<uv> v;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "BoolG<true> gt;" in generated_code
+    assert "BoolG<value_bool_1> gt2;" in generated_code
+    assert "BoolG<1!=2> gt3;" in generated_code
+    assert "Test<uv> v;" in generated_code
+    assert "BoolG<bool(1)>" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_invalid_value_expression_type_specialization_codegen_reparse_timeout_guard():
+    # Source: shader-slang/slang@29e69b0bf626f87500be73a7fb3764db25658c66
+    # tests/diagnostics/generic-invalid-type-specialization.slang. The source
+    # is a negative Slang diagnostic, but the importer must not emit CrossGL
+    # that sends the frontend generic parser into an expression loop.
+    code = """
+    RWStructuredBuffer<int> outputBuffer;
+
+    struct Check<T>
+    {
+        T v;
+    };
+
+    [numthreads(4, 1, 1)]
+    void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+    {
+        int index = dispatchThreadID.x;
+        Check<2 + 2> v;
+        outputBuffer[index] = index;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "Check<value_2_plus_2> v;" in generated_code
+    assert "Check<2+2>" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_generic_static_member_scope_codegen_reparse_from_upstream_diagnostic():
     # Reduced from shader-slang/slang@4511c96d89ae80b211fd286040ce5032d716d98d
     # tests/language-feature/generics/recursive-generic-eval-budget.slang.
@@ -1022,6 +1088,38 @@ def test_precise_output_parameter_modifier_codegen_from_hlsl_variable_syntax():
         in generated_code
     )
     assert "precise" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_non_tessellation_output_patch_parameter_codegen_reparse_from_slang_bug():
+    # Source: shader-slang/slang@29e69b0bf626f87500be73a7fb3764db25658c66
+    # tests/bugs/gh-8920-domain-shaders.slang
+    code = """
+    struct PatchOut {
+        int nothing;
+    }
+
+    struct VOut {
+        int dummy;
+    };
+
+    [[shader("vertex")]]
+    VOut main(
+        const OutputPatch<PatchOut, 1> bp
+    ) {
+        VOut v;
+        v.dummy = bp[0].nothing;
+        return v;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "VOut main(PatchOut bp[1])" in generated_code
+    assert "v.dummy = bp[0].nothing;" in generated_code
+    assert "OutputPatch<PatchOut, 1> bp" not in generated_code
     cgl_translator.parse(generated_code)
 
 

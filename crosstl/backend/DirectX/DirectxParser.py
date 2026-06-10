@@ -495,7 +495,7 @@ class HLSLParser:
             idx += 1
 
         while idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
-            idx = self.skip_angle_list_at(idx)
+            idx = self.skip_angle_list_at(idx, stop_at_statement_boundary=False)
             if idx is None:
                 return False
 
@@ -1292,20 +1292,49 @@ class HLSLParser:
 
         return idx < len(self.tokens) and self.tokens[idx][0] == "SEMICOLON"
 
-    def skip_angle_list_at(self, idx):
+    def skip_angle_list_at(self, idx, stop_at_statement_boundary=True):
         depth = 0
+        paren_depth = 0
+        bracket_depth = 0
         while idx < len(self.tokens):
             token_type = self.tokens[idx][0]
-            if token_type == "LESS_THAN":
+            if token_type == "LPAREN":
+                paren_depth += 1
+            elif token_type == "RPAREN":
+                if paren_depth > 0:
+                    paren_depth -= 1
+                elif stop_at_statement_boundary and depth > 0 and bracket_depth == 0:
+                    return None
+            elif token_type == "LBRACKET":
+                bracket_depth += 1
+            elif token_type == "RBRACKET":
+                if bracket_depth > 0:
+                    bracket_depth -= 1
+            elif token_type == "LESS_THAN" and paren_depth == 0 and bracket_depth == 0:
                 depth += 1
-            elif token_type == "GREATER_THAN":
+            elif (
+                token_type == "GREATER_THAN" and paren_depth == 0 and bracket_depth == 0
+            ):
                 depth -= 1
                 if depth == 0:
                     return idx + 1
-            elif token_type == "SHIFT_RIGHT" and depth > 1:
+            elif (
+                token_type == "SHIFT_RIGHT"
+                and depth > 1
+                and paren_depth == 0
+                and bracket_depth == 0
+            ):
                 depth -= 2
                 if depth == 0:
                     return idx + 1
+            elif (
+                token_type in {"SEMICOLON", "RBRACE"}
+                and stop_at_statement_boundary
+                and depth > 0
+                and paren_depth == 0
+                and bracket_depth == 0
+            ):
+                return None
             elif token_type == "EOF":
                 return None
             idx += 1
@@ -2780,22 +2809,8 @@ class HLSLParser:
             idx += 3
 
         if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
-            depth = 0
-            while idx < len(self.tokens):
-                if self.tokens[idx][0] == "LESS_THAN":
-                    depth += 1
-                elif self.tokens[idx][0] == "GREATER_THAN":
-                    depth -= 1
-                    if depth == 0:
-                        idx += 1
-                        break
-                elif self.tokens[idx][0] == "SHIFT_RIGHT" and depth > 1:
-                    depth -= 2
-                    if depth == 0:
-                        idx += 1
-                        break
-                idx += 1
-            else:
+            idx = self.skip_angle_list_at(idx)
+            if idx is None:
                 return None
 
         return idx
