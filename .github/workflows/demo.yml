@@ -128,6 +128,7 @@ jobs:
             --case metal-performance-testing-matmul \
             --case monogame-sprite-effect \
             --case nvidia-cuda-samples-vector-add \
+            --case openframeworks-noise-shader \
             --case rocm-examples-add-kernel \
             --case rust-gpu-vulkan-examples-triangle-overlay \
             --case sascha-willems-vulkan-headless-compute \

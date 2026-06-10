@@ -61,6 +61,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, Metal, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. Host launch and memory-management integration remain outside the demo scope. |
 | `nvpro-vk-mini-samples-rectangle` | `nvpro-samples/vk_mini_samples` at `994ac9f446ef44962c563b9600c8e9f117a3725d` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream rectangle shader pair unchanged. Metal attribute lowering is tracked in issue #817. |
 | `ogl-samples-flat-color` | `g-truc/ogl-samples` at `38cada7a9458864265e25415ae61586d500ff5fc` | MIT | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream GLSL 330 flat-color shader pair unchanged. Metal attribute lowering is tracked in issue #817. |
+| `openframeworks-noise-shader` | `openframeworks/openFrameworks` at `63eb03828c40de713b85db7810f1c519d8b9b0cc` | MIT | GLSL | CrossGL, Vulkan | Uses the upstream noise shader pair with whitespace normalization. Metal and DirectX `gl_FragCoord` lowering is tracked in issue #840; OpenGL version-compatible layout qualifiers are tracked in issue #841. |
 | `opencl-sdk-saxpy` | `KhronosGroup/OpenCL-SDK` at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` | Apache-2.0 | OpenCL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream SAXPY compute kernel unchanged. |
 | `rocm-examples-add-kernel` | `ROCm/rocm-examples` at `cf369da68f209c315074204bd0eb61d1a5c015d1` | MIT | HIP | CrossGL, Metal, Vulkan | Uses the upstream sphinx-marked add-kernel slice. Host HIP runtime setup remains outside the demo scope. |
 | `raylib-base-fragment` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream base fragment shader unchanged. |
@@ -79,12 +80,12 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 
 The ARM OpenGL ES SDK, DiligentSamples VRS vertex, DirectX, DirectX SDK
 Samples, DirectXShaderCompiler, glslang, Metal performance, NVIDIA CUDA
-Samples, MonoGame, nvpro-samples, ogl-samples, OpenCL-SDK, RenderDoc, Rust-GPU
-VulkanShaderExamples, SPIRV-Cross, SPIRV-Tools, Vulkan-Tools, raylib,
-SaschaWillems triangle, and Slang cases keep upstream source files unchanged
-apart from repository formatting checks. The DirectX Hello Texture shader was
-retested after issue #783 closed and is now checked for OpenGL, Metal, DirectX,
-and Vulkan output.
+Samples, MonoGame, nvpro-samples, ogl-samples, OpenCL-SDK, openFrameworks,
+RenderDoc, Rust-GPU VulkanShaderExamples, SPIRV-Cross, SPIRV-Tools,
+Vulkan-Tools, raylib, SaschaWillems triangle, and Slang cases keep upstream
+source files unchanged apart from repository formatting checks. The DirectX
+Hello Texture shader was retested after issue #783 closed and is now checked
+for OpenGL, Metal, DirectX, and Vulkan output.
 The SaschaWillems headless compute shader was retested after issue #756 closed
 and is now checked for Metal, DirectX, and Vulkan output. The Vulkan Samples,
 Apple, ROCm add-kernel, and Rust-GPU/rust-gpu graphics cases are reduced
@@ -110,6 +111,13 @@ formatting. The checked targets exclude Metal because program-scope
 constant-buffer lowering currently inserts a placeholder initializer, tracked
 in issue #837. OpenGL is excluded because legacy HLSL sampler-register metadata
 is not yet lowered to an OpenGL binding, tracked in issue #838.
+
+The `openframeworks/openFrameworks` noise shader pair keeps the upstream shader
+statements unchanged, with indentation and trailing whitespace normalized by
+repository formatting. Metal and DirectX are excluded until `gl_FragCoord`
+lowers to target fragment-position inputs, tracked in issue #840. OpenGL is
+excluded until generated layout qualifiers are compatible with the emitted GLSL
+version, tracked in issue #841.
 
 The `godotengine/godot` Betsy alpha-stitch case removes the upstream
 `#[compute]` shader-section marker before `#version`. That marker is part of

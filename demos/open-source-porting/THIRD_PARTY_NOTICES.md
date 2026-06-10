@@ -143,6 +143,17 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/bkvogel/metal_performance_testing/blob/b467b4b1dee0f7d9d43bda13856306ca3f1baea5/LICENSE
 
+## openframeworks/openFrameworks
+
+- Repository: https://github.com/openframeworks/openFrameworks
+- Commit: `63eb03828c40de713b85db7810f1c519d8b9b0cc`
+- Source paths:
+  - `examples/gl/shaderExample/bin/data/shaders_gl3/noise.vert`
+  - `examples/gl/shaderExample/bin/data/shaders_gl3/noise.frag`
+- License: MIT
+- License URL:
+  https://github.com/openframeworks/openFrameworks/blob/63eb03828c40de713b85db7810f1c519d8b9b0cc/LICENSE.md
+
 ## NVIDIA/cuda-samples
 
 - Repository: https://github.com/NVIDIA/cuda-samples

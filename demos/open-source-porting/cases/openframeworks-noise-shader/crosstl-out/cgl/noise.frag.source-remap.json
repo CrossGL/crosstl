@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/noise.frag.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 446,
+        "file": "crosstl-out/cgl/noise.frag.cgl",
+        "length": 446,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 604,
+        "file": "noise.frag",
+        "length": 604,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

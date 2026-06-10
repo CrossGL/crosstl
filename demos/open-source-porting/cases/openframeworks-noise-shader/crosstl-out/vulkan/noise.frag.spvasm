@@ -1,0 +1,84 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 50
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %17 "main" %20 %24
+OpExecutionMode %17 OriginUpperLeft
+OpName %9 "Uniforms"
+OpMemberName %9 0 "globalColor"
+OpName %11 "Uniforms"
+OpName %15 "src_tex_unit0"
+OpName %20 "main_return_fragColor"
+OpName %22 "fragColor"
+OpName %24 "gl_FragCoord"
+OpName %26 "xVal"
+OpName %29 "yVal"
+OpDecorate %9 Block
+OpMemberDecorate %9 0 Offset 0
+OpDecorate %11 DescriptorSet 0
+OpDecorate %11 Binding 0
+OpDecorate %15 DescriptorSet 0
+OpDecorate %15 Binding 1
+OpDecorate %20 Location 0
+OpDecorate %24 BuiltIn FragCoord
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypeStruct %8
+%10 = OpTypePointer Uniform %9
+%12 = OpTypeImage %5 2D 0 0 0 1 Unknown
+%13 = OpTypeSampledImage %12
+%14 = OpTypePointer UniformConstant %13
+%16 = OpTypeFunction %2
+%19 = OpTypePointer Output %8
+%21 = OpTypePointer Function %8
+%23 = OpTypePointer Input %8
+%25 = OpTypePointer Function %5
+%33 = OpConstant %5 2.0
+%35 = OpConstant %5 0.5
+%38 = OpConstant %5 4.0
+%45 = OpConstant %4 0
+%46 = OpTypePointer Uniform %8
+%11 = OpVariable %10 Uniform
+%15 = OpVariable %14 UniformConstant
+%20 = OpVariable %19 Output
+%24 = OpVariable %23 Input
+%17 = OpFunction %2 None %16
+%18 = OpLabel
+%22 = OpVariable %21 Function
+%26 = OpVariable %25 Function
+%29 = OpVariable %25 Function
+%27 = OpLoad %8 %24
+%28 = OpCompositeExtract %5 %27 0
+OpStore %26 %28
+%30 = OpLoad %8 %24
+%31 = OpCompositeExtract %5 %30 1
+OpStore %29 %31
+%32 = OpLoad %5 %26
+%34 = OpFMod %5 %32 %33
+%36 = OpFOrdEqual %3 %34 %35
+%37 = OpLoad %5 %29
+%39 = OpFMod %5 %37 %38
+%40 = OpFOrdEqual %3 %39 %35
+%41 = OpLogicalAnd %3 %36 %40
+OpSelectionMerge %42 None
+OpBranchConditional %41 %43 %44
+%43 = OpLabel
+%47 = OpAccessChain %46 %11 %45
+%48 = OpLoad %8 %47
+OpStore %22 %48
+OpBranch %42
+%44 = OpLabel
+OpKill
+%42 = OpLabel
+%49 = OpLoad %8 %22
+OpStore %20 %49
+OpReturn
+OpFunctionEnd

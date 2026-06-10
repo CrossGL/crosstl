@@ -1,0 +1,22 @@
+#version 150
+
+shader main {
+    sampler2D src_tex_unit0;
+    cbuffer Uniforms {
+    vec4 globalColor;
+    };
+
+    fragment {
+    vec4 main() @ fragColor {
+        vec4 fragColor;
+        float xVal = gl_FragCoord.x;
+        float yVal = gl_FragCoord.y;
+        if (((mod(xVal, 2.0) == 0.5) && (mod(yVal, 4.0) == 0.5))) {
+            fragColor = globalColor;
+        } else {
+            discard;
+        }
+        return fragColor;
+    }
+    }
+}

@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/noise.vert.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 62,
+        "endOffset": 1870,
+        "file": "crosstl-out/cgl/noise.vert.cgl",
+        "length": 1870,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 88,
+        "endOffset": 2166,
+        "file": "noise.vert",
+        "length": 2166,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}
