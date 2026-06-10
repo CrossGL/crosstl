@@ -56,6 +56,31 @@ def generate_crossgl_from_slang(code: str) -> str:
     return SlangToCrossGLConverter().generate(parser.parse())
 
 
+def test_generic_trait_methods_are_diagnostic_for_slang_codegen():
+    code = """
+    shader GenericTraitMethodDiagnostic {
+        trait Mapper {
+            fn map<T>(value: T) -> T {
+                return value;
+            }
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"Slang codegen does not support generic functions \(T\); "
+            r"specialize the function before Slang generation"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def compile_generated_slang(
     generated_code,
     tmp_path,

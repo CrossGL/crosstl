@@ -26,6 +26,8 @@ class HipToCrossGLConverter:
     CPP_NUMERIC_LITERAL_WITH_SEPARATOR = re.compile(
         r"^(?=.*')"
         r"(?:"
+        r"0[xX](?:(?:[0-9a-fA-F](?:'?[0-9a-fA-F])*)?\.(?:[0-9a-fA-F](?:'?[0-9a-fA-F])*)|(?:[0-9a-fA-F](?:'?[0-9a-fA-F])*)\.?)[pP][+-]?\d(?:'?\d)*"
+        r"|"
         r"0[xX][0-9a-fA-F](?:'?[0-9a-fA-F])*"
         r"|0[bB][01](?:'?[01])*"
         r"|(?:\d(?:'?\d)*)(?:\.(?:\d(?:'?\d)*)?)?"

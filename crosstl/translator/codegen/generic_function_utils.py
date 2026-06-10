@@ -9,6 +9,7 @@ from ..ast import (
     ExpressionStatementNode,
     ForNode,
     FunctionCallNode,
+    FunctionNode,
     IfNode,
     MatchNode,
     ReturnNode,
@@ -103,6 +104,50 @@ def generic_function_parameters(func):
         for param in getattr(func, "generic_params", []) or []
         if getattr(param, "name", None)
     ]
+
+
+def iter_function_nodes(ast_node):
+    """Yield every function node reachable from an AST object."""
+    visited = set()
+
+    def visit(value):
+        if value is None or isinstance(value, (str, bytes, int, float, bool)):
+            return
+
+        value_id = id(value)
+        if value_id in visited:
+            return
+        visited.add(value_id)
+
+        if isinstance(value, FunctionNode):
+            yield value
+
+        if isinstance(value, dict):
+            children = value.values()
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            children = value
+        elif hasattr(value, "__dict__"):
+            children = vars(value).values()
+        else:
+            return
+
+        for child in children:
+            yield from visit(child)
+
+    yield from visit(ast_node)
+
+
+def reject_unsupported_generic_functions(ast_node, target_name):
+    """Reject generic functions before emitting non-specialized target code."""
+    for func in iter_function_nodes(ast_node):
+        generic_params = generic_function_parameters(func)
+        if not generic_params:
+            continue
+        suffix = f" ({', '.join(generic_params)})" if generic_params else ""
+        raise ValueError(
+            f"{target_name} codegen does not support generic functions{suffix}; "
+            f"specialize the function before {target_name} generation"
+        )
 
 
 def generic_function_emission_list(generator, func):

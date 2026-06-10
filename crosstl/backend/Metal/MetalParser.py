@@ -135,6 +135,7 @@ KEYWORD_IDENTIFIER_TOKENS = {"BUFFER", "SAMPLER", "METAL", "RESTRICT"}
 TYPE_IDENTIFIER_TOKENS = {"PACKED_VECTOR"}
 GNU_EXTENSION_PREFIXES = {"__extension__"}
 STRUCT_METHOD_PREFIXES = {"virtual"}
+AGGREGATE_ALIGNMENT_MACROS = {"mittens_DEFAULT_ALIGN"}
 OPERATOR_OVERLOAD_TOKENS = {
     "PLUS",
     "MINUS",
@@ -1453,6 +1454,7 @@ class MetalParser:
         self.eat("STRUCT")
         struct_attributes = self.parse_attributes()
         alignas_specs = self.parse_alignas_specifiers()
+        self.skip_aggregate_alignment_macros()
         tag_name = None
         if self.is_current_name_token():
             tag_name = self.current_token[1]
@@ -2032,6 +2034,7 @@ class MetalParser:
         self.eat("STRUCT")
         struct_attributes = self.parse_attributes()
         alignas_specs.extend(self.parse_alignas_specifiers())
+        self.skip_aggregate_alignment_macros()
         if not self.is_current_name_token():
             raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
         name = self.current_token[1]
@@ -2070,6 +2073,7 @@ class MetalParser:
         self.eat("CLASS")
         class_attributes = self.parse_attributes()
         alignas_specs.extend(self.parse_alignas_specifiers())
+        self.skip_aggregate_alignment_macros()
         if not self.is_current_name_token():
             raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
         name = self.current_token[1]
@@ -2343,6 +2347,13 @@ class MetalParser:
         while (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] in GNU_EXTENSION_PREFIXES
+        ):
+            self.eat("IDENTIFIER")
+
+    def skip_aggregate_alignment_macros(self):
+        while (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in AGGREGATE_ALIGNMENT_MACROS
         ):
             self.eat("IDENTIFIER")
 

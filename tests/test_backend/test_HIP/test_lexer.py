@@ -220,6 +220,7 @@ class TestHipLexer:
         code = """
         42 3.14f 2.71828 0xFFu 0XCAFEull 0xFFFF'FFFF 0b1010u
         0b1010'0101 0777u 1'000u 1e5 2.5e-3f .5f
+        0x1.0p-14f 0x1.ffff'ffp-1f
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
@@ -237,6 +238,8 @@ class TestHipLexer:
         assert "0b1010'0101" in integer_values
         assert "0777u" in integer_values
         assert "1'000u" in integer_values
+        assert "0x1.0p-14f" in float_values
+        assert "0x1.ffff'ffp-1f" in float_values
         assert "2.5e-3f" in float_values
         assert ".5f" in float_values
 

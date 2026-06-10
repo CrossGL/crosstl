@@ -166,7 +166,7 @@ TOKENS = tuple(
         # Identifiers and literals (must come after keywords)
         (
             "FLOAT",
-            r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fFdDlL]*|\d+[eE][+-]?\d+[fFdDlL]*|\d+[fFdD]",
+            r"0[xX](?:(?:[0-9a-fA-F](?:'?[0-9a-fA-F])*)?\.(?:[0-9a-fA-F](?:'?[0-9a-fA-F])*)|(?:[0-9a-fA-F](?:'?[0-9a-fA-F])*)\.?)[pP][+-]?\d(?:'?\d)*[fFlL]?|(?:\d(?:'?\d)*\.(?:\d(?:'?\d)*)?|\.(?:\d(?:'?\d)*))(?:[eE][+-]?\d(?:'?\d)*)?[fFdDlL]*|\d(?:'?\d)*[eE][+-]?\d(?:'?\d)*[fFdDlL]*|\d(?:'?\d)*[fFdD]",
         ),
         (
             "INTEGER",

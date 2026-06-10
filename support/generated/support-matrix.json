@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1069
+        "test_count": 1071
       },
       "translator_codegen": {
         "exists": true,
@@ -383,6 +383,10 @@
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "reject_unsupported_generic_functions as reject_generic_functions_for_target,"
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "return self.unsupported_matrix_operation(op, result_type)"
           },
           {
@@ -456,10 +460,6 @@
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "f\"Unsupported {semantic} {context} for SPIR-V codegen; \""
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "f\"Unsupported {semantic} {context} for SPIR-V codegen; \""
           }
         ]
       },
@@ -469,7 +469,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 974
+        "test_count": 975
       },
       "translator_codegen": {
         "exists": true,
@@ -497,6 +497,10 @@
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "reject_unsupported_generic_functions as reject_generic_functions_for_target,"
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "CUDA_UNSUPPORTED_FP16_VECTOR_TYPES = {"
           },
           {
@@ -506,10 +510,6 @@
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "def reject_unsupported_generic_functions(self, ast_node):"
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "f\"CUDA codegen does not support generic functions{suffix}; \""
           },
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
@@ -583,7 +583,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 777
+        "test_count": 778
       },
       "translator_codegen": {
         "exists": true,
@@ -611,6 +611,10 @@
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "reject_unsupported_generic_functions as reject_generic_functions_for_target,"
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "HIP_UNSUPPORTED_FP16_VECTOR_TYPES = {"
           },
           {
@@ -620,10 +624,6 @@
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "def reject_unsupported_generic_functions(self, ast_node):"
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "f\"HIP codegen does not support generic functions{suffix}; \""
           },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
@@ -697,7 +697,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 820
+        "test_count": 821
       },
       "translator_codegen": {
         "exists": true,
@@ -725,6 +725,10 @@
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "reject_unsupported_generic_functions as reject_generic_functions_for_target,"
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
             "text": "MOJO_HLSL_UNSUPPORTED_WRITABLE_TEXTURE_TYPES = set()"
           },
           {
@@ -746,10 +750,6 @@
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
             "text": "def reject_unsupported_generic_functions(self, ast):"
-          },
-          {
-            "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "f\"Mojo codegen does not support generic functions{suffix}; \""
           },
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
@@ -811,7 +811,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 920
+        "test_count": 921
       },
       "translator_codegen": {
         "exists": true,
@@ -953,15 +953,15 @@
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "reject_unsupported_generic_functions as reject_generic_functions_for_target,"
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "self.reject_unsupported_generic_functions(ast)"
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "def reject_unsupported_generic_functions(self, ast_node):"
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "f\"Slang codegen does not support generic functions{suffix}; \""
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -1039,7 +1039,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 785
+        "test_count": 786
       },
       "translator_codegen": {
         "exists": true,

@@ -1645,6 +1645,30 @@ class TestVulkanSPIRVCodeGen:
         ):
             VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
+    def test_generic_trait_methods_report_deterministic_diagnostic(self):
+        source_code = """
+        shader GenericTraitMethodDiagnostic {
+            trait Mapper {
+                fn map<T>(value: T) -> T {
+                    return value;
+                }
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"SPIR-V codegen does not support generic functions \(T\); "
+                r"specialize the function before SPIR-V generation"
+            ),
+        ):
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
     def test_lambda_call_emits_explicit_unsupported_spirv_fallback(self):
         source_code = """
         shader UnsupportedLambda {

@@ -2885,6 +2885,31 @@ def test_codegen_cxx11_namespaced_cbuffer_attribute_passthrough():
     assert "vec4 tint;" in output
 
 
+def test_codegen_cbuffer_effect_annotation_before_body_reparse():
+    hlsl = textwrap.dedent("""
+        cbuffer FrameData : register(b0, space1)
+        <
+            string UIName = "Frame";
+            bool Visible = true;
+        >
+        {
+            row_major float4x4 viewProj : packoffset(c0);
+            precise float exposure : packoffset(c4.x);
+        };
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ register(b0, space1)" in output
+    assert "@ row_major" in output
+    assert "@ packoffset(c0)" in output
+    assert "@ packoffset(c4.x)" in output
+    assert "precise float exposure;" in output
+    assert "UIName" not in output
+    assert "Visible" not in output
+    parse_crossgl(output)
+
+
 def test_codegen_anonymous_old_style_cbuffer_uses_synthetic_name():
     hlsl = textwrap.dedent("""
         cbuffer : register(b1)
