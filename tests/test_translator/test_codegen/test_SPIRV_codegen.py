@@ -26329,6 +26329,59 @@ class TestSpirvShaderValidation:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_graphics_entry_output_parameters_lower_to_interface_outputs(
+        self, tmp_path
+    ):
+        source_code = """
+        shader GraphicsEntryOutputParameters {
+            fragment main_fs {
+                void main(out vec4 output @ gl_FragColor) {
+                    output = vec4(1.0, 0.0, 0.0, 1.0);
+                }
+            }
+
+            vertex main_vs {
+                void main(
+                    int vert_id @ gl_VertexID,
+                    out vec4 out_pos @ gl_Position @ invariant
+                ) {
+                    out_pos = vec4(
+                        float((vert_id - 1)),
+                        float((((vert_id & 1) * 2) - 1)),
+                        0.0,
+                        1.0
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        fragment_output_id = spirv_named_variable(
+            spv_code, "CrossGL_fragment_output_output", storage_class="Output"
+        )
+        vertex_id = spirv_named_variable(spv_code, "gl_VertexID", storage_class="Input")
+        position_id = spirv_named_variable(
+            spv_code, "gl_Position", storage_class="Output"
+        )
+
+        assert re.search(
+            rf'OpEntryPoint Fragment %\d+ "main_fs" {fragment_output_id}',
+            spv_code,
+        )
+        assert f"OpDecorate {fragment_output_id} Location 0" in spv_code
+        assert f"OpDecorate {vertex_id} BuiltIn VertexIndex" in spv_code
+        assert f"OpDecorate {position_id} BuiltIn Position" in spv_code
+        assert re.search(rf"OpStore {fragment_output_id} %\d+", spv_code)
+        assert re.search(rf"OpStore {position_id} %\d+", spv_code)
+        assert re.search(r'OpName %\d+ "output"', spv_code) is None
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_return_semantics_validate_builtin_types_and_stage_context_for_spirv(
         self,
     ):

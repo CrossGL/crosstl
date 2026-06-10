@@ -1,7 +1,7 @@
 """CrossGL-to-Vulkan SPIR-V code generator."""
 
 import re
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Set, Tuple, Union
 
 from ..ast import (
     ArrayAccessNode,
@@ -1214,6 +1214,13 @@ class VulkanSPIRVCodeGen:
         self, variable_id: SpirvId, result_type: SpirvId
     ) -> SpirvId:
         if not self.is_sample_mask_builtin_variable(variable_id):
+            variable_type = self.pointer_pointee_type(variable_id)
+            if (
+                variable_type is not None
+                and variable_type.type.base_type != result_type.type.base_type
+            ):
+                loaded = self.load_from_variable(variable_id, variable_type)
+                return self.convert_value_to_type(loaded, result_type)
             return self.load_from_variable(variable_id, result_type)
 
         variable_type = self.pointer_pointee_type(variable_id)
@@ -13371,6 +13378,7 @@ class VulkanSPIRVCodeGen:
             else return_type
         )
         mesh_output_parameters = {}
+        output_parameters = []
         runtime_parameters = []
         param_types = []
         param_value_types = []
@@ -13422,6 +13430,12 @@ class VulkanSPIRVCodeGen:
                 )
             else:
                 param_type = self.map_crossgl_type("float")
+
+            if self.is_graphics_output_parameter(
+                param, execution_model_hint, is_entry_point
+            ):
+                output_parameters.append((param, param_type))
+                continue
 
             param_value_types.append(param_type)
             param_resource_metadata = self.resource_type_metadata.get(param_type.id)
@@ -13544,6 +13558,22 @@ class VulkanSPIRVCodeGen:
                     function_node, return_type, execution_model_hint
                 )
             )
+        if entry_point_uses_void_signature:
+            for param, param_value_type in output_parameters:
+                param_name = getattr(param, "name", None) or "param"
+                variable = self.register_entry_point_interface_variable(
+                    execution_model_hint,
+                    "Output",
+                    self.entry_point_interface_name(
+                        execution_model_hint, "output", param_name
+                    ),
+                    param_value_type,
+                    param,
+                )
+                self.local_variables[param_name] = variable
+                self.register_declared_resource_metadata(
+                    param, variable, param_value_type
+                )
         for param, patch_info in patch_interface_parameters:
             patch_variable = self.register_patch_parameter_interface_variable(
                 param, patch_info
@@ -14485,6 +14515,29 @@ class VulkanSPIRVCodeGen:
             return False
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         return bool(qualifiers & {"out", "inout"})
+
+    def parameter_qualifier_names(self, node) -> Set[str]:
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        qualifiers.update(
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(node, "attributes", []) or []
+        )
+        qualifiers.discard("")
+        return qualifiers
+
+    def is_graphics_output_parameter(
+        self, node, execution_model: Optional[str], is_entry_point: bool
+    ) -> bool:
+        if not is_entry_point:
+            return False
+        if execution_model not in {"Vertex", "Fragment"}:
+            return False
+        if self.is_mesh_output_parameter(node):
+            return False
+        return bool(self.parameter_qualifier_names(node) & {"out", "inout"})
 
     def patch_type_info_from_name(self, type_name: str) -> Optional[dict]:
         base_name, generic_args = generic_type_parts(type_name)
