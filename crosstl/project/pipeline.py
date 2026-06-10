@@ -4372,7 +4372,12 @@ def _variant_jobs(
 def _selected_variant_names(variants: Sequence[str] | str | None) -> list[str] | None:
     if variants is None:
         return None
-    names = [variants] if isinstance(variants, str) else list(variants)
+    try:
+        names = [variants] if isinstance(variants, str) else list(variants)
+    except TypeError as exc:
+        raise ValueError(
+            "selected project variants must be a string or sequence of strings"
+        ) from exc
     if not names:
         raise ValueError(
             "selected project variants must include at least one variant name"

@@ -1882,6 +1882,29 @@ def test_scan_project_limits_named_variants_to_selected(tmp_path):
     assert payload["summary"]["artifactCount"] == 0
 
 
+@pytest.mark.parametrize("operation", [scan_project, translate_project])
+def test_project_operations_reject_invalid_variant_override(tmp_path, operation):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+
+            [project.variants.debug]
+            MODE = "debug"
+            """).strip(),
+        encoding="utf-8",
+    )
+    config = load_project_config(repo)
+
+    with pytest.raises(
+        ValueError,
+        match="selected project variants must be a string or sequence of strings",
+    ):
+        operation(config, variants=object())
+
+
 def test_scan_project_uses_configured_selected_variants(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
