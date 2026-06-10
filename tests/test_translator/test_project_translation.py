@@ -7928,6 +7928,91 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     ]
 
 
+def test_translate_project_preserves_source_suffixes_for_stem_collisions(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "shader.frag").write_text(
+        "#version 450\nvoid main() { gl_FragColor = vec4(1.0); }\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "shader.vert").write_text(
+        "#version 450\nvoid main() { gl_Position = vec4(1.0); }\n",
+        encoding="utf-8",
+    )
+
+    def write_artifact(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del backend, format_output, source_backend, include_paths, defines
+        Path(save_shader).write_text(f"{Path(file_path).name}\n", encoding="utf-8")
+        return ""
+
+    monkeypatch.setattr(project_pipeline, "translate", write_artifact)
+
+    report = translate_project(repo, targets=["cgl", "metal"], output_dir="out")
+    payload = report.to_json()
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    expected_paths = {
+        "out/cgl/shaders/shader.frag.cgl",
+        "out/cgl/shaders/shader.vert.cgl",
+        "out/metal/shaders/shader.frag.metal",
+        "out/metal/shaders/shader.vert.metal",
+    }
+    assert validation["success"] is True
+    assert {artifact["path"] for artifact in payload["artifacts"]} == expected_paths
+    assert payload["summary"]["artifactCount"] == 4
+    assert payload["artifactMatrix"]["complete"] is True
+    assert all((repo / path).is_file() for path in expected_paths)
+    assert not (repo / "out" / "cgl" / "shaders" / "shader.cgl").exists()
+    assert not (repo / "out" / "metal" / "shaders" / "shader.metal").exists()
+
+    cgl_artifacts = [
+        artifact for artifact in payload["artifacts"] if artifact["target"] == "cgl"
+    ]
+    assert {artifact["sourceRemap"]["path"] for artifact in cgl_artifacts} == {
+        "out/cgl/shaders/shader.frag.source-remap.json",
+        "out/cgl/shaders/shader.vert.source-remap.json",
+    }
+    assert {artifact["sourceRemap"]["generatedFile"] for artifact in cgl_artifacts} == {
+        "out/cgl/shaders/shader.frag.cgl",
+        "out/cgl/shaders/shader.vert.cgl",
+    }
+
+    legacy_payload = copy.deepcopy(payload)
+    legacy_artifact = next(
+        artifact
+        for artifact in legacy_payload["artifacts"]
+        if artifact["source"] == "shaders/shader.frag" and artifact["target"] == "cgl"
+    )
+    legacy_artifact["path"] = "out/cgl/shaders/shader.cgl"
+    legacy_report_path = repo / "out" / "legacy-portability-report.json"
+    legacy_report_path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+    legacy_validation = validate_project_report(legacy_report_path)
+
+    assert legacy_validation["success"] is False
+    assert any(
+        ".path must match project.outputDir target/variant directory plus artifacts["
+        in diagnostic["message"]
+        and "].source" in diagnostic["message"]
+        for diagnostic in legacy_validation["diagnostics"]
+    )
+
+
 def test_translate_project_emits_closed_portability_report_schema(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

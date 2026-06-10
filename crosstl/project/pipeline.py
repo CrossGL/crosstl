@@ -4760,13 +4760,80 @@ def _artifact_path(
     unit: ProjectTranslationUnit,
     target: str,
     variant: str | None = None,
+    *,
+    preserve_source_suffix: bool = False,
 ) -> Path:
-    extension = _artifact_target_extension(target)
-    relative = Path(unit.relative_path)
     base = config.output_path / target
     if variant is not None:
         base = base / _variant_output_segment(variant)
-    return base / relative.with_suffix(extension)
+    return base / _artifact_relative_path(
+        unit.relative_path,
+        target,
+        preserve_source_suffix=preserve_source_suffix,
+    )
+
+
+def _artifact_relative_path(
+    source: str,
+    target: str,
+    *,
+    preserve_source_suffix: bool = False,
+) -> Path:
+    extension = _artifact_target_extension(target)
+    relative = PurePosixPath(source.replace("\\", "/"))
+    if preserve_source_suffix:
+        if relative.suffix:
+            return Path(f"{relative.as_posix()}{extension}")
+        return Path(relative.with_suffix(f".source{extension}").as_posix())
+    return Path(relative.with_suffix(extension).as_posix())
+
+
+def _unit_artifact_source_path(unit: Any) -> str | None:
+    if isinstance(unit, ProjectTranslationUnit):
+        source = unit.relative_path
+    elif isinstance(unit, Mapping):
+        source = unit.get("path")
+    else:
+        return None
+    if _is_non_empty_string(source) and _is_report_identity_path(source):
+        return source
+    return None
+
+
+def _artifact_source_suffix_pairs(
+    units: Sequence[Any],
+    targets: Sequence[str],
+) -> set[tuple[str, str]]:
+    sources = sorted(
+        {
+            source
+            for unit in units
+            for source in (_unit_artifact_source_path(unit),)
+            if source is not None
+        }
+    )
+    normalized_targets = _normalized_targets(targets)
+    preserve_source_suffix: set[tuple[str, str]] = set()
+    pairs = [(source, target) for source in sources for target in normalized_targets]
+    while True:
+        paths: dict[tuple[str, str], set[str]] = {}
+        for source, target in pairs:
+            relative_path = _artifact_relative_path(
+                source,
+                target,
+                preserve_source_suffix=(source, target) in preserve_source_suffix,
+            ).as_posix()
+            paths.setdefault((target, relative_path), set()).add(source)
+        colliding_pairs = {
+            (source, target)
+            for (target, _relative_path), colliding_sources in paths.items()
+            if len(colliding_sources) > 1
+            for source in colliding_sources
+        }
+        new_pairs = colliding_pairs - preserve_source_suffix
+        if not new_pairs:
+            return preserve_source_suffix
+        preserve_source_suffix.update(new_pairs)
 
 
 def _artifact_target_extension(target: str) -> str:
@@ -4859,6 +4926,7 @@ def _artifact_matrix_report(
         for identity in (_artifact_identity(artifact),)
         if identity is not None
     }
+    preserve_source_suffix = _artifact_source_suffix_pairs(units, normalized_targets)
     variant_names: list[str | None] = sorted(variants) if variants else [None]
     expected_identities = {
         identity
@@ -4872,6 +4940,11 @@ def _artifact_matrix_report(
                 unit.relative_path,
                 target,
                 variant,
+                preserve_source_suffix=(
+                    unit.relative_path,
+                    target,
+                )
+                in preserve_source_suffix,
             ),
         )
         if identity is not None
@@ -5498,6 +5571,7 @@ def translate_project(
     )
     define_forwarding_diagnostics: set[str] = set()
     include_path_forwarding_diagnostics: set[str] = set()
+    preserve_source_suffix = _artifact_source_suffix_pairs(scan.units, selected_targets)
 
     for unit in scan.units:
         source_supports_defines = _source_frontend_supports_lexer_keyword(
@@ -5529,7 +5603,14 @@ def translate_project(
             include_path_forwarding_diagnostics.add(unit.source_backend)
         for target in selected_targets:
             for variant, defines in variant_jobs:
-                output_path = _artifact_path(config, unit, target, variant)
+                output_path = _artifact_path(
+                    config,
+                    unit,
+                    target,
+                    variant,
+                    preserve_source_suffix=(unit.relative_path, target)
+                    in preserve_source_suffix,
+                )
                 artifact = {
                     "source": unit.relative_path,
                     "sourceBackend": unit.source_backend,
@@ -7826,6 +7907,7 @@ def _inspection_artifact_matrix_identity_sets(
     root_path = Path(root).resolve()
     project_output_path = _project_output_path(root_path, output_dir).resolve()
     variant_names: list[str | None] = sorted(variants) if variants else [None]
+    preserve_source_suffix = _artifact_source_suffix_pairs(units, targets)
     expected_identities = set()
     for unit in units:
         if not isinstance(unit, Mapping):
@@ -7841,6 +7923,7 @@ def _inspection_artifact_matrix_identity_sets(
                     source,
                     target,
                     variant,
+                    preserve_source_suffix=(source, target) in preserve_source_suffix,
                 )
                 if identity is not None:
                     expected_identities.add(identity)
@@ -10082,13 +10165,17 @@ def _expected_artifact_identity(
     source: str,
     target: str,
     variant: str | None,
+    *,
+    preserve_source_suffix: bool = False,
 ) -> ArtifactIdentity | None:
     normalized_target = _normalized_targets([target])[0]
     output_base = project_output_path / normalized_target
     if variant is not None:
         output_base = output_base / _variant_output_segment(variant)
-    expected_relative = Path(source.replace("\\", "/")).with_suffix(
-        _artifact_target_extension(normalized_target)
+    expected_relative = _artifact_relative_path(
+        source,
+        normalized_target,
+        preserve_source_suffix=preserve_source_suffix,
     )
     expected_path = (output_base / expected_relative).resolve()
     if not _is_relative_to(expected_path, root_path):
@@ -10127,6 +10214,7 @@ def _artifact_matrix_contract_reasons(
     ):
         return []
     variant_names: list[str | None] = sorted(variants) if variants else [None]
+    preserve_source_suffix = _artifact_source_suffix_pairs(units, normalized_targets)
 
     artifact_identities = {
         identity
@@ -10145,7 +10233,12 @@ def _artifact_matrix_contract_reasons(
         for target in normalized_targets:
             for variant in variant_names:
                 identity = _expected_artifact_identity(
-                    root_path, project_output_path, source, target, variant
+                    root_path,
+                    project_output_path,
+                    source,
+                    target,
+                    variant,
+                    preserve_source_suffix=(source, target) in preserve_source_suffix,
                 )
                 if identity is not None and identity not in artifact_identities:
                     suffix = f" target {target}"
@@ -14832,6 +14925,11 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             _is_non_empty_string(name) for name in project_variants
         )
         declared_variants = set(project_variants) if project_variants_valid else set()
+        preserve_source_suffix = (
+            _artifact_source_suffix_pairs(units, project_targets)
+            if isinstance(units, list) and project_targets_valid
+            else set()
+        )
         artifact_identities: dict[ArtifactIdentity, int] = {}
         for index, artifact in enumerate(artifacts):
             if not isinstance(artifact, Mapping):
@@ -14905,8 +15003,12 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         f"({_value_mismatch_context(expected_extension, Path(path).suffix.lower())})"
                     )
                 elif _is_non_empty_string(source) and _is_report_identity_path(source):
-                    expected_relative = Path(source.replace("\\", "/")).with_suffix(
-                        _artifact_target_extension(target)
+                    normalized_target = _normalized_targets([target])[0]
+                    expected_relative = _artifact_relative_path(
+                        source,
+                        normalized_target,
+                        preserve_source_suffix=(source, normalized_target)
+                        in preserve_source_suffix,
                     )
                     expected_path = (expected_output_base / expected_relative).resolve()
                     if (root_path / path).resolve() != expected_path:
