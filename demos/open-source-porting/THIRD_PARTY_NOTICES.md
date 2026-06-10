@@ -66,7 +66,9 @@ should be treated with the same upstream license context when redistributed.
 
 - Repository: https://github.com/raysan5/raylib
 - Commit: `94897c4eca842673bad16ab03ad776a0a2255b14`
-- Source path: `examples/shaders/resources/shaders/glsl330/base.fs`
+- Source paths:
+  - `examples/shaders/resources/shaders/glsl330/base.fs`
+  - `examples/shaders/resources/shaders/glsl330/base.vs`
 - License: zlib/libpng
 - License URL:
   https://github.com/raysan5/raylib/blob/94897c4eca842673bad16ab03ad776a0a2255b14/LICENSE

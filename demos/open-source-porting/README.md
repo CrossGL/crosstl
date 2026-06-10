@@ -48,6 +48,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. DirectX constant-parameter lowering is tracked in issue #755. |
 | `opencl-sdk-saxpy` | `KhronosGroup/OpenCL-SDK` at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` | Apache-2.0 | OpenCL | CrossGL, Metal, Vulkan | Uses the upstream SAXPY compute kernel unchanged. OpenGL index-cast lowering is tracked in issue #768. |
 | `raylib-base-fragment` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, Metal, Vulkan | Uses the upstream base fragment shader unchanged. OpenGL binding qualifier/version alignment is tracked in issue #765. |
+| `raylib-base-vertex` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream base vertex shader unchanged. |
 | `sascha-willems-vulkan-conservative-triangle` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream conservative raster triangle vertex shader without semantic edits. DirectX semantic lowering remains outside this checked target subset. |
 | `slang-hello-world-compute` | `shader-slang/slang` at `29e69b0bf626f87500be73a7fb3764db25658c66` | Apache-2.0 WITH LLVM-exception | Slang | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream compute shader unchanged. |
 | `spirv-tools-basic-src` | `KhronosGroup/SPIRV-Tools` at `199cb207b911501ddd76dcddf100a6e21c15ef23` | Apache-2.0 | SPIR-V assembly | CrossGL, Metal, Vulkan | Uses the upstream SPIR-V assembly fixture unchanged. OpenGL builtin interface lowering is tracked in issue #779. |
@@ -74,6 +75,22 @@ exposed a CrossGL intermediate keyword collision: the fragment shader uses
 generation after GLSL-to-CrossGL conversion. That translator issue is tracked
 in issue #766, and the case is intentionally not checked in until keyword-safe
 identifier handling preserves the shader output.
+
+The `KhronosGroup/glslang` specialization-constant vertex shader from
+`Test/spv.specConstant.vert` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515`
+was tested as a candidate and exposed target lowering gaps for
+`layout(constant_id)`, `gl_MaxImageUnits`, and fixed-size stage-input arrays.
+That translator issue is tracked in issue #780, and the case is intentionally
+not checked in until generated target artifacts preserve the specialization
+constant semantics without placeholder output.
+
+The `shader-slang/slang` default-parameter compute shader from
+`tests/compute/default-parameter.slang` at
+`adc996670ec281aa8a4ee131f30b324648cbbe60` was tested as a candidate and
+exposed target lowering gaps for default function parameters in OpenGL and
+Metal output. That translator issue is tracked in issue #781, and the case is
+intentionally not checked in until generated source targets preserve the
+default-argument call semantics.
 
 The `microsoft/DirectXShaderCompiler` scalar-splat compute test was tested as
 a candidate and exposed target semantic gaps for HLSL scalar swizzles and

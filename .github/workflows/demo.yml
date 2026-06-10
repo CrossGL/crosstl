@@ -87,6 +87,7 @@ jobs:
             --run-toolchains \
             --require-toolchain-runs \
             --case directx-graphics-samples-hello-triangle \
+            --case raylib-base-vertex \
             --case sascha-willems-vulkan-conservative-triangle \
             --case slang-hello-world-compute \
             --target opengl \
@@ -119,6 +120,7 @@ jobs:
             --case metal-performance-testing-matmul \
             --case opencl-sdk-saxpy \
             --case raylib-base-fragment \
+            --case raylib-base-vertex \
             --case sascha-willems-vulkan-conservative-triangle \
             --case slang-hello-world-compute \
             --case spirv-tools-basic-src \
@@ -136,6 +138,7 @@ jobs:
             demos/open-source-porting/cases/metal-performance-testing-matmul/crosstl-out/metal/mat_mul_simple1.metal \
             demos/open-source-porting/cases/opencl-sdk-saxpy/crosstl-out/metal/saxpy.metal \
             demos/open-source-porting/cases/raylib-base-fragment/crosstl-out/metal/base.metal \
+            demos/open-source-porting/cases/raylib-base-vertex/crosstl-out/metal/base.metal \
             demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/metal/hello-world.metal \
             demos/open-source-porting/cases/spirv-tools-basic-src/crosstl-out/metal/basic_src.metal \
             demos/open-source-porting/cases/vulkan-samples-dynamic-line-grid/crosstl-out/metal/grid.metal
