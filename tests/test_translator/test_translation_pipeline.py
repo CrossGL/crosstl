@@ -328,6 +328,53 @@ def test_metal_uint2_dispatch_id_promotes_to_directx_uint3(tmp_path):
     assert "uint2 id : SV_DispatchThreadID" not in generated
 
 
+def test_metal_constant_reference_parameter_lowers_to_directx_constant_buffer(
+    tmp_path,
+):
+    source_path = _write_source(
+        tmp_path,
+        "mat-mul-params.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        struct MatMulParams {
+            uint row_dim_x;
+            uint col_dim_x;
+            uint inner_dim;
+        };
+
+        kernel void mat_mul_simple1(
+            device float* A [[buffer(0)]],
+            device float* B [[buffer(1)]],
+            device float* X [[buffer(2)]],
+            constant MatMulParams& params [[buffer(3)]],
+            uint2 id [[thread_position_in_grid]]
+        ) {
+            const uint row_dim_x = params.row_dim_x;
+            const uint col_dim_x = params.col_dim_x;
+            const uint inner_dim = params.inner_dim;
+            uint row = id.y;
+            uint col = id.x;
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="directx", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "ConstantBuffer<MatMulParams> params" in generated
+    assert "uint3 id_dispatchThreadID : SV_DispatchThreadID" in generated
+    assert "uint2 id = id_dispatchThreadID.xy;" in generated
+    assert "const uint row_dim_x = params.row_dim_x;" in generated
+    assert "const uint col_dim_x = params.col_dim_x;" in generated
+    assert "const uint inner_dim = params.inner_dim;" in generated
+    assert "ReferenceType" not in generated
+    assert "MatMulParams&" not in generated
+
+
 def test_metal_scalar_dispatch_id_promotes_to_directx_uint3(tmp_path):
     source_path = _write_source(
         tmp_path,
