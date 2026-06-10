@@ -101,6 +101,7 @@ jobs:
             --case metal-performance-testing-matmul \
             --case opencl-sdk-saxpy \
             --case raylib-base-fragment \
+            --case spirv-tools-basic-src \
             --target vulkan \
             --reports-dir support/generated/demo-reports/linux-vulkan
         shell: bash
@@ -120,8 +121,28 @@ jobs:
             --case raylib-base-fragment \
             --case sascha-willems-vulkan-conservative-triangle \
             --case slang-hello-world-compute \
+            --case spirv-tools-basic-src \
             --target metal \
             --reports-dir support/generated/demo-reports/macos-metal
+        shell: bash
+
+      - name: macOS Metal compile references
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          out_dir="${RUNNER_TEMP}/demo-metal-air"
+          mkdir -p "$out_dir"
+          for shader in \
+            demos/open-source-porting/cases/metal-performance-testing-matmul/crosstl-out/metal/mat_mul_simple1.metal \
+            demos/open-source-porting/cases/opencl-sdk-saxpy/crosstl-out/metal/saxpy.metal \
+            demos/open-source-porting/cases/raylib-base-fragment/crosstl-out/metal/base.metal \
+            demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/metal/hello-world.metal \
+            demos/open-source-porting/cases/spirv-tools-basic-src/crosstl-out/metal/basic_src.metal \
+            demos/open-source-porting/cases/vulkan-samples-dynamic-line-grid/crosstl-out/metal/grid.metal
+          do
+            output="$(printf '%s' "$shader" | tr '/.' '__').air"
+            xcrun -sdk macosx metal -c "$shader" -o "$out_dir/$output"
+          done
         shell: bash
 
       - name: Windows DirectX smoke checks

@@ -33,6 +33,7 @@ def test_open_source_demo_cases_have_pinned_manifests_and_references():
         "raylib-base-fragment",
         "sascha-willems-vulkan-conservative-triangle",
         "slang-hello-world-compute",
+        "spirv-tools-basic-src",
         "vulkan-samples-dynamic-line-grid",
     }
 
@@ -69,6 +70,8 @@ def test_open_source_demo_workflow_runs_platform_toolchain_smokes():
     assert "--target vulkan" in workflow
     assert "--target metal" in workflow
     assert "--target directx" in workflow
+    assert "macOS Metal compile references" in workflow
+    assert "spirv-tools-basic-src/crosstl-out/metal/basic_src.metal" in workflow
     assert "demo-reports-${{ matrix.os }}" in workflow
 
 
@@ -96,6 +99,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "raylib-base-fragment",
         "sascha-willems-vulkan-conservative-triangle",
         "slang-hello-world-compute",
+        "spirv-tools-basic-src",
         "vulkan-samples-dynamic-line-grid",
     }
     assert _workflow_step_cases(workflow, "macOS Metal smoke checks") == {
@@ -106,6 +110,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "raylib-base-fragment",
         "sascha-willems-vulkan-conservative-triangle",
         "slang-hello-world-compute",
+        "spirv-tools-basic-src",
         "vulkan-samples-dynamic-line-grid",
     }
     assert _workflow_step_cases(workflow, "Windows DirectX smoke checks") == {

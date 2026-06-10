@@ -1,0 +1,52 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 26
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %23 "main" %13 %16
+OpName %11 "gl_PerVertex"
+OpMemberName %11 0 "gl_Position"
+OpMemberName %11 1 "gl_PointSize"
+OpMemberName %11 2 "gl_ClipDistance"
+OpMemberName %11 3 "gl_CullDistance"
+OpName %13 "_ua_position"
+OpName %15 "ANGLEXfbPosition"
+OpName %16 "gl_Position"
+OpName %18 "gl_PointSize"
+OpName %20 "gl_ClipDistance"
+OpName %21 "gl_CullDistance"
+OpDecorate %13 Location 0
+OpDecorate %15 Location 0
+OpDecorate %16 BuiltIn Position
+OpDecorate %18 Location 1
+OpDecorate %20 Location 2
+OpDecorate %21 Location 10
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%10 = OpConstant %4 8
+%9 = OpTypeArray %5 %10
+%11 = OpTypeStruct %8 %5 %9 %9
+%12 = OpTypePointer Input %8
+%14 = OpTypePointer Output %8
+%17 = OpTypePointer Output %5
+%19 = OpTypePointer Output %9
+%22 = OpTypeFunction %2
+%13 = OpVariable %12 Input
+%15 = OpVariable %14 Output
+%16 = OpVariable %14 Output
+%18 = OpVariable %17 Output
+%20 = OpVariable %19 Output
+%21 = OpVariable %19 Output
+%23 = OpFunction %2 None %22
+%24 = OpLabel
+%25 = OpLoad %8 %13
+OpStore %16 %25
+OpReturn
+OpFunctionEnd

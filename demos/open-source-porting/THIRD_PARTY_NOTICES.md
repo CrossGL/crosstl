@@ -53,6 +53,15 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/KhronosGroup/OpenCL-SDK/blob/e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f/LICENSE
 
+## KhronosGroup/SPIRV-Tools
+
+- Repository: https://github.com/KhronosGroup/SPIRV-Tools
+- Commit: `199cb207b911501ddd76dcddf100a6e21c15ef23`
+- Source path: `test/diff/diff_files/basic_src.spvasm`
+- License: Apache-2.0
+- License URL:
+  https://github.com/KhronosGroup/SPIRV-Tools/blob/199cb207b911501ddd76dcddf100a6e21c15ef23/LICENSE
+
 ## raysan5/raylib
 
 - Repository: https://github.com/raysan5/raylib

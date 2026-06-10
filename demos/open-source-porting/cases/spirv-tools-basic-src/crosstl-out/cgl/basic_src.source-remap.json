@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/basic_src.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 622,
+        "file": "crosstl-out/cgl/basic_src.cgl",
+        "length": 622,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 51,
+        "endOffset": 1328,
+        "file": "basic_src.spvasm",
+        "length": 1328,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}
