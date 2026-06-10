@@ -104,6 +104,33 @@ def assert_metal_validates_if_available(metal_code, tmp_path):
     assert compile_result.returncode == 0, compile_result.stderr
 
 
+def assert_directx_vertex_validates_if_available(hlsl_code, tmp_path):
+    dxc = shutil.which("dxc")
+    if not dxc:
+        return
+
+    shader_path = tmp_path / "shader.hlsl"
+    output_path = tmp_path / "shader.dxil"
+    shader_path.write_text(hlsl_code, encoding="utf-8")
+
+    compile_result = subprocess.run(
+        [
+            dxc,
+            "-T",
+            "vs_6_0",
+            "-E",
+            "VSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
+
+
 def assert_guarded_glsl_validates_if_available(glsl_code, tmp_path):
     glslang = shutil.which("glslangValidator")
     if not glslang:
@@ -4701,6 +4728,94 @@ def test_translate_project_lowers_glsl_vertex_index_for_graphics_targets(tmp_pat
     assert "gl_VertexIndex" in directx
     assert "float(gl_VertexIndex)" in directx
     assert "gl_VertexID" not in directx
+
+
+def test_translate_project_glslang_push_constant_vertex_avoids_unwritten_sv_position(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "spv.pushConstant.vert").write_text(
+        "#version 400 layout(push_constant) uniform Material { int kind; "
+        "float fa[3]; } matInst; out vec4 color; void main() { switch "
+        "(matInst.kind) { case 1: color = vec4(0.2); break; case 2: "
+        "color = vec4(0.5); break; default: color = vec4(0.0); break; } }",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu"]
+            targets = ["directx"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    directx = (
+        repo / "translated" / "directx" / "gpu" / "spv.pushConstant.hlsl"
+    ).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert "SV_POSITION" not in directx
+    assert "SV_Position" not in directx
+    assert_directx_vertex_validates_if_available(directx, tmp_path)
+
+
+def test_translate_project_glsl_vertex_color_output_does_not_synthesize_position(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "color.vert").write_text(
+        textwrap.dedent("""
+            #version 400
+            layout(push_constant) uniform Material { int kind; float fa[3]; } matInst;
+            out vec4 color;
+            void main() {
+                switch (matInst.kind) {
+                case 1:
+                    color = vec4(0.2);
+                    break;
+                case 2:
+                    color = vec4(0.5);
+                    break;
+                default:
+                    color = vec4(0.0);
+                    break;
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu"]
+            targets = ["directx"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    directx = (repo / "translated" / "directx" / "gpu" / "color.hlsl").read_text(
+        encoding="utf-8"
+    )
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert "float4 color: TEXCOORD0;" in directx
+    assert "output.color = float4(0.2, 0.2, 0.2, 0.2);" in directx
+    assert "SV_POSITION" not in directx
+    assert "SV_Position" not in directx
+    assert_directx_vertex_validates_if_available(directx, tmp_path)
 
 
 def test_translate_project_lowers_glsl_vertex_index_to_metal_vertex_id(tmp_path):
@@ -19745,6 +19860,55 @@ def test_translate_project_records_structured_diagnostics_for_failures(tmp_path)
     assert failed_artifact["target"] == "not-a-backend"
     assert failed_artifact["error"]
     assert payload["migration"]["actions"][0]["targets"] == ["opengl"]
+
+
+def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "mlx_bf16.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            typedef bfloat bfloat16_t;
+
+            inline uint pack_bfloat16(bfloat16_t value) {
+                return asuint(value);
+            }
+
+            kernel void pack_kernel(device uint* out [[buffer(0)]]) {
+                bfloat16_t value = bfloat16_t(0.0);
+                out[0] = pack_bfloat16(value);
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    assert payload["summary"]["artifactCount"] == 2
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["artifactsBySourceBackend"]["metal"] == {
+        "artifactCount": 1,
+        "translatedCount": 1,
+        "failedCount": 0,
+    }
+    assert payload["diagnosticCounts"]["error"] == 0
+
+    metal_artifact = next(
+        artifact
+        for artifact in payload["artifacts"]
+        if artifact["source"] == "mlx_bf16.metal"
+    )
+    assert metal_artifact["status"] == "translated"
+    generated = (repo / metal_artifact["path"]).read_text(encoding="utf-8")
+    assert "uint pack_bfloat16(float value)" in generated
+    assert "return (floatBitsToUint(value) >> 16u);" in generated
+    assert "bfloat16_t" not in generated
+    assert "asuint(" not in generated
 
 
 def test_project_cli_translate_project_writes_report(tmp_path):

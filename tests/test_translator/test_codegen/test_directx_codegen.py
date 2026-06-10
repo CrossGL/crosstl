@@ -10059,7 +10059,7 @@ def test_directx_dispatch_mesh_payload_must_be_groupshared():
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
-def test_directx_groupshared_variables_must_be_global_scope():
+def test_directx_function_local_groupshared_variables_lower_to_global_scope():
     shader = """
     shader LocalGroupShared {
         task {
@@ -10072,8 +10072,34 @@ def test_directx_groupshared_variables_must_be_global_scope():
     }
     """
 
-    with pytest.raises(ValueError, match="groupshared variables.*global scope"):
-        HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "task")
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "task")
+
+    assert "groupshared uint main_scratch;" in generated
+    assert "    groupshared uint scratch;" not in generated
+    assert "main_scratch = 1u;" in generated
+    assert generated.index("groupshared uint main_scratch;") < generated.index(
+        '[shader("amplification")]'
+    )
+
+
+def test_directx_function_local_groupshared_duplicate_names_need_unique_source_names():
+    shader = """
+    shader DuplicateLocalGroupShared {
+        compute {
+            void main() {
+                if (true) {
+                    groupshared uint scratch;
+                    scratch = 1u;
+                }
+                groupshared uint scratch;
+                scratch = 2u;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="unique source names"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
 
 
 def test_directx_dispatch_mesh_rejects_calls_outside_amplification_stages():

@@ -612,6 +612,10 @@ class HLSLCodeGen:
         self.current_hlsl_mesh_payload_types = set()
         self.current_hlsl_dispatch_mesh_payload_types = set()
         self.current_hlsl_has_amplification_stage = False
+        self.hlsl_hoisted_groupshared_declarations = []
+        self.hlsl_hoisted_groupshared_aliases_by_function = {}
+        self.hlsl_hoisted_groupshared_declaration_ids = set()
+        self.hlsl_hoisted_groupshared_types_by_function = {}
         self.vertex_entry_input_struct_names = set()
         self.vertex_entry_output_struct_names = set()
         self.fragment_entry_input_struct_names = set()
@@ -990,6 +994,10 @@ class HLSLCodeGen:
         self.current_hlsl_mesh_payload_types = set()
         self.current_hlsl_dispatch_mesh_payload_types = set()
         self.current_hlsl_has_amplification_stage = False
+        self.hlsl_hoisted_groupshared_declarations = []
+        self.hlsl_hoisted_groupshared_aliases_by_function = {}
+        self.hlsl_hoisted_groupshared_declaration_ids = set()
+        self.hlsl_hoisted_groupshared_types_by_function = {}
         self.vertex_entry_output_struct_names = set()
         self.fragment_entry_input_struct_names = set()
         self.hlsl_temp_variable_index = 0
@@ -1069,6 +1077,7 @@ class HLSLCodeGen:
         self.global_variable_types = self.collect_global_variable_types(global_vars)
         self.global_variable_types.update(self.collect_cbuffer_member_types(cbuffers))
         functions = self.collect_functions(ast)
+        self.collect_hlsl_function_local_groupshared_declarations(ast, target_stage)
         self.hlsl_function_name_aliases = self.collect_hlsl_function_name_aliases(
             functions
         )
@@ -1891,8 +1900,8 @@ class HLSLCodeGen:
                 self.hlsl_declaration_has_groupshared_qualifier,
             ),
         )
-        for node in groupshared_vars:
-            code += self.generate_statement(node, 0)
+        for node, alias in self.hlsl_groupshared_declarations_to_emit(groupshared_vars):
+            code += self.generate_hlsl_hoisted_groupshared_declaration(node, alias)
 
         if cbuffers:
             code += "// Constant Buffers\n"
@@ -2889,9 +2898,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def generate_preprocessor_directive(self, directive):
         if isinstance(directive, PreprocessorNode):
             directive_name = (directive.directive or "").strip()
+            content = str(directive.content or "").strip()
             if directive_name.lower() in {"version", "extension", "precision"}:
                 return None
-            return f"#{directive_name} {directive.content}".strip()
+            if self.is_metal_only_preprocessor_directive(directive_name, content):
+                return None
+            return f"#{directive_name} {content}".strip()
 
         line = str(directive).strip()
         lowered = line.lower()
@@ -2901,7 +2913,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             or lowered.startswith("precision ")
         ):
             return None
+        if self.is_metal_only_preprocessor_line(line):
+            return None
         return line
+
+    def is_metal_only_preprocessor_directive(self, directive_name, content):
+        if directive_name.lower() != "include":
+            return False
+        normalized = str(content).strip().strip("<>\"'").lower()
+        return normalized in {"metal_stdlib", "metal_stdlib.h"}
+
+    def is_metal_only_preprocessor_line(self, line):
+        stripped = str(line).strip()
+        if not stripped.startswith("#"):
+            return False
+        parts = stripped[1:].strip().split(maxsplit=1)
+        if not parts:
+            return False
+        directive_name = parts[0]
+        content = parts[1] if len(parts) > 1 else ""
+        return self.is_metal_only_preprocessor_directive(directive_name, content)
 
     def generate_constants(self, ast, constants=None):
         code = ""
@@ -3231,12 +3262,28 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         self.local_variable_types = {}
         self.current_identifier_aliases = {}
+        self.current_identifier_aliases.update(
+            self.hlsl_hoisted_groupshared_aliases_by_function.get(id(func), {})
+        )
+        self.local_variable_types.update(
+            self.hlsl_hoisted_groupshared_types_by_function.get(id(func), {})
+        )
         if hasattr(func, "qualifiers") and func.qualifiers:
             qualifier = func.qualifiers[0] if func.qualifiers else None
         else:
             qualifier = getattr(func, "qualifier", None)
         effective_shader_type = shader_type or qualifier
+        promoted_entry_resource_parameter_ids = set()
+        if normalize_stage_name(effective_shader_type) in self.stage_entry_types():
+            promoted_entry_resource_parameter_ids = {
+                id(parameter)
+                for parameter in param_list
+                if self.hlsl_entry_resource_parameter_global_type(parameter, func)
+                is not None
+            }
         for p in param_list:
+            if id(p) in promoted_entry_resource_parameter_ids:
+                continue
             if hasattr(p, "param_type"):
                 raw_param_type = (
                     self.type_name_string(p.param_type)
@@ -3638,6 +3685,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if isinstance(stmt, VariableNode):
             vtype = self.local_variable_declared_type(stmt)
             self.local_variable_types[stmt.name] = self.type_name_string(vtype)
+            if id(stmt) in self.hlsl_hoisted_groupshared_declaration_ids:
+                return ""
             stmt_name = self.hlsl_declaration_identifier_name(stmt.name)
             if self.is_unsupported_glsl_buffer_block_struct_type(vtype):
                 self.current_unsupported_glsl_buffer_block_local_variables.add(
@@ -6868,8 +6917,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         stage_resource_vars = collect_stage_local_variables(
             root, target_stage, self.is_stage_local_resource_variable
         )
+        entry_resource_params = self.hlsl_stage_entry_resource_parameter_globals(
+            root, target_stage
+        )
         return deduplicate_named_declarations(
-            global_vars + stage_resource_vars, "DirectX resource"
+            global_vars + stage_resource_vars + entry_resource_params,
+            "DirectX resource",
         )
 
     def is_stage_local_resource_variable(self, node):
@@ -6882,7 +6935,59 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             or self.is_resource_parameter_type(vtype)
             or self.is_hlsl_readonly_buffer_type(vtype)
             or self.is_hlsl_uav_buffer_type(vtype)
+            or self.is_hlsl_constant_buffer_type(vtype)
             or self.is_glsl_buffer_block_variable(node, vtype)
+        )
+
+    def hlsl_stage_entry_resource_parameter_globals(self, root, target_stage=None):
+        globals_ = []
+        entries = collect_stage_entry_records(
+            root, target_stage, self.stage_entry_types()
+        )
+        for _, _stage_name, func in entries:
+            for parameter in getattr(func, "parameters", getattr(func, "params", [])):
+                proxy = self.hlsl_entry_resource_parameter_global(parameter, func)
+                if proxy is not None:
+                    globals_.append(proxy)
+        return globals_
+
+    def hlsl_entry_resource_parameter_global(self, parameter, func=None):
+        mapped_type = self.hlsl_entry_resource_parameter_global_type(parameter, func)
+        if mapped_type is None:
+            return None
+
+        return VariableNode(
+            name=parameter.name,
+            var_type=mapped_type,
+            attributes=list(getattr(parameter, "attributes", []) or []),
+            qualifiers=list(getattr(parameter, "qualifiers", []) or []),
+        )
+
+    def hlsl_entry_resource_parameter_global_type(self, parameter, func=None):
+        raw_type = self.hlsl_parameter_raw_type(parameter)
+        mapped_type = self.map_resource_parameter_type_with_hint(
+            raw_type,
+            parameter,
+            getattr(func, "name", None),
+        )
+        mapped_type = self.directx_resource_declaration_type(mapped_type)
+        if self.is_hlsl_global_resource_type(mapped_type):
+            return mapped_type
+        return None
+
+    def is_hlsl_global_resource_type(self, mapped_type):
+        mapped_type = str(mapped_type)
+        return (
+            mapped_type.startswith("Texture")
+            or self.is_hlsl_feedback_texture_type(mapped_type)
+            or self.is_hlsl_rw_texture_type(mapped_type)
+            or self.is_multisample_storage_image_resource_type(mapped_type)
+            or self.is_hlsl_acceleration_structure_type(mapped_type)
+            or self.is_hlsl_uav_buffer_type(mapped_type)
+            or self.is_hlsl_constant_buffer_type(mapped_type)
+            or self.is_hlsl_texture_buffer_type(mapped_type)
+            or self.is_hlsl_readonly_buffer_type(mapped_type)
+            or mapped_type in ["SamplerState", "SamplerComparisonState"]
         )
 
     def hlsl_requires_rwtexture_cube_alias(self, variables):
@@ -12013,11 +12118,121 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         qualifiers = {str(value).lower() for value in getattr(node, "qualifiers", [])}
         return bool(qualifiers & {"groupshared", "shared", "threadgroup", "workgroup"})
 
+    def hlsl_emitted_functions_for_groupshared_lowering(self, ast, target_stage=None):
+        functions = []
+        seen = set()
+
+        def add(func):
+            if func is None or id(func) in seen:
+                return
+            seen.add(id(func))
+            functions.append(func)
+
+        for func in getattr(ast, "functions", []) or []:
+            qualifiers = getattr(func, "qualifiers", []) or []
+            qualifier = (
+                qualifiers[0] if qualifiers else getattr(func, "qualifier", None)
+            )
+            qualifier_name = normalize_stage_name(qualifier)
+            if should_emit_qualified_function(target_stage, qualifier_name):
+                add(func)
+
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if not stage_matches(target_stage, stage_name):
+                continue
+            for func in getattr(stage, "local_functions", []) or []:
+                add(func)
+            add(getattr(stage, "entry_point", None))
+
+        return functions
+
+    def collect_hlsl_function_local_groupshared_declarations(
+        self, ast, target_stage=None
+    ):
+        emitted_stage_groupshared = collect_stage_local_variables(
+            ast,
+            target_stage,
+            self.hlsl_declaration_has_groupshared_qualifier,
+        )
+        used_names = set(self.global_variable_types)
+        used_names.update(
+            getattr(node, "name", None)
+            for node in emitted_stage_groupshared
+            if getattr(node, "name", None)
+        )
+        used_names.update(self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES)
+        declarations = []
+        aliases_by_function = {}
+        types_by_function = {}
+        declaration_ids = set()
+
+        for func in self.hlsl_emitted_functions_for_groupshared_lowering(
+            ast, target_stage
+        ):
+            aliases = {}
+            types = {}
+            declarations_by_name = {}
+            func_name = getattr(func, "name", None) or "shader"
+            for node in self.walk_ast(getattr(func, "body", [])):
+                if not isinstance(node, VariableNode):
+                    continue
+                if not self.hlsl_declaration_has_groupshared_qualifier(node):
+                    continue
+
+                name = getattr(node, "name", None)
+                if not name:
+                    continue
+                if name in declarations_by_name:
+                    raise ValueError(
+                        "DirectX cannot lower multiple function-local "
+                        f"groupshared/threadgroup declarations named '{name}' "
+                        f"in function '{func_name}'; unique source names are "
+                        "required for shader-scope lowering"
+                    )
+
+                alias_base = f"{func_name}_{name}"
+                alias = self.hlsl_unique_local_identifier(alias_base, used_names)
+                used_names.add(alias)
+                declarations_by_name[name] = node
+                aliases[name] = alias
+                declared_type = self.local_variable_declared_type(node)
+                declared_type_text = self.type_name_string(declared_type)
+                types[name] = declared_type_text
+                self.global_variable_types[alias] = declared_type_text
+                declarations.append((node, alias))
+                declaration_ids.add(id(node))
+
+            if aliases:
+                aliases_by_function[id(func)] = aliases
+                types_by_function[id(func)] = types
+
+        self.hlsl_hoisted_groupshared_declarations = declarations
+        self.hlsl_hoisted_groupshared_aliases_by_function = aliases_by_function
+        self.hlsl_hoisted_groupshared_declaration_ids = declaration_ids
+        self.hlsl_hoisted_groupshared_types_by_function = types_by_function
+
+    def hlsl_groupshared_declarations_to_emit(self, stage_groupshared_vars):
+        declarations = [
+            (node, getattr(node, "name", None)) for node in stage_groupshared_vars
+        ]
+        declarations.extend(self.hlsl_hoisted_groupshared_declarations)
+        return declarations
+
+    def generate_hlsl_hoisted_groupshared_declaration(self, node, alias):
+        vtype = self.local_variable_declared_type(node)
+        name = alias or getattr(node, "name", None)
+        declaration = format_c_style_array_declaration(self.map_type(vtype), name)
+        declaration = f"{self.local_variable_qualifier(node)}{declaration}"
+        return f"{declaration};\n"
+
     def validate_hlsl_local_groupshared_declarations(self, func):
         for node in self.walk_ast(getattr(func, "body", [])):
             if not isinstance(node, VariableNode):
                 continue
             if not self.hlsl_declaration_has_groupshared_qualifier(node):
+                continue
+            if id(node) in self.hlsl_hoisted_groupshared_declaration_ids:
                 continue
             raise ValueError(
                 "DirectX groupshared variables must be declared at shader/global scope"

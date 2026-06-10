@@ -614,6 +614,7 @@ class GLSLCodeGen:
     GLSL_PRECISION_QUALIFIERS = {"lowp", "mediump", "highp"}
     GLSL_PARAMETER_QUALIFIERS = {"out", "inout"}
     GLSL_RESERVED_IDENTIFIERS = {"active", "input", "output"}
+    GLSL_BFLOAT16_ALIASES = {"bfloat", "bfloat16", "bfloat16_t"}
     GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {
         "clamp",
         "floatBitsToInt",
@@ -1069,6 +1070,9 @@ class GLSLCodeGen:
             "simd_float3": "vec3",
             "simd_float4": "vec4",
             "half": "float",
+            "bfloat": "float",
+            "bfloat16": "float",
+            "bfloat16_t": "float",
             "half2": "vec2",
             "half3": "vec3",
             "half4": "vec4",
@@ -2462,7 +2466,11 @@ class GLSLCodeGen:
         code += self.generate_constants(ast, leading_constants)
         code += self.generate_glsl_wave_helpers(ast, target_stage)
 
-        global_vars = list(getattr(ast, "global_variables", []) or [])
+        global_vars = [
+            node
+            for node in list(getattr(ast, "global_variables", []) or [])
+            if not self.is_elided_bfloat16_type_alias_global(node)
+        ]
         stage_local_resource_vars = collect_stage_local_variables(
             ast, target_stage, self.is_stage_local_resource_variable
         )
@@ -10143,10 +10151,23 @@ class GLSLCodeGen:
             )
 
         value = self.generate_expression(args[0])
+        if target == "__crossgl_bfloat16_to_uint":
+            return f"(floatBitsToUint({value}) >> 16u)"
         return f"{target}({value})"
 
     def glsl_bitcast_target(self, func_name, value_expr):
-        value_type = self.map_type(self.expression_result_type(value_expr))
+        source_type = self.expression_result_type(value_expr)
+        source_type_name = self.type_name_string(source_type)
+        source_component_type = (
+            self.vector_component_type(source_type_name) or source_type_name
+        )
+        if (
+            func_name == "asuint"
+            and source_component_type in self.GLSL_BFLOAT16_ALIASES
+        ):
+            return "__crossgl_bfloat16_to_uint"
+
+        value_type = self.map_type(source_type)
         component_type = self.vector_component_type(value_type) or value_type
         if func_name == "asfloat":
             if component_type == "int":
@@ -10180,6 +10201,23 @@ class GLSLCodeGen:
             if value_type.endswith(("2", "3", "4")):
                 return f"uvec{value_type[-1]}"
         return None
+
+    def is_elided_bfloat16_type_alias_global(self, node):
+        if not isinstance(node, VariableNode):
+            return False
+        if getattr(node, "name", None) not in self.GLSL_BFLOAT16_ALIASES:
+            return False
+        if getattr(node, "initial_value", None) is not None:
+            return False
+        if getattr(node, "attributes", None):
+            return False
+        if getattr(node, "qualifiers", None):
+            return False
+        return self.type_name_string(getattr(node, "var_type", None)) in {
+            "f16",
+            "float16",
+            "bfloat",
+        }
 
     def generate_mul_call(self, func_name, args):
         if func_name != "mul" or func_name in self.function_return_types:

@@ -5096,6 +5096,24 @@ class TestVulkanSPIRVCodeGen:
         assert "OpStore" in spv_code
         assert "OpExecutionMode %main" not in spv_code
 
+    def test_compute_entry_ignores_metal_max_total_threads_metadata(self):
+        source_code = """
+        shader main {
+            compute {
+                void main() @max_total_threads_per_threadgroup(1024) {
+                    int x = 1;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint GLCompute %(\d+) "main"', spv_code)
+        assert entry_match is not None
+        assert f"OpExecutionMode %{entry_match.group(1)} LocalSize 1 1 1" in spv_code
+
     def test_compute_stage_builtin_ids_emit_spirv_builtins(self):
         source_code = """
         shader ComputeBuiltins {
