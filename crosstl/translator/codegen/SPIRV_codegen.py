@@ -10907,6 +10907,7 @@ class VulkanSPIRVCodeGen:
             "localsizey",
             "localsizez",
             "max_primitives",
+            "max_total_threads_per_threadgroup",
             "max_vertices",
             "maxprimitives",
             "maxvertices",
