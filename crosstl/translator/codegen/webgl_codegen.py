@@ -2,8 +2,9 @@
 
 from copy import copy
 
-from ..ast import FunctionCallNode, StageMap
+from ..ast import BinaryOpNode, FunctionCallNode, StageMap, TernaryOpNode
 from .GLSL_codegen import GLSLCodeGen
+from .array_utils import format_c_style_array_declaration
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 
@@ -35,6 +36,12 @@ class WebGLCodeGen(GLSLCodeGen):
 
     def glsl_resource_binding_layouts_supported(self, version_line):
         return False
+
+    def generate_expression(self, expr, is_main=False):
+        replacement = getattr(self, "_webgl_expression_replacements", {}).get(id(expr))
+        if replacement is not None:
+            return replacement
+        return super().generate_expression(expr, is_main=is_main)
 
     def glsl_dynamic_resource_call_dispatch_info(self, expr):
         dispatch = super().glsl_dynamic_resource_call_dispatch_info(expr)
@@ -95,6 +102,259 @@ class WebGLCodeGen(GLSLCodeGen):
             }
 
         return dynamic_arg
+
+    def webgl_nested_dynamic_sampler_expression_info(self, expr):
+        if not self.webgl_dynamic_sampler_expression_can_be_lifted(expr):
+            return None
+        matches = []
+        for node in self.walk_ast(expr):
+            if node is expr or not isinstance(node, FunctionCallNode):
+                continue
+            func_name = self.function_call_name(node)
+            if not func_name:
+                continue
+            args = list(getattr(node, "arguments", getattr(node, "args", [])) or [])
+            dynamic_info = self.webgl_dynamic_sampler_array_call_info(func_name, args)
+            if dynamic_info is None:
+                continue
+            dispatch = self.glsl_dynamic_resource_call_dispatch_info(node)
+            if dispatch is None:
+                continue
+            matches.append(
+                {
+                    "call": node,
+                    "dispatch": dispatch,
+                    "return_type": (
+                        dispatch.get("return_type")
+                        or self.expression_result_type(node)
+                        or "float"
+                    ),
+                }
+            )
+        if len(matches) != 1:
+            return None
+        return matches[0]
+
+    def webgl_dynamic_sampler_expression_can_be_lifted(self, expr):
+        for node in self.walk_ast(expr):
+            if isinstance(node, TernaryOpNode):
+                return False
+            if isinstance(node, BinaryOpNode):
+                op = self.map_operator(getattr(node, "op", None))
+                if op in {"&&", "||"}:
+                    return False
+        return True
+
+    def webgl_unique_dynamic_sampler_temp_name(self):
+        used_names = set(self.local_variable_types)
+        used_names.update(self.current_identifier_aliases.values())
+        used_names.update(self.current_stage_declared_names())
+        base_name = "crossgl_dynamic_sampler_value"
+        name = base_name
+        suffix = 1
+        while name in used_names:
+            suffix += 1
+            name = f"{base_name}_{suffix}"
+        return name
+
+    def webgl_render_expression_with_replacement(
+        self,
+        expr,
+        call,
+        replacement,
+        expected_type,
+    ):
+        previous_replacements = getattr(self, "_webgl_expression_replacements", {})
+        self._webgl_expression_replacements = {
+            **previous_replacements,
+            id(call): replacement,
+        }
+        try:
+            return self.generate_expression_with_expected(expr, expected_type)
+        finally:
+            self._webgl_expression_replacements = previous_replacements
+
+    def webgl_generate_nested_dynamic_sampler_prefix(self, nested_info, indent):
+        temp_name = self.webgl_unique_dynamic_sampler_temp_name()
+        temp_type = nested_info["return_type"]
+        self.local_variable_types[temp_name] = temp_type
+        indent_str = "    " * indent
+        declaration = format_c_style_array_declaration(
+            self.map_type(temp_type),
+            temp_name,
+        )
+        code = f"{indent_str}{declaration};\n"
+        code += self.generate_glsl_dynamic_resource_switch_statement(
+            nested_info["dispatch"],
+            indent,
+            lambda call: f"{temp_name} = {call};",
+            f"{temp_name} = {self.zero_value_expression(temp_type)};",
+        )
+        return temp_name, code
+
+    def generate_glsl_dynamic_resource_call_assignment_statement(
+        self,
+        expr,
+        target,
+        target_type,
+        indent,
+    ):
+        direct_statement = (
+            super().generate_glsl_dynamic_resource_call_assignment_statement(
+                expr,
+                target,
+                target_type,
+                indent,
+            )
+        )
+        if direct_statement is not None:
+            return direct_statement
+
+        nested_info = self.webgl_nested_dynamic_sampler_expression_info(expr)
+        if nested_info is None:
+            return None
+
+        temp_name, code = self.webgl_generate_nested_dynamic_sampler_prefix(
+            nested_info,
+            indent,
+        )
+        rendered_expr = self.webgl_render_expression_with_replacement(
+            expr,
+            nested_info["call"],
+            temp_name,
+            target_type,
+        )
+        indent_str = "    " * indent
+        code += f"{indent_str}{target} = {rendered_expr};\n"
+        return code
+
+    def generate_glsl_dynamic_resource_assignment_node(self, stmt, indent):
+        direct_statement = super().generate_glsl_dynamic_resource_assignment_node(
+            stmt,
+            indent,
+        )
+        if direct_statement is not None:
+            return direct_statement
+
+        left_node = getattr(stmt, "target", getattr(stmt, "left", None))
+        right_node = getattr(stmt, "value", getattr(stmt, "right", None))
+        op = self.map_operator(getattr(stmt, "operator", getattr(stmt, "op", "=")))
+        if op != "=":
+            return None
+        nested_info = self.webgl_nested_dynamic_sampler_expression_info(right_node)
+        if nested_info is None:
+            return None
+        self.validate_glsl_buffer_block_assignment_target(left_node, op)
+        expected_type = self.glsl_tessellation_factor_assignment_expected_type(
+            left_node
+        )
+        if expected_type is not None:
+            self.validate_glsl_tessellation_factor_assignment_value(
+                left_node,
+                right_node,
+            )
+        else:
+            expected_type = self.expression_result_type(left_node)
+        left = self.generate_glsl_buffer_block_mutation_target(left_node)
+        return self.generate_glsl_dynamic_resource_call_assignment_statement(
+            right_node,
+            left,
+            expected_type,
+            indent,
+        )
+
+    def generate_glsl_dynamic_resource_call_expression_statement(self, expr, indent):
+        direct_statement = (
+            super().generate_glsl_dynamic_resource_call_expression_statement(
+                expr,
+                indent,
+            )
+        )
+        if direct_statement is not None:
+            return direct_statement
+
+        nested_info = self.webgl_nested_dynamic_sampler_expression_info(expr)
+        if nested_info is None:
+            return None
+
+        temp_name, code = self.webgl_generate_nested_dynamic_sampler_prefix(
+            nested_info,
+            indent,
+        )
+        rendered_expr = self.webgl_render_expression_with_replacement(
+            expr,
+            nested_info["call"],
+            temp_name,
+            None,
+        )
+        indent_str = "    " * indent
+        code += f"{indent_str}{rendered_expr};\n"
+        return code
+
+    def generate_glsl_dynamic_resource_call_return_statement(self, expr, indent):
+        if self.current_stage_output is not None:
+            direct_dispatch = self.glsl_dynamic_resource_call_dispatch_info(expr)
+            if direct_dispatch is not None:
+                indent_str = "    " * indent
+                return_type = (
+                    direct_dispatch.get("return_type")
+                    or self.expression_result_type(expr)
+                    or self.current_function_return_type
+                )
+                return (
+                    self.generate_glsl_dynamic_resource_switch_statement(
+                        direct_dispatch,
+                        indent,
+                        lambda call: f"{self.current_stage_output['name']} = {call};",
+                        (
+                            f"{self.current_stage_output['name']} = "
+                            f"{self.zero_value_expression(return_type)};"
+                        ),
+                    )
+                    + f"{indent_str}return;\n"
+                )
+
+            nested_info = self.webgl_nested_dynamic_sampler_expression_info(expr)
+            if nested_info is not None:
+                temp_name, code = self.webgl_generate_nested_dynamic_sampler_prefix(
+                    nested_info,
+                    indent,
+                )
+                rendered_expr = self.webgl_render_expression_with_replacement(
+                    expr,
+                    nested_info["call"],
+                    temp_name,
+                    self.current_function_return_type,
+                )
+                indent_str = "    " * indent
+                code += f"{indent_str}{self.current_stage_output['name']} = {rendered_expr};\n"
+                code += f"{indent_str}return;\n"
+                return code
+
+        direct_statement = super().generate_glsl_dynamic_resource_call_return_statement(
+            expr,
+            indent,
+        )
+        if direct_statement is not None:
+            return direct_statement
+
+        nested_info = self.webgl_nested_dynamic_sampler_expression_info(expr)
+        if nested_info is None:
+            return None
+
+        temp_name, code = self.webgl_generate_nested_dynamic_sampler_prefix(
+            nested_info,
+            indent,
+        )
+        rendered_expr = self.webgl_render_expression_with_replacement(
+            expr,
+            nested_info["call"],
+            temp_name,
+            self.current_function_return_type,
+        )
+        indent_str = "    " * indent
+        code += f"{indent_str}return {rendered_expr};\n"
+        return code
 
     def should_emit_stage_io_layout(self, stage_name, direction):
         if normalize_stage_name(stage_name) == "fragment" and direction == "in":

@@ -226,6 +226,130 @@ def test_webgl_codegen_lowers_dynamic_sampler_array_helper_call():
     assert "shadow = 0.0;" in generated
 
 
+def test_webgl_codegen_lowers_nested_dynamic_sampler_array_helper_call():
+    shader = """
+    shader WebGLNestedDynamicSamplerArray {
+        const int MAP_COUNT = 2;
+
+        vec4 sampleColor(sampler2D colorMap, vec2 uv) {
+            return texture(colorMap, uv);
+        }
+
+        fragment {
+            uniform sampler2D colorMaps[MAP_COUNT];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec4 color = sampleColor(colorMaps[colorIndex], uv) + vec4(0.25);
+                return color;
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "sampleColor(colorMaps[colorIndex]" not in generated
+    assert "vec4 crossgl_dynamic_sampler_value;" in generated
+    assert "switch (colorIndex)" in generated
+    assert "crossgl_dynamic_sampler_value = sampleColor(colorMaps[0], uv);" in generated
+    assert "crossgl_dynamic_sampler_value = sampleColor(colorMaps[1], uv);" in generated
+    assert "vec4 color;" in generated
+    assert "color = (crossgl_dynamic_sampler_value + vec4(0.25));" in generated
+
+
+def test_webgl_codegen_lowers_nested_dynamic_sampler_array_assignment():
+    shader = """
+    shader WebGLNestedDynamicSamplerAssignment {
+        const int MAP_COUNT = 2;
+
+        vec4 sampleColor(sampler2D colorMap, vec2 uv) {
+            return texture(colorMap, uv);
+        }
+
+        fragment {
+            uniform sampler2D colorMaps[MAP_COUNT];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec4 color = vec4(0.0);
+                color = sampleColor(colorMaps[colorIndex], uv) * 0.5;
+                return color;
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "sampleColor(colorMaps[colorIndex]" not in generated
+    assert "switch (colorIndex)" in generated
+    assert "crossgl_dynamic_sampler_value = sampleColor(colorMaps[0], uv);" in generated
+    assert "crossgl_dynamic_sampler_value = sampleColor(colorMaps[1], uv);" in generated
+    assert "color = (crossgl_dynamic_sampler_value * 0.5);" in generated
+
+
+def test_webgl_codegen_lowers_dynamic_sampler_array_stage_return():
+    shader = """
+    shader WebGLDynamicSamplerReturn {
+        const int MAP_COUNT = 2;
+
+        vec4 sampleColor(sampler2D colorMap, vec2 uv) {
+            return texture(colorMap, uv);
+        }
+
+        fragment {
+            uniform sampler2D colorMaps[MAP_COUNT];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return sampleColor(colorMaps[colorIndex], uv);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "return sampleColor(colorMaps[colorIndex]" not in generated
+    assert "switch (colorIndex)" in generated
+    assert "fragColor = sampleColor(colorMaps[0], uv);" in generated
+    assert "fragColor = sampleColor(colorMaps[1], uv);" in generated
+    assert "fragColor = vec4(0.0);" in generated
+    assert "return;" in generated
+
+
+def test_webgl_codegen_lowers_nested_dynamic_sampler_array_stage_return():
+    shader = """
+    shader WebGLNestedDynamicSamplerReturn {
+        const int MAP_COUNT = 2;
+
+        vec4 sampleColor(sampler2D colorMap, vec2 uv) {
+            return texture(colorMap, uv);
+        }
+
+        fragment {
+            uniform sampler2D colorMaps[MAP_COUNT];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return sampleColor(colorMaps[colorIndex], uv) + vec4(0.25);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "sampleColor(colorMaps[colorIndex]" not in generated
+    assert "vec4 crossgl_dynamic_sampler_value;" in generated
+    assert "switch (colorIndex)" in generated
+    assert "crossgl_dynamic_sampler_value = sampleColor(colorMaps[0], uv);" in generated
+    assert "crossgl_dynamic_sampler_value = sampleColor(colorMaps[1], uv);" in generated
+    assert "fragColor = (crossgl_dynamic_sampler_value + vec4(0.25));" in generated
+    assert "return (crossgl_dynamic_sampler_value" not in generated
+
+
 def test_webgl_aliases_format_as_glsl():
     assert format_shader_code("void main(){}", "webgl") == format_shader_code(
         "void main(){}", "glsl"
