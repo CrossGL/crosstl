@@ -9325,6 +9325,208 @@ def _failed_toolchain_run_diagnostic_contract_reasons(
     return reasons
 
 
+ValidationArtifactDiagnosticKey = Tuple[str, str, str, Optional[str], Optional[str]]
+
+
+def _validation_artifact_diagnostic_key(
+    code: str, artifact: Mapping[str, Any]
+) -> ValidationArtifactDiagnosticKey | None:
+    source = artifact.get("source")
+    target = artifact.get("target")
+    if not (_is_non_empty_string(source) and _is_non_empty_string(target)):
+        return None
+
+    source_backend = artifact.get("sourceBackend")
+    if source_backend is not None and not _is_non_empty_string(source_backend):
+        return None
+
+    variant = artifact.get("variant")
+    if variant is not None and not _is_non_empty_string(variant):
+        return None
+
+    return (
+        code,
+        source,
+        _normalized_targets([target])[0],
+        source_backend if _is_non_empty_string(source_backend) else None,
+        variant if _is_non_empty_string(variant) else None,
+    )
+
+
+def _diagnostic_validation_artifact_key(
+    diagnostic: Mapping[str, Any],
+) -> ValidationArtifactDiagnosticKey | None:
+    code = diagnostic.get("code")
+    location = diagnostic.get("location")
+    target = diagnostic.get("target")
+    if not (
+        _is_non_empty_string(code)
+        and isinstance(location, Mapping)
+        and _is_non_empty_string(location.get("file"))
+        and _is_non_empty_string(target)
+    ):
+        return None
+
+    source_backend = diagnostic.get("sourceBackend")
+    if source_backend is not None and not _is_non_empty_string(source_backend):
+        return None
+
+    variant = diagnostic.get("variant")
+    if variant is not None and not _is_non_empty_string(variant):
+        return None
+
+    return (
+        code,
+        location["file"],
+        _normalized_targets([target])[0],
+        source_backend if _is_non_empty_string(source_backend) else None,
+        variant if _is_non_empty_string(variant) else None,
+    )
+
+
+def _append_validation_diagnostic_group(
+    groups: list[frozenset[str]], *codes: str
+) -> None:
+    group = frozenset(codes)
+    if group not in groups:
+        groups.append(group)
+
+
+def _validation_artifact_diagnostic_code_groups(
+    artifact: Mapping[str, Any],
+    referenced_artifact: DeclaredArtifact | None,
+) -> list[frozenset[str]]:
+    groups: list[frozenset[str]] = []
+    source_hash_status = artifact.get("sourceHashStatus")
+    source_size_status = artifact.get("sourceSizeStatus")
+    generated_hash_status = artifact.get("generatedHashStatus")
+    generated_size_status = artifact.get("generatedSizeStatus")
+    source_map_status = artifact.get("sourceMapStatus")
+    source_remap_status = artifact.get("sourceRemapStatus")
+
+    if (
+        referenced_artifact is not None
+        and referenced_artifact[1].get("status") == "failed"
+    ):
+        _append_validation_diagnostic_group(groups, "project.validate.failed-artifact")
+    elif artifact.get("exists") is False and (
+        generated_hash_status != "outside-project"
+        and generated_size_status != "outside-project"
+    ):
+        _append_validation_diagnostic_group(groups, "project.validate.missing-artifact")
+
+    if (
+        source_hash_status == "outside-project"
+        or source_size_status == "outside-project"
+    ):
+        _append_validation_diagnostic_group(
+            groups, "project.validate.source-outside-project"
+        )
+    if source_hash_status == "missing" or source_size_status == "missing":
+        _append_validation_diagnostic_group(groups, "project.validate.missing-source")
+    if source_hash_status == "mismatch":
+        _append_validation_diagnostic_group(
+            groups, "project.validate.source-hash-mismatch"
+        )
+    if source_size_status == "mismatch":
+        _append_validation_diagnostic_group(
+            groups, "project.validate.source-size-mismatch"
+        )
+
+    if (
+        generated_hash_status == "outside-project"
+        or generated_size_status == "outside-project"
+    ):
+        _append_validation_diagnostic_group(
+            groups, "project.validate.artifact-outside-project"
+        )
+    if generated_hash_status == "missing" or generated_size_status == "missing":
+        _append_validation_diagnostic_group(groups, "project.validate.missing-artifact")
+    if generated_hash_status == "mismatch":
+        _append_validation_diagnostic_group(
+            groups, "project.validate.generated-hash-mismatch"
+        )
+    if generated_size_status == "mismatch":
+        _append_validation_diagnostic_group(
+            groups, "project.validate.generated-size-mismatch"
+        )
+
+    if source_map_status == "mismatch":
+        _append_validation_diagnostic_group(
+            groups,
+            "project.validate.source-map-file-span-mismatch",
+            "project.validate.source-map-line-span-mismatch",
+        )
+
+    if source_remap_status == "outside-project":
+        _append_validation_diagnostic_group(
+            groups, "project.validate.source-remap-outside-project"
+        )
+    if source_remap_status == "missing":
+        _append_validation_diagnostic_group(
+            groups, "project.validate.missing-source-remap"
+        )
+    if source_remap_status == "invalid":
+        _append_validation_diagnostic_group(
+            groups, "project.validate.source-remap-invalid"
+        )
+    if source_remap_status == "mismatch":
+        _append_validation_diagnostic_group(
+            groups,
+            "project.validate.source-remap-mismatch",
+            "project.validate.source-remap-size-mismatch",
+        )
+    if source_remap_status == "hash-mismatch":
+        _append_validation_diagnostic_group(
+            groups, "project.validate.source-remap-hash-mismatch"
+        )
+    return groups
+
+
+def _failed_validation_artifact_diagnostic_contract_reasons(
+    artifact_checks: Sequence[Any],
+    diagnostics: Any,
+    declared_artifacts_by_identity: Mapping[ArtifactIdentity, DeclaredArtifact] | None,
+) -> list[str]:
+    if not isinstance(diagnostics, list):
+        return []
+
+    diagnostic_keys = {
+        key
+        for diagnostic in diagnostics
+        if isinstance(diagnostic, Mapping) and diagnostic.get("severity") == "error"
+        for key in (_diagnostic_validation_artifact_key(diagnostic),)
+        if key is not None
+    }
+    reasons = []
+    for index, artifact in enumerate(artifact_checks):
+        if not isinstance(artifact, Mapping) or artifact.get("status") != "failed":
+            continue
+        identity = _artifact_identity(artifact)
+        referenced_artifact = (
+            declared_artifacts_by_identity.get(identity)
+            if identity is not None and declared_artifacts_by_identity is not None
+            else None
+        )
+        code_groups = _validation_artifact_diagnostic_code_groups(
+            artifact, referenced_artifact
+        )
+        for code_group in code_groups:
+            expected_keys = {
+                key
+                for code in code_group
+                for key in (_validation_artifact_diagnostic_key(code, artifact),)
+                if key is not None
+            }
+            if expected_keys and diagnostic_keys.isdisjoint(expected_keys):
+                expected_codes = " or ".join(sorted(code_group))
+                reasons.append(
+                    f"validation.artifacts[{index}] failed record must be reported "
+                    f"by diagnostics ({expected_codes})"
+                )
+    return reasons
+
+
 def _diagnostic_counts_contract_reasons(
     prefix: str, value: Any, diagnostics: Sequence[Any]
 ) -> list[str]:
@@ -11817,6 +12019,14 @@ def _validation_contract_reasons(
                 "validation.artifacts", artifact_checks
             )
         )
+        if require_validation:
+            reasons.extend(
+                _failed_validation_artifact_diagnostic_contract_reasons(
+                    artifact_checks,
+                    report.get("diagnostics", []),
+                    declared_artifacts_by_identity,
+                )
+            )
 
     if "summary" in validation:
         if isinstance(toolchains, list) and project_targets_valid:

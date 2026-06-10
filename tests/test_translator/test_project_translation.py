@@ -12690,6 +12690,52 @@ def test_validate_project_report_rejects_failed_embedded_toolchain_runs_without_
     )
 
 
+def test_validate_project_report_rejects_failed_embedded_validation_artifacts_without_diagnostics(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out", validate=True)
+    payload = report.to_json()
+    validation_artifact = payload["validation"]["artifacts"][0]
+    validation_artifact["status"] = "failed"
+    validation_artifact["generatedHashStatus"] = "mismatch"
+    payload["validation"]["summary"] = {
+        "artifactCount": 1,
+        "okCount": 0,
+        "failedCount": 1,
+        "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
+        "sourceSizeStatusCounts": _source_size_status_counts(ok=1),
+        "generatedHashStatusCounts": _generated_hash_status_counts(mismatch=1),
+        "generatedSizeStatusCounts": _generated_size_status_counts(ok=1),
+        "sourceMapStatusCounts": _source_map_status_counts(ok=1),
+        "sourceRemapStatusCounts": _source_remap_status_counts(ok=1),
+    }
+    payload["diagnostics"] = []
+    payload["diagnosticCounts"] = {"note": 0, "warning": 0, "error": 0}
+    payload["summary"]["diagnosticCounts"] = payload["diagnosticCounts"]
+    payload["summary"]["diagnosticsByCode"] = {}
+    payload["summary"]["diagnosticsByTarget"] = {}
+    payload["summary"]["diagnosticsBySourceBackend"] = {}
+    payload["summary"]["diagnosticsByVariant"] = {}
+    payload["summary"]["diagnosticsByCheckKind"] = {}
+    payload["summary"]["missingCapabilityCounts"] = {}
+    report_path = repo / "out" / "failed-artifact-without-diagnostic-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "validation.artifacts[0] failed record must be reported by diagnostics "
+        "(project.validate.generated-hash-mismatch)"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_available_toolchains_without_run_coverage(
     tmp_path,
 ):
