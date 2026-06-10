@@ -368,6 +368,24 @@ RUNTIME_PACKAGE_INSPECTION_TARGET_FIELDS = frozenset(
         "bindings",
     )
 )
+RUNTIME_HOST_INTERFACE_FIELDS = frozenset(
+    (
+        "status",
+        "source",
+        "parser",
+        "entryPointCount",
+        "resourceCount",
+        "entryPoints",
+        "resources",
+        "diagnostics",
+    )
+)
+RUNTIME_HOST_INTERFACE_ENTRY_POINT_FIELDS = frozenset(
+    ("name", "stage", "executionConfig")
+)
+RUNTIME_HOST_INTERFACE_RESOURCE_FIELDS = frozenset(
+    ("name", "kind", "type", "set", "binding", "access")
+)
 RUNTIME_PACKAGE_INSPECTION_BINDING_FIELDS = frozenset(
     (
         "id",
@@ -383,6 +401,7 @@ RUNTIME_PACKAGE_INSPECTION_BINDING_FIELDS = frozenset(
         "hash",
         "sizeBytes",
         "sourceRemap",
+        "hostInterface",
         "diagnostics",
     )
 )
@@ -436,6 +455,7 @@ RUNTIME_ADAPTER_PLAN_ADAPTER_FIELDS = frozenset(
         "variant",
         "defines",
         "sourceRemap",
+        "hostInterface",
         "requiredTools",
         "hostResponsibilities",
         "validation",
@@ -9085,6 +9105,342 @@ def _runtime_package_inspection_binding_id(artifact: Mapping[str, Any]) -> str:
     )
 
 
+def _runtime_host_interface_empty(
+    status: str,
+    *,
+    parser: str | None = None,
+    diagnostics: Sequence[str] = (),
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "source": "package-artifact",
+        "parser": parser,
+        "entryPointCount": 0,
+        "resourceCount": 0,
+        "entryPoints": [],
+        "resources": [],
+        "diagnostics": list(diagnostics),
+    }
+
+
+def _runtime_host_interface_stage_name(stage: Any) -> str | None:
+    if hasattr(stage, "value"):
+        value = getattr(stage, "value")
+        return str(value) if value else None
+    if stage is None:
+        return None
+    label = str(stage)
+    return label.rsplit(".", 1)[-1].lower() if label else None
+
+
+def _runtime_host_interface_json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _runtime_host_interface_json_value(nested)
+            for key, nested in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_runtime_host_interface_json_value(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if hasattr(value, "value"):
+        return _runtime_host_interface_json_value(getattr(value, "value"))
+    if hasattr(value, "name"):
+        return str(getattr(value, "name"))
+    return str(value)
+
+
+def _runtime_host_interface_type_name(type_node: Any) -> str | None:
+    if type_node is None:
+        return None
+    class_name = type(type_node).__name__
+    if class_name == "VectorType":
+        element_type = _runtime_host_interface_type_name(
+            getattr(type_node, "element_type", None)
+        )
+        return f"{element_type}{getattr(type_node, 'size', '')}"
+    if class_name == "MatrixType":
+        element_type = _runtime_host_interface_type_name(
+            getattr(type_node, "element_type", None)
+        )
+        return f"{element_type}{type_node.rows}x{type_node.cols}"
+    if class_name == "ArrayType":
+        element_type = _runtime_host_interface_type_name(
+            getattr(type_node, "element_type", None)
+        )
+        size = _runtime_host_interface_json_value(getattr(type_node, "size", None))
+        return f"{element_type}[{size}]" if size is not None else f"{element_type}[]"
+    if hasattr(type_node, "name"):
+        name = str(getattr(type_node, "name"))
+        generic_args = [
+            generic_arg
+            for generic_arg in getattr(type_node, "generic_args", []) or []
+            if generic_arg is not None
+        ]
+        if generic_args:
+            generic_labels = ", ".join(
+                filter(
+                    None,
+                    (
+                        _runtime_host_interface_type_name(generic_arg)
+                        for generic_arg in generic_args
+                    ),
+                )
+            )
+            return f"{name}<{generic_labels}>"
+        return name
+    return str(type_node)
+
+
+def _runtime_host_interface_attribute_value(node: Any, names: Sequence[str]) -> Any:
+    normalized_names = {name.lower() for name in names}
+    for attribute in getattr(node, "attributes", []) or []:
+        attribute_name = str(getattr(attribute, "name", "")).lower()
+        if attribute_name not in normalized_names:
+            continue
+        arguments = getattr(attribute, "arguments", []) or []
+        if not arguments:
+            return None
+        return _runtime_host_interface_json_value(arguments[0])
+    return None
+
+
+def _runtime_host_interface_int_attribute(
+    node: Any, names: Sequence[str]
+) -> int | None:
+    value = _runtime_host_interface_attribute_value(node, names)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _runtime_host_interface_resource_access(node: Any) -> str | None:
+    access = getattr(node, "access", None)
+    if isinstance(access, str) and access:
+        return access
+    qualifiers = {
+        str(qualifier).lower() for qualifier in getattr(node, "qualifiers", [])
+    }
+    if qualifiers & {"read_write", "readwrite", "rw", "coherent"}:
+        return "read_write"
+    if qualifiers & {"writeonly", "write_only"}:
+        return "write"
+    if qualifiers & {"readonly", "read_only"}:
+        return "read"
+    return None
+
+
+def _runtime_host_interface_resource_kind(node: Any) -> str | None:
+    class_name = type(node).__name__
+    if class_name == "BufferNode":
+        return "buffer"
+    if class_name == "TextureResourceNode":
+        return "texture"
+    if class_name == "SamplerNode":
+        return "sampler"
+
+    type_name = _runtime_host_interface_type_name(getattr(node, "var_type", None)) or ""
+    type_label = type_name.lower()
+    qualifiers = {
+        str(qualifier).lower() for qualifier in getattr(node, "qualifiers", [])
+    }
+    attribute_names = {
+        str(getattr(attribute, "name", "")).lower()
+        for attribute in getattr(node, "attributes", []) or []
+    }
+
+    if "sampler" == type_label or type_label.endswith(" sampler"):
+        return "sampler"
+    if (
+        "rwtexture" in type_label
+        or "storage_texture" in type_label
+        or "writeonly" in qualifiers
+        or "uav" in attribute_names
+    ):
+        return "storage-texture"
+    if (
+        "texture" in type_label
+        or "sampler2d" in type_label
+        or "texture" in attribute_names
+    ):
+        return "texture"
+    if "buffer" in type_label or "buffer" in qualifiers:
+        return "buffer"
+    if "uniform" in qualifiers:
+        return "uniform"
+    return None
+
+
+def _runtime_host_interface_resource_from_node(node: Any) -> dict[str, Any] | None:
+    kind = _runtime_host_interface_resource_kind(node)
+    if kind is None:
+        return None
+
+    return {
+        "name": getattr(node, "name", None),
+        "kind": kind,
+        "type": (
+            _runtime_host_interface_type_name(getattr(node, "buffer_type", None))
+            or getattr(node, "texture_type", None)
+            or _runtime_host_interface_type_name(getattr(node, "var_type", None))
+        ),
+        "set": (
+            getattr(node, "set", None)
+            if isinstance(getattr(node, "set", None), int)
+            else _runtime_host_interface_int_attribute(node, ("set", "space"))
+        ),
+        "binding": (
+            getattr(node, "binding", None)
+            if isinstance(getattr(node, "binding", None), int)
+            else _runtime_host_interface_int_attribute(
+                node, ("binding", "texture", "sampler", "uav")
+            )
+        ),
+        "access": _runtime_host_interface_resource_access(node),
+    }
+
+
+def _runtime_host_interface_cbuffer_resource(node: Any) -> dict[str, Any]:
+    return {
+        "name": getattr(node, "name", None),
+        "kind": "constant-buffer",
+        "type": getattr(node, "name", None),
+        "set": _runtime_host_interface_int_attribute(node, ("set", "space")),
+        "binding": _runtime_host_interface_int_attribute(node, ("binding",)),
+        "access": "read",
+    }
+
+
+def _runtime_host_interface_entry_points(ast: Any) -> list[dict[str, Any]]:
+    entry_points: list[dict[str, Any]] = []
+    stages = getattr(ast, "stages", None)
+    stage_items = stages.items() if hasattr(stages, "items") else []
+    for stage, stage_node in stage_items:
+        entry_point = getattr(stage_node, "entry_point", None)
+        if entry_point is None:
+            continue
+        entry_points.append(
+            {
+                "name": getattr(entry_point, "name", None),
+                "stage": _runtime_host_interface_stage_name(stage),
+                "executionConfig": _runtime_host_interface_json_value(
+                    getattr(stage_node, "execution_config", {}) or {}
+                ),
+            }
+        )
+    return entry_points
+
+
+def _runtime_host_interface_resources(ast: Any) -> list[dict[str, Any]]:
+    resources: list[dict[str, Any]] = []
+    for cbuffer in getattr(ast, "cbuffers", []) or []:
+        resources.append(_runtime_host_interface_cbuffer_resource(cbuffer))
+    for variable in getattr(ast, "global_variables", []) or []:
+        resource = _runtime_host_interface_resource_from_node(variable)
+        if resource is not None:
+            resources.append(resource)
+
+    stages = getattr(ast, "stages", None)
+    stage_values = stages.values() if hasattr(stages, "values") else []
+    for stage_node in stage_values:
+        for cbuffer in getattr(stage_node, "local_cbuffers", []) or []:
+            resources.append(_runtime_host_interface_cbuffer_resource(cbuffer))
+        for variable in getattr(stage_node, "local_variables", []) or []:
+            resource = _runtime_host_interface_resource_from_node(variable)
+            if resource is not None:
+                resources.append(resource)
+    return resources
+
+
+def _runtime_host_interface_from_ast(ast: Any, parser: str) -> dict[str, Any]:
+    entry_points = _runtime_host_interface_entry_points(ast)
+    resources = _runtime_host_interface_resources(ast)
+    return {
+        "status": "ready",
+        "source": "package-artifact",
+        "parser": parser,
+        "entryPointCount": len(entry_points),
+        "resourceCount": len(resources),
+        "entryPoints": entry_points,
+        "resources": resources,
+        "diagnostics": [],
+    }
+
+
+def _runtime_package_inspection_host_interface(
+    *,
+    package_root: Path,
+    artifact: Mapping[str, Any],
+    artifact_diagnostics: Sequence[ProjectDiagnostic],
+) -> dict[str, Any]:
+    target = artifact.get("target")
+    target_name = str(target).lower() if _is_non_empty_string(target) else ""
+    if artifact_diagnostics:
+        return _runtime_host_interface_empty(
+            "not-inspected",
+            parser="cgl" if target_name in {"cgl", "crossgl"} else None,
+            diagnostics=(
+                "project.runtime-package-inspection.host-interface-artifact-not-ready",
+            ),
+        )
+    if target_name not in {"cgl", "crossgl"}:
+        return _runtime_host_interface_empty(
+            "unavailable",
+            diagnostics=(
+                "project.runtime-package-inspection.host-interface-parser-unavailable",
+            ),
+        )
+
+    package_relative_path = artifact.get("packagePath")
+    if not _is_non_empty_string(package_relative_path):
+        return _runtime_host_interface_empty(
+            "not-inspected",
+            parser="cgl",
+            diagnostics=(
+                "project.runtime-package-inspection.host-interface-artifact-not-ready",
+            ),
+        )
+
+    artifact_path = (package_root / package_relative_path).resolve()
+    if not _is_relative_to(artifact_path, package_root) or not artifact_path.is_file():
+        return _runtime_host_interface_empty(
+            "not-inspected",
+            parser="cgl",
+            diagnostics=(
+                "project.runtime-package-inspection.host-interface-artifact-not-ready",
+            ),
+        )
+
+    try:
+        register_default_sources()
+        source_spec = SOURCE_REGISTRY.get("cgl")
+        if source_spec is None:
+            return _runtime_host_interface_empty(
+                "unavailable",
+                parser="cgl",
+                diagnostics=(
+                    "project.runtime-package-inspection.host-interface-parser-unavailable",
+                ),
+            )
+        ast = source_spec.parse(
+            artifact_path.read_text(encoding="utf-8"),
+            file_path=str(artifact_path),
+        )
+    except Exception:
+        return _runtime_host_interface_empty(
+            "failed",
+            parser="cgl",
+            diagnostics=(
+                "project.runtime-package-inspection.host-interface-parse-failed",
+            ),
+        )
+    return _runtime_host_interface_from_ast(ast, parser="cgl")
+
+
 def _runtime_package_inspection_binding(
     *,
     package_path: Path,
@@ -9110,6 +9466,11 @@ def _runtime_package_inspection_binding(
         package_root=package_root,
         artifact=artifact,
     )
+    host_interface = _runtime_package_inspection_host_interface(
+        package_root=package_root,
+        artifact=artifact,
+        artifact_diagnostics=artifact_diagnostics,
+    )
     diagnostics = [*artifact_diagnostics, *source_remap_diagnostics]
     return {
         "id": _runtime_package_inspection_binding_id(artifact),
@@ -9129,6 +9490,7 @@ def _runtime_package_inspection_binding(
         "hash": artifact.get("hash"),
         "sizeBytes": artifact.get("sizeBytes"),
         "sourceRemap": source_remap,
+        "hostInterface": host_interface,
         "diagnostics": [diagnostic.code for diagnostic in diagnostics],
     }, diagnostics
 
@@ -9351,6 +9713,16 @@ def _runtime_adapter_entry(binding: Mapping[str, Any]) -> dict[str, Any]:
             }
             if isinstance(source_remap, Mapping)
             else None
+        ),
+        "hostInterface": (
+            dict(binding.get("hostInterface"))
+            if isinstance(binding.get("hostInterface"), Mapping)
+            else _runtime_host_interface_empty(
+                "not-inspected",
+                diagnostics=(
+                    "project.runtime-package-inspection.host-interface-not-recorded",
+                ),
+            )
         ),
         "requiredTools": list(catalog_entry["requiredTools"]),
         "hostResponsibilities": list(catalog_entry["loaderResponsibilities"]),
