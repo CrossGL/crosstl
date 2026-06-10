@@ -107,6 +107,9 @@ class SpirvId:
 class VulkanSPIRVCodeGen:
     """Generates SPIR-V code from a CrossGL shader AST."""
 
+    SIGNED_INT32_MAX = (1 << 31) - 1
+    UNSIGNED_INT32_MAX = (1 << 32) - 1
+
     def __init__(self, *, include_resource_interface_variables: bool = False):
         """Initialize an empty SPIR-V module-generation state."""
         self.include_resource_interface_variables = include_resource_interface_variables
@@ -639,6 +642,17 @@ class VulkanSPIRVCodeGen:
         self.value_types[id_value] = type_id
         self.constants[key] = spirv_id
         return spirv_id
+
+    def integer_literal_type_for_value(
+        self, primitive_type_name: str, value: int
+    ) -> str:
+        """Return a SPIR-V scalar integer type that can encode a literal value."""
+        if (
+            primitive_type_name == "int"
+            and self.SIGNED_INT32_MAX < value <= self.UNSIGNED_INT32_MAX
+        ):
+            return "uint"
+        return primitive_type_name
 
     def register_specialization_constant(
         self, value: Union[bool, int, float], type_id: SpirvId, spec_id: int
@@ -2553,13 +2567,15 @@ class VulkanSPIRVCodeGen:
     ) -> SpirvId:
         """Create a unary operation."""
         result_type = self.ensure_registered_type(result_type)
-        id_value = self.get_id()
 
         if op == "+":
             spv_op = None
         elif op == "-":
             component_type = self.scalar_or_vector_component_type(result_type.type)
-            spv_op = "OpSNegate" if component_type in {"int", "uint"} else "OpFNegate"
+            if component_type == "uint":
+                zero = self.default_value_for_type(result_type)
+                return self.binary_operation("-", result_type, zero, operand)
+            spv_op = "OpSNegate" if component_type == "int" else "OpFNegate"
         elif op == "!":
             bool_type = self.register_primitive_type("bool")
             operand_vector = self.vector_component_type_and_count(
@@ -2587,6 +2603,7 @@ class VulkanSPIRVCodeGen:
         if spv_op is None:
             return operand
 
+        id_value = self.get_id()
         self.emit(f"%{id_value} = {spv_op} %{result_type.id} %{operand.id}")
         self.decorate_no_contraction_result(id_value, spv_op, result_type)
 
@@ -20074,6 +20091,7 @@ class VulkanSPIRVCodeGen:
                 if self.expected_primitive_type_name() == "uint" and expr >= 0
                 else "int"
             )
+            primitive_type = self.integer_literal_type_for_value(primitive_type, expr)
             int_type = self.register_primitive_type(primitive_type)
             return self.register_constant(expr, int_type)
         elif isinstance(expr, float):
@@ -20145,14 +20163,18 @@ class VulkanSPIRVCodeGen:
                 literal_type_id = self.register_primitive_type(primitive_type_name)
                 return self.register_constant(float(expr.value), literal_type_id)
             if primitive_type_name in {"int", "uint"}:
+                literal_value = int(expr.value)
                 if (
                     primitive_type_name == "int"
                     and self.expected_primitive_type_name() == "uint"
-                    and int(expr.value) >= 0
+                    and literal_value >= 0
                 ):
                     primitive_type_name = "uint"
+                primitive_type_name = self.integer_literal_type_for_value(
+                    primitive_type_name, literal_value
+                )
                 literal_type_id = self.register_primitive_type(primitive_type_name)
-                return self.register_constant(int(expr.value), literal_type_id)
+                return self.register_constant(literal_value, literal_type_id)
             if primitive_type_name == "bool":
                 literal_type_id = self.register_primitive_type("bool")
                 if isinstance(expr.value, str):

@@ -24457,6 +24457,29 @@ def test_opengl_hlsl_bitcast_aliases_map_to_glsl_bit_functions():
     assert "asfloat(" not in generated_code
 
 
+def test_opengl_bfloat16_asuint_alias_lowers_to_uint_payload():
+    shader = """
+    shader BFloat16BitcastAlias {
+        uint packScalar(bfloat16_t value) {
+            return asuint(value);
+        }
+
+        uint packNamedAlias(bfloat value) {
+            return asuint(value);
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uint packScalar(float value)" in generated_code
+    assert "uint packNamedAlias(float value)" in generated_code
+    assert "return (floatBitsToUint(value) >> 16u);" in generated_code
+    assert "bfloat16_t" not in generated_code
+    assert "bfloat " not in generated_code
+    assert "asuint(" not in generated_code
+
+
 def test_opengl_hlsl_bitcast_alias_renames_local_target_shadow():
     shader = """
     shader BitcastAliasLocalShadow {

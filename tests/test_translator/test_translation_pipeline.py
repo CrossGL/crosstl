@@ -1,4 +1,7 @@
 import re
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -125,6 +128,59 @@ def _assert_generated_output_is_usable(generated):
     assert "Traceback" not in generated
     assert "NotImplemented" not in generated
     assert "<crosstl." not in generated
+
+
+def _compile_glslang_if_available(source: str, stage: str) -> None:
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        return
+
+    stage_name = {"vertex": "vert", "fragment": "frag"}[stage]
+    suffix = {"vertex": ".vert", "fragment": ".frag"}[stage]
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / f"shader{suffix}"
+        source_path.write_text(source, encoding="utf-8")
+        result = subprocess.run(
+            [glslang, "-S", stage_name, str(source_path)],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
+def _compile_metal_if_available(source: str) -> None:
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        return
+
+    lookup = subprocess.run(
+        [xcrun, "-f", "metal"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if lookup.returncode != 0:
+        return
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "shader.metal"
+        output_path = Path(temp_dir) / "shader.air"
+        source_path.write_text(source, encoding="utf-8")
+        result = subprocess.run(
+            [xcrun, "metal", str(source_path), "-o", str(output_path)],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+    assert result.returncode == 0, result.stderr
+
+
+def _compile_with_metal_if_available(source: str, tmp_path: Path):
+    _ = tmp_path
+    _compile_metal_if_available(source)
 
 
 def test_cgl_translate_save_shader_preserves_source_line_endings(tmp_path):
@@ -352,6 +408,42 @@ def test_metal_uint2_dispatch_id_promotes_to_directx_uint3(tmp_path):
     assert "uint row = id.y;" in generated
     assert "uint col = id.x;" in generated
     assert "uint2 id : SV_DispatchThreadID" not in generated
+
+
+def test_metal_threadgroup_scratch_lowers_to_directx_groupshared(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "mlx-threadgroup-scratch.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        kernel void mat_mul(
+            device float* out [[buffer(0)]],
+            uint tid [[thread_index_in_threadgroup]]
+        ) {
+            threadgroup float scratch[256];
+            scratch[tid] = 1.0;
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            out[tid] = scratch[tid];
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="directx", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "groupshared float mat_mul_scratch[256];" in generated
+    assert "threadgroup float" not in generated
+    assert "    groupshared float scratch[256];" not in generated
+    assert "mat_mul_scratch[tid] = 1.0;" in generated
+    assert "out_.Store(tid, mat_mul_scratch[tid]);" in generated
+    assert "GroupMemoryBarrierWithGroupSync();" in generated
+    assert generated.index("groupshared float mat_mul_scratch[256];") < generated.index(
+        "void CSMain"
+    )
 
 
 def test_metal_constant_reference_parameter_lowers_to_directx_constant_buffer(
@@ -791,6 +883,152 @@ def test_metal_max_total_threads_metadata_translates_to_vulkan(tmp_path):
     assert "OpEntryPoint GLCompute" in generated
     assert '"pinned_kernel"' in generated
     assert "return semantic" not in generated
+
+
+def test_hlsl_hello_const_buffers_vertex_semantics_lower_to_metal_attributes(
+    tmp_path,
+):
+    source_path = _write_source(
+        tmp_path,
+        "hello-const-buffers.hlsl",
+        """
+        cbuffer SceneConstantBuffer : register(b0)
+        {
+            float4 offset;
+        };
+
+        struct PSInput
+        {
+            float4 position : SV_POSITION;
+            float4 color : COLOR;
+        };
+
+        PSInput VSMain(float4 position : POSITION, float4 color : COLOR)
+        {
+            PSInput result;
+            result.position = position + offset;
+            result.color = color;
+            return result;
+        }
+
+        float4 PSMain(PSInput input) : SV_TARGET
+        {
+            return input.color;
+        }
+        """,
+    )
+
+    metal = crosstl.translate(str(source_path), backend="metal", format_output=False)
+
+    assert "float4 position [[attribute(0)]];" in metal
+    assert "float4 color [[attribute(1)]];" in metal
+    assert "float4 position [[position]];" in metal
+    assert "[[Color]]" not in metal
+    assert "[[COLOR]]" not in metal
+    _compile_with_metal_if_available(metal, tmp_path)
+
+
+def test_hlsl_struct_inout_vertex_entry_generates_valid_glsl_and_metal(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "diligent-cube-vs.hlsl",
+        """
+        cbuffer Constants
+        {
+            float4x4 g_WorldViewProj;
+        };
+
+        struct VSInput
+        {
+            float3 Pos   : ATTRIB0;
+            float4 Color : ATTRIB1;
+        };
+
+        struct PSInput
+        {
+            float4 Pos   : SV_POSITION;
+            float4 Color : COLOR0;
+        };
+
+        [shader("vertex")]
+        void main(in VSInput VSIn, out PSInput PSIn)
+        {
+            PSIn.Pos   = mul(float4(VSIn.Pos, 1.0), g_WorldViewProj);
+            PSIn.Color = VSIn.Color;
+        }
+        """,
+    )
+
+    opengl = crosstl.translate(str(source_path), backend="opengl", format_output=False)
+    metal = crosstl.translate(str(source_path), backend="metal", format_output=False)
+
+    assert "in vec3 VSIn_Pos;" in opengl
+    assert "in vec4 VSIn_Color;" in opengl
+    assert "out vec4 PSIn_Color;" in opengl
+    assert "PSIn_Color = VSIn_Color;" in opengl
+    assert "VSIn." not in opengl
+    assert "PSIn." not in opengl
+    assert "in vec4 Color;" not in opengl
+    assert "out vec4 Color;" not in opengl
+
+    assert "vertex vertex_main_Return vertex_main" in metal
+    assert "float3 VSIn_Pos [[attribute(0)]];" in metal
+    assert "float4 VSIn_Color [[attribute(1)]];" in metal
+    assert "float4 PSIn_Pos [[position]];" in metal
+    assert "float4 PSIn_Color [[user(Color0)]];" in metal
+    assert "[[ATTRIB" not in metal
+    assert "[[COLOR" not in metal
+    assert " PSIn." not in metal
+
+    _compile_glslang_if_available(opengl, "vertex")
+    _compile_metal_if_available(metal)
+
+
+def test_hlsl_struct_inout_pixel_entry_generates_valid_glsl_and_metal(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "diligent-cube-ps.hlsl",
+        """
+        struct PSInput
+        {
+            float4 Pos   : SV_POSITION;
+            float4 Color : COLOR0;
+        };
+
+        struct PSOutput
+        {
+            float4 Color : SV_TARGET;
+        };
+
+        [shader("pixel")]
+        void main(in PSInput PSIn, out PSOutput PSOut)
+        {
+            float4 Color = PSIn.Color;
+            PSOut.Color = Color;
+        }
+        """,
+    )
+
+    opengl = crosstl.translate(str(source_path), backend="opengl", format_output=False)
+    metal = crosstl.translate(str(source_path), backend="metal", format_output=False)
+
+    assert "in vec4 PSIn_Color;" in opengl
+    assert "layout(location = 0) out vec4 fragColor;" in opengl
+    assert "vec4 Color = PSIn_Color;" in opengl
+    assert "fragColor = Color;" in opengl
+    assert "PSIn." not in opengl
+    assert "PSOut." not in opengl
+
+    assert "fragment fragment_main_Return fragment_main" in metal
+    assert "float4 PSIn_Pos [[position]]" in metal
+    assert "float4 PSIn_Color [[user(Color0)]]" in metal
+    assert "float4 PSOut_Color [[color(0)]];" in metal
+    assert "[[COLOR" not in metal
+    assert " PSIn." not in metal
+    assert " PSOut." not in metal
+
+    _compile_glslang_if_available(opengl, "fragment")
+    _compile_metal_if_available(metal)
 
 
 @pytest.mark.parametrize(
