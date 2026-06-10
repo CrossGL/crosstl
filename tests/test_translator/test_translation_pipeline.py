@@ -1067,6 +1067,32 @@ def test_hlsl_struct_inout_pixel_entry_generates_valid_glsl_and_metal(tmp_path):
     _compile_metal_if_available(metal)
 
 
+def test_glsl_es_legacy_fragcolor_lowers_to_non_reserved_opengl_output(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "Cube_cube.frag",
+        """
+        precision lowp float;
+        varying vec3 vv3colour;
+        void main() { gl_FragColor = vec4(vv3colour, 1.0); }
+        """,
+    )
+
+    opengl = crosstl.translate(
+        str(source_path),
+        backend="opengl",
+        source_backend="opengl",
+        format_output=False,
+    )
+
+    assert "layout(location = 0) out vec4 fragColor;" in opengl
+    assert "fragColor = vec4(vv3colour, 1.0);" in opengl
+    assert "vec4 gl_FragColor;" not in opengl
+    assert "gl_FragColor" not in opengl
+
+    _compile_glslang_if_available(opengl, "fragment")
+
+
 @pytest.mark.parametrize("source_name", sorted(NATIVE_SOURCE_SNIPPETS))
 @pytest.mark.parametrize("target_backend", codegen.backend_names())
 def test_native_source_to_registered_target_pipeline_is_total(

@@ -5934,6 +5934,9 @@ class GLSLCodeGen:
         )
         self.current_stage_entry_type = shader_type or stage_context
         self.current_identifier_aliases = dict(self.current_identifier_aliases)
+        self.current_identifier_aliases.update(
+            self.fragment_legacy_color_output_aliases(func, shader_type, stage_output)
+        )
         self.current_compile_time_int_constants = dict(self.literal_int_constants)
         self.current_compile_time_int_vector_constants = dict(
             self.literal_int_vector_constants
@@ -7746,6 +7749,23 @@ class GLSLCodeGen:
         reserved_names.update(additional_reserved_names or set())
         return self.stage_io_name_avoiding_reserved(output_name, reserved_names)
 
+    def fragment_legacy_color_output_aliases(self, func, shader_type, stage_output):
+        if shader_type != "fragment" or stage_output is None:
+            return {}
+
+        semantic = str(self.function_return_semantic(func) or "gl_FragColor")
+        if not semantic.startswith("gl_FragColor"):
+            return {}
+
+        output_name = stage_output.get("name")
+        if not output_name or output_name.startswith("gl_"):
+            return {}
+
+        local_names = self.function_local_variable_names(func)
+        if semantic not in local_names:
+            return {}
+        return {semantic: output_name}
+
     def generate_stage_struct_constructor_return(self, expr, indent):
         if not self.current_stage_output_member_map:
             return None
@@ -7812,6 +7832,19 @@ class GLSLCodeGen:
             if stmt.name in self.flattened_stage_variables:
                 return ""
             var_type = self.local_variable_declared_type(stmt)
+            stage_output_alias = self.current_identifier_aliases.get(stmt.name)
+            if (
+                self.current_stage_output is not None
+                and stage_output_alias == self.current_stage_output["name"]
+            ):
+                self.local_variable_types[stmt.name] = var_type
+                initial_value = getattr(stmt, "initial_value", None)
+                if initial_value is None:
+                    return ""
+                init_expr = self.generate_expression_with_expected(
+                    initial_value, var_type
+                )
+                return f"{indent_str}{stage_output_alias} = {init_expr};\n"
             if (
                 self.current_stage_output is not None
                 and stmt.name == self.current_stage_output["name"]
@@ -7921,6 +7954,12 @@ class GLSLCodeGen:
             if (
                 self.current_stage_output is not None
                 and return_value_name == self.current_stage_output["name"]
+            ):
+                return f"{indent_str}return;\n"
+            if (
+                self.current_stage_output is not None
+                and self.current_identifier_aliases.get(return_value_name)
+                == self.current_stage_output["name"]
             ):
                 return f"{indent_str}return;\n"
             stage_struct_return = self.generate_stage_struct_constructor_return(
