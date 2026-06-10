@@ -1431,6 +1431,47 @@ def test_scan_report_records_build_system_runtime_reference(tmp_path):
     ]
 
 
+def test_scan_report_records_webgpu_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.ts").write_text(
+        textwrap.dedent("""
+            async function configure(device: GPUDevice) {
+              const shaderModule = device.createShaderModule({ code });
+              await navigator.gpu.requestAdapter();
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "package.json").write_text(
+        json.dumps({"devDependencies": {"@webgpu/types": "latest"}}),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 4
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 4}
+    assert payload["migration"]["runtimeReferencesByKind"] == {
+        "build-system": 1,
+        "runtime-api": 3,
+    }
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "host.ts": 3,
+        "package.json": 1,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.ts", "wgsl", "runtime-api", "GPUDevice"),
+        ("host.ts", "wgsl", "runtime-api", "createShaderModule"),
+        ("host.ts", "wgsl", "runtime-api", "navigator.gpu"),
+        ("package.json", "wgsl", "build-system", "wgsl-build-system"),
+    ]
+
+
 def test_scan_report_records_system_include_migration_actions(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

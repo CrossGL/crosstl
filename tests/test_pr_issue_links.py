@@ -1265,6 +1265,50 @@ def test_traceability_policy_treats_frontend_ir_paths_as_support_relevant():
     ]
 
 
+def test_traceability_policy_treats_project_pipeline_paths_as_support_relevant():
+    module = load_sync_module()
+    pr = module.PullRequestContext(
+        number=5,
+        title="Improve project porting metadata",
+        body="No linked issue.",
+        author="alice",
+        changed_files=(
+            "crosstl/project/pipeline.py",
+            "docs/source/project-porting.rst",
+            "tests/test_translator/test_project_translation.py",
+        ),
+    )
+    client = FakeClient(module)
+
+    summary = module.sync_pr_issue_links(
+        client,
+        pr,
+        "CrossGL/crosstl",
+        enforce_support_traceability=True,
+    )
+
+    assert summary["traceability_required"] == 1
+    assert summary["traceability_failed"] == 1
+    assert summary["support_relevant_files"] == 3
+    assert summary["traceability_audit"]["support_relevant_files"] == [
+        {
+            "path": "crosstl/project/pipeline.py",
+            "reason": "prefix",
+            "matched": "crosstl/project/",
+        },
+        {
+            "path": "docs/source/project-porting.rst",
+            "reason": "exact_path",
+            "matched": "docs/source/project-porting.rst",
+        },
+        {
+            "path": "tests/test_translator/test_project_translation.py",
+            "reason": "exact_path",
+            "matched": "tests/test_translator/test_project_translation.py",
+        },
+    ]
+
+
 def test_traceability_policy_ignores_non_support_paths():
     module = load_sync_module()
     pr = module.PullRequestContext(

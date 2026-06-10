@@ -1019,8 +1019,24 @@ RUNTIME_REFERENCE_RULES = (
     (
         "webgl",
         "build-system",
-        re.compile(r'"(?:@webgpu/types|webgl|three)"'),
+        re.compile(r'"(?:webgl|three)"'),
         "webgl-build-system",
+    ),
+    (
+        "wgsl",
+        "runtime-api",
+        re.compile(
+            r"\b(navigator\.gpu|GPU(?:Adapter|BindGroup|CanvasContext|"
+            r"CommandEncoder|ComputePipeline|Device|Queue|RenderPipeline|"
+            r"ShaderModule)|createShaderModule)\b"
+        ),
+        None,
+    ),
+    (
+        "wgsl",
+        "build-system",
+        re.compile(r'"(?:@webgpu/types|webgpu|gpuweb)"'),
+        "wgsl-build-system",
     ),
 )
 REPORT_PACKAGE_NAME = "crosstl"
