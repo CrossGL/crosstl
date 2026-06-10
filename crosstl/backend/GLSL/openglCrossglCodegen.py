@@ -288,6 +288,12 @@ class GLSLToCrossGLConverter:
         "gl_CullDistance": "float",
     }
     VERTEX_BUILTIN_ARRAY_OUTPUTS = {"gl_ClipDistance", "gl_CullDistance"}
+    VERTEX_ENTRY_BUILTIN_ALIASES = {
+        "gl_VertexIndex": "gl_VertexID",
+    }
+    VERTEX_ENTRY_BUILTIN_PARAMETERS = {
+        "gl_VertexID": "int gl_VertexID @ gl_VertexID",
+    }
     BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
     DEFAULT_SHADER_TYPE = "vertex"
 
@@ -2274,6 +2280,72 @@ class GLSLToCrossGLConverter:
         finally:
             self.shader_type = previous_shader_type
 
+    def ast_references_variable(self, node, names, visited=None):
+        if node is None:
+            return False
+        if visited is None:
+            visited = set()
+        if isinstance(node, (str, int, float, bool)):
+            return False
+
+        node_id = id(node)
+        if node_id in visited:
+            return False
+        visited.add(node_id)
+
+        if isinstance(node, VariableNode):
+            return node.name in names
+
+        if isinstance(node, (list, tuple, set)):
+            return any(
+                self.ast_references_variable(item, names, visited) for item in node
+            )
+
+        if isinstance(node, dict):
+            return any(
+                self.ast_references_variable(value, names, visited)
+                for value in node.values()
+            )
+
+        values = getattr(node, "__dict__", None)
+        if values is None:
+            return False
+        return any(
+            self.ast_references_variable(value, names, visited)
+            for value in values.values()
+        )
+
+    def vertex_entry_builtin_parameters(self, main_function):
+        if self.shader_type != "vertex" or main_function is None:
+            return []
+
+        builtin_names = {
+            *self.VERTEX_ENTRY_BUILTIN_ALIASES,
+            *self.VERTEX_ENTRY_BUILTIN_ALIASES.values(),
+        }
+        if not self.ast_references_variable(
+            getattr(main_function, "body", []), builtin_names
+        ):
+            return []
+
+        existing_parameter_names = {
+            param.name
+            for param in getattr(main_function, "params", []) or []
+            if isinstance(param, VariableNode)
+        }
+        return [
+            declaration
+            for name, declaration in self.VERTEX_ENTRY_BUILTIN_PARAMETERS.items()
+            if name not in existing_parameter_names
+        ]
+
+    def stage_input_parameter_list(self, main_function):
+        parameters = []
+        if self.inputs:
+            parameters.append(f"{self.stage_struct_name()}Input input")
+        parameters.extend(self.vertex_entry_builtin_parameters(main_function))
+        return ", ".join(parameters)
+
     def generate_shader(self, node):
         self.uniform_vars = []
         self.inputs = []
@@ -2640,9 +2712,7 @@ class GLSLToCrossGLConverter:
         # Generate the main function if it exists
         if main_function or shadertoy_main_image:
             self.increase_indent()
-            input_parameter = (
-                f"{self.stage_struct_name()}Input input" if self.inputs else ""
-            )
+            input_parameter = self.stage_input_parameter_list(main_function)
 
             # Determine function signature based on shader type
             if self.shader_type == "vertex":
@@ -3325,19 +3395,24 @@ class GLSLToCrossGLConverter:
         elif isinstance(node, (int, float)):
             return str(node)
         elif isinstance(node, VariableNode):
+            name = (
+                self.VERTEX_ENTRY_BUILTIN_ALIASES.get(node.name, node.name)
+                if self.shader_type == "vertex"
+                else node.name
+            )
             if self.shader_type in (
                 "vertex",
                 "fragment",
-            ) and any(var.name == node.name for var in self.inputs):
-                return f"input.{node.name}"
+            ) and any(var.name == name for var in self.inputs):
+                return f"input.{name}"
             if self.shader_type in ("vertex",) and any(
-                var.name == node.name for var in self.outputs
+                var.name == name for var in self.outputs
             ):
-                return f"output.{node.name}"
-            ssbo_member = self.anonymous_ssbo_member_reference(node.name)
+                return f"output.{name}"
+            ssbo_member = self.anonymous_ssbo_member_reference(name)
             if ssbo_member is not None:
                 return ssbo_member
-            return node.name
+            return name
         elif isinstance(node, BinaryOpNode):
             left = self.generate_expression(node.left)
             right = self.generate_expression(node.right)

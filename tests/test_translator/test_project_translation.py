@@ -4330,6 +4330,53 @@ def test_translate_project_preserves_anonymous_glsl_ssbo_shape_for_targets(tmp_p
     assert "values[index] = index" not in metal
 
 
+def test_translate_project_lowers_glsl_vertex_index_for_graphics_targets(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "fullscreen.vert").write_text(
+        textwrap.dedent("""
+            #version 450
+
+            void main() {
+                gl_Position = vec4(float(gl_VertexIndex), 0.0, 0.0, 1.0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu"]
+            targets = ["opengl", "directx"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    opengl = (repo / "translated" / "opengl" / "gpu" / "fullscreen.glsl").read_text(
+        encoding="utf-8"
+    )
+    directx = (repo / "translated" / "directx" / "gpu" / "fullscreen.hlsl").read_text(
+        encoding="utf-8"
+    )
+
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+
+    assert "gl_VertexID" in opengl
+    assert "gl_VertexIndex" not in opengl
+    assert "SV_VertexID" not in opengl
+
+    assert "SV_VertexID" in directx
+    assert "gl_VertexID" in directx
+    assert "float(gl_VertexID)" in directx
+    assert "gl_VertexIndex" not in directx
+
+
 def test_scan_project_reports_unsupported_source_overrides(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
