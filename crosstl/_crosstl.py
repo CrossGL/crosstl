@@ -15,6 +15,7 @@ from .translator.codegen import (
     get_codegen,
     normalize_backend_name,
 )
+from .translator.default_arguments import lower_default_arguments
 from .translator.plugin_loader import discover_backend_plugins
 from .translator.source_registry import (
     BINARY_SPIRV_UNSUPPORTED_MESSAGE,
@@ -155,6 +156,7 @@ def translate(
             generated_code = shader_code
         else:
             codegen = get_codegen(normalized_backend)
+            lower_default_arguments(ast)
             generated_code = codegen.generate(ast)
     else:
         if normalized_backend in ["cgl", "crossgl"]:
@@ -168,6 +170,7 @@ def translate(
                     f"Unsupported translation scenario: {file_path} to {backend}"
                 )
             # Translate to CrossGL first, then to target backend
+            lower_default_arguments(ast)
             reverse_codegen = source_spec.reverse_codegen_factory()
             intermediate_code = reverse_codegen.generate(ast)
             cgl_spec = SOURCE_REGISTRY.get("cgl")
@@ -179,6 +182,7 @@ def translate(
             if source_spec.name == "cuda" and normalized_backend in {"metal", "vulkan"}:
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
             codegen = get_codegen(normalized_backend)
+            lower_default_arguments(cgl_ast)
             generated_code = codegen.generate(cgl_ast)
 
     if (
