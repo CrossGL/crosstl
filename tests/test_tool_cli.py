@@ -189,3 +189,15 @@ def test_public_api_docs_include_project_api():
     )
 
     assert ".. automodule:: crosstl.project" in public_api
+
+
+def test_project_porting_guide_references_python_project_api():
+    guide = (ROOT / "docs" / "source" / "project-porting.rst").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        "from crosstl.project import inspect_project_report, translate_project" in guide
+    )
+    assert "report.write_json(report_path)" in guide
+    assert "inspect_project_report(report_path)" in guide
