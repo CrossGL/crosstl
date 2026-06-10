@@ -125,6 +125,12 @@ SPIR-V still needs host-entry filtering; that follow-up is tracked in issue
 #795. HIP candidates remain intentionally excluded until target artifacts
 compile directly and preserve only the relevant kernel entries.
 
+The `modular/modular` Mojo GPU vector-add example was tested as a candidate.
+It translates to CrossGL, but Metal and SPIR-V artifact generation still fails
+when Mojo identifier AST nodes cross the target-generation path; that
+translator issue is tracked in issue #798. The candidate is intentionally not
+checked in until platform target artifacts can be generated and validated.
+
 The `KhronosGroup/OpenCL-SDK` SAXPY kernel was retested after issue #751 closed
 and is now checked for Metal and Vulkan output. OpenGL output still needs an
 explicit cast when assigning `gl_GlobalInvocationID.x` to the signed index
