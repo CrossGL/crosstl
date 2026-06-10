@@ -52,6 +52,7 @@ OpDecorate %31 BuiltIn GlobalInvocationId
 %33 = OpTypePointer Function %11
 %35 = OpTypePointer Function %9
 %63 = OpConstant %4 0
+%66 = OpConstant %9 0
 %98 = OpConstant %9 1
 %16 = OpVariable %15 Input
 %20 = OpVariable %15 Input
@@ -115,7 +116,6 @@ OpBranchConditional %50 %52 %53
 OpStore %54 %61
 %64 = OpConvertSToF %5 %63
 OpStore %62 %64
-%66 = OpBitcast %9 %63
 OpStore %65 %66
 OpBranch %67
 %67 = OpLabel
