@@ -1308,6 +1308,7 @@ RUNTIME_REFERENCE_FILENAMES = frozenset(
         "pyproject.toml",
     )
 )
+RUNTIME_REFERENCE_NON_TARGET_BACKENDS = frozenset(("opencl",))
 RUNTIME_REFERENCE_RULES = (
     (
         "cuda",
@@ -1349,6 +1350,31 @@ RUNTIME_REFERENCE_RULES = (
         "hip-build-system",
     ),
     (
+        "opencl",
+        "runtime-api",
+        re.compile(
+            r"\b(cl(?:BuildProgram|CompileProgram|LinkProgram|"
+            r"Create(?:Buffer|CommandQueue(?:WithProperties)?|Context(?:FromType)?|"
+            r"Kernel|ProgramWith(?:Binary|BuiltInKernels|IL|Source))|"
+            r"Enqueue(?:NDRangeKernel|ReadBuffer(?:Rect)?|WriteBuffer(?:Rect)?)|"
+            r"Finish|Flush|Get(?:DeviceIDs|DeviceInfo|PlatformIDs|PlatformInfo|"
+            r"Program(?:BuildInfo|Info))|"
+            r"Release(?:CommandQueue|Context|Kernel|MemObject|Program)|"
+            r"SetKernelArg|WaitForEvents))\b"
+        ),
+        None,
+    ),
+    (
+        "opencl",
+        "build-system",
+        re.compile(
+            r"(?<!\w)(?:find_package\s*\(\s*OpenCL\b|OpenCL::OpenCL\b|"
+            r"-lOpenCL\b|OpenCL\.lib\b)",
+            re.IGNORECASE,
+        ),
+        "opencl-build-system",
+    ),
+    (
         "metal",
         "runtime-api",
         re.compile(r"\b(MTL(?:CreateSystemDefaultDevice|[A-Za-z_][A-Za-z0-9_]*))\b"),
@@ -1387,6 +1413,17 @@ RUNTIME_REFERENCE_RULES = (
         re.compile(
             r"\b((?:D3D11|D3D12|ID3D11|ID3D12|D3DCompile|"
             r"IDXGI|DXGI_|CreateDXGIFactory)[A-Za-z0-9_]*)\b"
+        ),
+        None,
+    ),
+    (
+        "directx",
+        "runtime-api",
+        re.compile(
+            r"\b((?:DxcCreateInstance|DxcBuffer|"
+            r"IDxc(?:Blob(?:Encoding)?|Compiler[0-9]*|IncludeHandler|"
+            r"Library|OperationResult|Result|Utils)|"
+            r"CLSID_Dxc[A-Za-z0-9_]*|IID_IDxc[A-Za-z0-9_]*))\b"
         ),
         None,
     ),
@@ -1489,8 +1526,82 @@ RUNTIME_REFERENCE_RULES = (
     ),
     (
         "wgsl",
+        "runtime-api",
+        re.compile(
+            r"(?<!navigator\.)\b(?:adapter|gpuAdapter|gpu|device|gpuDevice|"
+            r"context|gpuContext|"
+            r"queue|gpuQueue|encoder|commandEncoder|pass|passEncoder|"
+            r"renderPass|renderPassEncoder|computePass|computePassEncoder)\."
+            r"(request(?:Adapter|Device)|configure|getCurrentTexture|"
+            r"create(?:Buffer|Texture|CommandEncoder|RenderPipeline(?:Async)?|"
+            r"ComputePipeline(?:Async)?)|writeBuffer|begin(?:RenderPass|"
+            r"ComputePass)|set(?:Pipeline|VertexBuffer|IndexBuffer)|"
+            r"draw(?:Indexed)?|dispatchWorkgroups|end|finish|submit)(?=\s*\()"
+        ),
+        None,
+    ),
+    (
+        "wgsl",
+        "runtime-api",
+        re.compile(
+            r"\b(?:device|command_encoder|pass_encoder|"
+            r"render_pass|render_pass_encoder|compute_pass|compute_pass_encoder)\."
+            r"(create_(?:render_pipeline|compute_pipeline|"
+            r"command_encoder|buffer|texture)|begin_(?:render_pass|compute_pass)|"
+            r"set_(?:pipeline|vertex_buffer|index_buffer)|draw(?:_indexed)?|"
+            r"dispatch_workgroups|finish|submit)(?=\s*\()"
+        ),
+        None,
+    ),
+    (
+        "wgsl",
+        "runtime-api",
+        re.compile(
+            r"\b(GPU(?:BufferUsage|TextureUsage|ShaderStage|RenderPassEncoder|"
+            r"ComputePassEncoder|TextureView))\b"
+        ),
+        None,
+    ),
+    (
+        "wgsl",
+        "runtime-api",
+        re.compile(
+            r"\b(wgpu::(?:RenderPipelineDescriptor|ComputePipelineDescriptor|"
+            r"CommandEncoderDescriptor|BufferDescriptor|TextureDescriptor|"
+            r"RenderPassDescriptor|ComputePassDescriptor|VertexBufferLayout|"
+            r"VertexState|FragmentState|PrimitiveState|MultisampleState|"
+            r"ColorTargetState))\b"
+        ),
+        None,
+    ),
+    (
+        "wgsl",
+        "runtime-api",
+        re.compile(
+            r"\b((?:WGPU(?:Adapter|BindGroup(?:Layout)?|Buffer|Command(?:Buffer|Encoder)|"
+            r"Compute(?:PassEncoder|Pipeline)|Device|Instance|PipelineLayout|Queue|"
+            r"Render(?:PassEncoder|Pipeline)|Sampler|ShaderModule|Surface|"
+            r"Texture(?:View)?|(?:BindGroup(?:Layout)?|CommandEncoder|"
+            r"ComputePipeline|Device|PipelineLayout|RenderPass|RenderPipeline|"
+            r"Sampler|ShaderModule|Surface|Texture(?:View)?)Descriptor|"
+            r"ShaderSourceWGSL)|wgpu(?:CreateInstance|InstanceRequestAdapter|"
+            r"AdapterRequestDevice|DeviceCreate(?:BindGroup(?:Layout)?|Buffer|"
+            r"CommandEncoder|ComputePipeline|PipelineLayout|RenderPipeline|Sampler|"
+            r"ShaderModule|Texture)|CommandEncoderBegin(?:ComputePass|RenderPass)|"
+            r"RenderPassEncoderSet(?:BindGroup|Pipeline|VertexBuffer)|"
+            r"RenderPassEncoderDraw(?:Indexed)?|ComputePassEncoderDispatchWorkgroups|"
+            r"QueueSubmit)))\b"
+        ),
+        None,
+    ),
+    (
+        "wgsl",
         "build-system",
-        re.compile(r'"(?:@webgpu/types|webgpu|gpuweb)"'),
+        re.compile(
+            r"(?<![\w@/-])(?:\"(?:@webgpu/[^\"]+|gpuweb|webgpu(?:-[^\"]+)?|"
+            r"wgpu)\"|^\s*wgpu\s*=|find_package\s*\(\s*Dawn\b|"
+            r"(?:dawn::)?webgpu_dawn\b)"
+        ),
         "wgsl-build-system",
     ),
 )
@@ -20057,10 +20168,13 @@ def _runtime_reference_contract_reasons(prefix: str, reference: Any) -> list[str
         reasons.append(f"{prefix}.backend must be a string")
     else:
         normalized_backend = _normalized_targets([backend])
+        allowed_runtime_backends = (
+            set(_supported_target_names()) | RUNTIME_REFERENCE_NON_TARGET_BACKENDS
+        )
         if (
             len(normalized_backend) != 1
             or normalized_backend[0] != backend
-            or backend not in _supported_target_names()
+            or backend not in allowed_runtime_backends
         ):
             reasons.append(f"{prefix}.backend must be a normalized backend name")
 

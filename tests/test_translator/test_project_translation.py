@@ -1578,6 +1578,74 @@ def test_scan_report_records_cuda_hip_async_memcpy_runtime_references(tmp_path):
     ]
 
 
+def test_scan_report_records_opencl_host_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "CMakeLists.txt").write_text(
+        textwrap.dedent("""
+            find_package(OpenCL REQUIRED)
+            target_link_libraries(engine PRIVATE OpenCL::OpenCL)
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            void enqueue_opencl(cl_context context, cl_command_queue queue) {
+              clGetPlatformIDs(0, nullptr, nullptr);
+              cl_program program = clCreateProgramWithSource(
+                context, 1, &source, nullptr, nullptr);
+              clBuildProgram(program, 0, nullptr, nullptr, nullptr, nullptr);
+              clSetKernelArg(kernel, 0, sizeof(buffer), &buffer);
+              clEnqueueNDRangeKernel(queue, kernel, 1, nullptr, global, local,
+                                     0, nullptr, nullptr);
+              clFinish(queue);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.cpp").write_text(
+        textwrap.dedent("""
+            void helper() {
+              clBuildProgramHelper();
+              auto clFinishTime = 0;
+              auto myclGetPlatformIDs = 1;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 8
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"opencl": 8}
+    assert payload["migration"]["runtimeReferencesByKind"] == {
+        "build-system": 2,
+        "runtime-api": 6,
+    }
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "CMakeLists.txt": 2,
+        "host.cpp": 6,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("CMakeLists.txt", "opencl", "build-system", "opencl-build-system"),
+        ("CMakeLists.txt", "opencl", "build-system", "opencl-build-system"),
+        ("host.cpp", "opencl", "runtime-api", "clGetPlatformIDs"),
+        ("host.cpp", "opencl", "runtime-api", "clCreateProgramWithSource"),
+        ("host.cpp", "opencl", "runtime-api", "clBuildProgram"),
+        ("host.cpp", "opencl", "runtime-api", "clSetKernelArg"),
+        ("host.cpp", "opencl", "runtime-api", "clEnqueueNDRangeKernel"),
+        ("host.cpp", "opencl", "runtime-api", "clFinish"),
+    ]
+
+    report_path = repo / "opencl-runtime-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+    assert validate_project_report(report_path)["success"] is True
+
+
 def test_scan_report_records_build_system_runtime_reference(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -2032,6 +2100,65 @@ def test_scan_report_records_directx_dxgi_runtime_references(tmp_path):
     ]
 
 
+def test_scan_report_records_directx_dxc_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "CMakeLists.txt").write_text(
+        "target_link_libraries(engine PRIVATE dxcompiler.lib)\n",
+        encoding="utf-8",
+    )
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            #include <dxcapi.h>
+
+            void compile_shader() {
+              Microsoft::WRL::ComPtr<IDxcUtils> utils;
+              Microsoft::WRL::ComPtr<IDxcCompiler3> compiler;
+              DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils));
+              DxcBuffer sourceBuffer{};
+              compiler->Compile(&sourceBuffer, arguments, argCount, nullptr,
+                                IID_PPV_ARGS(result.GetAddressOf()));
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.cpp").write_text(
+        textwrap.dedent("""
+            void helper() {
+              auto IDxCompiler = 0;
+              auto DxcBufferBytes = 0;
+              auto IDXCompiler3 = 0;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["directx"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 6
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"directx": 6}
+    assert payload["migration"]["runtimeReferencesByKind"] == {
+        "build-system": 1,
+        "runtime-api": 5,
+    }
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "CMakeLists.txt": 1,
+        "host.cpp": 5,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("CMakeLists.txt", "directx", "build-system", "directx-build-system"),
+        ("host.cpp", "directx", "runtime-api", "IDxcUtils"),
+        ("host.cpp", "directx", "runtime-api", "IDxcCompiler3"),
+        ("host.cpp", "directx", "runtime-api", "DxcCreateInstance"),
+        ("host.cpp", "directx", "runtime-api", "CLSID_DxcUtils"),
+        ("host.cpp", "directx", "runtime-api", "DxcBuffer"),
+    ]
+
+
 def test_scan_report_records_webgpu_runtime_reference_evidence(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -2108,6 +2235,115 @@ def test_scan_report_records_webgpu_bind_group_runtime_reference_evidence(tmp_pa
     ]
 
 
+def test_scan_report_records_webgpu_pipeline_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.ts").write_text(
+        textwrap.dedent("""
+            function render(
+              device: GPUDevice,
+              context: GPUCanvasContext,
+              pass: GPURenderPassEncoder,
+            ) {
+              const usage = GPUBufferUsage.VERTEX |
+                GPUTextureUsage.RENDER_ATTACHMENT;
+              context.configure({ device, format });
+              const vertexBuffer = device.createBuffer({ size, usage });
+              const texture = device.createTexture({ size, format, usage });
+              const pipeline = device.createRenderPipeline(descriptor);
+              const encoder = device.createCommandEncoder();
+              const renderPass = encoder.beginRenderPass(renderPassDescriptor);
+              renderPass.setPipeline(pipeline);
+              renderPass.setVertexBuffer(0, vertexBuffer);
+              renderPass.draw(3);
+              renderPass.end();
+              const commandBuffer = encoder.finish();
+              device.queue.submit([commandBuffer]);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.ts").write_text(
+        textwrap.dedent("""
+            renderer.createRenderPipeline();
+            helper.createBuffer();
+            passenger.draw();
+            const GPUBufferUsageBytes = 0;
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 17
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 17}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 17}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.ts": 17}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.ts", "wgsl", "runtime-api", "GPUDevice"),
+        ("host.ts", "wgsl", "runtime-api", "GPUCanvasContext"),
+        ("host.ts", "wgsl", "runtime-api", "GPURenderPassEncoder"),
+        ("host.ts", "wgsl", "runtime-api", "GPUBufferUsage"),
+        ("host.ts", "wgsl", "runtime-api", "GPUTextureUsage"),
+        ("host.ts", "wgsl", "runtime-api", "configure"),
+        ("host.ts", "wgsl", "runtime-api", "createBuffer"),
+        ("host.ts", "wgsl", "runtime-api", "createTexture"),
+        ("host.ts", "wgsl", "runtime-api", "createRenderPipeline"),
+        ("host.ts", "wgsl", "runtime-api", "createCommandEncoder"),
+        ("host.ts", "wgsl", "runtime-api", "beginRenderPass"),
+        ("host.ts", "wgsl", "runtime-api", "setPipeline"),
+        ("host.ts", "wgsl", "runtime-api", "setVertexBuffer"),
+        ("host.ts", "wgsl", "runtime-api", "draw"),
+        ("host.ts", "wgsl", "runtime-api", "end"),
+        ("host.ts", "wgsl", "runtime-api", "finish"),
+        ("host.ts", "wgsl", "runtime-api", "submit"),
+    ]
+
+
+def test_scan_report_records_webgpu_pass_encoder_alias_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.ts").write_text(
+        textwrap.dedent("""
+            function encode(passEncoder, renderPassEncoder, computePassEncoder) {
+              passEncoder.setPipeline(pipeline);
+              passEncoder.draw(3);
+              renderPassEncoder.setVertexBuffer(0, vertexBuffer);
+              computePassEncoder.dispatchWorkgroups(8);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.ts").write_text(
+        textwrap.dedent("""
+            otherPassEncoder.setPipeline(pipeline);
+            passEncoder.setPipelineLater(pipeline);
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 4
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 4}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 4}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.ts": 4}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.ts", "wgsl", "runtime-api", "setPipeline"),
+        ("host.ts", "wgsl", "runtime-api", "draw"),
+        ("host.ts", "wgsl", "runtime-api", "setVertexBuffer"),
+        ("host.ts", "wgsl", "runtime-api", "dispatchWorkgroups"),
+    ]
+
+
 def test_scan_report_records_rust_wgpu_runtime_reference_evidence(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -2171,6 +2407,182 @@ def test_scan_report_records_rust_wgpu_runtime_reference_evidence(tmp_path):
         ("host.rs", "wgsl", "runtime-api", "wgpu::BindGroupDescriptor"),
         ("host.rs", "wgsl", "runtime-api", "wgpu::PipelineLayoutDescriptor"),
         ("host.rs", "wgsl", "runtime-api", "set_bind_group"),
+    ]
+
+
+def test_scan_report_records_rust_wgpu_pipeline_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.rs").write_text(
+        textwrap.dedent("""
+            fn render(device: &wgpu::Device, queue: &wgpu::Queue) {
+                let pipeline = device.create_render_pipeline(
+                    &wgpu::RenderPipelineDescriptor::default(),
+                );
+                let compute = device.create_compute_pipeline(
+                    &wgpu::ComputePipelineDescriptor::default(),
+                );
+                let command_encoder = device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: None },
+                );
+                let buffer = device.create_buffer(
+                    &wgpu::BufferDescriptor { label: None },
+                );
+                let texture = device.create_texture(
+                    &wgpu::TextureDescriptor { label: None },
+                );
+                let mut render_pass = command_encoder.begin_render_pass(
+                    &wgpu::RenderPassDescriptor::default(),
+                );
+                let mut compute_pass = command_encoder.begin_compute_pass(
+                    &wgpu::ComputePassDescriptor::default(),
+                );
+                render_pass.set_pipeline(&pipeline);
+                render_pass.set_vertex_buffer(0, buffer.slice(..));
+                render_pass.set_index_buffer(buffer.slice(..), wgpu::IndexFormat::Uint16);
+                render_pass.draw(0..3, 0..1);
+                render_pass.draw_indexed(0..3, 0, 0..1);
+                compute_pass.dispatch_workgroups(1, 1, 1);
+                queue.submit(Some(command_encoder.finish()));
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.rs").write_text(
+        textwrap.dedent("""
+            fn helper(other: Other, passenger: Passenger) {
+                other.create_render_pipeline();
+                passenger.draw();
+                let RenderPipelineDescriptorBytes = 0;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 22
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 22}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 22}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.rs": 22}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.rs", "wgsl", "runtime-api", "create_render_pipeline"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::RenderPipelineDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "create_compute_pipeline"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::ComputePipelineDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "create_command_encoder"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::CommandEncoderDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "create_buffer"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::BufferDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "create_texture"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::TextureDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "begin_render_pass"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::RenderPassDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "begin_compute_pass"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::ComputePassDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "set_pipeline"),
+        ("host.rs", "wgsl", "runtime-api", "set_vertex_buffer"),
+        ("host.rs", "wgsl", "runtime-api", "set_index_buffer"),
+        ("host.rs", "wgsl", "runtime-api", "draw"),
+        ("host.rs", "wgsl", "runtime-api", "draw_indexed"),
+        ("host.rs", "wgsl", "runtime-api", "dispatch_workgroups"),
+        ("host.rs", "wgsl", "runtime-api", "submit"),
+        ("host.rs", "wgsl", "runtime-api", "finish"),
+    ]
+
+
+def test_scan_report_records_native_webgpu_dawn_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "CMakeLists.txt").write_text(
+        textwrap.dedent("""
+            find_package(Dawn REQUIRED)
+            target_link_libraries(app PRIVATE dawn::webgpu_dawn)
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "Cargo.toml").write_text(
+        textwrap.dedent("""
+            [dependencies]
+            wgpu = "0.20"
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            void encode_native_webgpu() {
+              WGPUDevice device = nullptr;
+              WGPUShaderSourceWGSL wgsl{};
+              WGPUShaderModuleDescriptor shaderDesc{};
+              auto module = wgpuDeviceCreateShaderModule(device, &shaderDesc);
+              auto encoder = wgpuDeviceCreateCommandEncoder(device, nullptr);
+              WGPURenderPassEncoder pass =
+                  wgpuCommandEncoderBeginRenderPass(encoder, nullptr);
+              wgpuRenderPassEncoderSetPipeline(pass, pipeline);
+              wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "package.json").write_text(
+        json.dumps(
+            {
+                "dependencies": {
+                    "@webgpu/glslang": "latest",
+                    "webgpu-utils": "latest",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.cpp").write_text(
+        textwrap.dedent("""
+            void helper() {
+              auto WGPUShaderModuleDescriptorBytes = 0;
+              wgpuDeviceCreateShaderModuleLater();
+              auto mywebgpu_dawn = 1;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 14
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 14}
+    assert payload["migration"]["runtimeReferencesByKind"] == {
+        "build-system": 5,
+        "runtime-api": 9,
+    }
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "CMakeLists.txt": 2,
+        "Cargo.toml": 1,
+        "host.cpp": 9,
+        "package.json": 2,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("CMakeLists.txt", "wgsl", "build-system", "wgsl-build-system"),
+        ("CMakeLists.txt", "wgsl", "build-system", "wgsl-build-system"),
+        ("Cargo.toml", "wgsl", "build-system", "wgsl-build-system"),
+        ("host.cpp", "wgsl", "runtime-api", "WGPUDevice"),
+        ("host.cpp", "wgsl", "runtime-api", "WGPUShaderSourceWGSL"),
+        ("host.cpp", "wgsl", "runtime-api", "WGPUShaderModuleDescriptor"),
+        ("host.cpp", "wgsl", "runtime-api", "wgpuDeviceCreateShaderModule"),
+        ("host.cpp", "wgsl", "runtime-api", "wgpuDeviceCreateCommandEncoder"),
+        ("host.cpp", "wgsl", "runtime-api", "WGPURenderPassEncoder"),
+        ("host.cpp", "wgsl", "runtime-api", "wgpuCommandEncoderBeginRenderPass"),
+        ("host.cpp", "wgsl", "runtime-api", "wgpuRenderPassEncoderSetPipeline"),
+        ("host.cpp", "wgsl", "runtime-api", "wgpuRenderPassEncoderDraw"),
+        ("package.json", "wgsl", "build-system", "wgsl-build-system"),
+        ("package.json", "wgsl", "build-system", "wgsl-build-system"),
     ]
 
 
