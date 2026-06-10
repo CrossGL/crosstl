@@ -47,6 +47,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, Metal, DirectX, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. OpenGL smoke validation for this case is tracked in issue #745. |
 | `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, Metal, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. OpenGL output is tracked in issue #746. |
 | `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. DirectX constant-parameter lowering is tracked in issue #755. |
+| `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, Metal, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. Host launch and memory-management integration remain outside the demo scope. |
 | `opencl-sdk-saxpy` | `KhronosGroup/OpenCL-SDK` at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` | Apache-2.0 | OpenCL | CrossGL, Metal, Vulkan | Uses the upstream SAXPY compute kernel unchanged. OpenGL index-cast lowering is tracked in issue #768. |
 | `raylib-base-fragment` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, Metal, Vulkan | Uses the upstream base fragment shader unchanged. OpenGL binding qualifier/version alignment is tracked in issue #765. |
 | `raylib-base-vertex` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream base vertex shader unchanged. |
@@ -57,12 +58,13 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 
 ## Source adjustments
 
-The DirectX, Metal performance, OpenCL-SDK, SPIRV-Tools, raylib,
-SaschaWillems triangle, and Slang cases keep upstream source files unchanged
-apart from repository formatting checks. The Vulkan Samples and Apple cases are
-reduced source slices copied from fixture-backed upstream examples so the demo
-remains small and deterministic. The reductions remove unrelated code around
-the shader construct being demonstrated; they do not patch translator output.
+The DirectX, Metal performance, NVIDIA CUDA Samples, OpenCL-SDK, SPIRV-Tools,
+raylib, SaschaWillems triangle, and Slang cases keep upstream source files
+unchanged apart from repository formatting checks. The Vulkan Samples and Apple
+cases are reduced source slices copied from fixture-backed upstream examples so
+the demo remains small and deterministic. The reductions remove unrelated code
+around the shader construct being demonstrated; they do not patch translator
+output.
 
 The `glfw/glfw` OpenGL triangle shader strings were tested as a candidate and
 exposed a CrossGL intermediate keyword collision: the fragment shader uses
@@ -101,12 +103,11 @@ a candidate and exposed target semantic gaps for HLSL scalar swizzles and
 case is intentionally not checked in until target output preserves the compute
 semantics rather than emitting placeholder comments.
 
-The `NVIDIA/cuda-samples` vector-add CUDA kernel was tested as a reduced source
-slice from `cpp/0_Introduction/vectorAdd/vectorAdd.cu` at
-`b7c5481c556c3fe98db060207ecaa41a4b9a9abc`. Metal and SPIR-V target output
-still needs CUDA compute builtin lowering and valid target entry-point
-emission; that translator issue is tracked in issue #772, and the case is
-intentionally not checked in until target artifacts validate directly.
+The `NVIDIA/cuda-samples` vector-add NVRTC kernel was retested after issue #772
+closed and is now checked for Metal and Vulkan output. The upstream host
+launcher is intentionally not included; rewriting launch configuration, memory
+allocation, and data-transfer code is a runtime porting task outside this demo
+scope.
 
 Rust-GPU graphics and compute examples were tested from `Rust-GPU/rust-gpu`
 and `Rust-GPU/VulkanShaderExamples`. The graphics example needs target-native

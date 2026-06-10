@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/vectorAdd_kernel.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 665,
+        "file": "crosstl-out/cgl/vectorAdd_kernel.cgl",
+        "length": 665,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 43,
+        "endOffset": 1929,
+        "file": "vectorAdd_kernel.cu",
+        "length": 1929,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

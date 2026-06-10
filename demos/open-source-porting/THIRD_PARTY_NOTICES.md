@@ -55,6 +55,16 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/bkvogel/metal_performance_testing/blob/b467b4b1dee0f7d9d43bda13856306ca3f1baea5/LICENSE
 
+## NVIDIA/cuda-samples
+
+- Repository: https://github.com/NVIDIA/cuda-samples
+- Commit: `b7c5481c556c3fe98db060207ecaa41a4b9a9abc`
+- Source path:
+  `cpp/0_Introduction/vectorAdd_nvrtc/vectorAdd_kernel.cu`
+- License: BSD-style license with CUDA EULA reference
+- License URL:
+  https://github.com/NVIDIA/cuda-samples/blob/b7c5481c556c3fe98db060207ecaa41a4b9a9abc/LICENSE
+
 ## KhronosGroup/OpenCL-SDK
 
 - Repository: https://github.com/KhronosGroup/OpenCL-SDK

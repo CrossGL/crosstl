@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "NVIDIA CUDA Samples vectorAdd kernel",
+  "description": "Pinned CUDA sample used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "nvidia-cuda-samples-vector-add",
+      "path": "vectorAdd_kernel.cu",
+      "sourceBackend": "cuda",
+      "targets": ["cgl", "metal", "vulkan"],
+      "repository": "https://github.com/NVIDIA/cuda-samples",
+      "commit": "b7c5481c556c3fe98db060207ecaa41a4b9a9abc",
+      "sourceUrl": "https://github.com/NVIDIA/cuda-samples/blob/b7c5481c556c3fe98db060207ecaa41a4b9a9abc/cpp/0_Introduction/vectorAdd_nvrtc/vectorAdd_kernel.cu"
+    }
+  ]
+}
