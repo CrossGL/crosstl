@@ -16155,6 +16155,59 @@ class TestVulkanSPIRVCodeGen:
         assert "texelFetchOffset" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_unsigned_sampler_texel_fetch_uses_uint_sampled_image_type(self, tmp_path):
+        source_code = """
+        shader Resources {
+            usampler2d srcRGB;
+            uimage2d dstTexture @rgba32ui;
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(0, 0);
+                    uint zero = uint(0);
+                    uvec2 block = texelFetch(srcRGB, pixel, 0).xy;
+                    imageStore(dstTexture, pixel, uvec4(block.xy, zero, zero));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0", spv_code)
+        assert uint_type is not None
+        uvec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(uint_type.group(1))} 2",
+            spv_code,
+        )
+        uvec4_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(uint_type.group(1))} 4",
+            spv_code,
+        )
+        sampled_image = re.search(
+            rf"(%\d+) = OpTypeImage {re.escape(uint_type.group(1))} "
+            r"2D 0 0 0 1 Unknown",
+            spv_code,
+        )
+
+        assert uvec2_type is not None
+        assert uvec4_type is not None
+        assert sampled_image is not None
+        assert "OpTypeSampledImage" in spv_code
+        assert f"OpImageFetch {uvec4_type.group(1)}" in spv_code
+        assert re.search(
+            rf"%\d+ = OpVectorShuffle {re.escape(uvec2_type.group(1))} "
+            r"%\d+ %\d+ 0 1",
+            spv_code,
+        )
+        assert "Unknown type usampler" not in spv_code
+        assert "texelFetch requires a sampled image operand" not in spv_code
+        assert "Could not find member xy" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_sampled_texture_operations_reject_malformed_operands(self, tmp_path):
         source_code = """
         shader Resources {

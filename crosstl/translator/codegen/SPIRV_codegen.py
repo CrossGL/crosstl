@@ -10358,6 +10358,31 @@ class VulkanSPIRVCodeGen:
         if compact in direct_aliases:
             return direct_aliases[compact]
 
+        resource_match = re.fullmatch(
+            r"([iu]?(?:sampler|image)|texture)"
+            r"(1d|2d|3d|cube|buffer)"
+            r"(ms)?(array)?(shadow)?",
+            compact,
+            re.IGNORECASE,
+        )
+        if resource_match:
+            prefix, dim, ms_suffix, array_suffix, shadow_suffix = (
+                resource_match.groups()
+            )
+            dim = {
+                "1d": "1D",
+                "2d": "2D",
+                "3d": "3D",
+                "cube": "Cube",
+                "buffer": "Buffer",
+            }[dim.lower()]
+            return (
+                f"{prefix.lower()}{dim}"
+                f"{'MS' if ms_suffix else ''}"
+                f"{'Array' if array_suffix else ''}"
+                f"{'Shadow' if shadow_suffix else ''}"
+            )
+
         texture_match = re.fullmatch(
             r"Texture(1D|2D|3D|Cube)(MS)?(Array)?<([^>]+)>", compact
         )
@@ -10583,6 +10608,32 @@ class VulkanSPIRVCodeGen:
 
         if self.is_acceleration_structure_type_name(type_str):
             return {"kind": "acceleration_structure"}
+
+        sampled_image_match = re.fullmatch(
+            r"([iu]?sampler)(1D|2D|3D|Cube|Buffer)(MS)?(Array)?(?:Shadow)?",
+            type_str,
+        )
+        if sampled_image_match:
+            prefix, dim, ms_suffix, array_suffix = sampled_image_match.groups()
+            if ms_suffix and dim != "2D":
+                return None
+            if dim == "Buffer" and (ms_suffix or array_suffix):
+                return None
+            component_type = {
+                "sampler": "float",
+                "isampler": "int",
+                "usampler": "uint",
+            }[prefix]
+            return {
+                "kind": "sampled_image",
+                "component_type": component_type,
+                "dim": dim,
+                "depth": 1 if type_str.endswith("Shadow") else 0,
+                "arrayed": 1 if array_suffix else 0,
+                "multisampled": 1 if ms_suffix else 0,
+                "sampled": 1,
+                "format": "Unknown",
+            }
 
         image_match = re.fullmatch(
             r"([iu]?image)(1D|2D|3D|Cube)(MS)?(Array)?", type_str
@@ -13000,12 +13051,18 @@ class VulkanSPIRVCodeGen:
         self, node: VariableNode, var_id: SpirvId, type_id: SpirvId
     ):
         metadata = self.resource_metadata_for_declared_type(type_id)
-        if metadata is None or metadata.get("kind") != "storage_image":
+        if metadata is None or metadata.get("kind") not in {
+            "sampled_image",
+            "storage_image",
+            "texture",
+            "sampler",
+        }:
             return
 
         metadata = self.metadata_with_resource_memory_qualifiers(metadata, node)
         self.resource_type_metadata[var_id.id] = metadata
-        self.decorate_resource_variable_memory_qualifiers(var_id, metadata)
+        if metadata.get("kind") == "storage_image":
+            self.decorate_resource_variable_memory_qualifiers(var_id, metadata)
 
     def decorate_cbuffer_type(
         self, cbuffer_type: SpirvId, members: List[Tuple[SpirvId, str]]
