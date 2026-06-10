@@ -92,6 +92,14 @@ Metal output. That translator issue is tracked in issue #781, and the case is
 intentionally not checked in until generated source targets preserve the
 default-argument call semantics.
 
+The `microsoft/DirectX-Graphics-Samples` HelloTexture shader from
+`Samples/Desktop/D3D12HelloWorld/src/HelloTexture/shaders.hlsl` at
+`31ae3c91160d8634264004cdaf4e41a99c41243e` was tested as a candidate and
+exposed target lowering gaps for HLSL texture sampling and stage IO semantics
+in Metal and OpenGL output. That translator issue is tracked in issue #783,
+and the case is intentionally not checked in until generated source targets
+compile with platform validators.
+
 The `microsoft/DirectXShaderCompiler` scalar-splat compute test was tested as
 a candidate and exposed target semantic gaps for HLSL scalar swizzles and
 `groupshared` storage. That translator issue is tracked in issue #767, and the
