@@ -25665,6 +25665,79 @@ def test_runtime_loader_manifest_reports_wgsl_validation_command(tmp_path):
     }
 
 
+def test_runtime_loader_manifest_reports_directx_dxc_entry_profile_metadata(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path,
+        source=DIRECTX_GRAPHICS_CROSSL,
+        source_name="graphics.cgl",
+        targets=("directx",),
+    )
+
+    payload = build_runtime_loader_manifest(package_dir / "runtime-package.json")
+    load_unit = payload["loadUnits"][0]
+    load_step = load_unit["loadSteps"][0]
+    validate_step = load_unit["loadSteps"][-1]
+    expected_path = "artifacts/out/directx/graphics.hlsl"
+    expected_entry_profiles = [
+        {"entry": "VSMain", "profile": "vs_6_0"},
+        {"entry": "PSMain", "profile": "ps_6_0"},
+    ]
+    expected_commands = [
+        [
+            "dxc",
+            "-T",
+            "vs_6_0",
+            "-E",
+            "VSMain",
+            expected_path,
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+        [
+            "dxc",
+            "-T",
+            "ps_6_0",
+            "-E",
+            "PSMain",
+            expected_path,
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+    ]
+
+    assert load_unit["target"] == "directx"
+    assert load_unit["adapterKind"] == "directx-hlsl-adapter"
+    assert load_unit["artifactFormat"] == "HLSL source"
+    assert load_unit["packagePath"] == expected_path
+    assert load_unit["requiredTools"] == ["dxc"]
+    assert [step["kind"] for step in load_unit["loadSteps"]] == [
+        "load-package-artifact",
+        "bind-host-interface",
+        "validate-target-toolchain",
+    ]
+    assert load_step["metadata"] == {
+        "runtime": "directx",
+        "artifactFormat": "HLSL source",
+        "compiler": "dxc",
+        "targetProfiles": ["directx-11", "directx-12"],
+        "source": {"field": "packagePath", "path": expected_path},
+        "entryProfiles": expected_entry_profiles,
+    }
+    assert validate_step["kind"] == "validate-target-toolchain"
+    assert validate_step["tools"] == ["dxc"]
+    assert validate_step["command"] == expected_commands[0]
+    assert validate_step["metadata"]["commandInput"] == {
+        "mode": "path",
+        "source": {"field": "packagePath", "path": expected_path},
+        "language": "hlsl",
+        "compiler": "dxc",
+        "entryProfiles": expected_entry_profiles,
+        "commands": expected_commands,
+        "entryPoint": "VSMain",
+        "shaderModel": "vs_6_0",
+    }
+
+
 def test_project_cli_runtime_loader_manifest_text_outputs_load_units(tmp_path):
     _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
     package_manifest = package_dir / "runtime-package.json"

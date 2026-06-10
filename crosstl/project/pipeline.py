@@ -10671,9 +10671,68 @@ def _runtime_loader_host_entry_points(
     return entry_points
 
 
+def _runtime_loader_package_artifact_path(
+    package_path: Any, package_root: Path | None
+) -> Path:
+    artifact_path = Path(str(package_path))
+    if package_root is not None and not artifact_path.is_absolute():
+        return package_root / artifact_path
+    return artifact_path
+
+
+def _runtime_loader_directx_entry_profiles(
+    adapter: Mapping[str, Any],
+    *,
+    package_root: Path | None = None,
+) -> tuple[tuple[str, str], ...] | None:
+    package_path = adapter.get("packagePath")
+    if not _is_non_empty_string(package_path):
+        return (DIRECTX_DXC_DEFAULT_ENTRY_PROFILE,)
+    return _directx_dxc_entry_profiles(
+        _runtime_loader_package_artifact_path(package_path, package_root)
+    )
+
+
+def _runtime_loader_directx_entry_profile_metadata(
+    adapter: Mapping[str, Any],
+    *,
+    package_root: Path | None = None,
+) -> list[dict[str, Any]]:
+    entry_profiles = _runtime_loader_directx_entry_profiles(
+        adapter, package_root=package_root
+    )
+    if entry_profiles is None:
+        return [{"entry": None, "profile": "lib_6_3"}]
+    return [{"entry": entry, "profile": profile} for entry, profile in entry_profiles]
+
+
+def _runtime_loader_directx_commands(
+    adapter: Mapping[str, Any],
+    tools: Sequence[str],
+    *,
+    package_root: Path | None = None,
+) -> list[list[str]]:
+    package_path = adapter.get("packagePath")
+    if not _is_non_empty_string(package_path) or not tools:
+        return []
+    command_path = Path(str(package_path))
+    entry_profiles = _runtime_loader_directx_entry_profiles(
+        adapter, package_root=package_root
+    )
+    tool = tools[0]
+    if entry_profiles is None:
+        return [[tool, "-T", "lib_6_3", str(command_path), "-Fo", os.devnull]]
+    return [
+        _directx_dxc_entry_smoke_command(tool, command_path, entry, profile)
+        for entry, profile in entry_profiles
+    ]
+
+
 def _runtime_loader_target_load_metadata(
     adapter: Mapping[str, Any],
     webgl_program_groups: Mapping[str, Mapping[str, Any]],
+    *,
+    package_root: Path | None = None,
 ) -> dict[str, Any]:
     target = adapter.get("target")
     package_path = adapter.get("packagePath")
@@ -10707,6 +10766,17 @@ def _runtime_loader_target_load_metadata(
         if isinstance(program_group, Mapping):
             metadata["programGroup"] = dict(program_group)
         return metadata
+    if normalized_target == "directx":
+        return {
+            "runtime": "directx",
+            "artifactFormat": adapter.get("artifactFormat"),
+            "compiler": "dxc",
+            "targetProfiles": ["directx-11", "directx-12"],
+            "source": _runtime_loader_metadata_source(package_path),
+            "entryProfiles": _runtime_loader_directx_entry_profile_metadata(
+                adapter, package_root=package_root
+            ),
+        }
     return {}
 
 
@@ -10741,6 +10811,29 @@ def _runtime_loader_validation_command_input_metadata(
             "source": _runtime_loader_metadata_source(package_path),
             "language": "wgsl",
         }
+    if normalized_target == "directx":
+        tools = TOOLCHAIN_BY_BACKEND.get(normalized_target, ())
+        commands = _runtime_loader_directx_commands(
+            adapter, tools, package_root=package_root
+        )
+        entry_profiles = _runtime_loader_directx_entry_profile_metadata(
+            adapter, package_root=package_root
+        )
+        metadata: dict[str, Any] = {
+            "mode": "path",
+            "source": _runtime_loader_metadata_source(package_path),
+            "language": "hlsl",
+            "compiler": tools[0] if tools else "dxc",
+            "entryProfiles": entry_profiles,
+            "commands": commands,
+        }
+        if entry_profiles:
+            first_profile = entry_profiles[0]
+            if _is_non_empty_string(first_profile.get("entry")):
+                metadata["entryPoint"] = first_profile.get("entry")
+            if _is_non_empty_string(first_profile.get("profile")):
+                metadata["shaderModel"] = first_profile.get("profile")
+        return metadata
     return {
         "mode": "path",
         "source": _runtime_loader_metadata_source(package_path),
@@ -10885,6 +10978,12 @@ def _runtime_loader_validation_command(
     if normalized_target == "wgsl":
         return [tools[0], "--input-kind", "wgsl", str(package_path)]
 
+    if normalized_target == "directx":
+        commands = _runtime_loader_directx_commands(
+            adapter, tools, package_root=package_root
+        )
+        return commands[0] if commands else None
+
     smoke_command = _toolchain_smoke_command(
         normalized_target,
         tools,
@@ -10977,7 +11076,9 @@ def _runtime_loader_manifest_load_unit(
             adapter,
             package_root=package_root,
             target_metadata=_runtime_loader_target_load_metadata(
-                adapter, webgl_program_groups or {}
+                adapter,
+                webgl_program_groups or {},
+                package_root=package_root,
             ),
         ),
         "blockers": blockers,
