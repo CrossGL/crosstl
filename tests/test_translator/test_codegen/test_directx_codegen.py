@@ -10,11 +10,14 @@ from crosstl.translator.ast import (
     BlockNode,
     ExecutionModel,
     FunctionNode,
+    LiteralNode,
+    NamedType,
     PrimitiveType,
     ShaderNode,
     ShaderStage,
     StructMemberNode,
     StructNode,
+    UnaryOpNode,
     create_legacy_shader_node,
 )
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
@@ -48,6 +51,23 @@ def generate_code(ast_node):
     """
     codegen = HLSLCodeGen()
     return codegen.generate(ast_node)
+
+
+def test_hlsl_type_node_renders_expression_generic_arguments():
+    type_node = NamedType(
+        "LoopedElemToLoc",
+        [
+            NamedType("DIM"),
+            UnaryOpNode("-", LiteralNode(1, PrimitiveType("int"))),
+            NamedType("OffsetT"),
+            NamedType("General"),
+        ],
+    )
+
+    assert (
+        HLSLCodeGen().convert_type_node_to_string(type_node)
+        == "LoopedElemToLoc<DIM, -1, OffsetT, General>"
+    )
 
 
 HLSL_SCALAR_VECTOR_ZERO_DIAGNOSTIC = re.compile(

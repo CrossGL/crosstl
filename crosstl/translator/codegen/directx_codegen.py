@@ -19654,13 +19654,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value = type_node.value
             return str(value).lower() if isinstance(value, bool) else str(value)
         generic_args = getattr(type_node, "generic_args", [])
-        if hasattr(type_node, "name") and generic_args:
+        type_name = getattr(type_node, "name", None)
+        if type_name and generic_args:
             args = ", ".join(
                 self.convert_type_node_to_string(arg) for arg in generic_args
             )
-            return f"{type_node.name}<{args}>"
-        if hasattr(type_node, "name"):
-            return type_node.name
+            return f"{type_name}<{args}>"
+        if type_name:
+            return type_name
         elif hasattr(type_node, "rows") and hasattr(type_node, "cols"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
             if type_node.rows == type_node.cols:
@@ -19702,6 +19703,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return f"vec{size}<{element_type}>"
                 else:
                     return f"{element_type}{size}"
+        elif hasattr(type_node, "operator") or hasattr(type_node, "identifier"):
+            return self.expression_to_string(type_node)
         else:
             return str(type_node)
 

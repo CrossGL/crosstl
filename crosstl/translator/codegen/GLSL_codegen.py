@@ -16501,13 +16501,14 @@ class GLSLCodeGen:
             )
             return f"{referenced_type}&"
         generic_args = getattr(type_node, "generic_args", [])
-        if hasattr(type_node, "name") and generic_args:
+        type_name = getattr(type_node, "name", None)
+        if type_name and generic_args:
             args = ", ".join(
                 self.convert_type_node_to_string(arg) for arg in generic_args
             )
-            return f"{type_node.name}<{args}>"
-        if hasattr(type_node, "name"):
-            return type_node.name
+            return f"{type_name}<{args}>"
+        if type_name:
+            return type_name
         elif hasattr(type_node, "rows") and hasattr(type_node, "cols"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
             if type_node.rows == type_node.cols:
@@ -16537,6 +16538,8 @@ class GLSLCodeGen:
                     return f"bvec{size}"
                 else:
                     return f"{element_type}{size}"
+        elif hasattr(type_node, "operator") or hasattr(type_node, "identifier"):
+            return self.expression_to_string(type_node)
         else:
             return str(type_node)
 

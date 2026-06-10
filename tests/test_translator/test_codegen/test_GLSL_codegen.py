@@ -10,6 +10,7 @@ from crosstl.translator.ast import (
     ExecutionModel,
     FunctionNode,
     IdentifierNode,
+    LiteralNode,
     NamedType,
     ParameterNode,
     PrimitiveType,
@@ -18,6 +19,7 @@ from crosstl.translator.ast import (
     ShaderStage,
     StructMemberNode,
     StructNode,
+    UnaryOpNode,
     VectorType,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
@@ -51,6 +53,23 @@ def generate_code(ast_node):
     """
     codegen = GLSLCodeGen()
     return codegen.generate(ast_node)
+
+
+def test_glsl_type_node_renders_expression_generic_arguments():
+    type_node = NamedType(
+        "LoopedElemToLoc",
+        [
+            NamedType("DIM"),
+            UnaryOpNode("-", LiteralNode(1, PrimitiveType("int"))),
+            NamedType("OffsetT"),
+            NamedType("General"),
+        ],
+    )
+
+    assert (
+        GLSLCodeGen().convert_type_node_to_string(type_node)
+        == "LoopedElemToLoc<DIM, (-1), OffsetT, General>"
+    )
 
 
 def glsl_image_atomic_parameter_diagnostic(operation, resource_type, zero_value):

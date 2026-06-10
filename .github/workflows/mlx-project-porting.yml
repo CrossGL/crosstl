@@ -1,0 +1,100 @@
+name: MLX Project Porting
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  MLX_COMMIT: "968d264f2903d578e699c4452a4dbf48633921aa"
+  MLX_INSTANTIATE_KERNEL_ISSUE: "https://github.com/CrossGL/crosstl/issues/827"
+  MLX_OPENGL_BFLOAT16_ISSUE: "https://github.com/CrossGL/crosstl/issues/828"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/actions/install-linux-dxc/**"
+      - ".github/workflows/mlx-project-porting.yml"
+      - "crosstl/**"
+      - "integrations/mlx/**"
+      - "pyproject.toml"
+      - "requirements.txt"
+      - "tests/test_ci_workflows.py"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/actions/install-linux-dxc/**"
+      - ".github/workflows/mlx-project-porting.yml"
+      - "crosstl/**"
+      - "integrations/mlx/**"
+      - "pyproject.toml"
+      - "requirements.txt"
+      - "tests/test_ci_workflows.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mlx-metal-porting:
+    name: MLX Metal project porting (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+
+    steps:
+      - name: Checkout CrossTL
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install CrossTL
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Install Linux SPIR-V tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y spirv-tools
+
+      - name: Install Linux DXC
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/install-linux-dxc
+
+      - name: Checkout pinned MLX
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf mlx-upstream
+          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-upstream
+          git -C mlx-upstream sparse-checkout init --cone
+          git -C mlx-upstream sparse-checkout set mlx/backend/metal/kernels
+          git -C mlx-upstream checkout "$MLX_COMMIT"
+
+      - name: Run MLX project-porting checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            args+=(--require-vulkan-toolchain)
+          fi
+          python integrations/mlx/run_mlx_porting.py \
+            --mlx-root mlx-upstream \
+            "${args[@]}"
+
+      - name: Upload MLX project-porting reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-project-porting-${{ matrix.os }}
+          path: mlx-upstream/.crosstl-mlx-porting/**
+          if-no-files-found: ignore
+          retention-days: 14

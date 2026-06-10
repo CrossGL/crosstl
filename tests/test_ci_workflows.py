@@ -1768,6 +1768,23 @@ def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
     assert "retention-days: 30" in translator_tests
 
 
+def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
+    workflows = _workflow_texts()
+    mlx_porting = workflows.get("mlx-project-porting.yml", "")
+    harness = (ROOT / "integrations" / "mlx" / "run_mlx_porting.py").read_text(
+        encoding="utf-8"
+    )
+    mlx_commit = "968d264f2903d578e699c4452a4dbf48633921aa"
+
+    assert mlx_porting, "mlx-project-porting.yml must exist"
+    assert "integrations/mlx/run_mlx_porting.py" in mlx_porting
+    assert mlx_commit in mlx_porting
+    assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
+    assert re.search(r"translate-project\b[\s\S]*--run-toolchains", harness)
+    assert "https://github.com/CrossGL/crosstl/issues/827" in mlx_porting
+    assert "https://github.com/CrossGL/crosstl/issues/828" in mlx_porting
+
+
 def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():
     workflows = _workflow_texts()
     support_matrix = workflows.get("support-matrix.yml", "")
