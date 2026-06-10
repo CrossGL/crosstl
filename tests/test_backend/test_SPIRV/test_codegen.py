@@ -8365,12 +8365,61 @@ def test_spirv_tools_gl_pervertex_access_chain_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
+    parse_crossgl(generated_code)
+    assert "@glsl_interface_block(out)" in generated_code
+    assert "@glsl_interface_block_name(gl_PerVertex)" in generated_code
+    assert "struct gl_PerVertex" in generated_code
     assert "float4 _ua_position @input @location(0);" in generated_code
     assert "float4 gl_Position @output @gl_Position;" in generated_code
+    assert "float gl_PointSize @mediump;" in generated_code
     assert "float gl_ClipDistance[8] @output @gl_ClipDistance;" in generated_code
     assert "gl_Position = _ua_position;" in generated_code
     assert "value_19[0]" not in generated_code
     assert "Unhandled statement type" not in generated_code
+
+
+def test_translate_api_preserves_spirv_builtin_interfaces_for_opengl(tmp_path):
+    import crosstl
+
+    shader_path = tmp_path / "glpervertex.vert.spvasm"
+    shader_path.write_text(
+        SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY, encoding="utf-8"
+    )
+
+    generated_code = crosstl.translate(
+        str(shader_path), backend="opengl", format_output=False
+    )
+
+    assert "out gl_PerVertex {" in generated_code
+    assert "struct gl_PerVertex" not in generated_code
+    assert "\nmediump float gl_PointSize;" not in generated_code
+    assert "\nfloat gl_ClipDistance" not in generated_code
+    assert "\nfloat gl_CullDistance" not in generated_code
+    assert "layout(location = 0) in vec4 _ua_position;" in generated_code
+    assert "gl_Position = _ua_position;" in generated_code
+
+    top_level_builtin_declaration = re.compile(
+        r"^(?:layout\([^\n]*\)\s*)?"
+        r"(?:(?:in|out|uniform|lowp|mediump|highp|flat|smooth|noperspective)\s+)*"
+        r"(?:float|vec[234])\s+gl_",
+        re.MULTILINE,
+    )
+    assert top_level_builtin_declaration.search(generated_code) is None
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator not available")
+
+    output_path = tmp_path / "glpervertex.vert.glsl"
+    output_path.write_text(generated_code, encoding="utf-8")
+    result = subprocess.run(
+        [glslang, "-S", "vert", str(output_path)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout
 
 
 def test_spirv_assembly_multiline_opsource_literal_codegen_reparse():
