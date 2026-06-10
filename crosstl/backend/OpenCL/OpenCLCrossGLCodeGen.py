@@ -5,6 +5,7 @@ import re
 from crosstl.backend.HIP.HipAst import (
     ArrayAccessNode,
     BinaryOpNode,
+    DesignatedInitializerNode,
     FunctionNode,
     KernelNode,
     StructNode,
@@ -258,6 +259,35 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         if half_literal:
             return half_literal.group("body").replace("'", "")
         return value
+
+    def visit_InitializerListNode(self, node):
+        depth = getattr(self, "opencl_initializer_list_depth", 0)
+        self.opencl_initializer_list_depth = depth + 1
+        try:
+            elements = []
+            for element in node.elements:
+                strip_designator = (
+                    depth > 0
+                    or getattr(self, "opencl_strip_designated_initializers", 0) > 0
+                )
+                if strip_designator and isinstance(element, DesignatedInitializerNode):
+                    elements.append(self.visit(element.value))
+                else:
+                    elements.append(self.visit(element))
+            return f"{{{', '.join(elements)}}}"
+        finally:
+            self.opencl_initializer_list_depth = depth
+
+    def format_variable_initializer_value(self, value):
+        if self.indent_level != 0:
+            return super().format_variable_initializer_value(value)
+
+        depth = getattr(self, "opencl_strip_designated_initializers", 0)
+        self.opencl_strip_designated_initializers = depth + 1
+        try:
+            return super().format_variable_initializer_value(value)
+        finally:
+            self.opencl_strip_designated_initializers = depth
 
     def visit_OpenCLProgramNode(self, node):
         """Render an OpenCL program AST as a CrossGL shader block."""

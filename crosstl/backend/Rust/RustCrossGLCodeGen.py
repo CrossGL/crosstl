@@ -9346,14 +9346,42 @@ class RustToCrossGLConverter:
         return f"{mapped_type}({expression})"
 
     def normalize_macro_body(self, body):
+        literal = self.normalize_macro_literal_body(body)
+        if literal is not None:
+            return literal
         return body.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
 
     def normalize_reparseable_macro_body(self, body):
+        literal = self.normalize_macro_literal_body(body)
+        if literal is not None:
+            return literal
         body = self.normalize_macro_body(body)
         return re.sub(
             r"\b([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)!\s*(?=[({\[])",
             r"\1",
             body,
+        )
+
+    def normalize_macro_literal_body(self, body):
+        stripped = body.strip()
+        if not self.is_rust_literal(stripped):
+            return None
+        return self.normalize_rust_literal(stripped)
+
+    def is_rust_literal(self, value):
+        return any(
+            pattern.match(value)
+            for pattern in (
+                RUST_BYTE_RAW_STRING_RE,
+                RUST_C_RAW_STRING_RE,
+                RUST_RAW_STRING_RE,
+                RUST_STRING_RE,
+                RUST_BYTE_STRING_RE,
+                RUST_C_STRING_RE,
+                RUST_BYTE_CHAR_RE,
+                RUST_CHAR_RE,
+                RUST_NUMERIC_LITERAL_RE,
+            )
         )
 
     def generate_inline_result_expression(self, expression):

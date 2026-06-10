@@ -2611,6 +2611,8 @@ class MetalParser:
             attributes = self.parse_attributes()
             vtype, qualifiers = self.parse_type_specifier(attributes=attributes)
             name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
+            if grouped_suffix and self.current_token[0] == "LPAREN":
+                self.parse_function_pointer_parameter_suffix()
             param_type = self.apply_declarator_type_suffix(vtype, type_suffix)
             default_value = None
             if self.current_token[0] == "EQUALS":
@@ -2636,6 +2638,13 @@ class MetalParser:
                     f"Expected comma or closing parenthesis, got {self.current_token[0]}"
                 )
         return params
+
+    def parse_function_pointer_parameter_suffix(self):
+        self.parse_balanced_token_text(
+            "LPAREN",
+            "RPAREN",
+            error_message="Unterminated function pointer parameter",
+        )
 
     def is_gnu_attribute_start(self):
         return (

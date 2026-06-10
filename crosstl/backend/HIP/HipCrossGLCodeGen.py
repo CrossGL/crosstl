@@ -6,6 +6,7 @@ from .HipAst import (
     ArrayAccessNode,
     AssignmentNode,
     CastNode,
+    DesignatedInitializerNode,
     EnumNode,
     FunctionCallNode,
     FunctionNode,
@@ -4925,7 +4926,24 @@ class HipToCrossGLConverter:
         string_value = self.format_single_string_initializer(value)
         if string_value is not None:
             return string_value
+        scalar_value = self.format_single_scalar_initializer(value)
+        if scalar_value is not None:
+            return scalar_value
         return self.visit(value)
+
+    def format_single_scalar_initializer(self, value):
+        if not isinstance(value, InitializerListNode) or len(value.elements) != 1:
+            return None
+        initializer = value.elements[0]
+        if isinstance(initializer, DesignatedInitializerNode):
+            return None
+        if not isinstance(initializer, FunctionCallNode):
+            return None
+        if not isinstance(initializer.name, str) or not initializer.name.startswith(
+            "::"
+        ):
+            return None
+        return self.visit(initializer)
 
     def format_single_string_initializer(self, value):
         if not isinstance(value, InitializerListNode) or len(value.elements) != 1:
@@ -5286,6 +5304,13 @@ class HipToCrossGLConverter:
 
         # Convert HIP built-in functions
         crossgl_func = self.convert_hip_builtin_function(func_name)
+        if (
+            crossgl_func == func_name
+            and isinstance(func_name, str)
+            and func_name.startswith("::")
+            and not self.is_simple_identifier(crossgl_func)
+        ):
+            crossgl_func = self.format_function_declaration_name(func_name)
         return f"{crossgl_func}({args_str})"
 
     def format_std_numeric_limits_call(self, function_name, args):

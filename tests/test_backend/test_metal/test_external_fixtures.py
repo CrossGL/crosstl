@@ -50,6 +50,7 @@ PYTORCH_POOLING_COMMIT = "7168b60c0d3561d93aac7519d03d1bd95ee3e7a3"
 PYTORCH_BUCKETIZATION_COMMIT = "5ee1f788c7098ae5e50e49543ee7822f73cd8990"
 PYTORCH_ACTIVATION_COMMIT = "fa5cb72912c44b22acd9c26c69f3e933794ac501"
 PYTORCH_C10_METAL_CONSTEXPR_COMMIT = "fa5cb72912c44b22acd9c26c69f3e933794ac501"
+PYTORCH_CURRENT_COMMIT = "474a11a166e1313c37a9ad6f5ed0c887409d2cfc"
 CANDLE_REPO = "https://github.com/huggingface/candle"
 CANDLE_COMMIT = "39355c6c9187747e360a2d6ec9d67a2a501b2552"
 LLAMA_CPP_REPO = "https://github.com/ggml-org/llama.cpp"
@@ -1359,12 +1360,13 @@ EXTERNAL_FIXTURES = [
         "repo_url": PYTORCH_REPO,
         "commit": PYTORCH_GRID_SAMPLER_COMMIT,
         "source_path": "aten/src/ATen/native/mps/kernels/GridSampler.h",
-        "roundtrip": False,
+        "roundtrip": True,
         "struct_names": ["GridSamplerParams"],
         "contains": [
-            "c10::metal::array<idx_t,N> output_sizes;",
-            "c10::metal::array<idx_t,N> input_strides;",
+            "idx_t[N] output_sizes;",
+            "idx_t[N] input_strides;",
         ],
+        "not_contains": ["c10::metal::array"],
         "source": (
             """
             template <unsigned N = 5, typename idx_t = int32_t>
@@ -1373,6 +1375,94 @@ EXTERNAL_FIXTURES = [
                 ::c10::metal::array<idx_t, N> output_sizes;
                 ::c10::metal::array<idx_t, N> input_strides;
             };
+            """
+        ),
+    },
+    # Reduced from:
+    # Repo: https://github.com/pytorch/pytorch
+    # Commit: 474a11a166e1313c37a9ad6f5ed0c887409d2cfc
+    # Path: aten/src/ATen/native/mps/kernels/UpSample.h
+    {
+        "name": "pytorch_upsample_c10_array_expression_extent",
+        "repo_url": PYTORCH_REPO,
+        "commit": PYTORCH_CURRENT_COMMIT,
+        "source_path": "aten/src/ATen/native/mps/kernels/UpSample.h",
+        "roundtrip": True,
+        "contains": [
+            "uint64[N] input_strides;",
+            "float[N-2] scales;",
+        ],
+        "not_contains": ["c10::metal::array"],
+        "source": (
+            """
+            #include <c10/metal/common.h>
+
+            template <unsigned N = 5>
+            struct UpsampleParams {
+                ::c10::metal::array<uint64_t, N> input_strides;
+                ::c10::metal::array<float, N - 2> scales;
+                bool align_corners;
+            };
+            """
+        ),
+    },
+    # Reduced from:
+    # Repo: https://github.com/pytorch/pytorch
+    # Commit: 474a11a166e1313c37a9ad6f5ed0c887409d2cfc
+    # Path: aten/src/ATen/native/mps/kernels/Embedding.h
+    {
+        "name": "pytorch_embedding_c10_array_scoped_extent",
+        "repo_url": PYTORCH_REPO,
+        "commit": PYTORCH_CURRENT_COMMIT,
+        "source_path": "aten/src/ATen/native/mps/kernels/Embedding.h",
+        "roundtrip": True,
+        "contains": [
+            "idx_type_t[c10_u3a_u3ametal_u3a_u3amax_ndim] outer_sizes;",
+            "int64 padding_idx;",
+        ],
+        "not_contains": ["c10::metal::array", "::c10::metal::max_ndim"],
+        "source": (
+            """
+            #include <c10/metal/common.h>
+
+            template <typename idx_type_t = uint32_t>
+            struct EmbeddingDenseBackwardParams {
+                ::c10::metal::array<idx_type_t, ::c10::metal::max_ndim>
+                    outer_sizes;
+                int64_t padding_idx;
+            };
+            """
+        ),
+    },
+    # Reduced from:
+    # Repo: https://github.com/pytorch/pytorch
+    # Commit: 474a11a166e1313c37a9ad6f5ed0c887409d2cfc
+    # Path: c10/metal/atomic.h
+    {
+        "name": "pytorch_atomic_function_pointer_parameter",
+        "repo_url": PYTORCH_REPO,
+        "commit": PYTORCH_CURRENT_COMMIT,
+        "source_path": "c10/metal/atomic.h",
+        "roundtrip": True,
+        "contains": [
+            "void atomic_binary_op_helper(device atomic<AT>* data",
+            "T* op)",
+            "val = op(value, value);",
+        ],
+        "not_contains": ["(*op)"],
+        "source": (
+            """
+            #include <metal_atomic>
+
+            template <typename AT, typename T>
+            static inline void atomic_binary_op_helper(
+                device ::metal::atomic<AT>* data,
+                long offset,
+                T value,
+                T (*op)(T, T)) {
+                T val;
+                val = op(value, value);
+            }
         """
         ),
     },

@@ -2384,6 +2384,39 @@ EXTERNAL_FIXTURES = [
     {
         # Source: https://github.com/shader-slang/slang
         # Commit: 0658ed79219d6e4ee526182104ce71d476f787be
+        # Path: tests/diagnostics/entry-point-uniform-banned-types.slang
+        "id": "slang_entry_point_constant_buffer_parameter_register_reparse",
+        "repo": "shader-slang/slang-current-2026-06-10",
+        "path": "tests/diagnostics/entry-point-uniform-banned-types.slang",
+        "source": (
+            """
+            struct Params
+            {
+                float x;
+            }
+
+            ConstantBuffer<Params> g_params;
+
+            [shader("fragment")]
+            float4 main(ConstantBuffer<Params> p : register(b1)) : SV_Target
+            {
+                return float4(g_params.x + p.x, 0, 0, 0);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "vec4 main(Params p @register(b1)) @ Out_Color",
+            "return vec4(g_params.x + p.x, 0, 0, 0);",
+        ],
+        "not_contains": [
+            "Expected semantic name",
+            "ConstantBuffer<Params> p : register(b1)",
+        ],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 0658ed79219d6e4ee526182104ce71d476f787be
         # Path: tools/gfx-unit-test/pointer-in-buffer-double-ptr-roundtrip.slang
         "id": "slang_gfx_structured_buffer_pointer_element_reparse",
         "repo": "shader-slang/slang-current-2026-06-10",

@@ -11613,6 +11613,32 @@ def test_nested_block_doc_comment_codegen_reparse_from_wgpu_hub():
     crosstl.translator.parse(result)
 
 
+def test_raw_string_macro_argument_codegen_reparse_from_rust_gpu_target_spec():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # a27c0363d391a54de1feb9ee6864ad9dff72d243,
+    # crates/rustc_codegen_spirv-types/src/target_spec.rs
+    # TargetSpecVersion::format_spec.
+    code = r"""
+    impl TargetSpecVersion {
+        fn format_spec(&self, target_env: TargetEnv) -> String {
+            format!(
+                r#"{{
+  "env": "{target_env}",
+  "target-pointer-width": 32
+}}"#
+            )
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert 'r#"' not in result
+    assert '\\"env\\"' in result
+    assert "\\n  " in result
+    crosstl.translator.parse(result)
+
+
 def test_error_handling():
     edge_cases = [
         "fn empty() {}",

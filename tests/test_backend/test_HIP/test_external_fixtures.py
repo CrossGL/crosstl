@@ -2354,6 +2354,32 @@ def test_external_hip_kittens_fast_exp_vector_codegen_reparse():
     assert "__expf" not in crossgl
 
 
+def test_hip_scalar_brace_initializer_scoped_call_codegen_reparse():
+    source = """
+    template <class T>
+    struct Info {
+        int value;
+    };
+
+    template <class T>
+    int make_info() {
+        return ::hip::detail::make_value<T>();
+    }
+
+    template <class T>
+    Info<T> info = {::hip::detail::make_info<T>()};
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[1].name == "make_info"
+    assert ast.statements[2].name == "info"
+    assert "return hip_detail_make_value();" in crossgl
+    assert "var info: Info<T> = hip_detail_make_info();" in crossgl
+    assert "{::hip::detail" not in crossgl
+    assert "::hip::detail" not in crossgl
+
+
 def test_rocm_math_api_fast_float_intrinsics_codegen_reparse():
     # HIP math API documents CUDA-compatible single-precision intrinsics such
     # as __fdividef, rounded arithmetic aliases, and __saturatef.

@@ -1114,6 +1114,9 @@ class SlangToCrossGLConverter:
             f"{self.format_identifier(parameter_name)}"
             f"{self.format_array_suffixes(param)}"
         )
+        metadata = self.format_parameter_metadata(param)
+        if metadata:
+            parameter += metadata
         semantic = self.map_semantic(
             param.semantic,
             function_qualifier=function_qualifier,
@@ -1122,6 +1125,13 @@ class SlangToCrossGLConverter:
         if semantic:
             parameter += f" {semantic}"
         return parameter
+
+    def format_parameter_metadata(self, param):
+        register_name = getattr(param, "register", None)
+        if not self.should_emit_register_metadata(register_name, param):
+            return ""
+        register_arguments = self.format_register_metadata_arguments(register_name)
+        return f" @register({register_arguments})"
 
     def is_entry_like_function(self, func):
         return bool(

@@ -132,6 +132,16 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "7bc17e135b393336fab370a4def48327f30d754b",
         "path": "lib/kernel/core-math/acosf16.cl",
     },
+    "pocl_core_math_nested_union_designated_array_initializer": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "lib/kernel/core-math/cosf16.cl",
+    },
+    "pocl_core_math_global_union_designated_initializer": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "lib/kernel/core-math/powf16.cl",
+    },
     "opencv_filter2d_small_block_macro_argument": {
         "url": "https://github.com/opencv/opencv",
         "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
@@ -912,6 +922,65 @@ def test_external_pocl_core_math_typedef_union_designated_initializer_codegen_re
     assert init.designators == [("field", "f")]
     assert "struct b32u32_u" in crossgl
     assert "{.f = x}" in crossgl
+
+
+def test_external_pocl_core_math_nested_designated_array_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "pocl_core_math_nested_union_designated_array_initializer"
+    ]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "lib/kernel/core-math/cosf16.cl"
+
+    source = """
+    typedef union
+    {
+        float f;
+        uint u;
+    } b32u32_u;
+
+    static constant b32u32_u C1[] = {
+        {0x1p+0},
+        {.u = 0x7fc00000},
+        {.u = 0x7f800001},
+    };
+
+    kernel void pocl_core_math_table_probe(global uint *out) {
+        out[0] = C1[1].u;
+    }
+    """
+
+    _ast, crossgl = assert_crossgl_reparses(source)
+
+    assert "var<uniform> C1: array<b32u32_u>" in crossgl
+    assert "{.u =" not in crossgl
+    assert "{{0x1p+0}, {0x7fc00000}, {0x7f800001}}" in crossgl
+
+
+def test_external_pocl_core_math_global_designated_initializer_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "pocl_core_math_global_union_designated_initializer"
+    ]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "lib/kernel/core-math/powf16.cl"
+
+    source = """
+    typedef union
+    {
+        half f;
+        ushort u;
+    } b16u16_u;
+
+    static constant b16u16_u poszero = {.u = 0x0000};
+
+    kernel void pocl_pow_table_probe(global ushort *out) {
+        out[0] = poszero.u;
+    }
+    """
+
+    _ast, crossgl = assert_crossgl_reparses(source)
+
+    assert "var<uniform> poszero: b16u16_u = {0x0000};" in crossgl
+    assert "{.u =" not in crossgl
 
 
 def test_opencl_unknown_sizeof_codegen_emits_diagnostic_fallback():

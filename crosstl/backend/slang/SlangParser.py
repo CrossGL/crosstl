@@ -2725,6 +2725,8 @@ class SlangParser:
             if self.current_token[0] == "EQUALS":
                 self.eat("EQUALS")
                 default_value = self.parse_expression()
+            register_names = self.parse_register_annotations()
+            register_name = register_names[0] if register_names else None
             if self.current_token[0] == "COLON":
                 semantic = self.parse_semantic_annotations()
             if self.current_token[0] == "EQUALS":
@@ -2739,6 +2741,8 @@ class SlangParser:
                     semantic=semantic,
                     array_sizes=array_sizes,
                     value=default_value,
+                    register=register_name,
+                    registers=register_names,
                 )
             )
             if self.current_token[0] == "COMMA":

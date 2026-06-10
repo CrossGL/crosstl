@@ -3611,6 +3611,42 @@ def test_current_cccl_forceinline_function_annotation_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_current_cccl_scalar_brace_initializer_scoped_call_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 01499a8daf1bc8568aa86f90467fc70bf9a58989
+    # path: libcudacxx/include/cuda/std/__utility/typeid.h
+    source = """
+    template <class _Tp>
+    struct __pretty_name_begin {
+      struct __pretty_name_end;
+    };
+
+    struct __type_info {
+      int __name_;
+    };
+
+    template <class _Tp>
+    int __pretty_nameof() {
+      return ::cuda::std::__pretty_nameof_helper<
+          typename __pretty_name_begin<_Tp>::__pretty_name_end>();
+    }
+
+    template <class _Tp>
+    constexpr __type_info __typeid_v = {::cuda::std::__pretty_nameof<_Tp>()};
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.global_variables[0].name == "__typeid_v"
+    assert "var __typeid_v: __type_info = cuda_std___pretty_nameof__Tp();" in crossgl
+    assert "cuda_std___pretty_nameof_helper_typename___pretty_name_begin" in crossgl
+    assert "{::cuda::std" not in crossgl
+    assert "::cuda::std" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_current_cutlass_decltype_scoped_value_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/cutlass

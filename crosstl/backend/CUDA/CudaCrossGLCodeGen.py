@@ -6,6 +6,7 @@ from .CudaAst import (
     ArrayAccessNode,
     AssignmentNode,
     CastNode,
+    DesignatedInitializerNode,
     EnumNode,
     FunctionCallNode,
     InitializerListNode,
@@ -4304,7 +4305,7 @@ class CudaToCrossGLConverter:
                 self.emit(f"var {output_name}: {var_type} = {value};")
                 return
 
-            value = self.visit(node.value)
+            value = self.format_variable_initializer_value(node.value)
             self.register_warp_mask_value(node.name, output_name, value)
             self.emit(f"var {output_name}: {var_type} = {value};")
         else:
@@ -4369,6 +4370,26 @@ class CudaToCrossGLConverter:
 
         for name in names:
             self.warp_mask_value_scopes[-1].pop(name, None)
+
+    def format_variable_initializer_value(self, value):
+        scalar_value = self.format_single_scalar_initializer(value)
+        if scalar_value is not None:
+            return scalar_value
+        return self.visit(value)
+
+    def format_single_scalar_initializer(self, value):
+        if not isinstance(value, InitializerListNode) or len(value.elements) != 1:
+            return None
+        initializer = value.elements[0]
+        if isinstance(initializer, DesignatedInitializerNode):
+            return None
+        if not isinstance(initializer, FunctionCallNode):
+            return None
+        if not isinstance(initializer.name, str) or not initializer.name.startswith(
+            "::"
+        ):
+            return None
+        return self.visit(initializer)
 
     def resolve_warp_mask_expression(self, mask):
         text = str(mask).strip()
@@ -4673,7 +4694,12 @@ class CudaToCrossGLConverter:
                 return integer_intrinsic
 
         if self.is_user_defined_function(raw_name):
-            return f"{raw_name}({args_str})"
+            func_name = (
+                self.convert_cuda_function_name_to_crossgl(raw_name)
+                if isinstance(raw_name, str) and raw_name.startswith("::")
+                else raw_name
+            )
+            return f"{func_name}({args_str})"
 
         load_cache_intrinsic = self.format_cuda_load_cache_intrinsic_call(
             raw_name, node.args, args
@@ -4722,6 +4748,13 @@ class CudaToCrossGLConverter:
             return resource_call
 
         func_name = self.convert_cuda_builtin_function(raw_name)
+        if (
+            func_name == raw_name
+            and isinstance(raw_name, str)
+            and raw_name.startswith("::")
+            and not self.is_simple_identifier(func_name)
+        ):
+            func_name = self.convert_cuda_function_name_to_crossgl(raw_name)
         return f"{func_name}({args_str})"
 
     def format_cuda_time_function_call(self, function_name, args):

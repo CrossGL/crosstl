@@ -1349,7 +1349,7 @@ class MetalToCrossGLConverter:
 
     def format_array_suffix(self, var, include_declarator_arrays=True):
         array_type = self.metal_array_type_parts(getattr(var, "vtype", None))
-        suffix = f"[{array_type[1]}]" if array_type else ""
+        suffix = f"[{self.format_array_extent(array_type[1])}]" if array_type else ""
         if not include_declarator_arrays:
             return suffix
         return suffix + self.format_declarator_array_suffix(var)
@@ -1362,8 +1362,18 @@ class MetalToCrossGLConverter:
             if size is None:
                 suffix += "[]"
             else:
-                suffix += f"[{self.generate_expression(size, False)}]"
+                suffix += f"[{self.format_array_extent(size)}]"
         return suffix
+
+    def format_array_extent(self, size):
+        if not isinstance(size, str):
+            return self.generate_expression(size, False)
+
+        extent = size.strip()
+        if self.is_scoped_identifier(extent.lstrip(":")):
+            extent = extent.lstrip(":")
+            return self.sanitize_identifier(extent)
+        return extent
 
     def use_name_array_suffix(self, mapped_type, var):
         if not getattr(var, "array_sizes", None):
@@ -2370,7 +2380,7 @@ class MetalToCrossGLConverter:
         array_type = self.metal_array_type_parts(metal_type)
         if array_type:
             element_type, size = array_type
-            return f"{self.map_type(element_type)}[{size}]"
+            return f"{self.map_type(element_type)}[{self.format_array_extent(size)}]"
 
         base = metal_type.strip()
         if base.endswith("..."):
@@ -2732,9 +2742,12 @@ class MetalToCrossGLConverter:
 
     def metal_array_type_parts(self, metal_type):
         base_name, generic_args = self.generic_type_parts(metal_type)
-        if base_name != "array" or len(generic_args) < 2:
+        if not self.is_metal_array_type_name(base_name) or len(generic_args) < 2:
             return None
         return generic_args[0].strip(), generic_args[1].strip()
+
+    def is_metal_array_type_name(self, base_name):
+        return base_name in {"array", "metal::array", "c10::metal::array"}
 
     def metal_vector_type_parts(self, metal_type):
         base_name, generic_args = self.generic_type_parts(metal_type)
