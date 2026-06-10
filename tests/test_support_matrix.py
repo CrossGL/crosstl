@@ -615,6 +615,51 @@ def test_project_migration_actions_are_first_class_support_feature():
         ) in backend_support["evidence"]
 
 
+def test_project_runtime_integration_plan_is_first_class_support_feature():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.runtime_integration_plan"]
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Runtime integration planning"
+    assert set(feature["support"]) == {backend["id"] for backend in matrix["backends"]}
+    for backend_support in feature["support"].values():
+        assert backend_support["status"] == "supported"
+        assert "metadata-only crosstl-runtime-integration-plan" in (
+            backend_support["notes"]
+        )
+        assert "explicit scope and non-goals" in backend_support["notes"]
+        assert "runtime-loader-plan-v1" in backend_support["notes"]
+        assert "diagnostic-only failed plans" in backend_support["notes"]
+        assert "does not import compiler internals" in backend_support["notes"]
+        assert "execute device code" in backend_support["notes"]
+        assert "rewrite host application code" in backend_support["notes"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_plan_runtime_integration_builds_metadata_plan"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_plan_runtime_integration_applies_runtime_reference_sample_limit"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_plan_runtime_integration_invalid_report_is_diagnostic_only"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_plan_runtime_text_outputs_requests_and_actions"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_plan_runtime_rejects_negative_sample_limit"
+        ) in backend_support["evidence"]
+
+
 def test_project_include_resolution_documents_status_reporting():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(
