@@ -34,6 +34,7 @@ RUNTIME_PACKAGE_KIND = "crosstl-runtime-package"
 RUNTIME_HOST_BINDING_PLAN_KIND = "crosstl-runtime-host-binding-plan"
 RUNTIME_PACKAGE_INSPECTION_KIND = "crosstl-runtime-package-inspection"
 RUNTIME_ADAPTER_PLAN_KIND = "crosstl-runtime-adapter-plan"
+RUNTIME_LOADER_MANIFEST_KIND = "crosstl-runtime-loader-manifest"
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
 RUNTIME_LOADER_PLAN_CONTRACT = "runtime-loader-plan-v1"
@@ -44,6 +45,7 @@ RUNTIME_PACKAGE_SCOPE = "runtime-artifact-handoff-package"
 RUNTIME_HOST_BINDING_PLAN_SCOPE = "host-binding-planning"
 RUNTIME_PACKAGE_INSPECTION_SCOPE = "runtime-package-readiness-inspection"
 RUNTIME_ADAPTER_PLAN_SCOPE = "runtime-adapter-integration-planning"
+RUNTIME_LOADER_MANIFEST_SCOPE = "runtime-loader-metadata-contract"
 RUNTIME_INTEGRATION_PLAN_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
@@ -73,6 +75,12 @@ RUNTIME_PACKAGE_INSPECTION_NON_GOALS = (
     "target-sdk-installation",
 )
 RUNTIME_ADAPTER_PLAN_NON_GOALS = (
+    "host-code-rewriting",
+    "device-execution",
+    "runtime-framework-generation",
+    "target-sdk-installation",
+)
+RUNTIME_LOADER_MANIFEST_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
     "runtime-framework-generation",
@@ -471,6 +479,66 @@ RUNTIME_ADAPTER_PLAN_ACTION_FIELDS = frozenset(
         "binding",
         "packagePath",
     )
+)
+RUNTIME_LOADER_MANIFEST_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourcePackage",
+        "sourcePackageHash",
+        "generatedAt",
+        "success",
+        "scope",
+        "nonGoals",
+        "packageRoot",
+        "project",
+        "summary",
+        "targets",
+        "loadUnits",
+        "actions",
+        "runtimePlan",
+        "adapterPlan",
+        "packageInspection",
+        "diagnosticCounts",
+        "diagnostics",
+    )
+)
+RUNTIME_LOADER_MANIFEST_TARGET_FIELDS = frozenset(
+    (
+        "target",
+        "adapterKind",
+        "loadUnitCount",
+        "readyLoadUnitCount",
+        "blockedLoadUnitCount",
+        "runtimeReferenceCount",
+        "requiredTools",
+        "loaderResponsibilities",
+        "packagePaths",
+        "loadUnits",
+    )
+)
+RUNTIME_LOADER_MANIFEST_LOAD_UNIT_FIELDS = frozenset(
+    (
+        "id",
+        "target",
+        "adapterKind",
+        "artifactFormat",
+        "packagePath",
+        "sourcePath",
+        "sourceBackend",
+        "variant",
+        "defines",
+        "sourceRemap",
+        "hostInterface",
+        "requiredTools",
+        "hostResponsibilities",
+        "loadSteps",
+        "blockers",
+        "validation",
+    )
+)
+RUNTIME_LOADER_MANIFEST_LOAD_STEP_FIELDS = frozenset(
+    ("kind", "message", "target", "packagePath", "tools", "hostInterfaceStatus")
 )
 REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
 REPORT_PROJECT_FIELDS = frozenset(
@@ -10090,6 +10158,298 @@ def plan_runtime_adapters(
         "diagnostics": (
             [dict(diagnostic) for diagnostic in inspection.get("diagnostics", [])]
             if isinstance(inspection.get("diagnostics"), list)
+            else []
+        ),
+    }
+
+
+def _runtime_loader_manifest_load_steps(
+    adapter: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    package_path = adapter.get("packagePath")
+    target = adapter.get("target")
+    steps = [
+        {
+            "kind": "load-package-artifact",
+            "message": (
+                f"Load {adapter.get('artifactFormat')} artifact "
+                f"{package_path} for target {target}."
+            ),
+            "target": target,
+            "packagePath": package_path,
+            "tools": [],
+            "hostInterfaceStatus": None,
+        }
+    ]
+    source_remap = adapter.get("sourceRemap")
+    if isinstance(source_remap, Mapping) and _is_non_empty_string(
+        source_remap.get("packagePath")
+    ):
+        steps.append(
+            {
+                "kind": "load-source-remap",
+                "message": (
+                    "Load source-remap metadata "
+                    f"{source_remap.get('packagePath')} for diagnostics and "
+                    "provenance."
+                ),
+                "target": target,
+                "packagePath": source_remap.get("packagePath"),
+                "tools": [],
+                "hostInterfaceStatus": None,
+            }
+        )
+
+    host_interface = adapter.get("hostInterface")
+    interface_status = (
+        host_interface.get("status") if isinstance(host_interface, Mapping) else None
+    )
+    if interface_status == "ready":
+        steps.append(
+            {
+                "kind": "bind-host-interface",
+                "message": (
+                    "Bind "
+                    f"{host_interface.get('entryPointCount', 0)} entry points and "
+                    f"{host_interface.get('resourceCount', 0)} resources from "
+                    "host-interface metadata."
+                ),
+                "target": target,
+                "packagePath": package_path,
+                "tools": [],
+                "hostInterfaceStatus": interface_status,
+            }
+        )
+
+    required_tools = [
+        tool
+        for tool in _record_sequence(adapter.get("requiredTools"))
+        if _is_non_empty_string(tool)
+    ]
+    if required_tools:
+        steps.append(
+            {
+                "kind": "validate-target-toolchain",
+                "message": (
+                    "Validate the loaded artifact with available target tools: "
+                    f"{', '.join(required_tools)}."
+                ),
+                "target": target,
+                "packagePath": package_path,
+                "tools": required_tools,
+                "hostInterfaceStatus": interface_status,
+            }
+        )
+    return steps
+
+
+def _runtime_loader_manifest_blockers(
+    adapter: Mapping[str, Any], actions: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    adapter_id = adapter.get("id")
+    return [
+        dict(action)
+        for action in actions
+        if action.get("adapter") == adapter_id
+        and action.get("kind") == "resolve-host-interface-metadata"
+    ]
+
+
+def _runtime_loader_manifest_load_unit(
+    adapter: Mapping[str, Any], actions: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    blockers = _runtime_loader_manifest_blockers(adapter, actions)
+    host_interface = adapter.get("hostInterface")
+    host_interface_status = (
+        host_interface.get("status") if isinstance(host_interface, Mapping) else None
+    )
+    validation = (
+        dict(adapter.get("validation"))
+        if isinstance(adapter.get("validation"), Mapping)
+        else {}
+    )
+    validation["hostInterface"] = (
+        host_interface_status
+        if _is_non_empty_string(host_interface_status)
+        else "not-inspected"
+    )
+    validation["loadReady"] = not blockers
+    return {
+        "id": adapter.get("id"),
+        "target": adapter.get("target"),
+        "adapterKind": adapter.get("adapterKind"),
+        "artifactFormat": adapter.get("artifactFormat"),
+        "packagePath": adapter.get("packagePath"),
+        "sourcePath": adapter.get("sourcePath"),
+        "sourceBackend": adapter.get("sourceBackend"),
+        "variant": adapter.get("variant"),
+        "defines": (
+            dict(adapter.get("defines"))
+            if isinstance(adapter.get("defines"), Mapping)
+            else {}
+        ),
+        "sourceRemap": (
+            dict(adapter.get("sourceRemap"))
+            if isinstance(adapter.get("sourceRemap"), Mapping)
+            else None
+        ),
+        "hostInterface": (
+            dict(host_interface)
+            if isinstance(host_interface, Mapping)
+            else _runtime_host_interface_empty(
+                "not-inspected",
+                diagnostics=(
+                    "project.runtime-package-inspection.host-interface-not-recorded",
+                ),
+            )
+        ),
+        "requiredTools": [
+            tool
+            for tool in _record_sequence(adapter.get("requiredTools"))
+            if _is_non_empty_string(tool)
+        ],
+        "hostResponsibilities": [
+            responsibility
+            for responsibility in _record_sequence(adapter.get("hostResponsibilities"))
+            if _is_non_empty_string(responsibility)
+        ],
+        "loadSteps": _runtime_loader_manifest_load_steps(adapter),
+        "blockers": blockers,
+        "validation": validation,
+    }
+
+
+def _runtime_loader_manifest_target(
+    target: Mapping[str, Any], load_units: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    target_name = target.get("target")
+    target_load_units = [
+        load_unit for load_unit in load_units if load_unit.get("target") == target_name
+    ]
+    blocked_units = [
+        load_unit for load_unit in target_load_units if load_unit.get("blockers")
+    ]
+    ready_units = [
+        load_unit for load_unit in target_load_units if not load_unit.get("blockers")
+    ]
+    return {
+        "target": target_name,
+        "adapterKind": target.get("adapterKind"),
+        "loadUnitCount": len(target_load_units),
+        "readyLoadUnitCount": len(ready_units),
+        "blockedLoadUnitCount": len(blocked_units),
+        "runtimeReferenceCount": target.get("runtimeReferenceCount", 0),
+        "requiredTools": (
+            list(target.get("requiredTools"))
+            if isinstance(target.get("requiredTools"), list)
+            else []
+        ),
+        "loaderResponsibilities": (
+            list(target.get("loaderResponsibilities"))
+            if isinstance(target.get("loaderResponsibilities"), list)
+            else []
+        ),
+        "packagePaths": [
+            load_unit.get("packagePath")
+            for load_unit in target_load_units
+            if _is_non_empty_string(load_unit.get("packagePath"))
+        ],
+        "loadUnits": [load_unit.get("id") for load_unit in target_load_units],
+    }
+
+
+def build_runtime_loader_manifest(
+    package_manifest_path: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Build a runtime loader manifest from a runtime package manifest."""
+
+    package_path = _filesystem_path_arg(
+        package_manifest_path, field_name="Runtime package manifest path"
+    )
+    adapter_plan = plan_runtime_adapters(package_path)
+    actions = [
+        action
+        for action in _record_sequence(adapter_plan.get("actions"))
+        if isinstance(action, Mapping)
+    ]
+    adapters = [
+        adapter
+        for adapter in _record_sequence(adapter_plan.get("adapters"))
+        if isinstance(adapter, Mapping)
+    ]
+    targets = [
+        target
+        for target in _record_sequence(adapter_plan.get("targets"))
+        if isinstance(target, Mapping)
+    ]
+    load_units = [
+        _runtime_loader_manifest_load_unit(adapter, actions) for adapter in adapters
+    ]
+    ready_load_unit_count = sum(
+        1 for load_unit in load_units if not load_unit.get("blockers")
+    )
+    blocked_load_unit_count = sum(
+        1 for load_unit in load_units if load_unit.get("blockers")
+    )
+    adapter_summary = (
+        adapter_plan.get("summary")
+        if isinstance(adapter_plan.get("summary"), Mapping)
+        else {}
+    )
+    package_inspection = (
+        dict(adapter_plan.get("packageInspection"))
+        if isinstance(adapter_plan.get("packageInspection"), Mapping)
+        else {}
+    )
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_LOADER_MANIFEST_KIND,
+        "sourcePackage": str(package_path),
+        "sourcePackageHash": _optional_source_hash(package_path),
+        "generatedAt": int(time.time()),
+        "success": bool(adapter_plan.get("success")),
+        "scope": RUNTIME_LOADER_MANIFEST_SCOPE,
+        "nonGoals": list(RUNTIME_LOADER_MANIFEST_NON_GOALS),
+        "packageRoot": adapter_plan.get("packageRoot"),
+        "project": (
+            dict(adapter_plan.get("project"))
+            if isinstance(adapter_plan.get("project"), Mapping)
+            else {"targets": []}
+        ),
+        "summary": {
+            "targetCount": adapter_summary.get("targetCount", 0),
+            "bindingCount": adapter_summary.get("bindingCount", 0),
+            "loadUnitCount": len(load_units),
+            "readyLoadUnitCount": ready_load_unit_count,
+            "blockedLoadUnitCount": blocked_load_unit_count,
+            "actionCount": len(actions),
+            "runtimeReferenceCount": adapter_summary.get("runtimeReferenceCount", 0),
+        },
+        "targets": [
+            _runtime_loader_manifest_target(target, load_units) for target in targets
+        ],
+        "loadUnits": load_units,
+        "actions": [dict(action) for action in actions],
+        "runtimePlan": (
+            dict(adapter_plan.get("runtimePlan"))
+            if isinstance(adapter_plan.get("runtimePlan"), Mapping)
+            else {}
+        ),
+        "adapterPlan": {
+            "kind": adapter_plan.get("kind"),
+            "success": adapter_plan.get("success"),
+            "adapterCount": adapter_summary.get("adapterCount", 0),
+            "actionCount": len(actions),
+        },
+        "packageInspection": package_inspection,
+        "diagnosticCounts": (
+            dict(adapter_plan.get("diagnosticCounts"))
+            if isinstance(adapter_plan.get("diagnosticCounts"), Mapping)
+            else {}
+        ),
+        "diagnostics": (
+            [dict(diagnostic) for diagnostic in adapter_plan.get("diagnostics", [])]
+            if isinstance(adapter_plan.get("diagnostics"), list)
             else []
         ),
     }
