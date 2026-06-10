@@ -20512,6 +20512,12 @@ class VulkanSPIRVCodeGen:
         storage_class: str,
     ) -> str:
         upper_name = str(semantic).upper()
+        if semantic == "gl_Position":
+            return (
+                "gl_FragCoord"
+                if execution_model == "Fragment" and storage_class == "Input"
+                else semantic
+            )
         if upper_name == "SV_POSITION":
             return (
                 "gl_FragCoord"
