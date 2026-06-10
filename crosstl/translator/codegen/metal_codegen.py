@@ -21271,6 +21271,10 @@ class MetalCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        if isinstance(type_node, FunctionCallNode):
+            return self.safe_expression_to_string(type_node)
+        if isinstance(type_node, IdentifierNode):
+            return type_node.name
         if isinstance(type_node, PointerType):
             pointee_type = self.convert_type_node_to_string(type_node.pointee_type)
             return f"{pointee_type}*"
