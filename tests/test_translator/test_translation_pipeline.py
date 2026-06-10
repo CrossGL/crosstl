@@ -391,7 +391,14 @@ def test_metal_constant_reference_parameter_lowers_to_directx_constant_buffer(
     )
 
     _assert_generated_output_is_usable(generated)
-    assert "ConstantBuffer<MatMulParams> params" in generated
+    assert "#include <metal_stdlib>" not in generated
+    assert "RWStructuredBuffer<float> A : register(u0);" in generated
+    assert "RWStructuredBuffer<float> B : register(u1);" in generated
+    assert "RWStructuredBuffer<float> X : register(u2);" in generated
+    assert "ConstantBuffer<MatMulParams> params : register(b3);" in generated
+    assert "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)" in generated
+    assert "void CSMain(float* A" not in generated
+    assert "RWStructuredBuffer<float> A," not in generated
     assert "uint3 id_dispatchThreadID : SV_DispatchThreadID" in generated
     assert "uint2 id = id_dispatchThreadID.xy;" in generated
     assert "const uint row_dim_x = params.row_dim_x;" in generated
@@ -757,6 +764,33 @@ def test_hlsl_compute_scalar_splat_swizzle_lowers_for_vulkan_and_metal(tmp_path)
     assert "a.xxxx" not in metal
     assert "unsupported Metal program-scope groupshared global" in metal
     assert "unsupported Metal program-scope groupshared store" in metal
+
+
+def test_metal_max_total_threads_metadata_translates_to_vulkan(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "mlx-max-total-threads.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        [[max_total_threads_per_threadgroup(1024)]]
+        kernel void pinned_kernel(
+            device float* out [[buffer(0)]],
+            uint index [[thread_position_in_grid]]) {
+            out[index] = 1.0;
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="vulkan", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "OpEntryPoint GLCompute" in generated
+    assert '"pinned_kernel"' in generated
+    assert "return semantic" not in generated
 
 
 @pytest.mark.parametrize(

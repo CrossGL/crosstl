@@ -2889,9 +2889,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def generate_preprocessor_directive(self, directive):
         if isinstance(directive, PreprocessorNode):
             directive_name = (directive.directive or "").strip()
+            content = str(directive.content or "").strip()
             if directive_name.lower() in {"version", "extension", "precision"}:
                 return None
-            return f"#{directive_name} {directive.content}".strip()
+            if self.is_metal_only_preprocessor_directive(directive_name, content):
+                return None
+            return f"#{directive_name} {content}".strip()
 
         line = str(directive).strip()
         lowered = line.lower()
@@ -2901,7 +2904,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             or lowered.startswith("precision ")
         ):
             return None
+        if self.is_metal_only_preprocessor_line(line):
+            return None
         return line
+
+    def is_metal_only_preprocessor_directive(self, directive_name, content):
+        if directive_name.lower() != "include":
+            return False
+        normalized = str(content).strip().strip("<>\"'").lower()
+        return normalized in {"metal_stdlib", "metal_stdlib.h"}
+
+    def is_metal_only_preprocessor_line(self, line):
+        stripped = str(line).strip()
+        if not stripped.startswith("#"):
+            return False
+        parts = stripped[1:].strip().split(maxsplit=1)
+        if not parts:
+            return False
+        directive_name = parts[0]
+        content = parts[1] if len(parts) > 1 else ""
+        return self.is_metal_only_preprocessor_directive(directive_name, content)
 
     def generate_constants(self, ast, constants=None):
         code = ""
@@ -3236,7 +3258,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         else:
             qualifier = getattr(func, "qualifier", None)
         effective_shader_type = shader_type or qualifier
+        promoted_entry_resource_parameter_ids = set()
+        if normalize_stage_name(effective_shader_type) in self.stage_entry_types():
+            promoted_entry_resource_parameter_ids = {
+                id(parameter)
+                for parameter in param_list
+                if self.hlsl_entry_resource_parameter_global_type(parameter, func)
+                is not None
+            }
         for p in param_list:
+            if id(p) in promoted_entry_resource_parameter_ids:
+                continue
             if hasattr(p, "param_type"):
                 raw_param_type = (
                     self.type_name_string(p.param_type)
@@ -6868,8 +6900,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         stage_resource_vars = collect_stage_local_variables(
             root, target_stage, self.is_stage_local_resource_variable
         )
+        entry_resource_params = self.hlsl_stage_entry_resource_parameter_globals(
+            root, target_stage
+        )
         return deduplicate_named_declarations(
-            global_vars + stage_resource_vars, "DirectX resource"
+            global_vars + stage_resource_vars + entry_resource_params,
+            "DirectX resource",
         )
 
     def is_stage_local_resource_variable(self, node):
@@ -6882,7 +6918,59 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             or self.is_resource_parameter_type(vtype)
             or self.is_hlsl_readonly_buffer_type(vtype)
             or self.is_hlsl_uav_buffer_type(vtype)
+            or self.is_hlsl_constant_buffer_type(vtype)
             or self.is_glsl_buffer_block_variable(node, vtype)
+        )
+
+    def hlsl_stage_entry_resource_parameter_globals(self, root, target_stage=None):
+        globals_ = []
+        entries = collect_stage_entry_records(
+            root, target_stage, self.stage_entry_types()
+        )
+        for _, _stage_name, func in entries:
+            for parameter in getattr(func, "parameters", getattr(func, "params", [])):
+                proxy = self.hlsl_entry_resource_parameter_global(parameter, func)
+                if proxy is not None:
+                    globals_.append(proxy)
+        return globals_
+
+    def hlsl_entry_resource_parameter_global(self, parameter, func=None):
+        mapped_type = self.hlsl_entry_resource_parameter_global_type(parameter, func)
+        if mapped_type is None:
+            return None
+
+        return VariableNode(
+            name=parameter.name,
+            var_type=mapped_type,
+            attributes=list(getattr(parameter, "attributes", []) or []),
+            qualifiers=list(getattr(parameter, "qualifiers", []) or []),
+        )
+
+    def hlsl_entry_resource_parameter_global_type(self, parameter, func=None):
+        raw_type = self.hlsl_parameter_raw_type(parameter)
+        mapped_type = self.map_resource_parameter_type_with_hint(
+            raw_type,
+            parameter,
+            getattr(func, "name", None),
+        )
+        mapped_type = self.directx_resource_declaration_type(mapped_type)
+        if self.is_hlsl_global_resource_type(mapped_type):
+            return mapped_type
+        return None
+
+    def is_hlsl_global_resource_type(self, mapped_type):
+        mapped_type = str(mapped_type)
+        return (
+            mapped_type.startswith("Texture")
+            or self.is_hlsl_feedback_texture_type(mapped_type)
+            or self.is_hlsl_rw_texture_type(mapped_type)
+            or self.is_multisample_storage_image_resource_type(mapped_type)
+            or self.is_hlsl_acceleration_structure_type(mapped_type)
+            or self.is_hlsl_uav_buffer_type(mapped_type)
+            or self.is_hlsl_constant_buffer_type(mapped_type)
+            or self.is_hlsl_texture_buffer_type(mapped_type)
+            or self.is_hlsl_readonly_buffer_type(mapped_type)
+            or mapped_type in ["SamplerState", "SamplerComparisonState"]
         )
 
     def hlsl_requires_rwtexture_cube_alias(self, variables):
