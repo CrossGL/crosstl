@@ -25271,6 +25271,67 @@ def test_legacy_single_file_cli_accepts_options_before_input(
     assert output.read_text(encoding="utf-8") == "// translated\n"
 
 
+def test_translate_project_opencl_targets_do_not_leak_resource_parameter_syntax(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "scale.cl").write_text(
+        textwrap.dedent("""
+            kernel void scale(global float *out,
+                              global const float *in,
+                              const float factor) {
+                uint i = get_global_id(0);
+                out[i] = in[i] * factor;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl", "directx", "metal"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("opengl", "translated"),
+        ("directx", "translated"),
+        ("metal", "translated"),
+    }
+
+    outputs = {
+        artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in payload["artifacts"]
+    }
+    combined = "\n".join(outputs.values())
+
+    assert "var<storage" not in combined
+    assert "read_write>" not in combined
+    assert ": group" not in combined
+    assert "[[group]]" not in combined
+
+    assert "layout(std430, binding = 0) buffer outBuffer { float out[]; };" in (
+        outputs["opengl"]
+    )
+    assert "layout(std140, binding = 2) uniform scale_Args" in outputs["opengl"]
+    assert "uint i = gl_GlobalInvocationID.x;" in outputs["opengl"]
+    assert not re.search(r"\b(?:f32|u32)\b", outputs["opengl"])
+
+    assert "RWStructuredBuffer<float> out : register(u0);" in outputs["directx"]
+    assert "StructuredBuffer<float> in_ : register(t1);" in outputs["directx"]
+    assert "RWStructuredBuffer<float> in_" not in outputs["directx"]
+    assert "cbuffer scale_Args : register(b2)" in outputs["directx"]
+    assert "[numthreads(1, 1, 1)]" in outputs["directx"]
+
+    assert "device float* out [[buffer(0)]]" in outputs["metal"]
+    assert "const device float* in_ [[buffer(1)]]" in outputs["metal"]
+    assert "constant scale_Args& scale_Args [[buffer(2)]]" in outputs["metal"]
+    assert "kernel void kernel_scale(" in outputs["metal"]
+
+
 def test_legacy_single_file_cli_still_works(tmp_path):
     shader = tmp_path / "simple.cgl"
     output = tmp_path / "simple.glsl"
