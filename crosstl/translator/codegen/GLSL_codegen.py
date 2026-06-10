@@ -3718,15 +3718,27 @@ class GLSLCodeGen:
             const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
             value = getattr(node, "value", None)
             value_code = self.generate_constant_expression(value)
-            layout = self.glsl_constant_layout_prefix(node)
+            constant_id = self.glsl_specialization_constant_id(node)
             declaration = format_c_style_array_declaration(
                 self.map_type(const_type), name
             )
-            code += f"{layout}const {declaration} = {value_code};\n"
+            if constant_id is not None:
+                code += (
+                    "/* CrossGL fallback: OpenGL source validation cannot preserve "
+                    f"specialization constant id {constant_id} for "
+                    f"'{name}'; using the default literal. */\n"
+                )
+            code += f"const {declaration} = {value_code};\n"
 
         return f"{code}\n" if code else ""
 
     def glsl_constant_layout_prefix(self, node):
+        constant_id = self.glsl_specialization_constant_id(node)
+        if constant_id is None:
+            return ""
+        return f"layout(constant_id = {constant_id}) "
+
+    def glsl_specialization_constant_id(self, node):
         constant_id = None
         for attr in getattr(node, "attributes", []) or []:
             attr_name = getattr(attr, "name", None)
@@ -3748,9 +3760,7 @@ class GLSLCodeGen:
                     f"'{name}': {constant_id} differs from {value}"
                 )
             constant_id = value
-        if constant_id is None:
-            return ""
-        return f"layout(constant_id = {constant_id}) "
+        return constant_id
 
     def generate_constant_expression(self, expr):
         value_code = self.generate_expression(expr)
@@ -7355,6 +7365,11 @@ class GLSLCodeGen:
         ).items():
             if name not in parameter_names:
                 self.current_stage_parameter_aliases.setdefault(name, alias)
+
+        if "output" not in parameter_names:
+            output_member_map = self.stage_output_member_map(entry_func, stage_context)
+            if output_member_map:
+                self.current_stage_outputs.setdefault("output", output_member_map)
 
     def stage_parameter_aliases(self, func, shader_type):
         if shader_type is None:

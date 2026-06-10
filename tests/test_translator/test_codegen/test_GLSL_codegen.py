@@ -79,7 +79,13 @@ def test_glsl_specialization_constant_metadata_emits_layout():
 
     generated = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "layout(constant_id = 0) const int LIGHTING_MODEL = 0;" in generated
+    assert "layout(constant_id" not in generated
+    assert (
+        "/* CrossGL fallback: OpenGL source validation cannot preserve "
+        "specialization constant id 0 for 'LIGHTING_MODEL'; using the default "
+        "literal. */"
+    ) in generated
+    assert "const int LIGHTING_MODEL = 0;" in generated
 
 
 def test_glsl_tile_image_ext_importer_attribute_roundtrips():
