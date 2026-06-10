@@ -37,4 +37,3 @@ vertex vertex_main_vs_Return vertex_main_vs(vertex_main_vs_Input _crossglInput [
     _crossglOutput.builtin_pos = builtin_pos;
     return _crossglOutput;
 }
-
