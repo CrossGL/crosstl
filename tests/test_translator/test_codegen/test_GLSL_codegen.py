@@ -322,6 +322,23 @@ def test_glsl_hlsl_graphics_builtin_parameter_aliases_to_glsl_builtins():
     assert "SV_InstanceID" not in generated
 
 
+def test_glsl_vertex_index_identifier_lowers_to_vertex_id_builtin():
+    code = """
+    shader VertexIndexAlias {
+        vertex {
+            void main() {
+                gl_Position = vec4(float(gl_VertexIndex), 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "vertex")
+
+    assert "float(gl_VertexID)" in generated
+    assert "gl_VertexIndex" not in generated
+
+
 def test_readonly_structured_buffer_uses_readonly_ssbo():
     code = """
     shader StructuredBufferGLSL {

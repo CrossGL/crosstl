@@ -948,6 +948,7 @@ class GLSLCodeGen:
         self.glsl_buffer_block_read_validation_suppression = 0
         self.semantic_map = {
             "gl_VertexID": "gl_VertexID",
+            "gl_VertexIndex": "gl_VertexID",
             "SV_VertexID": "gl_VertexID",
             "SV_VertexId": "gl_VertexID",
             "sv_vertex_id": "gl_VertexID",
@@ -9556,6 +9557,15 @@ class GLSLCodeGen:
             return self.generate_statement(init, 0).strip().rstrip(";")
         return self.generate_expression(init).strip().rstrip(";")
 
+    def glsl_target_builtin_identifier(self, name):
+        if (
+            normalize_stage_name(getattr(self, "current_stage_entry_type", None))
+            == "vertex"
+            and name == "gl_VertexIndex"
+        ):
+            return "gl_VertexID"
+        return name
+
     def generate_expression(self, expr, is_main=False):
         """Render a CrossGL AST expression into GLSL expression syntax."""
         if expr is None:
@@ -9574,7 +9584,9 @@ class GLSLCodeGen:
                     return enum_value_expression(self, expr.name)
                 if expr.name in self.current_identifier_aliases:
                     return self.current_identifier_aliases[expr.name]
-                return self.current_stage_parameter_aliases.get(expr.name, expr.name)
+                return self.current_stage_parameter_aliases.get(
+                    expr.name, self.glsl_target_builtin_identifier(expr.name)
+                )
             else:
                 return str(expr)
         elif hasattr(expr, "__class__") and "IdentifierNode" in str(type(expr)):
@@ -9584,7 +9596,9 @@ class GLSLCodeGen:
                 return enum_value_expression(self, expr.name)
             if expr.name in self.current_identifier_aliases:
                 return self.current_identifier_aliases[expr.name]
-            return self.current_stage_parameter_aliases.get(expr.name, expr.name)
+            return self.current_stage_parameter_aliases.get(
+                expr.name, self.glsl_target_builtin_identifier(expr.name)
+            )
         elif isinstance(expr, ArrayLiteralNode):
             elements = ", ".join(
                 self.generate_expression(element) for element in expr.elements
