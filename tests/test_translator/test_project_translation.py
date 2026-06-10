@@ -25,6 +25,7 @@ from crosstl.project import (
     build_runtime_loader_manifest,
     build_runtime_package,
     inspect_project_report,
+    inspect_runtime_host_integration_handoff,
     inspect_runtime_host_loader_scaffolds,
     inspect_runtime_package,
     load_project_config,
@@ -199,6 +200,7 @@ def test_project_package_exposes_public_api_surface():
         "build_runtime_host_integration_handoff",
         "build_runtime_loader_manifest",
         "build_runtime_package",
+        "inspect_runtime_host_integration_handoff",
         "inspect_runtime_host_loader_scaffolds",
         "inspect_runtime_package",
         "inspect_project_report",
@@ -25910,6 +25912,273 @@ def test_project_cli_host_integration_handoff_json_writes_output(tmp_path):
     assert payload["kind"] == project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_KIND
     assert payload["summary"]["generatedFileCount"] == 3
     assert (handoff_dir / "HOST_INTEGRATION.md").is_file()
+
+
+def _build_runtime_host_integration_handoff_fixture(tmp_path, targets=("cgl",)):
+    repo, plan_path, _ = _write_host_loader_consumption_plan_fixture(
+        tmp_path, targets=targets
+    )
+    handoff_dir = repo / "host-integration"
+    handoff_payload = build_runtime_host_integration_handoff(plan_path, handoff_dir)
+    return repo, handoff_dir, handoff_payload
+
+
+def test_inspect_runtime_host_integration_handoff_reports_ready_bundle(tmp_path):
+    _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+
+    payload = inspect_runtime_host_integration_handoff(
+        handoff_dir / "host-integration.json"
+    )
+
+    assert set(payload) == (
+        project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_FIELDS
+    )
+    assert (
+        payload["kind"]
+        == project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_KIND
+    )
+    assert payload["success"] is True
+    assert payload["status"] == "ready"
+    assert (
+        payload["scope"]
+        == project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_SCOPE
+    )
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_NON_GOALS
+    )
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "readyTargetCount": 1,
+        "blockedTargetCount": 0,
+        "failedTargetCount": 0,
+        "generatedFileCount": 3,
+        "verifiedGeneratedFileCount": 3,
+        "failedGeneratedFileCount": 0,
+        "loaderUnitCount": 1,
+        "actionCount": 6,
+        "requiredToolCount": 0,
+        "hostResponsibilityCount": 2,
+    }
+    assert set(payload["targets"][0]) == (
+        project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_TARGET_FIELDS
+    )
+    assert payload["targets"][0]["target"] == "cgl"
+    assert payload["targets"][0]["status"] == "ready"
+    assert payload["targets"][0]["fileStatus"] == "ready"
+    assert payload["targets"][0]["targetKind"] == (
+        "crosstl-runtime-host-integration-target"
+    )
+    assert payload["targets"][0]["targetStatus"] == "ready"
+    assert payload["targets"][0]["loaderUnitCount"] == 1
+    assert payload["targets"][0]["actionCount"] == 6
+    for generated_file in payload["generatedFiles"]:
+        assert set(generated_file) == (
+            project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_GENERATED_FILE_FIELDS
+        )
+        assert generated_file["status"] == "ready"
+        assert generated_file["diagnostics"] == []
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+
+
+def test_inspect_runtime_host_integration_handoff_detects_missing_target_file(
+    tmp_path,
+):
+    _, handoff_dir, handoff_payload = _build_runtime_host_integration_handoff_fixture(
+        tmp_path
+    )
+    target_path = handoff_dir / handoff_payload["targets"][0]["handoffFile"]
+    target_path.unlink()
+
+    payload = inspect_runtime_host_integration_handoff(
+        handoff_dir / "host-integration.json"
+    )
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["summary"]["failedTargetCount"] == 1
+    assert payload["summary"]["failedGeneratedFileCount"] == 1
+    assert payload["targets"][0]["status"] == "failed"
+    assert payload["targets"][0]["fileStatus"] == "failed"
+    assert (
+        "project.runtime-host-integration-handoff-inspection.target-missing"
+        in payload["targets"][0]["diagnostics"]
+    )
+    assert (
+        "project.runtime-host-integration-handoff-inspection.generated-file-missing"
+        in payload["generatedFiles"][2]["diagnostics"]
+    )
+
+
+def test_inspect_runtime_host_integration_handoff_rejects_unsafe_generated_path(
+    tmp_path,
+):
+    _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+    manifest_path = handoff_dir / "host-integration.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["generatedFiles"][0]["path"] = "../HOST_INTEGRATION.md"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    payload = inspect_runtime_host_integration_handoff(manifest_path)
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["summary"]["failedGeneratedFileCount"] == 1
+    assert payload["generatedFiles"][0]["status"] == "failed"
+    assert (
+        "project.runtime-host-integration-handoff-inspection."
+        "generated-file-path-outside-root"
+    ) in payload["generatedFiles"][0]["diagnostics"]
+
+
+def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch(
+    tmp_path,
+):
+    _, handoff_dir, handoff_payload = _build_runtime_host_integration_handoff_fixture(
+        tmp_path
+    )
+    target_path = handoff_dir / handoff_payload["targets"][0]["handoffFile"]
+    target_payload = json.loads(target_path.read_text(encoding="utf-8"))
+    target_payload["actions"].append(
+        {
+            "kind": "manual-runtime-integration",
+            "severity": "note",
+            "message": "Injected mismatch for inspection coverage.",
+        }
+    )
+    target_path.write_text(json.dumps(target_payload), encoding="utf-8")
+
+    payload = inspect_runtime_host_integration_handoff(
+        handoff_dir / "host-integration.json"
+    )
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["summary"]["failedTargetCount"] == 1
+    assert payload["targets"][0]["status"] == "failed"
+    assert payload["targets"][0]["fileStatus"] == "failed"
+    assert payload["targets"][0]["actionCount"] == 7
+    assert (
+        "project.runtime-host-integration-handoff-inspection."
+        "target-action-count-mismatch"
+    ) in payload["targets"][0]["diagnostics"]
+
+
+def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle(tmp_path):
+    _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
+        tmp_path, targets=("vulkan",)
+    )
+
+    payload = inspect_runtime_host_integration_handoff(
+        handoff_dir / "host-integration.json"
+    )
+
+    assert payload["success"] is True
+    assert payload["status"] == "blocked"
+    assert payload["summary"]["targetCount"] == 1
+    assert payload["summary"]["readyTargetCount"] == 0
+    assert payload["summary"]["blockedTargetCount"] == 1
+    assert payload["summary"]["failedTargetCount"] == 0
+    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["status"] == "blocked"
+    assert payload["targets"][0]["targetStatus"] == "blocked"
+    assert payload["targets"][0]["loaderUnitCount"] == 1
+    assert payload["targets"][0]["actionCount"] == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+
+
+def test_inspect_runtime_host_integration_handoff_rejects_wrong_manifest_kind(
+    tmp_path,
+):
+    manifest_path = tmp_path / "host-integration.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-runtime-host-loader-consumption-plan",
+                "success": True,
+                "targets": [],
+                "generatedFiles": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = inspect_runtime_host_integration_handoff(manifest_path)
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["summary"]["targetCount"] == 0
+    assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == (
+        "project.runtime-host-integration-handoff-inspection.manifest-kind-invalid"
+    )
+
+
+def test_project_cli_inspect_host_integration_handoff_text_outputs_readiness(
+    tmp_path,
+):
+    _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+    manifest_path = handoff_dir / "host-integration.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-host-integration-handoff",
+            str(manifest_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert (
+        f"Runtime host integration handoff inspection: {manifest_path}" in result.stdout
+    )
+    assert "Status: ready" in result.stdout
+    assert (
+        "Inspection scope: host-integration-handoff-readiness-inspection"
+        in result.stdout
+    )
+    assert "Summary: 1 targets, 1 ready, 0 blocked, 0 failed" in result.stdout
+    assert "Generated file checks:" in result.stdout
+    assert "Runtime host integration handoff targets:" in result.stdout
+
+
+def test_project_cli_inspect_host_integration_handoff_json_writes_output(tmp_path):
+    repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+    output_path = repo / "host-integration-handoff-inspection.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-host-integration-handoff",
+            str(handoff_dir / "host-integration.json"),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert (
+        payload["kind"]
+        == project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_KIND
+    )
+    assert payload["summary"]["readyTargetCount"] == 1
+    assert payload["generatedFiles"][0]["status"] == "ready"
 
 
 def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp_path):
