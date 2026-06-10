@@ -1570,10 +1570,11 @@
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "partial",
+          "notes": "CrossGL cbuffers lower to WGSL uniform structs with deterministic @group/@binding allocation, HLSL register/space metadata handling, and bare cbuffer-member access rewriting. Layout-specific packing metadata, duplicate explicit binding diagnostics, and target-invalid uniform-buffer shapes remain covered by deterministic diagnostics or future validation work.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_does_not_rewrite_shadowed_cbuffer_member_identifiers"
           ]
         }
       }
@@ -1674,10 +1675,10 @@
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "partial",
+          "notes": "StructuredBuffer and RWStructuredBuffer declarations lower to WGSL storage-buffer arrays with read/read_write access modes and deterministic binding allocation. Append/consume buffers, byte-address buffers, helper methods, and richer storage-resource layouts remain future work or deterministic diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_structured_buffers_to_storage_bindings"
           ]
         }
       }
@@ -1848,10 +1849,13 @@
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "partial",
+          "notes": "CrossGL sampled texture globals lower to WGSL texture bindings plus companion sampler bindings, standalone sampler globals lower to sampler bindings, stage-local resource declarations are emitted at module scope, and texture parameters receive companion sampler parameters with call-site sampler injection. Resource arrays, texture handles inside user structs, comparison samplers, storage images, and duplicate binding diagnostics remain deterministic diagnostics or future work.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_sampled_texture_resources_and_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_explicit_sampler_texture_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_emits_stage_local_resource_declarations",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls"
           ]
         }
       }
@@ -2003,10 +2007,12 @@
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "partial",
+          "notes": "Basic sampled texture calls lower to WGSL textureSample for combined texture/coords and explicit texture/sampler/coords forms, including helper texture parameters with companion sampler threading. Shadow comparison sampling, texture arrays, struct-held handles, and advanced sampling forms remain deterministic diagnostics or future work.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_sampled_texture_resources_and_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_explicit_sampler_texture_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls"
           ]
         }
       }
@@ -2119,10 +2125,10 @@
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "partial",
+          "notes": "Explicit textureLod calls lower to WGSL textureSampleLevel for implicit companion samplers and explicit sampler operands. Gradient, bias, offset, projected, shadow-compare, arrayed-resource, and target-invalid coordinate forms remain deterministic diagnostics or future work.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls"
           ]
         }
       }
@@ -2304,10 +2310,10 @@
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "partial",
+          "notes": "textureSize calls lower to WGSL textureDimensions for sampled texture resources with optional mip-level operands. LOD queries, level-count queries, sample-count queries, storage-image queries, multisample resources, and array/cube-array coordinate-specialization edge cases remain deterministic diagnostics or future work.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls"
           ]
         }
       }
@@ -9785,6 +9791,16 @@
           ]
         },
         "webgl": {
+          "status": "supported",
+          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, and hostResponsibilities metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_json_writes_output"
+          ]
+        },
+        "wgsl": {
           "status": "supported",
           "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, and hostResponsibilities metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [

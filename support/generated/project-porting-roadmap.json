@@ -265,15 +265,6 @@
       "status": "partial"
     },
     {
-      "backend": "WebGPU / WGSL",
-      "backend_id": "wgsl",
-      "category": "project",
-      "feature": "Runtime adapter plan",
-      "feature_id": "project.runtime_adapter_plan",
-      "notes": "No support status has been audited for this backend.",
-      "status": "unknown"
-    },
-    {
       "backend": "DirectX / HLSL",
       "backend_id": "directx",
       "category": "project",
@@ -5455,9 +5446,14 @@
           "status": "supported"
         },
         "wgsl": {
-          "evidence": [],
-          "notes": "No support status has been audited for this backend.",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_json_writes_output"
+          ],
+          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, and hostResponsibilities metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
         }
       }
     },
@@ -8398,7 +8394,7 @@
   "summary": {
     "backend_count": 11,
     "backlog": {
-      "backlog_count": 34,
+      "backlog_count": 33,
       "by_backend": {
         "cuda": 3,
         "directx": 3,
@@ -8410,16 +8406,16 @@
         "slang": 3,
         "vulkan": 3,
         "webgl": 3,
-        "wgsl": 4
+        "wgsl": 3
       },
       "by_category": {
-        "project": 34
+        "project": 33
       },
       "by_status": {
         "diagnostic": 0,
         "partial": 33,
         "supported": 0,
-        "unknown": 1,
+        "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       }
@@ -8509,8 +8505,8 @@
       "wgsl": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 12,
-        "unknown": 1,
+        "supported": 13,
+        "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       }

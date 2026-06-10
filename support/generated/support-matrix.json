@@ -343,7 +343,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 29,
+        "unsupported_marker_count": 32,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
@@ -372,6 +372,10 @@
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
             "text": "raise ValueError(f\"WGSL target does not support shader stage: {stage_name}\")"
+          },
+          {
+            "path": "crosstl/translator/codegen/wgsl_codegen.py",
+            "text": "\"WGSL target does not support StructuredBuffer parameters yet; \""
           },
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
@@ -415,15 +419,11 @@
           },
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "raise ValueError(\"WGSL target does not support do-while statements\")"
+            "text": "\"WGSL target does not support initializers for sampled texture \""
           },
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "raise ValueError(\"WGSL target does not support for-in statements\")"
-          },
-          {
-            "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "raise ValueError(\"WGSL target does not support match statements\")"
+            "text": "\"WGSL target does not support initializers for sampler resource \""
           }
         ]
       },
@@ -435,7 +435,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 21
+        "test_count": 30
       },
       "translator_codegen": {
         "exists": true,
@@ -1274,6 +1274,60 @@
   ],
   "backlog": [
     {
+      "backend": "WebGPU / WGSL",
+      "backend_id": "wgsl",
+      "category": "resources",
+      "feature": "Explicit and automatic resource bindings",
+      "feature_id": "resources.bindings",
+      "notes": "CrossGL cbuffers lower to WGSL uniform structs with deterministic @group/@binding allocation, HLSL register/space metadata handling, and bare cbuffer-member access rewriting. Layout-specific packing metadata, duplicate explicit binding diagnostics, and target-invalid uniform-buffer shapes remain covered by deterministic diagnostics or future validation work.",
+      "status": "partial"
+    },
+    {
+      "backend": "WebGPU / WGSL",
+      "backend_id": "wgsl",
+      "category": "resources",
+      "feature": "Constant/uniform buffers",
+      "feature_id": "resources.constant_buffers",
+      "notes": "StructuredBuffer and RWStructuredBuffer declarations lower to WGSL storage-buffer arrays with read/read_write access modes and deterministic binding allocation. Append/consume buffers, byte-address buffers, helper methods, and richer storage-resource layouts remain future work or deterministic diagnostics.",
+      "status": "partial"
+    },
+    {
+      "backend": "WebGPU / WGSL",
+      "backend_id": "wgsl",
+      "category": "resources",
+      "feature": "Structured/storage buffers",
+      "feature_id": "resources.structured_buffers",
+      "notes": "CrossGL sampled texture globals lower to WGSL texture bindings plus companion sampler bindings, standalone sampler globals lower to sampler bindings, stage-local resource declarations are emitted at module scope, and texture parameters receive companion sampler parameters with call-site sampler injection. Resource arrays, texture handles inside user structs, comparison samplers, storage images, and duplicate binding diagnostics remain deterministic diagnostics or future work.",
+      "status": "partial"
+    },
+    {
+      "backend": "WebGPU / WGSL",
+      "backend_id": "wgsl",
+      "category": "resources",
+      "feature": "Resource arrays",
+      "feature_id": "resources.resource_arrays",
+      "notes": "Basic sampled texture calls lower to WGSL textureSample for combined texture/coords and explicit texture/sampler/coords forms, including helper texture parameters with companion sampler threading. Shadow comparison sampling, texture arrays, struct-held handles, and advanced sampling forms remain deterministic diagnostics or future work.",
+      "status": "partial"
+    },
+    {
+      "backend": "WebGPU / WGSL",
+      "backend_id": "wgsl",
+      "category": "resources",
+      "feature": "Texture and sampler object model",
+      "feature_id": "resources.texture_sampler_split",
+      "notes": "Explicit textureLod calls lower to WGSL textureSampleLevel for implicit companion samplers and explicit sampler operands. Gradient, bias, offset, projected, shadow-compare, arrayed-resource, and target-invalid coordinate forms remain deterministic diagnostics or future work.",
+      "status": "partial"
+    },
+    {
+      "backend": "WebGPU / WGSL",
+      "backend_id": "wgsl",
+      "category": "resources",
+      "feature": "GLSL buffer block lowering",
+      "feature_id": "resources.glsl_buffer_blocks",
+      "notes": "textureSize calls lower to WGSL textureDimensions for sampled texture resources with optional mip-level operands. LOD queries, level-count queries, sample-count queries, storage-image queries, multisample resources, and array/cube-array coordinate-specialization edge cases remain deterministic diagnostics or future work.",
+      "status": "partial"
+    },
+    {
       "backend": "DirectX / HLSL",
       "backend_id": "directx",
       "category": "project",
@@ -1536,15 +1590,6 @@
       "next_scope": "Document and expand backend-native macro semantic coverage, including macro forms that are translated, preserved, or rejected with diagnostics for each source frontend.",
       "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, selected-variant lists, and per-variant define counts, records report CLI variant metadata, records each artifact applied define map and define-processing status (forwarded, not-requested, or not-supported) with source frontend support metadata, emits warning diagnostics and missing-capability rollups when configured defines cannot be forwarded by a source frontend, emits scan-time diagnostics for active #error and #warning directives scoped by project and selected variant conditionals, emits warning diagnostics when active #define or #undef directives in translation units or resolved include files shadow configured project or selected variant define names while ignoring block-commented directives, inspection summaries and text output expose variant names, selected-variant summaries for scoped runs, and per-variant define counts without define values plus define-processing status, target, source-backend, and variant rollups plus sampled define-processing artifact metadata with define names, deterministic define fingerprints, and without define values, validates malformed define/variant metadata including empty mapping keys, punctuation-bearing variant keys in config/report diagnostics, and forged variant define counts, duplicate selected variant metadata, undeclared artifact and validation-record variants, missing artifact define maps, artifact define maps that do not match base defines merged with the artifact variant, malformed or forged artifact define-processing metadata including unexpected generated processing fields, and define-processing summary rollup mismatches including target and variant rollups, missing define-processing target and variant rollups, rejects malformed define, variant, and selected-variant TOML values before scan, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, verifies define-forwarding metadata for every registered source frontend, applies object-like define expansion and #if/#ifdef/#ifndef/#elif/#else/#endif branch selection in the CrossGL source frontend when defines are provided, applies named-variant define maps through OpenGL/GLSL native preprocessing during project translation, applies named-variant define maps through DirectX/HLSL native preprocessing during project translation, applies named-variant define maps through Metal/MSL native preprocessing during project translation, applies named-variant define maps through CUDA/HIP native preprocessing during project translation, applies named-variant define maps through Slang native preprocessing during project translation, applies named-variant define maps through Vulkan native preprocessing during project translation, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides, and supports configured selected_variants defaults plus API, scan/report CLI, and translation CLI scoped runs for selected declared variants, de-duplicates repeated selections before scan or artifact planning, and does not claim omitted variants as attempted, and sanitizes unsafe variant names into stable output path segments while retaining original variant labels in reports and validation rollups. Native preprocessor semantics remain backend-dependent, so this remains partial project support. Project inspection exposes project-level define names and deterministic define fingerprints, variant define names, and deterministic per-variant define fingerprints without define values. Define-processing inspection summaries expose redacted project define names, deterministic define fingerprints, selected variant names, per-variant define records, and artifact effective define fingerprints without define values.",
       "status": "partial"
-    },
-    {
-      "backend": "WebGPU / WGSL",
-      "backend_id": "wgsl",
-      "category": "project",
-      "feature": "Runtime adapter plan",
-      "feature_id": "project.runtime_adapter_plan",
-      "notes": "No support status has been audited for this backend.",
-      "status": "unknown"
     },
     {
       "backend": "DirectX / HLSL",
@@ -3305,10 +3350,11 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_does_not_rewrite_shadowed_cbuffer_member_identifiers"
           ],
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
-          "status": "diagnostic"
+          "notes": "CrossGL cbuffers lower to WGSL uniform structs with deterministic @group/@binding allocation, HLSL register/space metadata handling, and bare cbuffer-member access rewriting. Layout-specific packing metadata, duplicate explicit binding diagnostics, and target-invalid uniform-buffer shapes remain covered by deterministic diagnostics or future validation work.",
+          "status": "partial"
         }
       }
     },
@@ -3412,10 +3458,10 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_structured_buffers_to_storage_bindings"
           ],
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
-          "status": "diagnostic"
+          "notes": "StructuredBuffer and RWStructuredBuffer declarations lower to WGSL storage-buffer arrays with read/read_write access modes and deterministic binding allocation. Append/consume buffers, byte-address buffers, helper methods, and richer storage-resource layouts remain future work or deterministic diagnostics.",
+          "status": "partial"
         }
       }
     },
@@ -3586,10 +3632,13 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_sampled_texture_resources_and_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_explicit_sampler_texture_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_emits_stage_local_resource_declarations",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls"
           ],
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
-          "status": "diagnostic"
+          "notes": "CrossGL sampled texture globals lower to WGSL texture bindings plus companion sampler bindings, standalone sampler globals lower to sampler bindings, stage-local resource declarations are emitted at module scope, and texture parameters receive companion sampler parameters with call-site sampler injection. Resource arrays, texture handles inside user structs, comparison samplers, storage images, and duplicate binding diagnostics remain deterministic diagnostics or future work.",
+          "status": "partial"
         }
       }
     },
@@ -3741,10 +3790,12 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_sampled_texture_resources_and_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_explicit_sampler_texture_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls"
           ],
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
-          "status": "diagnostic"
+          "notes": "Basic sampled texture calls lower to WGSL textureSample for combined texture/coords and explicit texture/sampler/coords forms, including helper texture parameters with companion sampler threading. Shadow comparison sampling, texture arrays, struct-held handles, and advanced sampling forms remain deterministic diagnostics or future work.",
+          "status": "partial"
         }
       }
     },
@@ -3857,10 +3908,10 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls"
           ],
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
-          "status": "diagnostic"
+          "notes": "Explicit textureLod calls lower to WGSL textureSampleLevel for implicit companion samplers and explicit sampler operands. Gradient, bias, offset, projected, shadow-compare, arrayed-resource, and target-invalid coordinate forms remain deterministic diagnostics or future work.",
+          "status": "partial"
         }
       }
     },
@@ -4043,10 +4094,10 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls"
           ],
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
-          "status": "diagnostic"
+          "notes": "textureSize calls lower to WGSL textureDimensions for sampled texture resources with optional mip-level operands. LOD queries, level-count queries, sample-count queries, storage-image queries, multisample resources, and array/cube-array coordinate-specialization edge cases remain deterministic diagnostics or future work.",
+          "status": "partial"
         }
       }
     },
@@ -11637,9 +11688,14 @@
           "status": "supported"
         },
         "wgsl": {
-          "evidence": [],
-          "notes": "No support status has been audited for this backend.",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_json_writes_output"
+          ],
+          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, and hostResponsibilities metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
         }
       }
     },
@@ -14595,7 +14651,7 @@
   },
   "summary": {
     "backend_count": 11,
-    "backlog_count": 34,
+    "backlog_count": 39,
     "feature_count": 60,
     "status_counts": {
       "cuda": {
@@ -14679,10 +14735,10 @@
         "validated_rejection": 9
       },
       "wgsl": {
-        "diagnostic": 25,
-        "partial": 3,
-        "supported": 24,
-        "unknown": 1,
+        "diagnostic": 19,
+        "partial": 9,
+        "supported": 25,
+        "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 7
       }
