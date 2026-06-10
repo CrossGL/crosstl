@@ -63,6 +63,59 @@ def assert_spirv_asm_validates_if_available(spv_code, tmp_path):
     assert validate.returncode == 0, validate.stderr
 
 
+def assert_metal_validates_if_available(metal_code, tmp_path):
+    xcrun = shutil.which("xcrun")
+    if not xcrun:
+        return
+
+    probe = subprocess.run(
+        [xcrun, "-sdk", "macosx", "-f", "metal"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if probe.returncode != 0:
+        return
+
+    shader_path = tmp_path / "shader.metal"
+    output_path = tmp_path / "shader.air"
+    shader_path.write_text(metal_code, encoding="utf-8")
+
+    compile_result = subprocess.run(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compile_result.returncode == 0, compile_result.stderr
+
+
+def assert_guarded_glsl_validates_if_available(glsl_code, tmp_path):
+    glslang = shutil.which("glslangValidator")
+    if not glslang:
+        return
+
+    shader_path = tmp_path / "shader.glsl"
+    shader_path.write_text(glsl_code, encoding="utf-8")
+    for stage in ("vert", "frag"):
+        result = subprocess.run(
+            [glslang, "-S", stage, str(shader_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
 SIMPLE_CROSSL = textwrap.dedent("""
     shader RepoShader {
         struct VertexInput {
@@ -4289,6 +4342,112 @@ def test_translate_project_honors_source_backend_overrides(tmp_path):
     assert payload["units"][0]["sourceOverride"] == "cgl"
     assert payload["artifacts"][0]["sourceBackend"] == "cgl"
     assert payload["artifacts"][0]["path"] == "translated/opengl/gpu/kernel.glsl"
+
+
+def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "hello_texture.hlsl").write_text(
+        textwrap.dedent("""
+            struct PSInput
+            {
+                float4 position : SV_POSITION;
+                float2 uv : TEXCOORD;
+            };
+
+            Texture2D g_texture : register(t0);
+            SamplerState g_sampler : register(s0);
+
+            PSInput VSMain(float4 position : POSITION, float2 uv : TEXCOORD)
+            {
+                PSInput result;
+                result.position = position;
+                result.uv = uv;
+                return result;
+            }
+
+            float4 PSMain(PSInput input) : SV_TARGET
+            {
+                return g_texture.Sample(g_sampler, input.uv);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu"]
+            include = ["gpu/*.hlsl"]
+            targets = ["cgl", "opengl", "metal", "directx", "vulkan"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    cgl = (repo / "translated" / "cgl" / "gpu" / "hello_texture.cgl").read_text(
+        encoding="utf-8"
+    )
+    opengl = (repo / "translated" / "opengl" / "gpu" / "hello_texture.glsl").read_text(
+        encoding="utf-8"
+    )
+    metal = (repo / "translated" / "metal" / "gpu" / "hello_texture.metal").read_text(
+        encoding="utf-8"
+    )
+    directx = (
+        repo / "translated" / "directx" / "gpu" / "hello_texture.hlsl"
+    ).read_text(encoding="utf-8")
+    vulkan = (
+        repo / "translated" / "vulkan" / "gpu" / "hello_texture.spvasm"
+    ).read_text(encoding="utf-8")
+
+    assert payload["summary"]["unitCount"] == 1
+    assert payload["summary"]["translatedCount"] == 5
+    assert payload["summary"]["failedCount"] == 0
+    assert len(payload["artifacts"]) == 5
+
+    assert "PSInput VSMain(vec4 position @ Position, vec2 uv @ TexCoord)" in cgl
+    assert "vec4 PSMain(PSInput input) @ gl_FragColor @ stage_entry" in cgl
+    assert "return texture(g_texture, g_sampler, input.uv);" in cgl
+
+    assert "struct VSMain_Input" in metal
+    assert "float4 position [[attribute(0)]];" in metal
+    assert "float2 uv [[attribute(4)]];" in metal
+    assert "VSMain_Input _crossglInput [[stage_in]]" in metal
+    assert "float4 position = _crossglInput.position;" in metal
+    assert "float2 uv = _crossglInput.uv;" in metal
+    assert "fragment float4 PSMain(PSInput input [[stage_in]]" in metal
+    assert "g_texture.sample(g_sampler, input.uv)" in metal
+    assert "[[Position]]" not in metal
+    assert "[[TexCoord]]" not in metal
+    assert "fragment void fragment_main" not in metal
+
+    assert "layout(location = 4) out vec2 out_uv;" in opengl
+    assert "layout(location = 4) in vec2 in_out_uv;" in opengl
+    assert "layout(location = 0) out vec4 fragColor;" in opengl
+    assert "fragColor = texture(g_texture, in_out_uv);" in opengl
+    assert "vec4 PSMain(PSInput input)" not in opengl
+    assert "void main() {\n}" not in opengl
+    assert "PSInput" not in opengl
+
+    assert "float4 PSMain(PSInput input): SV_TARGET" in directx
+    assert "g_texture.Sample(g_sampler, input.uv)" in directx
+    assert "void PSMain_2()" not in directx
+
+    assert "OpEntryPoint Fragment" in vulkan
+    assert '"PSMain"' in vulkan
+    assert "BuiltIn FragCoord" in vulkan
+    assert "OpImageSampleImplicitLod" in vulkan
+    assert "WARNING: SPIR-V builtin gl_Position" not in vulkan
+
+    assert_metal_validates_if_available(metal, tmp_path)
+    assert_guarded_glsl_validates_if_available(opengl, tmp_path)
+    assert_spirv_asm_validates_if_available(vulkan, tmp_path)
 
 
 def test_translate_project_preserves_anonymous_glsl_ssbo_shape_for_targets(tmp_path):
