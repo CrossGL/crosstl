@@ -11230,9 +11230,14 @@ class VulkanSPIRVCodeGen:
                 self.local_variables[param_name] = variable
                 continue
 
-            initial_value = self.entry_point_parameter_value(
-                param, param_value_type, execution_model
-            )
+            if self.is_bound_uniform_value_parameter(param, execution_model):
+                initial_value = self.entry_point_uniform_parameter_value(
+                    param, param_value_type
+                )
+            else:
+                initial_value = self.entry_point_parameter_value(
+                    param, param_value_type, execution_model
+                )
             local_variable = self.create_variable(
                 param_value_type, "Function", param_name
             )
@@ -11247,6 +11252,27 @@ class VulkanSPIRVCodeGen:
         return {
             str(qualifier).lower()
             for qualifier in getattr(param, "resource_qualifiers", []) or []
+        }
+
+    def is_bound_uniform_value_parameter(
+        self, param, execution_model: Optional[str]
+    ) -> bool:
+        if execution_model != "GLCompute":
+            return False
+        if self.explicit_interface_integer_attribute(param, "binding") is None:
+            return False
+        qualifiers = self.parameter_qualifier_names(param)
+        qualifiers.update(self.resource_parameter_qualifier_names(param))
+        if not qualifiers & {"uniform", "constant"}:
+            return False
+
+        param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+        type_name = self.type_name_from_value(param_type)
+        return self.normalize_primitive_name(type_name) in {
+            "float",
+            "double",
+            "int",
+            "uint",
         }
 
     def is_storage_resource_parameter(self, param) -> bool:
@@ -11272,6 +11298,31 @@ class VulkanSPIRVCodeGen:
         )
         type_name = self.type_name_from_value(variable.var_type)
         return self.process_glsl_buffer_block_declaration(variable, type_name)
+
+    def entry_point_uniform_parameter_value(
+        self, param, param_value_type: SpirvId
+    ) -> SpirvId:
+        param_name = getattr(param, "name", None) or "param"
+        member_type = self.storage_layout_type(param_value_type, "std140")
+        block_name = f"{self.current_function_name}_{param_name}UniformBlock"
+        block_type = self.register_struct_type(block_name, [(member_type, param_name)])
+        self.decorate_cbuffer_type(block_type, [(member_type, param_name)])
+
+        var_id = self.create_variable(block_type, "Uniform", f"{param_name}Uniform")
+        descriptor_set, binding = self.resource_descriptor_slot(param)
+        self.decorations.append(
+            f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
+        )
+        self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+        self.uniform_buffers.append(var_id)
+
+        int_type = self.register_primitive_type("int")
+        index = self.register_constant(0, int_type)
+        ptr_type = self.register_pointer_type(member_type, "Uniform")
+        member_pointer = self.access_chain(var_id, [index], ptr_type)
+        self.variable_value_types[member_pointer.id] = member_type
+        loaded = self.get_variable_value(member_pointer)
+        return self.convert_value_to_type(loaded, param_value_type)
 
     def entry_point_parameter_value(
         self, param, param_value_type: SpirvId, execution_model: Optional[str]

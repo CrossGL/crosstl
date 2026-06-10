@@ -106,6 +106,20 @@ class HipToCrossGLConverter:
         "float1": "f32",
         "double1": "f64",
     }
+    CROSSL_SCALAR_TYPES = {
+        "bool",
+        "f16",
+        "f32",
+        "f64",
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+    }
     VECTOR_CONSTRUCTOR_MAPPING = {
         **VECTOR1_TYPE_MAPPING,
         **VECTOR_TYPE_MAPPING,
@@ -4585,6 +4599,11 @@ class HipToCrossGLConverter:
     def visit_HipProgramNode(self, node):
         """Render a HIP program AST as a CrossGL shader block."""
         self.emit("// HIP to CrossGL conversion")
+        has_kernel = any(
+            isinstance(stmt, FunctionNode)
+            and "__global__" in getattr(stmt, "qualifiers", [])
+            for stmt in node.statements
+        )
 
         for stmt in node.statements:
             if isinstance(stmt, FunctionNode):
@@ -4596,6 +4615,8 @@ class HipToCrossGLConverter:
                     self.emit(f"// Kernel: {stmt.name}")
                     self.visit_kernel_as_compute_shader(stmt)
                 else:
+                    if has_kernel and stmt.name == "main":
+                        continue
                     self.emit(f"// Function: {stmt.name}")
                     self.visit(stmt)
                 self.emit("")
@@ -4774,7 +4795,13 @@ class HipToCrossGLConverter:
                         output_name = self.register_identifier_name(param_name)
                         self.register_vector1_name(param_name, raw_type)
                         self.register_variable_type(param_name, param_type)
-                        params.append(f"{param_type} {output_name}")
+                        if self.is_crossgl_scalar_type(param_type):
+                            params.append(
+                                f"@group(0) @binding({len(params)}) "
+                                f"var<uniform> {output_name}: {param_type}"
+                            )
+                        else:
+                            params.append(f"{param_type} {output_name}")
 
             kernel_name = self.format_function_declaration_name(kernel.name)
             self.emit(f"fn {kernel_name}(")
@@ -4815,6 +4842,9 @@ class HipToCrossGLConverter:
             self.pop_identifier_name_scope()
             self.pop_variable_type_scope()
             self.pop_resource_object_hint_scope()
+
+    def is_crossgl_scalar_type(self, type_name):
+        return str(type_name).strip() in self.CROSSL_SCALAR_TYPES
 
     def visit_StructNode(self, node):
         if getattr(node, "is_union", False):
