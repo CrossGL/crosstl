@@ -2,7 +2,7 @@
 
 from copy import copy
 
-from ..ast import StageMap
+from ..ast import FunctionCallNode, StageMap
 from .GLSL_codegen import GLSLCodeGen
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
@@ -35,6 +35,66 @@ class WebGLCodeGen(GLSLCodeGen):
 
     def glsl_resource_binding_layouts_supported(self, version_line):
         return False
+
+    def glsl_dynamic_resource_call_dispatch_info(self, expr):
+        dispatch = super().glsl_dynamic_resource_call_dispatch_info(expr)
+        if dispatch is not None:
+            return dispatch
+        if not isinstance(expr, FunctionCallNode):
+            return None
+
+        func_name = self.function_call_name(expr)
+        if not func_name:
+            return None
+        args = list(getattr(expr, "arguments", getattr(expr, "args", [])) or [])
+        dynamic_info = self.webgl_dynamic_sampler_array_call_info(func_name, args)
+        if dynamic_info is None:
+            return None
+
+        cases = []
+        for index in range(dynamic_info["array_size"]):
+            static_args = list(args)
+            static_args[dynamic_info["arg_index"]] = (
+                self.glsl_static_array_access_argument(dynamic_info, index)
+            )
+            rendered_args = ", ".join(
+                self.generate_function_call_arguments(func_name, static_args)
+            )
+            cases.append((index, f"{func_name}({rendered_args})"))
+
+        return {
+            "index_expr": dynamic_info["index_expr"],
+            "cases": cases,
+            "return_type": self.expression_result_type(expr),
+        }
+
+    def webgl_dynamic_sampler_array_call_info(self, func_name, args):
+        callee = self.function_definitions.get(func_name)
+        if callee is None:
+            return None
+
+        params = list(getattr(callee, "parameters", getattr(callee, "params", [])))
+        dynamic_arg = None
+        for index, (param, arg) in enumerate(zip(params, args or [])):
+            param_type = self.type_name_string(
+                getattr(param, "param_type", getattr(param, "vtype", None))
+            )
+            if not self.is_sampled_texture_type(param_type):
+                continue
+            dynamic_info = self.glsl_dynamic_resource_array_access_info(
+                arg,
+                self.current_resource_aliases,
+            )
+            if dynamic_info is None:
+                continue
+            if dynamic_arg is not None:
+                return None
+            dynamic_arg = {
+                "arg_index": index,
+                **dynamic_info,
+            }
+
+        return dynamic_arg
 
     def should_emit_stage_io_layout(self, stage_name, direction):
         if normalize_stage_name(stage_name) == "fragment" and direction == "in":

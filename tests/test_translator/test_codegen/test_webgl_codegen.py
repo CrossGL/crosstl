@@ -191,6 +191,41 @@ def test_webgl_codegen_casts_texture_size_for_float_vector_arithmetic():
     assert "vec2 texelSize = (1.0 / vec2(textureSize(shadowMap, 0)));" in generated
 
 
+def test_webgl_codegen_lowers_dynamic_sampler_array_helper_call():
+    shader = """
+    shader WebGLDynamicSamplerArray {
+        const int MAP_COUNT = 2;
+
+        float sampleShadow(sampler2D shadowMap, vec2 uv) {
+            return texture(shadowMap, uv).r;
+        }
+
+        fragment {
+            uniform sampler2D shadowMaps[MAP_COUNT];
+            uniform int shadowIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                float shadow = 0.0;
+                shadow = sampleShadow(shadowMaps[shadowIndex], uv);
+                return vec4(shadow);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "sampleShadow(shadowMaps[shadowIndex]" not in generated
+    assert "float shadow = 0.0;" in generated
+    assert "switch (shadowIndex)" in generated
+    assert "case 0:" in generated
+    assert "shadow = sampleShadow(shadowMaps[0], uv);" in generated
+    assert "case 1:" in generated
+    assert "shadow = sampleShadow(shadowMaps[1], uv);" in generated
+    assert "default:" in generated
+    assert "shadow = 0.0;" in generated
+
+
 def test_webgl_aliases_format_as_glsl():
     assert format_shader_code("void main(){}", "webgl") == format_shader_code(
         "void main(){}", "glsl"
