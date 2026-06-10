@@ -213,7 +213,7 @@ EXTERNAL_FIXTURES = [
         contains=(
             "groupshared int a;",
             "@ numthreads(64, 1, 1)",
-            "ivec4 x = a.xxxx;",
+            "ivec4 x = ivec4(a);",
         ),
     ),
     ExternalFixture(
@@ -237,6 +237,7 @@ EXTERNAL_FIXTURES = [
         contains=(
             "groupshared vec4 SharedArr[64];",
             "void fn_(vec4 Arr[64], float F)",
+            "vec4 tmp = vec4(F);",
             "fn_(SharedArr, 6.0);",
         ),
     ),
@@ -763,9 +764,9 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "static const vec4 a = (1.5).xxxx;",
-            "static const vec4 b = (2).xxxx;",
-            "static const ivec4 c = (3.5).xxxx;",
+            "static const vec4 a = vec4(1.5);",
+            "static const vec4 b = vec4(2);",
+            "static const ivec4 c = ivec4(3.5);",
             "return (a + b) + c;",
         ),
     ),
@@ -903,8 +904,8 @@ EXTERNAL_FIXTURES = [
             "uint v2;",
             "ConstantBuffer<MyStruct> myConstBuff;",
             "StructuredBuffer<MyStruct> myStructBuff;",
-            "vec4 temp1 = myStructBuff[0].v2.xxxx;",
-            "vec4 temp2 = myConstBuff.v2.xxxx;",
+            "vec4 temp1 = vec4(myStructBuff[0].v2);",
+            "vec4 temp2 = vec4(myConstBuff.v2);",
         ),
     ),
     ExternalFixture(

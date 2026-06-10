@@ -1560,7 +1560,12 @@ class GLSLToCrossGLConverter:
 
     def semantic_attribute_suffix(self, semantic):
         mapped = self.map_hlsl_style_semantic(semantic)
-        return f" @ {mapped}" if mapped else ""
+        return f" {self.crossgl_attribute_reference(mapped)}" if mapped else ""
+
+    def crossgl_attribute_reference(self, name):
+        if name in CROSSGL_RESERVED_IDENTIFIERS:
+            return f"@{name}"
+        return f"@ {name}"
 
     def map_hlsl_style_semantic(self, semantic):
         if not semantic:
@@ -2672,7 +2677,8 @@ class GLSLToCrossGLConverter:
                     result += (
                         self.indent()
                         + f"{output_type} main({input_parameter})"
-                        + f"{output_attributes} @ {output_name}"
+                        + f"{output_attributes} "
+                        + self.crossgl_attribute_reference(output_name)
                     )
             elif self.shader_type in self.NON_STRUCT_STAGE_TYPES:
                 result += self.indent() + "void main()"

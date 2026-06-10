@@ -635,6 +635,7 @@ class MetalCodeGen:
         self.metal_resource_binding_indices_by_id = {}
         self.metal_source_binding_stage_by_id = {}
         self.metal_program_scope_value_globals = set()
+        self.metal_program_scope_groupshared_globals = set()
         self.metal_program_scope_value_global_types = {}
         self.cbuffer_variables = []
         self.cbuffer_binding_indices = {}
@@ -1199,6 +1200,7 @@ class MetalCodeGen:
         self.metal_buffer_resource_variables = []
         self.metal_resource_binding_indices_by_id = {}
         self.metal_program_scope_value_globals = set()
+        self.metal_program_scope_groupshared_globals = set()
         self.metal_program_scope_value_global_types = {}
         self.glsl_buffer_block_variables = []
         self.lowered_glsl_buffer_blocks = {}
@@ -2089,7 +2091,9 @@ class MetalCodeGen:
                     declaration = f"{declaration}{array_suffix}"
                 qualifier = self.global_variable_qualifier(node)
                 declaration = f"{qualifier}{declaration}"
-                self.record_metal_program_scope_value_global(var_name, vtype, qualifier)
+                self.record_metal_program_scope_value_global(
+                    var_name, vtype, qualifier, node
+                )
                 initial_value = getattr(node, "initial_value", None)
                 if initial_value is not None:
                     expected_type = getattr(node, "var_type", vtype)
@@ -2098,7 +2102,10 @@ class MetalCodeGen:
                     )
                     code += f"{declaration} = {init_expr};\n"
                 elif self.global_value_variable_requires_initializer(qualifier):
-                    code += f"{self.metal_program_scope_global_initializer_diagnostic(var_name)}\n"
+                    diagnostic = self.metal_program_scope_global_initializer_diagnostic(
+                        var_name, node
+                    )
+                    code += f"{diagnostic}\n"
                     init_expr = self.metal_program_scope_global_default_initializer(
                         mapped_type, array_suffix
                     )
@@ -5776,10 +5783,28 @@ class MetalCodeGen:
             return "constant "
         return "constant "
 
-    def record_metal_program_scope_value_global(self, name, vtype, qualifier):
+    def is_program_scope_groupshared_global(self, node):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        attributes = {
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(node, "attributes", []) or []
+        }
+        return bool(
+            (qualifiers | attributes)
+            & {"groupshared", "shared", "threadgroup", "workgroup"}
+        )
+
+    def record_metal_program_scope_value_global(
+        self, name, vtype, qualifier, node=None
+    ):
         if not name or not self.global_value_variable_requires_initializer(qualifier):
             return
         self.metal_program_scope_value_globals.add(name)
+        if self.is_program_scope_groupshared_global(node):
+            self.metal_program_scope_groupshared_globals.add(name)
         self.metal_program_scope_value_global_types[name] = self.type_name_string(vtype)
 
     def global_value_variable_requires_initializer(self, qualifier):
@@ -5793,7 +5818,13 @@ class MetalCodeGen:
             return "{}"
         return self.metal_default_value_expression(mapped_type)
 
-    def metal_program_scope_global_initializer_diagnostic(self, name):
+    def metal_program_scope_global_initializer_diagnostic(self, name, node=None):
+        if self.is_program_scope_groupshared_global(node):
+            return (
+                "/* unsupported Metal program-scope groupshared global: "
+                f"'{name}' cannot be emitted as Metal threadgroup storage at "
+                "program scope; using constant zero placeholder */"
+            )
         return (
             "/* unsupported Metal program-scope global initializer: "
             f"'{name}' needs an initializer in the constant address space; "
@@ -12108,6 +12139,12 @@ class MetalCodeGen:
         ):
             return None
         target_name = self.assignment_target_display_name(target) or root_name
+        if root_name in self.metal_program_scope_groupshared_globals:
+            return (
+                "/* unsupported Metal program-scope groupshared store: global "
+                f"'{target_name}' cannot be written because Metal threadgroup "
+                "storage must be declared inside a kernel */"
+            )
         return (
             "/* unsupported Metal program-scope global store: global "
             f"'{target_name}' is emitted in the constant address space */"
