@@ -431,7 +431,10 @@ lists ready package bindings by target with ``adapterKind``, ``artifactFormat``,
 ``requiredTools``, ``hostResponsibilities``, source-remap handoff paths,
 parser-derived ``hostInterface`` entry point and resource summaries where the
 packaged artifact frontend is available, and ``wire-runtime-adapter`` actions
-for host loader or build-system tooling. It also carries through package
+for host loader or build-system tooling. When host interface metadata is
+unavailable or not ready, the plan emits ``resolve-host-interface-metadata``
+actions so host and build tooling can provide reflection or backend-specific
+binding metadata before wiring the adapter. It also carries through package
 inspection diagnostics and
 ``review-runtime-references`` actions when the source repository contained
 runtime API references. The plan is a target-scoped integration contract; it

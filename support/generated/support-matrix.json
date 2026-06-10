@@ -10608,101 +10608,121 @@
         "cuda": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_json_writes_output"
           ],
-          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling, and emits resolve-host-interface-metadata actions when packaged artifact interface metadata is unavailable or not ready. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "directx": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_json_writes_output"
           ],
-          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling, and emits resolve-host-interface-metadata actions when packaged artifact interface metadata is unavailable or not ready. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "hip": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_json_writes_output"
           ],
-          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling, and emits resolve-host-interface-metadata actions when packaged artifact interface metadata is unavailable or not ready. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "metal": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_json_writes_output"
           ],
-          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling, and emits resolve-host-interface-metadata actions when packaged artifact interface metadata is unavailable or not ready. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "mojo": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_json_writes_output"
           ],
-          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling, and emits resolve-host-interface-metadata actions when packaged artifact interface metadata is unavailable or not ready. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "opengl": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_json_writes_output"
           ],
-          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling, and emits resolve-host-interface-metadata actions when packaged artifact interface metadata is unavailable or not ready. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "rust": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_json_writes_output"
           ],
-          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling, and emits resolve-host-interface-metadata actions when packaged artifact interface metadata is unavailable or not ready. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "slang": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_json_writes_output"
           ],
-          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling, and emits resolve-host-interface-metadata actions when packaged artifact interface metadata is unavailable or not ready. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "vulkan": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_json_writes_output"
           ],
-          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling, and emits resolve-host-interface-metadata actions when packaged artifact interface metadata is unavailable or not ready. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "webgl": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_json_writes_output"
           ],
-          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, hostResponsibilities, and hostInterface metadata for ready bindings, preserves source-remap handoff paths, emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling, and emits resolve-host-interface-metadata actions when packaged artifact interface metadata is unavailable or not ready. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         }
       }
