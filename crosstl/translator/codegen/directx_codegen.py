@@ -6928,9 +6928,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             root, target_stage, self.stage_entry_types()
         )
         for _, _stage_name, func in entries:
-            for parameter in getattr(
-                func, "parameters", getattr(func, "params", [])
-            ):
+            for parameter in getattr(func, "parameters", getattr(func, "params", [])):
                 proxy = self.hlsl_entry_resource_parameter_global(parameter, func)
                 if proxy is not None:
                     globals_.append(proxy)

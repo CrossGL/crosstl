@@ -794,7 +794,7 @@ def test_metal_max_total_threads_metadata_translates_to_vulkan(tmp_path):
     )
 
     _assert_generated_output_is_usable(generated)
-    assert 'OpEntryPoint GLCompute' in generated
+    assert "OpEntryPoint GLCompute" in generated
     assert '"pinned_kernel"' in generated
     assert "return semantic" not in generated
 

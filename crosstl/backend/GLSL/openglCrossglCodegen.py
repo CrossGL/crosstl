@@ -2333,12 +2333,9 @@ class GLSLToCrossGLConverter:
             output_names = {
                 var.name for var in self.outputs if isinstance(var, VariableNode)
             }
-            if (
-                "gl_Position" not in output_names
-                and (
-                    "gl_Position" in builtin_redeclaration_qualifiers
-                    or vertex_builtin_output_writes.get("gl_Position", False)
-                )
+            if "gl_Position" not in output_names and (
+                "gl_Position" in builtin_redeclaration_qualifiers
+                or vertex_builtin_output_writes.get("gl_Position", False)
             ):
                 builtin = VariableNode(
                     "vec4",

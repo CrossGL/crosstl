@@ -128,9 +128,7 @@ def assert_directx_vertex_validates_if_available(hlsl_code, tmp_path):
         text=True,
         check=False,
     )
-    assert (
-        compile_result.returncode == 0
-    ), compile_result.stdout + compile_result.stderr
+    assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
 
 
 def assert_guarded_glsl_validates_if_available(glsl_code, tmp_path):

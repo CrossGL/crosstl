@@ -13428,9 +13428,7 @@ class MetalCodeGen:
             )
         if struct_name in self.metal_stage_io_struct_names:
             defaults.update(
-                self.metal_default_user_stage_io_member_semantics(
-                    struct_node, defaults
-                )
+                self.metal_default_user_stage_io_member_semantics(struct_node, defaults)
             )
         return defaults
 
