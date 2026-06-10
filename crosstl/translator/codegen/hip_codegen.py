@@ -63,6 +63,9 @@ from .enum_utils import (
     generic_enum_specialized_type_name,
     infer_enum_constructor_type,
 )
+from .generic_function_utils import (
+    reject_unsupported_generic_functions as reject_generic_functions_for_target,
+)
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
@@ -763,27 +766,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def reject_unsupported_generic_functions(self, ast_node):
         """Reject generic functions before emitting non-compilable HIP code."""
-        functions = list(getattr(ast_node, "functions", []) or [])
-        for stage in (getattr(ast_node, "stages", {}) or {}).values():
-            entry_point = getattr(stage, "entry_point", None)
-            if entry_point is not None:
-                functions.append(entry_point)
-            functions.extend(getattr(stage, "local_functions", []) or [])
-
-        for func in functions:
-            generic_params = getattr(func, "generic_params", []) or []
-            if not generic_params:
-                continue
-            names = [
-                getattr(param, "name", str(param))
-                for param in generic_params
-                if getattr(param, "name", str(param))
-            ]
-            suffix = f" ({', '.join(names)})" if names else ""
-            raise ValueError(
-                f"HIP codegen does not support generic functions{suffix}; "
-                "specialize the function before HIP generation"
-            )
+        reject_generic_functions_for_target(ast_node, "HIP")
 
     def setup_enum_and_generic_metadata(self, ast_node):
         """Collect enum and concrete generic type metadata used by HIP lowering."""

@@ -4179,6 +4179,8 @@ class TestHipParser:
             unsigned int count = 1'000u;
             float x = 1e-3f;
             float y = .5f;
+            float hex = 0x1.0p-14f;
+            float separated = 0x1.ffff'ffp-1f;
             return mask | bits | oct;
         }
         """
@@ -4196,6 +4198,8 @@ class TestHipParser:
         assert body[5].value == "1'000u"
         assert body[6].value == "1e-3f"
         assert body[7].value == ".5f"
+        assert body[8].value == "0x1.0p-14f"
+        assert body[9].value == "0x1.ffff'ffp-1f"
 
     def test_boolean_null_and_character_literal_parsing(self):
         code = r"""

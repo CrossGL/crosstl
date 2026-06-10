@@ -80,6 +80,9 @@ from .enum_utils import (
     generate_generic_enum_structs,
     generic_enum_specialized_type_name,
 )
+from .generic_function_utils import (
+    reject_unsupported_generic_functions as reject_generic_functions_for_target,
+)
 from .glsl_buffer_layout import (
     align_to,
     byte_offset_add,
@@ -545,27 +548,7 @@ class SlangCodeGen:
 
     def reject_unsupported_generic_functions(self, ast_node):
         """Reject generic functions before emitting non-compilable Slang code."""
-        functions = list(getattr(ast_node, "functions", []) or [])
-        for stage in (getattr(ast_node, "stages", {}) or {}).values():
-            entry_point = getattr(stage, "entry_point", None)
-            if entry_point is not None:
-                functions.append(entry_point)
-            functions.extend(getattr(stage, "local_functions", []) or [])
-
-        for func in functions:
-            generic_params = getattr(func, "generic_params", []) or []
-            if not generic_params:
-                continue
-            names = [
-                getattr(param, "name", str(param))
-                for param in generic_params
-                if getattr(param, "name", str(param))
-            ]
-            suffix = f" ({', '.join(names)})" if names else ""
-            raise ValueError(
-                f"Slang codegen does not support generic functions{suffix}; "
-                "specialize the function before Slang generation"
-            )
+        reject_generic_functions_for_target(ast_node, "Slang")
 
     def emit_helper_functions(self):
         helpers = ""

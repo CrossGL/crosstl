@@ -8300,6 +8300,31 @@ def test_generic_payload_enum_parameterized_specializations_are_diagnostic_for_m
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_generic_trait_methods_are_diagnostic_for_mojo_codegen():
+    code = """
+    shader GenericTraitMethodDiagnostic {
+        trait Mapper {
+            fn map<T>(value: T) -> T {
+                return value;
+            }
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"Mojo codegen does not support generic functions \(T\); "
+            r"specialize the function before Mojo generation"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_generic_payload_enum_match_expression_uses_single_subject_call():
     code = """
     generic<T, E> struct Result {

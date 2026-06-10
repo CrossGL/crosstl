@@ -53,6 +53,8 @@ PYTORCH_C10_METAL_CONSTEXPR_COMMIT = "fa5cb72912c44b22acd9c26c69f3e933794ac501"
 PYTORCH_CURRENT_COMMIT = "474a11a166e1313c37a9ad6f5ed0c887409d2cfc"
 CANDLE_REPO = "https://github.com/huggingface/candle"
 CANDLE_COMMIT = "39355c6c9187747e360a2d6ec9d67a2a501b2552"
+TINYGRAD_REPO = "https://github.com/tinygrad/tinygrad"
+TINYGRAD_THUNDER_COMMIT = "623b66e0e4e8e519038f9f5cd86a8ab6976032c8"
 LLAMA_CPP_REPO = "https://github.com/ggml-org/llama.cpp"
 LLAMA_CPP_COMMIT = "94a220cd6745e6e3f8de62870b66fd5b9bc92700"
 LLAMA_CPP_GGML_COMMON_COMMIT = "e3471b3e7306fe120dc8f38a2263c1293fc2add7"
@@ -2405,6 +2407,39 @@ EXTERNAL_FIXTURES = [
                 half4 shared = _uniforms.colorGreen;
                 return restrict * shared;
             }
+        """
+        ),
+    },
+    {
+        "name": "tinygrad_thunder_struct_alignment_macro",
+        "repo_url": TINYGRAD_REPO,
+        "commit": TINYGRAD_THUNDER_COMMIT,
+        "source_path": "extra/thunder/metal/include/types/shared/sv.metal",
+        "roundtrip": True,
+        "struct_names": ["sv", "alignment_dummy"],
+        "contains": [
+            "struct sv",
+            "struct alignment_dummy",
+            "dtype[_length] data;",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template<typename _T, size_t _length>
+            struct mittens_DEFAULT_ALIGN sv {
+                using dtype = _T;
+                dtype data[_length];
+
+                METAL_FUNC threadgroup dtype& operator[](size_t idx) threadgroup {
+                    return data[idx];
+                }
+            };
+
+            struct mittens_DEFAULT_ALIGN alignment_dummy {
+                int dummy;
+            };
         """
         ),
     },
