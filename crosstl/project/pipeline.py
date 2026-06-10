@@ -728,8 +728,17 @@ def _normalized_targets(targets: Sequence[str] | str) -> list[str]:
     discover_backend_plugins()
     if isinstance(targets, str):
         targets = [targets]
+    else:
+        try:
+            targets = list(targets)
+        except TypeError as exc:
+            raise ValueError(
+                "project targets must be a string or sequence of strings"
+            ) from exc
     normalized_targets = []
     for target in targets:
+        if not isinstance(target, str) or not target.strip():
+            raise ValueError("project targets must be non-empty strings")
         normalized = normalize_backend_name(target) or target.strip().lower()
         if normalized not in normalized_targets:
             normalized_targets.append(normalized)

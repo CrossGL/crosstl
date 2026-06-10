@@ -198,6 +198,41 @@ def test_project_apis_accept_single_target_strings(tmp_path):
     assert (repo / "out" / "cgl" / "simple.cgl").exists()
 
 
+@pytest.mark.parametrize(
+    "operation",
+    ["scan-report", "translate-project"],
+)
+def test_project_apis_reject_invalid_target_override(tmp_path, operation):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="project targets must be a string or sequence of strings",
+    ):
+        if operation == "scan-report":
+            scan_project(repo).to_report(targets=object())
+        else:
+            translate_project(repo, targets=object(), output_dir="out")
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["scan-report", "translate-project"],
+)
+def test_project_apis_reject_invalid_target_entries(tmp_path, operation):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="project targets must be non-empty strings"):
+        if operation == "scan-report":
+            scan_project(repo).to_report(targets=["cgl", " "])
+        else:
+            translate_project(repo, targets=["cgl", object()], output_dir="out")
+
+
 def test_project_config_accepts_single_string_sequence_fields(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
