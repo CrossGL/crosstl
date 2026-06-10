@@ -15,10 +15,10 @@
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 17,
-        "endOffset": 235,
+        "endLine": 16,
+        "endOffset": 234,
         "file": "flat-color.vert",
-        "length": 235,
+        "length": 234,
         "line": 1,
         "offset": 0
       }

@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/cube.frag.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 43,
+        "endOffset": 1169,
+        "file": "crosstl-out/cgl/cube.frag.cgl",
+        "length": 1169,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 55,
+        "endOffset": 1684,
+        "file": "cube.frag",
+        "length": 1684,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

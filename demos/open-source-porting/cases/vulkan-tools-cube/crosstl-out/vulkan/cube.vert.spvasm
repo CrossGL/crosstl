@@ -1,0 +1,104 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 60
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %18 "main" %21 %23 %24
+OpName %12 "buf"
+OpMemberName %12 0 "MVP"
+OpMemberName %12 1 "position"
+OpMemberName %12 2 "attr"
+OpName %13 "VertexOutput"
+OpMemberName %13 0 "texcoord"
+OpMemberName %13 1 "frag_pos"
+OpMemberName %13 2 "gl_Position"
+OpName %14 "Uniforms"
+OpMemberName %14 0 "ubuf"
+OpName %16 "Uniforms"
+OpName %21 "CrossGL_vertex_output_main_texcoord"
+OpName %23 "CrossGL_vertex_output_main_frag_pos"
+OpName %24 "gl_Position"
+OpName %26 "output"
+OpDecorate %14 Block
+OpMemberDecorate %14 0 Offset 0
+OpMemberDecorate %12 0 Offset 0
+OpMemberDecorate %12 0 ColMajor
+OpMemberDecorate %12 0 MatrixStride 16
+OpMemberDecorate %12 1 Offset 64
+OpDecorate %10 ArrayStride 16
+OpMemberDecorate %12 2 Offset 640
+OpDecorate %16 DescriptorSet 0
+OpDecorate %16 Binding 0
+OpDecorate %21 Location 0
+OpDecorate %23 Location 1
+OpDecorate %24 BuiltIn Position
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypeMatrix %8 4
+%11 = OpConstant %4 36
+%10 = OpTypeArray %8 %11
+%12 = OpTypeStruct %9 %10 %10
+%13 = OpTypeStruct %8 %7 %8
+%14 = OpTypeStruct %12
+%15 = OpTypePointer Uniform %14
+%17 = OpTypeFunction %2
+%20 = OpTypePointer Output %8
+%22 = OpTypePointer Output %7
+%25 = OpTypePointer Function %13
+%27 = OpConstant %5 0.0
+%28 = OpConstant %4 0
+%29 = OpTypePointer Uniform %12
+%31 = OpConstant %4 2
+%32 = OpTypePointer Uniform %10
+%34 = OpTypePointer Uniform %8
+%37 = OpTypePointer Function %8
+%40 = OpTypePointer Uniform %9
+%44 = OpConstant %4 1
+%54 = OpTypePointer Function %7
+%16 = OpVariable %15 Uniform
+%21 = OpVariable %20 Output
+%23 = OpVariable %22 Output
+%24 = OpVariable %20 Output
+%18 = OpFunction %2 None %17
+%19 = OpLabel
+%26 = OpVariable %25 Function
+; WARNING: Unknown variable gl_VertexIndex
+%30 = OpAccessChain %29 %16 %28
+%33 = OpAccessChain %32 %30 %31
+%35 = OpAccessChain %34 %33 %27
+%36 = OpLoad %8 %35
+%38 = OpAccessChain %37 %26 %28
+OpStore %38 %36
+%39 = OpAccessChain %29 %16 %28
+%41 = OpAccessChain %40 %39 %28
+%42 = OpLoad %9 %41
+; WARNING: Unknown variable gl_VertexIndex
+%43 = OpAccessChain %29 %16 %28
+%45 = OpAccessChain %32 %43 %44
+%46 = OpAccessChain %34 %45 %27
+%47 = OpLoad %8 %46
+%48 = OpMatrixTimesVector %8 %42 %47
+%49 = OpAccessChain %37 %26 %31
+OpStore %49 %48
+%50 = OpAccessChain %37 %26 %31
+%51 = OpAccessChain %37 %26 %31
+%52 = OpLoad %8 %51
+%53 = OpVectorShuffle %7 %52 %52 0 1 2
+%55 = OpAccessChain %54 %26 %44
+OpStore %55 %53
+%56 = OpLoad %13 %26
+%57 = OpCompositeExtract %8 %56 0
+OpStore %21 %57
+%58 = OpCompositeExtract %7 %56 1
+OpStore %23 %58
+%59 = OpCompositeExtract %8 %56 2
+OpStore %24 %59
+OpReturn
+OpFunctionEnd

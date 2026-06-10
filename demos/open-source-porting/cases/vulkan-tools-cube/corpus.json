@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "name": "Vulkan Tools Cube",
+  "description": "Pinned GLSL source pair used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "vulkan-tools-cube-vertex",
+      "path": "cube.vert",
+      "sourceBackend": "opengl",
+      "targets": ["cgl", "opengl", "vulkan"],
+      "repository": "https://github.com/KhronosGroup/Vulkan-Tools",
+      "commit": "68749eafbf27114a1dd807d6c870e53306673e64",
+      "sourceUrl": "https://github.com/KhronosGroup/Vulkan-Tools/blob/68749eafbf27114a1dd807d6c870e53306673e64/cube/cube.vert"
+    },
+    {
+      "id": "vulkan-tools-cube-fragment",
+      "path": "cube.frag",
+      "sourceBackend": "opengl",
+      "targets": ["cgl", "opengl", "vulkan"],
+      "repository": "https://github.com/KhronosGroup/Vulkan-Tools",
+      "commit": "68749eafbf27114a1dd807d6c870e53306673e64",
+      "sourceUrl": "https://github.com/KhronosGroup/Vulkan-Tools/blob/68749eafbf27114a1dd807d6c870e53306673e64/cube/cube.frag"
+    }
+  ]
+}

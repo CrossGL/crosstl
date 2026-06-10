@@ -113,6 +113,17 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/KhronosGroup/SPIRV-Cross/blob/146679ff8255a6068518685599d7fb8761d1b570/LICENSE
 
+## KhronosGroup/Vulkan-Tools
+
+- Repository: https://github.com/KhronosGroup/Vulkan-Tools
+- Commit: `68749eafbf27114a1dd807d6c870e53306673e64`
+- Source paths:
+  - `cube/cube.vert`
+  - `cube/cube.frag`
+- License: Apache-2.0
+- License URL:
+  https://github.com/KhronosGroup/Vulkan-Tools/blob/68749eafbf27114a1dd807d6c870e53306673e64/LICENSE.txt
+
 ## raysan5/raylib
 
 - Repository: https://github.com/raysan5/raylib

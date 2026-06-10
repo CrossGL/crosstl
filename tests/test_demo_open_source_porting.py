@@ -45,6 +45,7 @@ def test_open_source_demo_cases_have_pinned_manifests_and_references():
         "slang-hello-world-compute",
         "spirv-cross-round-fragment",
         "spirv-tools-basic-src",
+        "vulkan-tools-cube",
         "vulkan-samples-dynamic-line-grid",
     }
 
@@ -163,6 +164,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "slang-hello-world-compute",
         "spirv-cross-round-fragment",
         "spirv-tools-basic-src",
+        "vulkan-tools-cube",
         "vulkan-samples-dynamic-line-grid",
     }
     assert _workflow_step_cases(workflow, "macOS Metal smoke checks") == {

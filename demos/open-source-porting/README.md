@@ -62,13 +62,14 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `sascha-willems-vulkan-headless-compute` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, Metal, DirectX, Vulkan | Uses the upstream headless compute shader unchanged. OpenGL specialization-constant validation is tracked in issue #780. |
 | `slang-hello-world-compute` | `shader-slang/slang` at `29e69b0bf626f87500be73a7fb3764db25658c66` | Apache-2.0 WITH LLVM-exception | Slang | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream compute shader unchanged. |
 | `spirv-tools-basic-src` | `KhronosGroup/SPIRV-Tools` at `199cb207b911501ddd76dcddf100a6e21c15ef23` | Apache-2.0 | SPIR-V assembly | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream SPIR-V assembly fixture unchanged. |
+| `vulkan-tools-cube` | `KhronosGroup/Vulkan-Tools` at `68749eafbf27114a1dd807d6c870e53306673e64` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream cube demo shader pair unchanged. DirectX reserved-keyword lowering is tracked in issue #819. |
 
 ## Source adjustments
 
 The DirectX, glslang, Metal performance, NVIDIA CUDA Samples, ogl-samples,
-OpenCL-SDK, Rust-GPU VulkanShaderExamples, SPIRV-Cross, SPIRV-Tools, raylib,
-SaschaWillems triangle, and Slang cases keep upstream source files unchanged
-apart from repository
+OpenCL-SDK, Rust-GPU VulkanShaderExamples, SPIRV-Cross, SPIRV-Tools,
+Vulkan-Tools, raylib, SaschaWillems triangle, and Slang cases keep upstream
+source files unchanged apart from repository
 formatting checks. The DirectX Hello Texture shader was retested after issue
 #783 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan output.
 The SaschaWillems headless compute shader was retested after issue #756 closed
@@ -111,6 +112,13 @@ OpenGL, and Vulkan output. Metal output is intentionally excluded because
 GLSL vertex layout locations are currently emitted as Metal `[[location]]`
 attributes instead of `[[attribute(n)]]` bindings. That translator issue is
 tracked in issue #817.
+
+The `KhronosGroup/Vulkan-Tools` cube demo shaders are checked for CrossGL,
+OpenGL, and Vulkan output. DirectX output is intentionally excluded because
+GLSL identifiers that collide with HLSL reserved words are currently emitted
+unchanged. That translator issue is tracked in issue #819. Metal output is
+also left out of the checked target set until GLSL location metadata lowering
+is resolved under issue #817.
 
 The `KhronosGroup/OpenCL-SDK` reduce kernel from `samples/core/reduce/reduce.cl`
 at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` was tested as a candidate. It

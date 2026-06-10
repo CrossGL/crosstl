@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/cube.vert.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 680,
+        "file": "crosstl-out/cgl/cube.vert.cgl",
+        "length": 680,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 39,
+        "endOffset": 1212,
+        "file": "cube.vert",
+        "length": 1212,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}
