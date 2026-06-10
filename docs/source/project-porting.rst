@@ -44,22 +44,22 @@ A typical first pass looks like:
 
 .. code-block:: bash
 
-   python -m crosstl._crosstl scan /path/to/repo \
+   python -m crosstl scan /path/to/repo \
      --target metal \
      --target opengl \
      --output scan-report.json
 
-   python -m crosstl._crosstl translate-project /path/to/repo \
+   python -m crosstl translate-project /path/to/repo \
      --target metal \
      --target opengl \
      --output-dir crosstl-out \
      --report crosstl-out/portability-report.json
 
-   python -m crosstl._crosstl validate-project \
+   python -m crosstl validate-project \
      crosstl-out/portability-report.json \
      --format text
 
-   python -m crosstl._crosstl inspect-report \
+   python -m crosstl inspect-report \
      crosstl-out/portability-report.json \
      --format text
 
@@ -125,7 +125,7 @@ The legacy single-file command remains available:
 
 .. code-block:: bash
 
-   python -m crosstl._crosstl examples/graphics/SimpleShader.cgl --backend metal
+   python -m crosstl examples/graphics/SimpleShader.cgl --backend metal
 
 Legacy single-file options may appear before or after the input path.
 
@@ -133,7 +133,7 @@ The explicit single-file subcommand is equivalent:
 
 .. code-block:: bash
 
-   python -m crosstl._crosstl translate examples/graphics/SimpleShader.cgl --backend metal
+   python -m crosstl translate examples/graphics/SimpleShader.cgl --backend metal
 
 Both single-file forms also accept ``--source-backend``, repeatable
 ``--include-dir``, and repeatable ``--define`` overrides. Use them when a file
@@ -145,13 +145,13 @@ Scan a repository and print a JSON report:
 
 .. code-block:: bash
 
-   python -m crosstl._crosstl scan /path/to/repo --target metal
+   python -m crosstl scan /path/to/repo --target metal
 
 Emit the same scan-only portability report with an explicit output path:
 
 .. code-block:: bash
 
-   python -m crosstl._crosstl report /path/to/repo \
+   python -m crosstl report /path/to/repo \
      --target metal \
      --output crosstl-out/portability-report.json
 
@@ -166,7 +166,7 @@ Translate every discovered unit to one or more targets:
 
 .. code-block:: bash
 
-   python -m crosstl._crosstl translate-project /path/to/repo \
+   python -m crosstl translate-project /path/to/repo \
      --target metal \
      --target opengl \
      --output-dir crosstl-out \
@@ -215,7 +215,7 @@ Validate artifacts referenced by a report:
 
 .. code-block:: bash
 
-   python -m crosstl._crosstl validate-project crosstl-out/portability-report.json \
+   python -m crosstl validate-project crosstl-out/portability-report.json \
      --format text
 
 Validation exits nonzero when the report metadata is malformed, artifact
@@ -271,7 +271,7 @@ Inspect an existing report as a concise JSON, text, or SARIF summary:
 
 .. code-block:: bash
 
-   python -m crosstl._crosstl inspect-report crosstl-out/portability-report.json \
+   python -m crosstl inspect-report crosstl-out/portability-report.json \
      --format text \
      --max-diagnostics 20 \
      --max-failed-artifacts 20 \

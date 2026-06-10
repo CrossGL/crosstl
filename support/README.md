@@ -25,7 +25,7 @@ The matrix is intentionally data-driven:
 - Project-porting support rows track repository scan, batch translation,
   project configuration, artifact reports, provenance, validation hooks, and
   structured diagnostics. The implementation emits scan and portability reports
-  through `python -m crosstl._crosstl scan`, `report`, and `translate-project`,
+  through `python -m crosstl scan`, `report`, and `translate-project`,
   validates reports through `validate-project`, and summarizes reports through
   `inspect-report`.
 
@@ -51,7 +51,7 @@ python tools/support_matrix.py audit --backend directx --status partial --output
 python tools/support_matrix.py audit --category project --output /tmp/project-porting-roadmap.json
 python tools/support_signals.py docs --output support/generated/backend-docs-report.json
 python tools/support_signals.py extract --docs-report support/generated/backend-docs-report.json --output support/generated/support-signals.json
-python -m crosstl._crosstl scan /path/to/repo --target metal --output /tmp/crosstl-project-scan.json
+python -m crosstl scan /path/to/repo --target metal --output /tmp/crosstl-project-scan.json
 ```
 
 The hourly issue-sync CI fetches official backend documentation URLs, crawls a

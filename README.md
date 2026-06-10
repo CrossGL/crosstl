@@ -291,20 +291,20 @@ For repositories with many shader or GPU source files, start with a scan-only
 report before writing translated artifacts:
 
 ```bash
-python -m crosstl._crosstl scan /path/to/repo \
+python -m crosstl scan /path/to/repo \
   --target metal \
   --output scan-report.json
 
-python -m crosstl._crosstl translate-project /path/to/repo \
+python -m crosstl translate-project /path/to/repo \
   --target metal \
   --output-dir crosstl-out \
   --report crosstl-out/portability-report.json
 
-python -m crosstl._crosstl validate-project \
+python -m crosstl validate-project \
   crosstl-out/portability-report.json \
   --format text
 
-python -m crosstl._crosstl inspect-report \
+python -m crosstl inspect-report \
   crosstl-out/portability-report.json \
   --format text
 ```

@@ -183,6 +183,25 @@ def test_public_docs_reference_project_porting_workflow():
         assert "project-porting" in text
 
 
+def test_public_docs_use_root_package_cli_entrypoint():
+    docs = {
+        "README.md": (ROOT / "README.md").read_text(encoding="utf-8"),
+        "docs/source/quickstart.rst": (
+            ROOT / "docs" / "source" / "quickstart.rst"
+        ).read_text(encoding="utf-8"),
+        "docs/source/project-porting.rst": (
+            ROOT / "docs" / "source" / "project-porting.rst"
+        ).read_text(encoding="utf-8"),
+        "support/README.md": (ROOT / "support" / "README.md").read_text(
+            encoding="utf-8"
+        ),
+    }
+
+    for path, text in docs.items():
+        assert "python -m crosstl._crosstl" not in text, path
+        assert "python -m crosstl " in text, path
+
+
 def test_public_api_docs_include_project_api():
     public_api = (ROOT / "docs" / "source" / "api" / "public.rst").read_text(
         encoding="utf-8"
