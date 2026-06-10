@@ -80,6 +80,13 @@ a candidate and exposed target semantic gaps for HLSL scalar swizzles and
 case is intentionally not checked in until target output preserves the compute
 semantics rather than emitting placeholder comments.
 
+The `NVIDIA/cuda-samples` vector-add CUDA kernel was tested as a reduced source
+slice from `cpp/0_Introduction/vectorAdd/vectorAdd.cu` at
+`b7c5481c556c3fe98db060207ecaa41a4b9a9abc`. Metal and SPIR-V target output
+still needs CUDA compute builtin lowering and valid target entry-point
+emission; that translator issue is tracked in issue #772, and the case is
+intentionally not checked in until target artifacts validate directly.
+
 The `KhronosGroup/OpenCL-SDK` SAXPY kernel was retested after issue #751 closed
 and is now checked for Metal and Vulkan output. OpenGL output still needs an
 explicit cast when assigning `gl_GlobalInvocationID.x` to the signed index
