@@ -1,4 +1,8 @@
 import re
+import shutil
+import subprocess
+
+import pytest
 
 from crosstl import translate
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
@@ -6,6 +10,59 @@ from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+
+ROCM_BIT_EXTRACT_HIP = """
+#include <hip/hip_runtime.h>
+
+__global__ void bit_extract_kernel(
+    unsigned int* d_output,
+    const unsigned int* d_input,
+    unsigned int size) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        d_output[idx] = __bitextract_u32(d_input[idx], 8, 8);
+    }
+}
+
+int main() {
+    return 0;
+}
+"""
+
+
+def compile_metal_if_available(source: str, tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not available")
+
+    lookup = subprocess.run(
+        [xcrun, "-sdk", "macosx", "-f", "metal"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if lookup.returncode != 0:
+        pytest.skip("macOS Metal compiler is not available")
+
+    source_path = tmp_path / "shader.metal"
+    output_path = tmp_path / "shader.air"
+    source_path.write_text(source, encoding="utf-8")
+    result = subprocess.run(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(source_path),
+            "-o",
+            str(output_path),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 class TestHipCodeGen:
@@ -108,6 +165,50 @@ class TestHipCodeGen:
         assert "blockIdx" not in result
         assert "blockDim" not in result
 
+    def test_public_rocm_bit_extract_suppresses_host_main_and_binds_scalar_reparse(
+        self,
+    ):
+        # Reduced from ROCm/rocm-examples@cf369da68f209c315074204bd0eb61d1a5c015d1,
+        # HIP-Basic/bit_extract/main.hip.
+        lexer = HipLexer(ROCM_BIT_EXTRACT_HIP)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// Kernel: bit_extract_kernel" in result
+        assert "@group(0) @binding(2) var<uniform> size: u32" in result
+        assert "i32 main(" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_public_rocm_bit_extract_scalar_parameter_lowers_for_metal(self, tmp_path):
+        source_path = tmp_path / "main.hip"
+        source_path.write_text(ROCM_BIT_EXTRACT_HIP, encoding="utf-8")
+
+        result = translate(str(source_path), backend="metal", format_output=False)
+
+        assert "kernel void bit_extract_kernel(" in result
+        assert "constant uint& size [[buffer(2)]]" in result
+        assert "uint size" not in result
+        assert "int main(" not in result
+        compile_metal_if_available(result, tmp_path)
+
+    def test_public_rocm_bit_extract_scalar_parameter_lowers_for_spirv(self, tmp_path):
+        source_path = tmp_path / "main.hip"
+        source_path.write_text(ROCM_BIT_EXTRACT_HIP, encoding="utf-8")
+
+        result = translate(str(source_path), backend="vulkan", format_output=False)
+
+        assert re.findall(r'OpEntryPoint\s+(\w+)\s+%\d+\s+"([^"]+)"', result) == [
+            ("GLCompute", "bit_extract_kernel")
+        ]
+        assert "CrossGL_glcompute_input_size" not in result
+        assert re.search(r'OpName %\d+ "bit_extract_kernel_sizeUniformBlock"', result)
+        assert re.search(r"OpDecorate %\d+ Binding 2", result)
+        assert re.search(r"OpExecutionMode %\d+ LocalSize 1 1 1", result)
+
     def test_public_rocm_module_api_unnamed_function_parameter_codegen_reparse(self):
         # Reduced from ROCm/rocm-examples@cf369da68f209c315074204bd0eb61d1a5c015d1,
         # HIP-Basic/module_api/main.hip.
@@ -147,7 +248,7 @@ class TestHipCodeGen:
             "@group(0) @binding(0) var<storage, read_write> _param0: array<f32>"
             in result
         )
-        assert "u32 n" in result
+        assert "@group(0) @binding(1) var<uniform> n: u32" in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_public_hip_examples_qualified_method_conversion_reparse(self):
@@ -16324,7 +16425,7 @@ class TestHipCodeGen:
         assert (
             "@group(0) @binding(1) var<storage, read_write> mask: array<u64>" in result
         )
-        assert "u32 size" in result
+        assert "@group(0) @binding(3) var<uniform> size: u32" in result
         assert "var tid: u32 = gl_LocalInvocationID.x;" in result
         assert "var lid: u32 = (gl_LocalInvocationID.x % 32);" in result
         assert "var bid: u32 = gl_WorkGroupID.x;" in result
@@ -17164,8 +17265,8 @@ class TestHipCodeGen:
         assert "var wide: i64 = 2;" in result
         assert "var uwide: u64 = 3u;" in result
         assert "out: array<u32>" in result
-        assert "f32 scale" in result
-        assert "i64 x" in result
+        assert "@group(0) @binding(1) var<uniform> scale: f32" in result
+        assert "@group(0) @binding(2) var<uniform> x: i64" in result
         assert "var local: i32 = 1;" in result
         assert "var idx: u32 = 2u;" in result
         assert "var y: u64 = 1u;" in result
