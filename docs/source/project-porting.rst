@@ -434,8 +434,11 @@ packaged artifact frontend is available, and ``wire-runtime-adapter`` actions
 for host loader or build-system tooling. When host interface metadata is
 unavailable or not ready, the plan emits ``resolve-host-interface-metadata``
 actions so host and build tooling can provide reflection or backend-specific
-binding metadata before wiring the adapter. It also carries through package
-inspection diagnostics and
+binding metadata before wiring the adapter. Source targets with registered
+frontends can contribute parser-derived interface summaries; formats that need
+compiled reflection, such as SPIR-V handoff artifacts without reflected entry
+point/resource data, remain explicit follow-up actions. The plan also carries
+through package inspection diagnostics and
 ``review-runtime-references`` actions when the source repository contained
 runtime API references. The plan is a target-scoped integration contract; it
 does not rewrite host application code, execute device code, generate runtime

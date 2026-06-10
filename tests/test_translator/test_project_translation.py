@@ -23473,6 +23473,123 @@ def test_inspect_runtime_package_reports_host_interface_resources(tmp_path):
     assert host_interface["diagnostics"] == []
 
 
+def test_inspect_runtime_package_uses_registered_target_parser_for_host_interface(
+    tmp_path,
+):
+    source = textwrap.dedent("""
+        shader ResourceShader {
+            layout(set = 1, binding = 2) uniform sampler2D sourceTexture;
+
+            cbuffer Camera {
+                mat4 viewProj;
+            }
+
+            fragment {
+                vec4 main() {
+                    return vec4(1.0);
+                }
+            }
+        }
+        """).strip()
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path,
+        source=source,
+        source_name="resource.cgl",
+        targets=("opengl",),
+    )
+
+    payload = inspect_runtime_package(package_dir / "runtime-package.json")
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["source"] == "package-artifact"
+    assert host_interface["parser"] == "opengl"
+    assert host_interface["entryPointCount"] == 1
+    assert host_interface["entryPoints"] == [
+        {
+            "name": "main",
+            "stage": "fragment",
+            "executionConfig": {},
+        }
+    ]
+    assert host_interface["resourceCount"] == 2
+    assert host_interface["resources"] == [
+        {
+            "name": "Camera",
+            "kind": "constant-buffer",
+            "type": "Camera",
+            "set": None,
+            "binding": 0,
+            "access": "read",
+        },
+        {
+            "name": "sourceTexture",
+            "kind": "texture",
+            "type": "sampler2D",
+            "set": None,
+            "binding": 1026,
+            "access": None,
+        },
+    ]
+    assert host_interface["diagnostics"] == []
+
+
+def test_inspect_runtime_package_reports_entry_point_parameter_resources(tmp_path):
+    source = textwrap.dedent("""
+        shader ResourceShader {
+            layout(set = 1, binding = 2) uniform sampler2D sourceTexture;
+
+            cbuffer Camera {
+                mat4 viewProj;
+            }
+
+            fragment {
+                vec4 main() {
+                    return vec4(1.0);
+                }
+            }
+        }
+        """).strip()
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path,
+        source=source,
+        source_name="resource.cgl",
+        targets=("metal",),
+    )
+
+    payload = inspect_runtime_package(package_dir / "runtime-package.json")
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["parser"] == "metal"
+    assert host_interface["entryPoints"] == [
+        {
+            "name": "fragment_main",
+            "stage": "fragment",
+            "executionConfig": {},
+        }
+    ]
+    assert host_interface["resources"] == [
+        {
+            "name": "camera",
+            "kind": "constant-buffer",
+            "type": "Camera&",
+            "set": None,
+            "binding": 0,
+            "access": "read",
+        },
+        {
+            "name": "sourceTexture",
+            "kind": "texture",
+            "type": "texture2d<float>",
+            "set": None,
+            "binding": 0,
+            "access": None,
+        },
+    ]
+    assert host_interface["diagnostics"] == []
+
+
 def test_inspect_runtime_package_detects_missing_packaged_artifact(tmp_path):
     _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
     (package_dir / "artifacts" / "out" / "cgl" / "simple.cgl").unlink()
@@ -24012,7 +24129,7 @@ def test_plan_runtime_adapters_from_runtime_package(tmp_path):
     }
 
 
-def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target(
+def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface(
     tmp_path,
 ):
     _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("opengl",))
@@ -24026,7 +24143,7 @@ def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_ta
         "readyBindingCount": 1,
         "failedBindingCount": 0,
         "adapterCount": 1,
-        "actionCount": 3,
+        "actionCount": 2,
         "runtimeReferenceCount": 1,
     }
     assert payload["targets"][0]["target"] == "opengl"
@@ -24035,17 +24152,61 @@ def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_ta
     adapter = payload["adapters"][0]
     assert adapter["target"] == "opengl"
     assert adapter["adapterKind"] == "opengl-glsl-adapter"
+    assert adapter["hostInterface"]["status"] == "ready"
+    assert adapter["hostInterface"] == {
+        "status": "ready",
+        "source": "package-artifact",
+        "parser": "opengl",
+        "entryPointCount": 1,
+        "resourceCount": 0,
+        "entryPoints": [
+            {
+                "name": "main",
+                "stage": "vertex",
+                "executionConfig": {},
+            }
+        ],
+        "resources": [],
+        "diagnostics": [],
+    }
+    assert [action["kind"] for action in payload["actions"]] == [
+        "wire-runtime-adapter",
+        "review-runtime-references",
+    ]
+
+
+def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty(
+    tmp_path,
+):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
+
+    payload = plan_runtime_adapters(package_dir / "runtime-package.json")
+
+    assert payload["success"] is True
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "bindingCount": 1,
+        "readyBindingCount": 1,
+        "failedBindingCount": 0,
+        "adapterCount": 1,
+        "actionCount": 3,
+        "runtimeReferenceCount": 1,
+    }
+    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["adapterKind"] == "vulkan-shader-adapter"
+    assert len(payload["adapters"]) == 1
+    adapter = payload["adapters"][0]
+    assert adapter["target"] == "vulkan"
+    assert adapter["adapterKind"] == "vulkan-shader-adapter"
     assert adapter["hostInterface"] == {
         "status": "unavailable",
         "source": "package-artifact",
-        "parser": None,
+        "parser": "vulkan",
         "entryPointCount": 0,
         "resourceCount": 0,
         "entryPoints": [],
         "resources": [],
-        "diagnostics": [
-            "project.runtime-package-inspection.host-interface-parser-unavailable"
-        ],
+        "diagnostics": ["project.runtime-package-inspection.host-interface-empty"],
     }
     assert [action["kind"] for action in payload["actions"]] == [
         "wire-runtime-adapter",
@@ -24057,12 +24218,12 @@ def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_ta
         project_pipeline.RUNTIME_ADAPTER_PLAN_ACTION_FIELDS
     )
     assert host_interface_action["severity"] == "warning"
-    assert host_interface_action["target"] == "opengl"
+    assert host_interface_action["target"] == "vulkan"
     assert host_interface_action["adapter"] == adapter["id"]
     assert host_interface_action["binding"] == adapter["binding"]
     assert host_interface_action["packagePath"] == adapter["packagePath"]
     assert "status is unavailable" in host_interface_action["message"]
-    assert "host-interface-parser-unavailable" in host_interface_action["message"]
+    assert "host-interface-empty" in host_interface_action["message"]
 
 
 def test_plan_runtime_adapters_rejects_failed_package(tmp_path):
@@ -24143,7 +24304,7 @@ def test_project_cli_plan_runtime_adapters_text_outputs_adapters(tmp_path):
 def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status(
     tmp_path,
 ):
-    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("opengl",))
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
     package_manifest = package_dir / "runtime-package.json"
 
     result = subprocess.run(
@@ -24165,7 +24326,7 @@ def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status(
     assert result.returncode == 0
     assert "Runtime adapters:" in result.stdout
     assert "interface: unavailable" in result.stdout
-    assert "host-interface-parser-unavailable" in result.stdout
+    assert "host-interface-empty" in result.stdout
     assert "Runtime adapter actions:" in result.stdout
     assert "resolve-host-interface-metadata" in result.stdout
 
