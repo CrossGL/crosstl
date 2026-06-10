@@ -1,4 +1,6 @@
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -102,6 +104,33 @@ def _assert_generated_output_is_usable(generated):
     assert "Traceback" not in generated
     assert "NotImplemented" not in generated
     assert "<crosstl." not in generated
+
+
+def _compile_with_metal_if_available(source: str, tmp_path: Path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        return
+
+    lookup = subprocess.run(
+        [xcrun, "-f", "metal"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if lookup.returncode != 0:
+        return
+
+    source_path = tmp_path / "generated.metal"
+    output_path = tmp_path / "generated.air"
+    source_path.write_text(source, encoding="utf-8")
+    result = subprocess.run(
+        [xcrun, "metal", str(source_path), "-o", str(output_path)],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_cgl_translate_save_shader_preserves_source_line_endings(tmp_path):
@@ -768,6 +797,49 @@ def test_metal_max_total_threads_metadata_translates_to_vulkan(tmp_path):
     assert 'OpEntryPoint GLCompute' in generated
     assert '"pinned_kernel"' in generated
     assert "return semantic" not in generated
+
+
+def test_hlsl_hello_const_buffers_vertex_semantics_lower_to_metal_attributes(
+    tmp_path,
+):
+    source_path = _write_source(
+        tmp_path,
+        "hello-const-buffers.hlsl",
+        """
+        cbuffer SceneConstantBuffer : register(b0)
+        {
+            float4 offset;
+        };
+
+        struct PSInput
+        {
+            float4 position : SV_POSITION;
+            float4 color : COLOR;
+        };
+
+        PSInput VSMain(float4 position : POSITION, float4 color : COLOR)
+        {
+            PSInput result;
+            result.position = position + offset;
+            result.color = color;
+            return result;
+        }
+
+        float4 PSMain(PSInput input) : SV_TARGET
+        {
+            return input.color;
+        }
+        """,
+    )
+
+    metal = crosstl.translate(str(source_path), backend="metal", format_output=False)
+
+    assert "float4 position [[attribute(0)]];" in metal
+    assert "float4 color [[attribute(1)]];" in metal
+    assert "float4 position [[position]];" in metal
+    assert "[[Color]]" not in metal
+    assert "[[COLOR]]" not in metal
+    _compile_with_metal_if_available(metal, tmp_path)
 
 
 @pytest.mark.parametrize("source_name", sorted(NATIVE_SOURCE_SNIPPETS))
