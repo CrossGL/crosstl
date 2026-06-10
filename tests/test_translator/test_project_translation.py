@@ -25172,7 +25172,9 @@ def test_plan_runtime_adapters_reports_webgpu_wgsl_adapter_metadata(tmp_path):
         "parser": "cgl",
         "entryPointCount": 1,
         "resourceCount": 0,
-        "entryPoints": [{"name": "main", "stage": "vertex", "executionConfig": {}}],
+        "entryPoints": [
+            {"name": "vertex_main", "stage": "vertex", "executionConfig": {}}
+        ],
         "resources": [],
         "diagnostics": [],
     }
@@ -25180,6 +25182,33 @@ def test_plan_runtime_adapters_reports_webgpu_wgsl_adapter_metadata(tmp_path):
         "wire-runtime-adapter",
         "review-runtime-references",
     ]
+
+
+def test_wgsl_runtime_metadata_uses_generated_stage_entry_names(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path,
+        source=DIRECTX_GRAPHICS_CROSSL,
+        source_name="graphics.cgl",
+        targets=("wgsl",),
+    )
+
+    adapter_plan = plan_runtime_adapters(package_dir / "runtime-package.json")
+    loader_manifest = build_runtime_loader_manifest(
+        package_dir / "runtime-package.json"
+    )
+
+    expected_entry_points = [
+        {"name": "vertex_main", "stage": "vertex", "executionConfig": {}},
+        {"name": "fragment_main", "stage": "fragment", "executionConfig": {}},
+    ]
+    assert (
+        adapter_plan["adapters"][0]["hostInterface"]["entryPoints"]
+        == expected_entry_points
+    )
+    assert (
+        loader_manifest["loadUnits"][0]["loadSteps"][0]["metadata"]["entryPoints"]
+        == expected_entry_points
+    )
 
 
 def test_plan_runtime_adapters_reports_webgl_adapter_validation_tool(tmp_path):
@@ -25615,7 +25644,7 @@ def test_runtime_loader_manifest_reports_wgsl_validation_command(tmp_path):
             }
         },
         "entryPoints": [
-            {"name": "main", "stage": "vertex", "executionConfig": {}},
+            {"name": "vertex_main", "stage": "vertex", "executionConfig": {}},
         ],
     }
     assert validate_step["kind"] == "validate-target-toolchain"

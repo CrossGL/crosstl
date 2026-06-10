@@ -8236,6 +8236,9 @@ def _runtime_manifest_source_host_interface(
     )
     if host_interface["entryPointCount"] == 0 and host_interface["resourceCount"] == 0:
         return None
+    target = artifact.get("target")
+    if _is_non_empty_string(target) and _normalized_targets([str(target)])[0] == "wgsl":
+        host_interface = _runtime_host_interface_for_wgsl_target(host_interface)
     return host_interface
 
 
@@ -9859,6 +9862,31 @@ def _runtime_host_interface_from_ast(
         "resources": resources,
         "diagnostics": [],
     }
+
+
+def _runtime_host_interface_for_wgsl_target(
+    host_interface: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = dict(host_interface)
+    stage_counts: Counter[str] = Counter()
+    entry_points = []
+    for entry_point in _record_sequence(payload.get("entryPoints")):
+        if not isinstance(entry_point, Mapping):
+            continue
+        entry_payload = dict(entry_point)
+        stage = _runtime_host_interface_stage_name(entry_payload.get("stage"))
+        if stage in {"vertex", "fragment", "compute"}:
+            stage_index = stage_counts[stage]
+            stage_counts[stage] += 1
+            entry_name = f"{stage}_main"
+            if stage_index:
+                entry_name = f"{entry_name}_{stage_index}"
+            entry_payload["name"] = entry_name
+            entry_payload["stage"] = stage
+        entry_points.append(entry_payload)
+    payload["entryPoints"] = entry_points
+    payload["entryPointCount"] = len(entry_points)
+    return payload
 
 
 def _runtime_package_inspection_parser_name(target_name: str) -> str | None:
