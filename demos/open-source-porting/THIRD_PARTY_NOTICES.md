@@ -106,6 +106,18 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/Rust-GPU/VulkanShaderExamples/blob/b29a37eb46802b5ea6882af4808d6887fc184581/LICENSE.md
 
+## Rust-GPU/rust-gpu
+
+- Repository: https://github.com/Rust-GPU/rust-gpu
+- Commit: `36e3348cdc2f824afec64b3b5af5d369d98a4c0d`
+- Source paths:
+  - `examples/shaders/sky-shader/src/lib.rs`
+  - `examples/shaders/mouse-shader/src/lib.rs`
+- License: Apache-2.0 OR MIT
+- License URLs:
+  - https://github.com/Rust-GPU/rust-gpu/blob/36e3348cdc2f824afec64b3b5af5d369d98a4c0d/LICENSE-APACHE
+  - https://github.com/Rust-GPU/rust-gpu/blob/36e3348cdc2f824afec64b3b5af5d369d98a4c0d/LICENSE-MIT
+
 ## SaschaWillems/Vulkan
 
 - Repository: https://github.com/SaschaWillems/Vulkan
