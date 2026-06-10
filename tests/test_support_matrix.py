@@ -2643,6 +2643,46 @@ def test_validate_backend_catalog_rejects_duplicate_aliases():
         module.validate_backend_catalog(backends)
 
 
+def test_validate_backend_catalog_rejects_duplicate_target_aliases():
+    module = load_support_matrix_module()
+    directx = _backend("directx", ["hlsl"], ".hlsl")
+    opengl = _backend("opengl", ["glsl"], ".glsl")
+    directx["target_aliases"] = ["shared"]
+    opengl["target_aliases"] = ["shared"]
+
+    with pytest.raises(module.SupportMatrixError, match="Duplicate backend alias"):
+        module.validate_backend_catalog({"backends": [directx, opengl]})
+
+
+def test_backend_inventory_preserves_target_profiles():
+    module = load_support_matrix_module()
+    directx = _backend("directx", ["hlsl"], ".hlsl")
+    directx["target_aliases"] = ["dx12"]
+    directx["target_profiles"] = ["directx-12", "shader-model-6"]
+
+    matrix = module.build_matrix(
+        {"backends": [directx]},
+        {
+            "statuses": _status_descriptions(module),
+            "features": [
+                {
+                    "id": "target.codegen",
+                    "category": "target",
+                    "name": "Code generation",
+                    "description": "Emit target code.",
+                    "support": {"directx": {"status": "partial"}},
+                }
+            ],
+        },
+    )
+
+    assert matrix["backends"][0]["target_aliases"] == ["dx12"]
+    assert matrix["backends"][0]["target_profiles"] == [
+        "directx-12",
+        "shader-model-6",
+    ]
+
+
 def test_validate_backend_catalog_accepts_target_only_backends():
     module = load_support_matrix_module()
     backends = {"backends": [_target_only_backend("webgl", ["webgl2"], ".webgl.glsl")]}
@@ -3117,6 +3157,9 @@ def test_support_backend_catalog_matches_codegen_registry():
         spec = codegen.get_backend(backend_id)
         assert spec is not None, f"{backend_id} is not registered"
         assert codegen.get_backend_extension(backend_id) == backend["target_extension"]
+        assert tuple(backend.get("target_profiles", [])) == tuple(
+            codegen.target_profiles(backend_id)
+        )
         if backend_id in native_source_backend_ids:
             assert spec.source_registry_name == backend_id
             assert (
@@ -3135,6 +3178,10 @@ def test_support_backend_catalog_matches_codegen_registry():
                     f"{backend_id} support alias is not accepted by source registry: "
                     f"{alias}"
                 )
+        for alias in backend.get("target_aliases", []):
+            assert (
+                codegen.normalize_backend_name(alias) == backend_id
+            ), f"{backend_id} target alias is not accepted by codegen: {alias}"
 
 
 def test_project_porting_roadmap_is_focused_on_project_category():

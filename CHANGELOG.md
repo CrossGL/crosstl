@@ -8,10 +8,12 @@ All notable changes to CrossTL are documented in this file.
 
 - Target-only WebGL/WebGL2 GLSL ES backend support.
 - Target-only WebGPU/WGSL backend support for vertex, fragment, and compute output.
+- DirectX target profile aliases for `dx11`, `dx12`, `d3d11`, and `d3d12`, all resolving to HLSL source output.
 
 ### Improved
 
 - Split target backend registration from native source frontend availability in the backend registry and support matrix.
+- Added target alias and target profile metadata to backend support inventory.
 - Documented target-only source rejection for WebGL and WGSL outputs.
 
 ## [2.0.0] - 2026-06-01

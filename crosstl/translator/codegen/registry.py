@@ -24,6 +24,8 @@ class BackendSpec:
     format_backend: str | None = None
     source_name: str | None = None
     has_source_frontend: bool = True
+    target_aliases: Sequence[str] = ()
+    target_profiles: Sequence[str] = ()
 
     @property
     def source_registry_name(self) -> str | None:
@@ -58,6 +60,16 @@ class BackendRegistry:
                 if self._by_alias[alias_key] == name:
                     continue
                 raise ValueError(f"Backend alias '{alias_key}' already registered")
+            self._by_alias[alias_key] = name
+
+        for alias in spec.target_aliases:
+            alias_key = _normalize_backend_name(alias)
+            if alias_key in self._by_alias and not overwrite:
+                if self._by_alias[alias_key] == name:
+                    continue
+                raise ValueError(
+                    f"Backend target alias '{alias_key}' already registered"
+                )
             self._by_alias[alias_key] = name
 
         for extension in spec.file_extensions:
@@ -122,6 +134,13 @@ class BackendRegistry:
         """Return a copy of the alias-to-backend mapping."""
         return dict(self._by_alias)
 
+    def target_profiles(self, name: str) -> Sequence[str]:
+        """Return advertised target profiles for a backend."""
+        spec = self.get(name)
+        if not spec:
+            return ()
+        return tuple(spec.target_profiles)
+
     def extensions(self) -> dict[str, str]:
         """Return a copy of the file-extension-to-backend mapping."""
         return dict(self._by_extension)
@@ -158,6 +177,11 @@ def source_backend_names() -> Sequence[str]:
 def target_backend_names_with_source_frontends() -> Sequence[str]:
     """Return registered targets that also have native source frontends."""
     return BACKEND_REGISTRY.target_backend_names_with_source_frontends()
+
+
+def target_profiles(name: str) -> Sequence[str]:
+    """Return advertised target profiles for a registered backend."""
+    return BACKEND_REGISTRY.target_profiles(name)
 
 
 def get_backend_extension(name: str) -> str | None:

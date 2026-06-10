@@ -14,50 +14,74 @@ Built-in targets
    * - Target
      - Backend name
      - Aliases
+     - Target aliases
+     - Target profiles
      - Output extension
    * - DirectX / HLSL
      - ``directx``
      - ``hlsl``, ``dx``
+     - ``dx11``, ``dx12``, ``d3d11``, ``d3d12``
+     - ``directx-11``, ``directx-12``
      - ``.hlsl``
    * - OpenGL / GLSL
      - ``opengl``
      - ``glsl``, ``ogl``
+     - n/a
+     - n/a
      - ``.glsl``
    * - WebGL / GLSL ES
      - ``webgl``
      - ``webgl2``, ``essl``, ``glsl-es``
+     - n/a
+     - n/a
      - ``.webgl.glsl``
    * - WebGPU / WGSL
      - ``wgsl``
      - ``webgpu``
+     - n/a
+     - n/a
      - ``.wgsl``
    * - Metal
      - ``metal``
      - ``metal``, ``msl``
+     - n/a
+     - n/a
      - ``.metal``
    * - Vulkan SPIR-V
      - ``vulkan``
      - ``spirv``, ``spv``
+     - n/a
+     - n/a
      - ``.spvasm``
    * - CUDA
      - ``cuda``
      - ``cu``
+     - n/a
+     - n/a
      - ``.cu``
    * - HIP
      - ``hip``
      - ``hip``
+     - n/a
+     - n/a
      - ``.hip``
    * - Mojo
      - ``mojo``
      - ``mojo``
+     - n/a
+     - n/a
      - ``.mojo``
    * - Rust
      - ``rust``
      - ``rust``, ``rs``
+     - n/a
+     - n/a
      - ``.rs``
    * - Slang
      - ``slang``
      - ``slang``
+     - n/a
+     - n/a
      - ``.slang``
 
 Built-in sources

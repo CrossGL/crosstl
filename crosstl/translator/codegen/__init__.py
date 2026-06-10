@@ -16,6 +16,7 @@ from .registry import (
     register_backend,
     source_backend_names,
     target_backend_names_with_source_frontends,
+    target_profiles,
 )
 from .rust_codegen import RustCodeGen
 from .SPIRV_codegen import VulkanSPIRVCodeGen
@@ -36,6 +37,8 @@ register_backend(
         name="directx",
         codegen_class=HLSLCodeGen,
         aliases=("hlsl", "dx"),
+        target_aliases=("dx11", "dx12", "d3d11", "d3d12"),
+        target_profiles=("directx-11", "directx-12"),
         file_extensions=(".hlsl",),
         format_backend="directx",
     )
@@ -153,6 +156,7 @@ __all__ = [
     "backend_names",
     "source_backend_names",
     "target_backend_names_with_source_frontends",
+    "target_profiles",
 ]
 
 if "_SlangCodeGen" in globals() and _SlangCodeGen is not None:

@@ -278,6 +278,23 @@ def validate_backend_catalog(backends_data):
                 raise SupportMatrixError(f"Duplicate backend alias: {alias}")
             aliases.add(alias)
 
+        require_list(
+            backend.get("target_aliases", []),
+            f"Backend '{backend_id}' target_aliases",
+        )
+        for alias in backend.get("target_aliases", []):
+            validate_id(alias, f"Backend '{backend_id}' target alias '{alias}'")
+            if alias in aliases:
+                raise SupportMatrixError(f"Duplicate backend alias: {alias}")
+            aliases.add(alias)
+
+        require_list(
+            backend.get("target_profiles", []),
+            f"Backend '{backend_id}' target_profiles",
+        )
+        for profile in backend.get("target_profiles", []):
+            validate_id(profile, f"Backend '{backend_id}' target profile '{profile}'")
+
         if not path_exists(backend["translator_codegen"]):
             raise SupportMatrixError(
                 "Backend '{}' codegen path does not exist: {}".format(
@@ -492,6 +509,8 @@ def backend_inventory(backend):
         "id": backend["id"],
         "name": backend["name"],
         "aliases": backend.get("aliases", []),
+        "target_aliases": backend.get("target_aliases", []),
+        "target_profiles": backend.get("target_profiles", []),
         "source_kind": backend_source_kind(backend),
         "target_extension": backend.get("target_extension"),
         "translator_codegen": {
@@ -1000,6 +1019,8 @@ def render_docs(matrix):
         backend_rows.append(
             [
                 backend["name"],
+                ", ".join(backend.get("target_aliases", [])),
+                ", ".join(backend.get("target_profiles", [])),
                 backend.get("target_extension") or "",
                 backend["translator_codegen"]["path"],
                 backend["source_kind"],
@@ -1015,6 +1036,8 @@ def render_docs(matrix):
             "Backend inventory",
             [
                 "Backend",
+                "Target aliases",
+                "Target profiles",
                 "Ext",
                 "Target generator",
                 "Source kind",

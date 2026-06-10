@@ -9,6 +9,16 @@
         "hlsl",
         "dx"
       ],
+      "target_aliases": [
+        "dx11",
+        "dx12",
+        "d3d11",
+        "d3d12"
+      ],
+      "target_profiles": [
+        "directx-11",
+        "directx-12"
+      ],
       "target_extension": ".hlsl",
       "translator_codegen": "crosstl/translator/codegen/directx_codegen.py",
       "native_backend": "crosstl/backend/DirectX",

@@ -175,6 +175,28 @@ def test_backend_registry_tracks_target_only_backends_separately():
     assert registry.get("webgpu").source_registry_name is None
 
 
+def test_backend_registry_resolves_target_aliases_and_profiles():
+    registry = BackendRegistry()
+    registry.register(
+        BackendSpec(
+            name="directx",
+            codegen_class=_DummyCodeGen,
+            aliases=("hlsl", "dx"),
+            target_aliases=("dx11", "dx12", "d3d11", "d3d12"),
+            target_profiles=("directx-11", "directx-12"),
+            file_extensions=(".hlsl",),
+        )
+    )
+
+    assert registry.resolve_name("dx11") == "directx"
+    assert registry.resolve_name("D3D12") == "directx"
+    assert registry.get("dx12").name == "directx"
+    assert registry.target_profiles("hlsl") == (
+        "directx-11",
+        "directx-12",
+    )
+
+
 def test_backend_registry_can_map_target_to_differently_named_source_frontend():
     registry = BackendRegistry()
     registry.register(
@@ -198,6 +220,34 @@ def test_global_registry_exposes_clear_source_frontend_target_names():
     assert codegen.source_backend_names() == (
         codegen.target_backend_names_with_source_frontends()
     )
+
+
+def test_directx_target_profile_aliases_are_target_only():
+    register_default_sources()
+
+    assert codegen.normalize_backend_name("dx11") == "directx"
+    assert codegen.normalize_backend_name("dx12") == "directx"
+    assert codegen.normalize_backend_name("d3d11") == "directx"
+    assert codegen.normalize_backend_name("d3d12") == "directx"
+    assert codegen.target_profiles("directx") == (
+        "directx-11",
+        "directx-12",
+    )
+    assert SOURCE_REGISTRY.get("dx11") is None
+    assert SOURCE_REGISTRY.get("dx12") is None
+
+
+def test_directx_target_profile_alias_translate_api_roundtrip(tmp_path):
+    import crosstl
+
+    cgl_file = tmp_path / "test_shader.cgl"
+    cgl_file.write_text(SMOKE_SHADER, encoding="utf-8")
+
+    directx_output = crosstl.translate(str(cgl_file), backend="directx")
+    dx12_output = crosstl.translate(str(cgl_file), backend="dx12")
+
+    assert dx12_output == directx_output
+    assert "VSMain" in dx12_output
 
 
 @pytest.mark.parametrize(
