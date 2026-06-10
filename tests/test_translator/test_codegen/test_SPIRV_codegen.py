@@ -2,6 +2,7 @@ import re
 import shutil
 import subprocess
 
+import crosstl
 import pytest
 
 from crosstl.translator.ast import (
@@ -260,6 +261,63 @@ class TestSpirvId:
 
 
 class TestVulkanSPIRVCodeGen:
+    def assert_uint_int_min_literal_lowering(self, spv_code):
+        signed_int_types = set(re.findall(r"(%\d+) = OpTypeInt 32 1\b", spv_code))
+        signed_int_constants = {
+            value
+            for _, type_id, value in re.findall(
+                r"(%\d+) = OpConstant (%\d+) (-?\d+)\b", spv_code
+            )
+            if type_id in signed_int_types
+        }
+
+        assert "2147483648" in {
+            str(value) for value in spirv_uint_constant_values(spv_code).values()
+        }
+        assert "2147483648" not in signed_int_constants
+        assert "OpSNegate" not in spv_code
+        assert "OpISub" in spv_code
+        assert "OpBitcast" in spv_code
+
+    def test_signed_int_min_literal_lowers_through_unsigned_operand(self, tmp_path):
+        source_code = """
+        shader IntMinLiteral {
+            compute {
+                void main() {
+                    int value = -2147483648;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        self.assert_uint_int_min_literal_lowering(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_metal_unary_int_min_literal_translates_to_valid_spirv(self, tmp_path):
+        source_path = tmp_path / "unary.metal"
+        source_path.write_text(
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void unary_min_int() {
+                int value = -2147483648;
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        spv_code = crosstl.translate(
+            str(source_path), backend="vulkan", format_output=False
+        )
+
+        self.assert_uint_int_min_literal_lowering(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_initialization(self):
         gen = VulkanSPIRVCodeGen()
         assert gen.next_id == 1
