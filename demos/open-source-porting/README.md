@@ -46,12 +46,14 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, Metal, DirectX, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. OpenGL smoke validation for this case is tracked in issue #745. |
 | `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, Metal, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. OpenGL output is tracked in issue #746. |
 | `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. DirectX constant-parameter lowering is tracked in issue #755. |
+| `sascha-willems-vulkan-conservative-triangle` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream conservative raster triangle vertex shader without semantic edits. DirectX semantic lowering remains outside this checked target subset. |
 | `slang-hello-world-compute` | `shader-slang/slang` at `29e69b0bf626f87500be73a7fb3764db25658c66` | Apache-2.0 WITH LLVM-exception | Slang | CrossGL, Metal, DirectX, Vulkan | Uses the upstream compute shader unchanged. OpenGL compute semantic lowering is tracked in issue #752. |
 
 ## Source adjustments
 
-The DirectX, Metal performance, and Slang cases keep upstream source files
-unchanged. The Vulkan and Apple cases are reduced source slices copied from
+The DirectX, Metal performance, SaschaWillems triangle, and Slang cases keep
+upstream source files unchanged apart from repository formatting checks. The
+Vulkan Samples and Apple cases are reduced source slices copied from
 fixture-backed upstream examples so the demo remains small and deterministic.
 The reductions remove unrelated code around the shader construct being
 demonstrated; they do not patch translator output.
@@ -67,6 +69,12 @@ exposed OpenCL lowering gaps for OpenGL and DirectX artifacts. That translator
 issue is tracked in issue #751, and the case is intentionally not checked in
 until the generated target shaders validate across the intended platform
 matrix.
+
+The `SaschaWillems/Vulkan` headless compute shader was tested as a candidate
+and exposed storage-buffer lowering gaps for OpenGL, DirectX, and Metal
+artifacts. That translator issue is tracked in issue #756, and the case is
+intentionally not checked in until those target artifacts preserve buffer
+resource access.
 
 ## Generated artifacts
 

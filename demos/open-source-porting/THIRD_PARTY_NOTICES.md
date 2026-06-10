@@ -44,6 +44,15 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/bkvogel/metal_performance_testing/blob/b467b4b1dee0f7d9d43bda13856306ca3f1baea5/LICENSE
 
+## SaschaWillems/Vulkan
+
+- Repository: https://github.com/SaschaWillems/Vulkan
+- Commit: `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade`
+- Source path: `shaders/glsl/conservativeraster/triangle.vert`
+- License: MIT
+- License URL:
+  https://github.com/SaschaWillems/Vulkan/blob/2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade/LICENSE.md
+
 ## shader-slang/slang
 
 - Repository: https://github.com/shader-slang/slang

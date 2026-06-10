@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/triangle.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 639,
+        "file": "crosstl-out/cgl/triangle.cgl",
+        "length": 639,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 348,
+        "file": "triangle.vert",
+        "length": 348,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

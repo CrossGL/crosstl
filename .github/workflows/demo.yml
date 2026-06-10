@@ -95,6 +95,7 @@ jobs:
             --run-toolchains \
             --require-toolchain-runs \
             --case directx-graphics-samples-hello-triangle \
+            --case sascha-willems-vulkan-conservative-triangle \
             --target opengl \
             --target vulkan \
             --reports-dir support/generated/demo-reports/linux-opengl-vulkan
@@ -117,6 +118,12 @@ jobs:
             --check \
             --run-toolchains \
             --require-toolchain-runs \
+            --case directx-graphics-samples-hello-triangle \
+            --case vulkan-samples-dynamic-line-grid \
+            --case apple-modern-rendering-mesh-viewdir \
+            --case metal-performance-testing-matmul \
+            --case sascha-willems-vulkan-conservative-triangle \
+            --case slang-hello-world-compute \
             --target metal \
             --reports-dir support/generated/demo-reports/macos-metal
         shell: bash
