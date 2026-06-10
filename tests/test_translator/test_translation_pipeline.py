@@ -736,6 +736,33 @@ def test_hlsl_compute_scalar_splat_swizzle_lowers_for_vulkan_and_metal(tmp_path)
     assert "unsupported Metal program-scope groupshared store" in metal
 
 
+def test_metal_max_total_threads_metadata_translates_to_vulkan(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "mlx-max-total-threads.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        [[max_total_threads_per_threadgroup(1024)]]
+        kernel void pinned_kernel(
+            device float* out [[buffer(0)]],
+            uint index [[thread_position_in_grid]]) {
+            out[index] = 1.0;
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="vulkan", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert 'OpEntryPoint GLCompute' in generated
+    assert '"pinned_kernel"' in generated
+    assert "return semantic" not in generated
+
+
 @pytest.mark.parametrize("source_name", sorted(NATIVE_SOURCE_SNIPPETS))
 @pytest.mark.parametrize("target_backend", codegen.backend_names())
 def test_native_source_to_registered_target_pipeline_is_total(
