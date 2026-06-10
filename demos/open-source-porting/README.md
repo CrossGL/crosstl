@@ -48,6 +48,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `lonelydevil-vulkan-tutorial-triangle` | `lonelydevil/vulkan-tutorial-C-implementation` at `780ff146a6eccd7064a10e86363f3c2f7323825d` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream triangle shader pair unchanged. |
 | `spirv-cross-round-fragment` | `KhronosGroup/SPIRV-Cross` at `146679ff8255a6068518685599d7fb8761d1b570` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream fragment reference shader unchanged. |
 | `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. |
+| `angle-simple-texture-2d` | `google/angle` at `52232eaf409a28d77947df5622af274e1ef770c6` | BSD-style | GLSL ES | CrossGL, Metal, DirectX, Vulkan | Uses extracted upstream SimpleTexture2D shader strings. OpenGL reserved identifier lowering is tracked in issue #820. |
 | `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, Metal, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. OpenGL validation is tracked in issue #805. |
 | `arm-opengl-es-sdk-cube` | `ARM-software/opengl-es-sdk-for-android` at `c3caf759bb2e71fa9a118b3e3abd996cf00e660a` | MIT | GLSL ES | CrossGL, Metal, DirectX, Vulkan | Uses the upstream cube shader pair unchanged. OpenGL reserved identifier lowering is tracked in issue #820. |
 | `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. DirectX output validation is tracked in issue #807. |
@@ -79,6 +80,13 @@ Apple, and Rust-GPU/rust-gpu graphics cases are reduced source slices copied
 from fixture-backed upstream examples so the demo remains small and
 deterministic. The reductions remove unrelated code around the shader construct
 being demonstrated; they do not patch translator output.
+
+The `google/angle` SimpleTexture2D case extracts the upstream GLSL ES shader
+strings from `samples/simple_texture_2d/SimpleTexture2D.cpp` into standalone
+shader files so the project translation runner can treat them as ordinary
+translation units. The extraction adds only license/provenance comments and
+does not change shader semantics. OpenGL output is excluded for the same
+reserved `gl_FragColor` lowering issue tracked in issue #820.
 
 The `glfw/glfw` OpenGL triangle shader strings were tested as a candidate and
 exposed a CrossGL intermediate keyword collision: the fragment shader uses

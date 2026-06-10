@@ -26,6 +26,7 @@ def test_open_source_demo_cases_have_pinned_manifests_and_references():
     case_dirs = sorted(path for path in CASE_ROOT.iterdir() if path.is_dir())
 
     assert {path.name for path in case_dirs} == {
+        "angle-simple-texture-2d",
         "apple-modern-rendering-mesh-viewdir",
         "arm-opengl-es-sdk-cube",
         "glslang-push-constant-vertex",
@@ -146,6 +147,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
     workflow = (ROOT / ".github" / "workflows" / "demo.yml").read_text(encoding="utf-8")
 
     assert _workflow_step_cases(workflow, "Linux OpenGL and Vulkan smoke checks") == {
+        "angle-simple-texture-2d",
         "apple-modern-rendering-mesh-viewdir",
         "arm-opengl-es-sdk-cube",
         "directx-graphics-samples-hello-triangle",
@@ -170,6 +172,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "vulkan-samples-dynamic-line-grid",
     }
     assert _workflow_step_cases(workflow, "macOS Metal smoke checks") == {
+        "angle-simple-texture-2d",
         "apple-modern-rendering-mesh-viewdir",
         "arm-opengl-es-sdk-cube",
         "directx-graphics-samples-hello-triangle",
@@ -191,6 +194,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "vulkan-samples-dynamic-line-grid",
     }
     assert _workflow_step_cases(workflow, "Windows DirectX smoke checks") == {
+        "angle-simple-texture-2d",
         "apple-modern-rendering-mesh-viewdir",
         "arm-opengl-es-sdk-cube",
         "directx-graphics-samples-hello-triangle",
@@ -252,6 +256,8 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
         )
     )
     assert {
+        "demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.vert.hlsl",
+        "demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.frag.hlsl",
         "demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.vert.hlsl",
         "demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.frag.hlsl",
         "demos/open-source-porting/cases/directx-graphics-samples-hello-triangle/crosstl-out/directx/shaders.hlsl",

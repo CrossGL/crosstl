@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/SimpleTexture2D.vert.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 395,
+        "file": "crosstl-out/cgl/SimpleTexture2D.vert.cgl",
+        "length": 395,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 402,
+        "file": "SimpleTexture2D.vert",
+        "length": 402,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

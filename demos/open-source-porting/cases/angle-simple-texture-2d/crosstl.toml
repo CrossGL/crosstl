@@ -1,0 +1,6 @@
+[project]
+source_roots = ["."]
+include = ["SimpleTexture2D.vert", "SimpleTexture2D.frag"]
+targets = ["cgl", "metal", "directx", "vulkan"]
+output_dir = "crosstl-out"
+external_corpus_manifest = "corpus.json"

@@ -35,6 +35,15 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/KhronosGroup/Vulkan-Samples/blob/ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a/LICENSE
 
+## google/angle
+
+- Repository: https://github.com/google/angle
+- Commit: `52232eaf409a28d77947df5622af274e1ef770c6`
+- Source path: `samples/simple_texture_2d/SimpleTexture2D.cpp`
+- License: BSD-style permissive license
+- License URL:
+  https://github.com/google/angle/blob/52232eaf409a28d77947df5622af274e1ef770c6/LICENSE
+
 ## KhronosGroup/glslang
 
 - Repository: https://github.com/KhronosGroup/glslang
