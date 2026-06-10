@@ -1601,6 +1601,67 @@ def test_scan_report_records_vulkan_loader_linker_runtime_reference(tmp_path):
     ] == [("Makefile", "vulkan", "build-system", "vulkan-build-system")]
 
 
+def test_scan_report_records_webgl_host_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.ts").write_text(
+        textwrap.dedent("""
+            function render(gl: WebGL2RenderingContext, vertices) {
+              const shader = gl.createShader(gl.VERTEX_SHADER);
+              gl.shaderSource(shader, source);
+              gl.compileShader(shader);
+              const program = gl.createProgram();
+              gl.attachShader(program, shader);
+              gl.linkProgram(program);
+              gl.useProgram(program);
+              const buffer = gl.createBuffer();
+              gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+              gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+              gl.enableVertexAttribArray(0);
+              gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+              gl.drawElements(gl.TRIANGLES, 3, gl.UNSIGNED_SHORT, 0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.js").write_text(
+        textwrap.dedent("""
+            function createShader() {}
+            renderer.createProgram();
+            glish.createShader();
+            contextual.createProgram();
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["webgl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 14
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"webgl": 14}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 14}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.ts": 14}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.ts", "webgl", "runtime-api", "WebGL2RenderingContext"),
+        ("host.ts", "webgl", "runtime-api", "createShader"),
+        ("host.ts", "webgl", "runtime-api", "shaderSource"),
+        ("host.ts", "webgl", "runtime-api", "compileShader"),
+        ("host.ts", "webgl", "runtime-api", "createProgram"),
+        ("host.ts", "webgl", "runtime-api", "attachShader"),
+        ("host.ts", "webgl", "runtime-api", "linkProgram"),
+        ("host.ts", "webgl", "runtime-api", "useProgram"),
+        ("host.ts", "webgl", "runtime-api", "createBuffer"),
+        ("host.ts", "webgl", "runtime-api", "bindBuffer"),
+        ("host.ts", "webgl", "runtime-api", "bufferData"),
+        ("host.ts", "webgl", "runtime-api", "enableVertexAttribArray"),
+        ("host.ts", "webgl", "runtime-api", "vertexAttribPointer"),
+        ("host.ts", "webgl", "runtime-api", "drawElements"),
+    ]
+
+
 def test_scan_report_records_directx_11_runtime_references(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1643,6 +1704,37 @@ def test_scan_report_records_directx_11_runtime_references(tmp_path):
         ("host.cpp", "directx", "runtime-api", "ID3D11Device"),
         ("host.cpp", "directx", "runtime-api", "D3D11CreateDevice"),
         ("host.cpp", "directx", "runtime-api", "D3D11_SDK_VERSION"),
+    ]
+
+
+def test_scan_report_records_directx_dxgi_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            void recreate_swapchain(IDXGIFactory2* factory, IDXGISwapChain1* swapChain) {
+              DXGI_SWAP_CHAIN_DESC1 desc{};
+              CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["directx"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 4
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"directx": 4}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 4}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.cpp": 4}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.cpp", "directx", "runtime-api", "IDXGIFactory2"),
+        ("host.cpp", "directx", "runtime-api", "IDXGISwapChain1"),
+        ("host.cpp", "directx", "runtime-api", "DXGI_SWAP_CHAIN_DESC1"),
+        ("host.cpp", "directx", "runtime-api", "CreateDXGIFactory2"),
     ]
 
 

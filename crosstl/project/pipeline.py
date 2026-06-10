@@ -1301,7 +1301,10 @@ RUNTIME_REFERENCE_RULES = (
     (
         "directx",
         "runtime-api",
-        re.compile(r"\b((?:D3D11|D3D12|ID3D11|ID3D12|D3DCompile)[A-Za-z0-9_]*)\b"),
+        re.compile(
+            r"\b((?:D3D11|D3D12|ID3D11|ID3D12|D3DCompile|"
+            r"IDXGI|DXGI_|CreateDXGIFactory)[A-Za-z0-9_]*)\b"
+        ),
         None,
     ),
     (
@@ -1343,7 +1346,21 @@ RUNTIME_REFERENCE_RULES = (
     (
         "webgl",
         "runtime-api",
-        re.compile(r"\b(WebGL2RenderingContext|WebGLRenderingContext|createShader)\b"),
+        re.compile(r"\b(WebGL2RenderingContext|WebGLRenderingContext)\b"),
+        None,
+    ),
+    (
+        "webgl",
+        "runtime-api",
+        re.compile(
+            r"\b(?:gl|ctx|context|webgl|webgl2)\."
+            r"(attachShader|bindBuffer|bufferData|compileShader|createBuffer|"
+            r"createProgram|createShader|drawArrays|drawElements|"
+            r"enableVertexAttribArray|getAttribLocation|getProgramInfoLog|"
+            r"getProgramParameter|getShaderInfoLog|getShaderParameter|linkProgram|"
+            r"shaderSource|uniform(?:[1234][fi]v?|Matrix[234]fv)|useProgram|"
+            r"vertexAttribPointer)(?=\s*\()"
+        ),
         None,
     ),
     (

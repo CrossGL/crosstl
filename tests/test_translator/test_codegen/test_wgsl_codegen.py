@@ -249,6 +249,46 @@ def test_wgsl_codegen_preserves_explicit_set_and_binding_resources():
     assert "@group(6) @binding(8)\nvar<uniform> _Registered: Registered;" in generated
 
 
+def test_wgsl_auto_bindings_skip_later_explicit_bindings():
+    shader = """
+    shader WGSLLateExplicitBindings {
+        uniform vec4 autoTint;
+        sampler2D explicitTexture @binding(0);
+        compute {
+            void main() {
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(0)\nvar explicitTexture: texture_2d<f32>;" in generated
+    assert "@group(0) @binding(1)\nvar explicitTexture_sampler: sampler;" in generated
+    assert "@group(0) @binding(2)\nvar<uniform> autoTint: vec4<f32>;" in generated
+
+
+def test_wgsl_synthetic_sampler_skips_occupied_binding():
+    shader = """
+    shader WGSLSyntheticSamplerCollision {
+        sampler occupied @binding(1);
+        sampler2D colorTex @binding(0);
+        compute {
+            void main() {
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(1)\nvar occupied: sampler;" in generated
+    assert "@group(0) @binding(0)\nvar colorTex: texture_2d<f32>;" in generated
+    assert "@group(0) @binding(2)\nvar colorTex_sampler: sampler;" in generated
+
+
 def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings():
     shader = """
     shader WGSLCBuffer {
