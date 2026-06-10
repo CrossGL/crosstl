@@ -1638,7 +1638,7 @@ class HLSLToCrossGLConverter:
             if attr_name.lower() in skip_names:
                 continue
             attr_name = self.crossgl_attribute_name(attr_name)
-            prefix = "@" if attr_name.lower() == "domain" else "@ "
+            prefix = "@" if attr_name in self.crossgl_reserved_identifiers else "@ "
             args = getattr(attr, "args", getattr(attr, "arguments", []))
             if args:
                 rendered_args = ", ".join(self.generate_expression(arg) for arg in args)

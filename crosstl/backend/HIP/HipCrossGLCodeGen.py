@@ -358,6 +358,7 @@ class HipToCrossGLConverter:
         self.suppress_device_query_value_access = 0
         self.suppress_identifier_name_rewrite = 0
         self.generated_matrix_helper_types = set()
+        self.anonymous_enum_count = 0
 
     def generate(self, ast_node):
         self.output = []
@@ -385,6 +386,7 @@ class HipToCrossGLConverter:
         self.suppress_device_attribute_value_access = 0
         self.suppress_device_query_value_access = 0
         self.suppress_identifier_name_rewrite = 0
+        self.anonymous_enum_count = 0
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -7775,7 +7777,7 @@ class HipToCrossGLConverter:
         return normalized_name
 
     def visit_EnumNode(self, node):
-        name = node.name or ""
+        name = node.name or self.next_anonymous_enum_name()
         underlying = getattr(node, "underlying_type", None)
         suffix = (
             f" : {self.convert_hip_type_to_crossgl(underlying)}" if underlying else ""
@@ -7793,12 +7795,21 @@ class HipToCrossGLConverter:
 
             if member_value is not None:
                 value = self.visit(member_value)
+                member_name = self.sanitize_enum_member_name(member_name)
                 self.emit(f"{member_name} = {value},")
             else:
-                self.emit(f"{member_name},")
+                self.emit(f"{self.sanitize_enum_member_name(member_name)},")
 
         self.indent_level -= 1
         self.emit("};")
+
+    def sanitize_enum_member_name(self, name):
+        return self.sanitize_identifier_name(name)
+
+    def next_anonymous_enum_name(self):
+        name = f"anonymous_enum_{self.anonymous_enum_count}"
+        self.anonymous_enum_count += 1
+        return name
 
     # Legacy method for backwards compatibility
     def convert(self, node):

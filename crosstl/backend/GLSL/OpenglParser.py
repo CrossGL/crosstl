@@ -412,6 +412,8 @@ VERTEX_BUILTINS = {
     "gl_BaseInstance",
     "gl_DrawID",
 }
+TRANSFORM_FEEDBACK_DEFAULT_LAYOUT_KEYS = {"xfb_buffer", "xfb_stride"}
+TRANSFORM_FEEDBACK_LAYOUT_KEYS = TRANSFORM_FEEDBACK_DEFAULT_LAYOUT_KEYS | {"xfb_offset"}
 
 
 class GLSLParser:
@@ -426,6 +428,8 @@ class GLSLParser:
         self.current_token = self.tokens[self.index]
         self.anonymous_struct_count = 0
         self.known_type_names = set()
+        self.current_xfb_output_buffer = None
+        self.xfb_output_stride_by_buffer = {}
 
     def is_auto_shader_type(self, shader_type):
         return shader_type in AUTO_SHADER_TYPES
@@ -523,7 +527,9 @@ class GLSLParser:
 
             if layout is not None and self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
-                layouts.append({"layout": layout, "qualifiers": qualifiers})
+                layout = self.consume_standalone_xfb_output_layout(qualifiers, layout)
+                if layout is not None:
+                    layouts.append({"layout": layout, "qualifiers": qualifiers})
                 continue
 
             if self.is_type_only_layout_declaration_start(qualifiers, layout):
@@ -821,6 +827,76 @@ class GLSLParser:
 
     def is_io_qualifier_set(self, qualifiers):
         return bool({"in", "out", "inout", "attribute", "varying"} & set(qualifiers))
+
+    def layout_value_key(self, value):
+        if isinstance(value, NumberNode):
+            return value.value
+        if isinstance(value, VariableNode) and not value.vtype:
+            return value.name
+        return str(value)
+
+    def pop_layout_key(self, layout, key_name):
+        for key in list(layout):
+            if str(key).lower() == key_name:
+                return layout.pop(key)
+        return None
+
+    def get_layout_key(self, layout, key_name):
+        for key, value in (layout or {}).items():
+            if str(key).lower() == key_name:
+                return value
+        return None
+
+    def layout_keys_lower(self, layout):
+        return {str(key).lower() for key in layout or {}}
+
+    def has_out_qualifier(self, qualifiers):
+        return "out" in {str(qualifier).lower() for qualifier in qualifiers or []}
+
+    def consume_standalone_xfb_output_layout(self, qualifiers, layout):
+        if not self.has_out_qualifier(qualifiers):
+            return layout
+
+        remaining = dict(layout)
+        xfb_buffer = self.pop_layout_key(remaining, "xfb_buffer")
+        if xfb_buffer is not None:
+            self.current_xfb_output_buffer = xfb_buffer
+
+        xfb_stride = self.pop_layout_key(remaining, "xfb_stride")
+        if xfb_stride is not None:
+            if self.current_xfb_output_buffer is None:
+                self.current_xfb_output_buffer = "0"
+            self.xfb_output_stride_by_buffer[
+                self.layout_value_key(self.current_xfb_output_buffer)
+            ] = xfb_stride
+
+        return remaining or None
+
+    def output_layout_with_xfb_defaults(self, qualifiers, layout):
+        if not layout or not self.has_out_qualifier(qualifiers):
+            return layout
+
+        layout_keys = self.layout_keys_lower(layout)
+        if not layout_keys & TRANSFORM_FEEDBACK_LAYOUT_KEYS:
+            return layout
+
+        merged = dict(layout)
+        xfb_buffer = self.get_layout_key(merged, "xfb_buffer")
+        if xfb_buffer is None and (
+            "xfb_offset" in layout_keys or "xfb_stride" in layout_keys
+        ):
+            xfb_buffer = self.current_xfb_output_buffer
+            if xfb_buffer is not None:
+                merged["xfb_buffer"] = xfb_buffer
+
+        if self.get_layout_key(merged, "xfb_stride") is None and xfb_buffer is not None:
+            stride = self.xfb_output_stride_by_buffer.get(
+                self.layout_value_key(xfb_buffer)
+            )
+            if stride is not None:
+                merged["xfb_stride"] = stride
+
+        return merged
 
     def apply_variable_io_type(self, var, qualifiers):
         if "inout" in qualifiers:
@@ -1410,6 +1486,9 @@ class GLSLParser:
                         )
                 else:
                     semantic = self.parse_hlsl_semantic()
+            variable_layout = self.output_layout_with_xfb_defaults(
+                qualifiers, variable_layout
+            )
 
             var = VariableNode(
                 declarator_type,
@@ -1537,6 +1616,7 @@ class GLSLParser:
         register_layout = self.parse_hlsl_register_annotation()
         if register_layout:
             layout = self.merge_layout_qualifiers(layout, register_layout)
+        layout = self.output_layout_with_xfb_defaults(qualifiers, layout)
         self.skip_newlines()
         self.eat("LBRACE")
 

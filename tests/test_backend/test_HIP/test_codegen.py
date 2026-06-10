@@ -375,6 +375,32 @@ class TestHipCodeGen:
         assert "MemoryMode::PAGED" in result
         assert "EnumNode" not in result
 
+    def test_current_rocm_stb_anonymous_enum_codegen_reparse(self):
+        # Reduced from:
+        # repo: https://github.com/ROCm/rocm-examples
+        # commit: adaf64a066eecb4ad90036dfd1838fc95bed9914
+        # path: Applications/optical_flow/stb_image.h
+        code = """
+        enum {
+            STBI_default = 0,
+            STBI_grey = 1,
+            STBI_rgb_alpha = 4,
+        };
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+        assert "enum anonymous_enum_0 {" in result
+        assert "STBI_default = 0," in result
+        assert "STBI_rgb_alpha = 4," in result
+        assert "enum  {" not in result
+
     def test_inline_assembly_conversion(self):
         code = r"""
         __global__ void asmKernel(float* out, float in) {

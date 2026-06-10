@@ -222,6 +222,21 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "ef7d2c97b4e5158a230aca54100b15cd3b9fa815",
         "path": "clang/lib/Headers/opencl-c-base.h",
     },
+    "llvm_clang_opencl_bool_vector_typedef": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "ef7d2c97b4e5158a230aca54100b15cd3b9fa815",
+        "path": "clang/test/SemaOpenCL/bool-vectors.cl",
+    },
+    "llvm_clang_opencl_convergent_parameter_attribute": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "ef7d2c97b4e5158a230aca54100b15cd3b9fa815",
+        "path": "clang/test/SemaOpenCL/convergent.cl",
+    },
+    "llvm_clang_opencl_vector_typedef_middle_attribute": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "ef7d2c97b4e5158a230aca54100b15cd3b9fa815",
+        "path": "clang/test/CodeGenOpenCL/vector_odd.cl",
+    },
     "llvm_clang_opencl_generic_address_space_keyword": {
         "url": "https://github.com/llvm/llvm-project",
         "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
@@ -1211,6 +1226,64 @@ def test_external_llvm_clang_opencl_c_base_builtin_typedef_macros_codegen_repars
     assert "typedef i64 ptrdiff_t;" in crossgl
     assert "typedef i64 intptr_t;" in crossgl
     assert "typedef u64 uintptr_t;" in crossgl
+
+
+def test_external_llvm_clang_opencl_bool_vector_typedef_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["llvm_clang_opencl_bool_vector_typedef"]
+    assert source_info["commit"] == "ef7d2c97b4e5158a230aca54100b15cd3b9fa815"
+    assert source_info["path"] == "clang/test/SemaOpenCL/bool-vectors.cl"
+
+    source = """
+    typedef __attribute__((ext_vector_type(16))) _Bool bool8;
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].alias_type == "_Bool"
+    assert "typedef bool bool8;" in crossgl
+    assert "_Bool" not in crossgl
+
+
+def test_external_llvm_clang_opencl_convergent_parameter_attribute_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "llvm_clang_opencl_convergent_parameter_attribute"
+    ]
+    assert source_info["commit"] == "ef7d2c97b4e5158a230aca54100b15cd3b9fa815"
+    assert source_info["path"] == "clang/test/SemaOpenCL/convergent.cl"
+
+    source = """
+    void f3(int a __attribute__((convergent)));
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].name == "f3"
+    assert ast.statements[0].params == [{"type": "int", "name": "a"}]
+    assert "__attribute__" not in crossgl
+    assert "void f3(i32 a)" in crossgl
+
+
+def test_external_llvm_clang_opencl_vector_typedef_middle_attribute_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "llvm_clang_opencl_vector_typedef_middle_attribute"
+    ]
+    assert source_info["commit"] == "ef7d2c97b4e5158a230aca54100b15cd3b9fa815"
+    assert source_info["path"] == "clang/test/CodeGenOpenCL/vector_odd.cl"
+
+    source = """
+    typedef unsigned char __attribute__((ext_vector_type(3))) uchar3;
+
+    kernel void test_odd_vector1(uchar3 lhs) {
+      lhs.odd = 1;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].name == "uchar3"
+    assert ast.statements[1].params == [{"type": "uchar3", "name": "lhs"}]
+    assert "typedef u8 uchar3;" in crossgl
+    assert "lhs.odd = 1;" in crossgl
 
 
 def test_external_pocl_opencl_c_sync_builtin_declarations_parse():

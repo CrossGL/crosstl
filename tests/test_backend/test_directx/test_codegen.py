@@ -2194,6 +2194,39 @@ def test_codegen_mesh_task_stages():
     assert "task" in lowered
 
 
+def test_codegen_node_shader_attribute_reparses_from_dxc_callgraph():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/HLSLFileCheck/validation/callgraph/deriv-in-nested-fn-node-lib68-launch.hlsl
+    code = textwrap.dedent("""
+        [noinline] export
+        void intermediate() {
+        }
+
+        [shader("node")]
+        [NodeLaunch("thread")]
+        void main() {
+            intermediate();
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert '@shader("node")' in crossgl
+    assert '@ shader("node")' not in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    main = next(
+        function for function in shader_ast.functions if function.name == "main"
+    )
+
+    assert [
+        (attr.name, [arg.value for arg in attr.arguments]) for attr in main.attributes
+    ] == [
+        ("shader", ["node"]),
+        ("NodeLaunch", ["thread"]),
+    ]
+
+
 def test_codegen_pascal_case_mesh_attributes_infer_stage():
     code = textwrap.dedent("""
         struct VertexOut {
@@ -2765,7 +2798,7 @@ def test_codegen_extra_attributes_emitted():
     output = generate_crossgl(EXTRA_ATTRIBUTES_HLSL)
     lowered = output.lower()
     assert "@ unroll" in lowered
-    assert "@ loop" in lowered
+    assert "@loop" in lowered
     assert "@ branch" in lowered
     assert "@ flatten" in lowered
     assert "@ maxtessfactor" in lowered

@@ -243,6 +243,79 @@ class OpenCLParser(HipParser):
 
         return OpenCLProgramNode(statements)
 
+    def skip_cpp_attributes_at_pos(self, index):
+        while index < len(self.tokens):
+            old_index = index
+            index = super().skip_cpp_attributes_at_pos(index)
+            index = self.skip_type_attribute_prefixes_at_pos(index)
+            if index == old_index:
+                break
+        return index
+
+    def skip_parameter_attributes(self):
+        old_pos = None
+        while self.current_token and self.pos != old_pos:
+            old_pos = self.pos
+            self.skip_cpp_attributes()
+            self.parse_type_attribute_prefixes()
+
+    def parse_parameter_list(self):
+        params = []
+        previous_base_type = None
+
+        self.skip_newlines()
+        if self.match("RPAREN"):
+            return params
+        if self.match("VOID") and self.peek() and self.peek().type == "RPAREN":
+            self.advance()
+            return params
+
+        while True:
+            self.skip_newlines()
+            if self.match("RPAREN"):
+                break
+
+            self.skip_parameter_attributes()
+            if previous_base_type and self.is_parameter_declarator_continuation():
+                param_type = self.parse_declarator_prefix(previous_base_type)
+            else:
+                param_type = self.parse_type()
+                previous_base_type = self.strip_declarator_markers(param_type)
+            self.skip_newlines()
+
+            param_name = ""
+            function_pointer_name = self.parse_function_pointer_parameter_declarator()
+            if function_pointer_name is not None:
+                param_type += " (*)"
+                param_name = function_pointer_name
+            elif self.is_declarator_name_token():
+                param_name = self.current_token.value
+                self.advance()
+                self.skip_parameter_attributes()
+
+            if self.match("ELLIPSIS"):
+                param_type += " ..."
+                self.advance()
+                self.skip_newlines()
+
+            if not param_name and self.is_declarator_name_token():
+                param_name = self.current_token.value
+                self.advance()
+                self.skip_parameter_attributes()
+
+            param_type += self.parse_array_suffix()
+            self.skip_default_parameter_value()
+            params.append({"type": param_type, "name": param_name})
+
+            self.skip_newlines()
+            if self.match("COMMA"):
+                self.advance()
+                self.skip_newlines()
+            else:
+                break
+
+        return params
+
     def parse_expression_statement(self):
         expressions = [self.parse_expression()]
         self.skip_newlines()
@@ -683,6 +756,7 @@ class OpenCLParser(HipParser):
         alias_type = base_type
         if allow_prefix:
             alias_type = self.parse_declarator_prefix(alias_type)
+        self.parse_type_attribute_prefixes()
 
         block_declarator = self.parse_opencl_block_pointer_declarator()
         if block_declarator is not None:

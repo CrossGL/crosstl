@@ -49,6 +49,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "signed char": "i8",
         "unsigned char": "u8",
         "uchar": "u8",
+        "_Bool": "bool",
         "signed short": "i16",
         "unsigned short": "u16",
         "ushort": "u16",

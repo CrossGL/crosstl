@@ -4298,6 +4298,57 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_CROSS_INTEGER_BITCAST_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
+; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
+; Source path: shaders/asm/comp/atomic-decrement.asm.comp
+; Reduced from signed GlobalInvocationId component bitcast to unsigned output.
+OpCapability Shader
+OpCapability ImageBuffer
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %thread_id
+OpExecutionMode %main LocalSize 4 1 1
+OpName %thread_id "vThreadID"
+OpName %Output "Output"
+OpMemberName %Output 0 "unsignedValue"
+OpMemberName %Output 1 "signedValue"
+OpName %output "output"
+OpDecorate %thread_id BuiltIn GlobalInvocationId
+OpDecorate %Output BufferBlock
+OpMemberDecorate %Output 0 Offset 0
+OpMemberDecorate %Output 1 Offset 4
+OpDecorate %output DescriptorSet 0
+OpDecorate %output Binding 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%int = OpTypeInt 32 1
+%v3int = OpTypeVector %int 3
+%Output = OpTypeStruct %uint %int
+%ptr_input_v3int = OpTypePointer Input %v3int
+%ptr_input_int = OpTypePointer Input %int
+%ptr_output_block = OpTypePointer Uniform %Output
+%ptr_output_uint = OpTypePointer Uniform %uint
+%ptr_output_int = OpTypePointer Uniform %int
+%zero = OpConstant %uint 0
+%one = OpConstant %uint 1
+%all_bits = OpConstant %uint 4294967295
+%thread_id = OpVariable %ptr_input_v3int Input
+%output = OpVariable %ptr_output_block Uniform
+%main = OpFunction %void None %fn
+%label = OpLabel
+%thread_x_ptr = OpAccessChain %ptr_input_int %thread_id %zero
+%thread_x = OpLoad %int %thread_x_ptr
+%unsigned_bits = OpBitcast %uint %thread_x
+%unsigned_ptr = OpAccessChain %ptr_output_uint %output %zero
+OpStore %unsigned_ptr %unsigned_bits
+%signed_bits = OpBitcast %int %all_bits
+%signed_ptr = OpAccessChain %ptr_output_int %output %one
+OpStore %signed_ptr %signed_bits
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_SAT_CONVERT_STOU_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
 ; Source commit: 1c74ae51a0478e15e3460fcc536b46c792684d2e
@@ -7861,6 +7912,21 @@ def test_spirv_tools_bitcast_success_codegen_reparse():
     assert "vecOut = uintBitsToFloat(uint2(1, 2));" in generated_code
     assert "float_value" not in generated_code
     assert "vec_value" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_cross_integer_bitcast_codegen_reparse():
+    tokens = tokenize_code(SPIRV_CROSS_INTEGER_BITCAST_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "int3 gl_GlobalInvocationID @input @gl_GlobalInvocationID;" in generated_code
+    assert (
+        "output[0].unsignedValue = asuint(gl_GlobalInvocationID[0]);" in generated_code
+    )
+    assert "output[0].signedValue = asint(4294967295);" in generated_code
+    assert "spirvBitcast_" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

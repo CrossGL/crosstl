@@ -295,6 +295,45 @@ def test_codegen_function_call_array_sizes_roundtrip_from_glslang_constfold():
     )
 
 
+def test_codegen_transform_feedback_defaults_reparse_from_glslang():
+    # Reduced from KhronosGroup/glslang Test/spv.xfb.vert at
+    # 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515. GLSL transform-feedback
+    # defaults are ordered, so conflicting xfb_buffer defaults must be folded
+    # onto the affected output declarations instead of emitted as global stage
+    # layouts that CrossGL validation treats as simultaneous.
+    code = textwrap.dedent("""
+        #version 450
+
+        layout(xfb_buffer = 3) out;
+        layout(xfb_stride = 48) out;
+        layout(xfb_offset = 12, location = 0) out float out1;
+
+        layout(xfb_buffer = 2) out;
+        layout(location=1) out outXfb {
+            layout(xfb_buffer = 2, xfb_stride = 32, xfb_offset = 8) float out2;
+        };
+
+        layout(xfb_buffer = 1, location=3) out outXfb2 {
+            layout(xfb_stride = 64, xfb_offset = 60) float out3;
+        };
+
+        layout(location = 4, xfb_buffer = 0, xfb_offset = 4) out float out4;
+
+        void main()
+        {
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert "layout(xfb_buffer = 3) out;" not in crossgl
+    assert (
+        "float out1 @location(0) @xfb_buffer(3) @xfb_offset(12) @xfb_stride(48);"
+        in crossgl
+    )
+    assert "float out4 @location(4) @xfb_buffer(0) @xfb_offset(4);" in crossgl
+
+
 def test_codegen_half_float_suffix_and_ssbo_struct_array_roundtrip_from_glslang():
     # Reduced from KhronosGroup/glslang spv.float16.frag and bfloat struct
     # constructor coverage.

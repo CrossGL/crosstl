@@ -4818,6 +4818,8 @@ class VulkanParser:
             ("float", "int"): "floatBitsToInt",
             ("float", "uint"): "floatBitsToUint",
             ("int", "float"): "intBitsToFloat",
+            ("int", "uint"): "asuint",
+            ("uint", "int"): "asint",
             ("uint", "float"): "uintBitsToFloat",
         }.get((source_family, result_family))
 
