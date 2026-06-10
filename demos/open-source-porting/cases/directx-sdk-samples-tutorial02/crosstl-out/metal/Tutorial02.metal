@@ -16,4 +16,3 @@ vertex float4 VS(VS_Input _crossglInput [[stage_in]]) {
 fragment float4 PS(float4 Pos [[position]]) {
     return float4(1.0, 1.0, 0.0, 1.0);
 }
-
