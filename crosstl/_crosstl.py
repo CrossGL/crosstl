@@ -611,6 +611,148 @@ def _run_plan_runtime(args):
     return 0 if payload["success"] else 1
 
 
+def _format_runtime_artifact_manifest(payload):
+    lines = [f"Runtime artifact manifest: {payload.get('sourceReport')}"]
+    for header_line in (
+        _format_payload_schema_version(payload, "Manifest schema version"),
+        _format_payload_kind(payload, "Manifest kind"),
+        _format_payload_generated_at(payload, "Manifest generated at"),
+        _format_payload_hash(payload, "sourceReportHash", "Source report hash"),
+    ):
+        if header_line:
+            lines.append(header_line)
+    lines.append(f"Status: {'ok' if payload.get('success') else 'failed'}")
+    scope = payload.get("scope")
+    if isinstance(scope, str) and scope:
+        lines.append(f"Manifest scope: {scope}")
+    non_goals = payload.get("nonGoals")
+    if isinstance(non_goals, list):
+        non_goal_labels = [
+            non_goal for non_goal in non_goals if isinstance(non_goal, str) and non_goal
+        ]
+        if non_goal_labels:
+            lines.append(f"Manifest non-goals: {', '.join(non_goal_labels)}")
+
+    project = payload.get("project")
+    for project_line in (
+        _format_project_root_path(project),
+        _format_project_output_dir(project),
+        _format_project_string_list(project, "Project targets", "targets"),
+    ):
+        if project_line:
+            lines.append(project_line)
+
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        lines.append(
+            "Summary: "
+            f"{summary.get('targetCount', 0)} targets, "
+            f"{summary.get('artifactCount', 0)} runtime artifacts, "
+            f"{summary.get('failedArtifactCount', 0)} failed artifacts, "
+            f"{summary.get('runtimeReferenceCount', 0)} runtime references"
+        )
+
+    runtime_plan = payload.get("runtimePlan")
+    if isinstance(runtime_plan, Mapping):
+        contract_name = runtime_plan.get("contract")
+        contract_status = runtime_plan.get("contractStatus")
+        if isinstance(contract_name, str) and contract_name:
+            suffix = (
+                f" ({contract_status})"
+                if isinstance(contract_status, str) and contract_status
+                else ""
+            )
+            lines.append(f"Runtime plan contract: {contract_name}{suffix}")
+        issue = runtime_plan.get("contractIssue")
+        if isinstance(issue, str) and issue:
+            lines.append(f"Runtime plan contract issue: {issue}")
+        for line in (
+            _format_count_rollup(
+                "Runtime references by backend",
+                runtime_plan.get("runtimeReferencesByBackend"),
+                include_zero=False,
+            ),
+            _format_count_rollup(
+                "Runtime references by kind",
+                runtime_plan.get("runtimeReferencesByKind"),
+                include_zero=False,
+            ),
+            _format_count_rollup(
+                "Runtime references by path",
+                runtime_plan.get("runtimeReferencesByPath"),
+                include_zero=False,
+            ),
+        ):
+            if line:
+                lines.append(line)
+
+    targets = payload.get("targets", [])
+    if targets:
+        lines.append("Runtime targets:")
+        for target in targets:
+            if not isinstance(target, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"{target.get('target', 'unknown')}: "
+                f"{target.get('translatedArtifactCount', 0)} translated, "
+                f"{target.get('failedArtifactCount', 0)} failed, "
+                f"{target.get('runtimeReferenceCount', 0)} runtime references"
+            )
+
+    artifacts = payload.get("artifacts", [])
+    if artifacts:
+        lines.append("Runtime artifacts:")
+        for artifact in artifacts:
+            if not isinstance(artifact, Mapping):
+                continue
+            details = []
+            source_backend = artifact.get("sourceBackend")
+            if isinstance(source_backend, str) and source_backend:
+                details.append(f"source backend: {source_backend}")
+            variant = artifact.get("variant")
+            if isinstance(variant, str) and variant:
+                details.append(f"variant: {variant}")
+            source_remap = artifact.get("sourceRemap")
+            if isinstance(source_remap, Mapping):
+                source_remap_path = source_remap.get("path")
+                if isinstance(source_remap_path, str) and source_remap_path:
+                    details.append(f"source remap: {source_remap_path}")
+            detail_suffix = f" [{'; '.join(details)}]" if details else ""
+            lines.append(
+                "- "
+                f"{artifact.get('target', 'unknown')}: "
+                f"{artifact.get('source', '<unknown>')} -> "
+                f"{artifact.get('path', '<unknown>')}{detail_suffix}"
+            )
+
+    diagnostics = payload.get("diagnostics", [])
+    if diagnostics:
+        lines.append("Diagnostics:")
+        for diagnostic in diagnostics:
+            if isinstance(diagnostic, Mapping):
+                lines.append(_format_project_diagnostic_line(diagnostic))
+    return "\n".join(lines) + "\n"
+
+
+def _run_runtime_manifest(args):
+    from .project import build_runtime_artifact_manifest
+
+    payload = build_runtime_artifact_manifest(args.report)
+    if args.format == "sarif":
+        _write_json_payload(
+            _format_project_diagnostics_sarif(
+                payload, tool_name="CrossTL runtime artifact manifest"
+            ),
+            args.output,
+        )
+    elif args.format == "text":
+        _write_text_payload(_format_runtime_artifact_manifest(payload), args.output)
+    else:
+        _write_json_payload(payload, args.output)
+    return 0 if payload["success"] else 1
+
+
 def _format_count_rollup(label, counts, *, include_zero=True):
     if not isinstance(counts, Mapping):
         return None
@@ -4141,6 +4283,24 @@ def _build_parser():
     )
     plan_runtime_parser.set_defaults(func=_run_plan_runtime)
 
+    runtime_manifest_parser = subparsers.add_parser(
+        "runtime-manifest",
+        help="Build a runtime artifact manifest from a project report",
+    )
+    runtime_manifest_parser.add_argument(
+        "report", help="Project portability report JSON"
+    )
+    runtime_manifest_parser.add_argument(
+        "--format",
+        choices=("json", "text", "sarif"),
+        default="json",
+        help="Manifest output format",
+    )
+    runtime_manifest_parser.add_argument(
+        "--output", "-o", help="Write runtime artifact manifest; use '-' for stdout"
+    )
+    runtime_manifest_parser.set_defaults(func=_run_runtime_manifest)
+
     report_parser = subparsers.add_parser(
         "report", help="Emit a scan-only project portability report"
     )
@@ -4168,6 +4328,7 @@ def _use_legacy_cli(argv):
         "validate-project",
         "inspect-report",
         "plan-runtime",
+        "runtime-manifest",
         "report",
     }
     if not argv or argv[0] in {"-h", "--help"}:
