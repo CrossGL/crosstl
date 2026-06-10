@@ -747,6 +747,59 @@ def test_project_runtime_package_handoff_is_first_class_support_feature():
         ) in backend_support["evidence"]
 
 
+def test_project_runtime_package_inspection_is_first_class_support_feature():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.runtime_package_inspection"]
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Runtime package inspection"
+    assert set(feature["support"]) == {backend["id"] for backend in matrix["backends"]}
+    for backend_support in feature["support"].values():
+        assert backend_support["status"] == "supported"
+        assert "crosstl-runtime-package-inspection" in backend_support["notes"]
+        assert "verifies copied packaged artifact" in backend_support["notes"]
+        assert "source-remap sidecar" in backend_support["notes"]
+        assert "ready and failed host binding records" in backend_support["notes"]
+        assert "runtime-loader-plan-v1" in backend_support["notes"]
+        assert "Inspection is read-only" in backend_support["notes"]
+        assert "does not rewrite host application code" in backend_support["notes"]
+        assert "execute device code" in backend_support["notes"]
+        assert "install target SDKs" in backend_support["notes"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_runtime_package_reports_ready_bindings"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_runtime_package_detects_missing_packaged_artifact"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_runtime_package_detects_missing_source_remap"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_runtime_package_rejects_failed_package"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_runtime_package_text_outputs_readiness"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_runtime_package_json_writes_output"
+        ) in backend_support["evidence"]
+
+
 def test_project_runtime_host_binding_plan_is_first_class_support_feature():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(

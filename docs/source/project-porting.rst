@@ -380,6 +380,24 @@ artifact for host or build-system tooling; it does not rewrite host application
 code, execute device code, generate runtime framework code, or install target
 SDKs.
 
+Inspect a runtime handoff package before host binding:
+
+.. code-block:: bash
+
+   python -m crosstl inspect-runtime-package \
+     crosstl-runtime-package/runtime-package.json \
+     --format text
+
+Runtime package inspections emit a ``crosstl-runtime-package-inspection`` JSON
+document with ready and failed host-binding records. The inspection is read-only
+and verifies copied packaged artifacts and source-remap sidecars against the
+package manifest's recorded paths, hashes, and byte sizes. Missing, stale, or
+malformed package contents are reported as structured diagnostics before host
+loader or build-system tooling consumes the handoff package. Inspection
+preserves the ``runtime-loader-plan-v1`` summary linkage and does not rewrite
+host application code, execute device code, generate runtime framework code, or
+install target SDKs.
+
 Build a host binding plan from a runtime package manifest:
 
 .. code-block:: bash
