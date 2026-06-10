@@ -26,8 +26,10 @@ jobs:
         exclude:
           - python-version: "3.8"
             os: windows-latest
+        include:
           - python-version: "3.9"
             os: windows-latest
+            runner: windows-2022
 
     steps:
       - uses: actions/checkout@v4

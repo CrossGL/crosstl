@@ -9,14 +9,12 @@ checked-in machine-readable and Sphinx documentation artifacts.
 import argparse
 import difflib
 import hashlib
+import importlib.util
 import json
 import os
 import re
 import sys
-import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,8 +24,22 @@ FEATURES_PATH = SUPPORT_DIR / "features.json"
 GENERATED_DIR = SUPPORT_DIR / "generated"
 MATRIX_JSON_PATH = GENERATED_DIR / "support-matrix.json"
 GRAPHICS_ROADMAP_JSON_PATH = GENERATED_DIR / "graphics-backend-roadmap.json"
+PROJECT_PORTING_ROADMAP_JSON_PATH = GENERATED_DIR / "project-porting-roadmap.json"
 DOCS_RST_PATH = ROOT / "docs" / "source" / "support-matrix.rst"
 DEFAULT_DOC_REPORT_PATH = GENERATED_DIR / "backend-docs-report.json"
+
+
+def load_support_signals_module():
+    spec = importlib.util.spec_from_file_location(
+        "support_signals",
+        ROOT / "tools" / "support_signals.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
 
 STATUS_CODES = {
     "supported": "Y",
@@ -54,6 +66,7 @@ BACKLOG_STATUSES = {
 }
 
 GRAPHICS_BACKEND_IDS = ("directx", "opengl", "metal")
+PROJECT_PORTING_CATEGORY = "project"
 GENERATED_DIFF_PREVIEW_LIMIT = 120
 
 TEST_PATTERN = re.compile(r"^\s*def\s+test_", re.MULTILINE)
@@ -62,7 +75,9 @@ UNSUPPORTED_PATTERN = re.compile(
     re.IGNORECASE,
 )
 ID_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]*$")
-SUPPORT_ENTRY_KEYS = {"status", "notes", "evidence"}
+SUPPORT_PLAN_KEY = "support_plan"
+SUPPORT_PLAN_KEYS = ("current_gap", "next_scope", "completion_criteria")
+SUPPORT_ENTRY_KEYS = {"status", "notes", "evidence", *SUPPORT_PLAN_KEYS}
 
 
 class SupportMatrixError(Exception):
@@ -354,6 +369,21 @@ def validate_evidence(feature_id, backend_id, evidence):
                 )
 
 
+def validate_support_plan(plan, description):
+    if not isinstance(plan, dict):
+        raise SupportMatrixError(f"{description} must be an object")
+    unknown_keys = set(plan) - set(SUPPORT_PLAN_KEYS)
+    if unknown_keys:
+        raise SupportMatrixError(
+            "{} has unsupported support plan key(s): {}".format(
+                description, ", ".join(sorted(unknown_keys))
+            )
+        )
+    for key in SUPPORT_PLAN_KEYS:
+        if key in plan and not isinstance(plan[key], str):
+            raise SupportMatrixError(f"{description} '{key}' must be a string")
+
+
 def validate_feature_catalog(features_data, backend_ids):
     statuses = features_data.get("statuses")
     if not isinstance(statuses, dict) or not statuses:
@@ -400,6 +430,11 @@ def validate_feature_catalog(features_data, backend_ids):
                     )
                 )
 
+        if SUPPORT_PLAN_KEY in feature:
+            validate_support_plan(
+                feature[SUPPORT_PLAN_KEY], f"Feature '{feature_id}' support_plan"
+            )
+
         support = feature.get("support", {})
         if not isinstance(support, dict):
             raise SupportMatrixError(
@@ -434,12 +469,13 @@ def validate_feature_catalog(features_data, backend_ids):
                         feature_id, backend_id, status
                     )
                 )
-            if "notes" in entry and not isinstance(entry["notes"], str):
-                raise SupportMatrixError(
-                    "Feature '{}' backend '{}' notes must be a string".format(
-                        feature_id, backend_id
+            for key in ("notes", *SUPPORT_PLAN_KEYS):
+                if key in entry and not isinstance(entry[key], str):
+                    raise SupportMatrixError(
+                        "Feature '{}' backend '{}' {} must be a string".format(
+                            feature_id, backend_id, key
+                        )
                     )
-                )
             if "evidence" in entry:
                 validate_evidence(feature_id, backend_id, entry["evidence"])
 
@@ -490,11 +526,34 @@ def normalized_support_entry(feature, backend_id):
             "notes": "No support status has been audited for this backend.",
             "evidence": [],
         }
-    return {
+    entry = {
         "status": support["status"],
         "notes": support.get("notes", ""),
         "evidence": support.get("evidence", []),
     }
+    if entry["status"] in BACKLOG_STATUSES:
+        support_plan = feature.get(SUPPORT_PLAN_KEY, {})
+        for key in SUPPORT_PLAN_KEYS:
+            value = support.get(key) or support_plan.get(key)
+            if value:
+                entry[key] = value
+    return entry
+
+
+def backlog_row_for_feature(feature, backend_id, backend_name, entry):
+    row = {
+        "feature_id": feature["id"],
+        "feature": feature["name"],
+        "category": feature["category"],
+        "backend_id": backend_id,
+        "backend": backend_name,
+        "status": entry["status"],
+        "notes": entry.get("notes", ""),
+    }
+    for key in SUPPORT_PLAN_KEYS:
+        if entry.get(key):
+            row[key] = entry[key]
+    return row
 
 
 def build_matrix(backends_data, features_data):
@@ -516,15 +575,9 @@ def build_matrix(backends_data, features_data):
             counts[backend_id][entry["status"]] += 1
             if entry["status"] in BACKLOG_STATUSES:
                 backlog.append(
-                    {
-                        "feature_id": source_feature["id"],
-                        "feature": source_feature["name"],
-                        "category": source_feature["category"],
-                        "backend_id": backend_id,
-                        "backend": backend_names[backend_id],
-                        "status": entry["status"],
-                        "notes": entry.get("notes", ""),
-                    }
+                    backlog_row_for_feature(
+                        source_feature, backend_id, backend_names[backend_id], entry
+                    )
                 )
 
         features.append(
@@ -612,19 +665,16 @@ def validate_matrix(matrix):
             counts[backend_id][status] += 1
             if status in BACKLOG_STATUSES:
                 expected_backlog.append(
-                    {
-                        "feature_id": feature_id,
-                        "feature": feature["name"],
-                        "category": feature["category"],
-                        "backend_id": backend_id,
-                        "backend": next(
+                    backlog_row_for_feature(
+                        feature,
+                        backend_id,
+                        next(
                             backend["name"]
                             for backend in backends
                             if backend["id"] == backend_id
                         ),
-                        "status": status,
-                        "notes": entry.get("notes", ""),
-                    }
+                        entry,
+                    )
                 )
 
     summary_counts = matrix.get("summary", {}).get("status_counts")
@@ -813,6 +863,64 @@ def build_graphics_backend_roadmap(matrix):
     )
 
 
+def build_category_view(matrix, view_id, title, categories):
+    category_set = set(categories)
+    backend_ids = [backend["id"] for backend in matrix["backends"]]
+    backend_names = {backend["id"]: backend["name"] for backend in matrix["backends"]}
+    status_counts = {
+        backend_id: {status: 0 for status in STATUS_ORDER} for backend_id in backend_ids
+    }
+
+    features = []
+    for feature in matrix["features"]:
+        if feature["category"] not in category_set:
+            continue
+        support = {}
+        for backend_id in backend_ids:
+            entry = feature["support"][backend_id]
+            support[backend_id] = entry
+            status_counts[backend_id][entry["status"]] += 1
+        features.append(
+            {
+                "id": feature["id"],
+                "category": feature["category"],
+                "name": feature["name"],
+                "description": feature["description"],
+                "support": support,
+            }
+        )
+
+    rows = filtered_backlog(matrix, categories=categories)
+    return {
+        "schema_version": 1,
+        "generator": "tools/support_matrix.py",
+        "view": {
+            "id": view_id,
+            "title": title,
+            "categories": list(categories),
+            "backend_ids": backend_ids,
+            "backends": backend_names,
+        },
+        "summary": {
+            "feature_count": len(features),
+            "backend_count": len(backend_ids),
+            "status_counts": status_counts,
+            "backlog": backlog_summary(rows),
+        },
+        "features": features,
+        "backlog": rows,
+    }
+
+
+def build_project_porting_roadmap(matrix):
+    return build_category_view(
+        matrix,
+        "project_porting",
+        "Project-porting support roadmap",
+        (PROJECT_PORTING_CATEGORY,),
+    )
+
+
 def rst_escape(text):
     if text is None:
         return ""
@@ -858,6 +966,7 @@ def render_docs(matrix):
     backend_name = {backend["id"]: backend["name"] for backend in matrix["backends"]}
     graphics_roadmap = build_graphics_backend_roadmap(matrix)
     graphics_backend_names = graphics_roadmap["view"]["backends"]
+    project_roadmap = build_project_porting_roadmap(matrix)
     lines = [
         "Support Matrix",
         "==============",
@@ -969,9 +1078,51 @@ def render_docs(matrix):
     ]
     lines.extend(
         render_csv_table(
-            "DirectX/OpenGL/Metal backlog",
+            "DirectX/OpenGL/Metal actionable backlog",
             ["Backend", "Category", "Feature", "Status", "Notes"],
             graphics_backlog_rows,
+        )
+    )
+
+    lines.extend(
+        [
+            "Project Porting Focus",
+            "---------------------",
+            "",
+            "This view isolates repository-scale scanning, translation, report",
+            "inspection, diagnostics, validation, and corpus-coverage rows.",
+            "",
+        ]
+    )
+    project_summary_rows = []
+    for backend_id in backend_ids:
+        counts = project_roadmap["summary"]["status_counts"][backend_id]
+        project_summary_rows.append(
+            [backend_name[backend_id]]
+            + [counts.get(status, 0) for status in STATUS_ORDER]
+        )
+    lines.extend(
+        render_csv_table(
+            "Project-porting status summary",
+            ["Backend"] + [status for status in STATUS_ORDER],
+            project_summary_rows,
+        )
+    )
+    project_backlog_rows = [
+        [
+            item["backend"],
+            item["feature"],
+            item["status"],
+            item.get("current_gap") or item.get("notes", ""),
+            item.get("next_scope", ""),
+        ]
+        for item in project_roadmap["backlog"]
+    ]
+    lines.extend(
+        render_csv_table(
+            "Project-porting actionable backlog",
+            ["Backend", "Feature", "Status", "Current gap", "Next scope"],
+            project_backlog_rows,
         )
     )
 
@@ -1006,23 +1157,37 @@ def render_docs(matrix):
                 item["category"],
                 item["feature"],
                 item["status"],
+                item.get("current_gap") or item.get("notes", ""),
+                item.get("next_scope", ""),
                 item.get("notes", ""),
             ]
         )
     lines.extend(
         [
-            "Backlog",
-            "-------",
+            "Actionable Backlog",
+            "------------------",
             "",
-            "These rows are the current path to full backend coverage. Unknown rows",
-            "need an audit before implementation work can be scoped accurately.",
+            "These rows are actionable coverage gaps with ``partial``,",
+            "``unsupported``, or ``unknown`` status. Evidence-backed",
+            "``diagnostic`` and ``validated_rejection`` rows remain visible in",
+            "the matrix counts, but are closed-loop behavior rather than synced",
+            "implementation backlog work. Unknown rows need an audit before",
+            "implementation work can be scoped accurately.",
             "",
         ]
     )
     lines.extend(
         render_csv_table(
-            "Non-supported or unaudited feature rows",
-            ["Backend", "Category", "Feature", "Status", "Notes"],
+            "Actionable backlog rows",
+            [
+                "Backend",
+                "Category",
+                "Feature",
+                "Status",
+                "Current gap",
+                "Next scope",
+                "Notes",
+            ],
             backlog_rows,
         )
     )
@@ -1059,6 +1224,9 @@ def write_generated(matrix):
     GRAPHICS_ROADMAP_JSON_PATH.write_text(
         stable_json(build_graphics_backend_roadmap(matrix)), encoding="utf-8"
     )
+    PROJECT_PORTING_ROADMAP_JSON_PATH.write_text(
+        stable_json(build_project_porting_roadmap(matrix)), encoding="utf-8"
+    )
     DOCS_RST_PATH.write_text(render_docs(matrix), encoding="utf-8")
 
 
@@ -1068,6 +1236,10 @@ def generated_artifact_specs(matrix):
         (
             GRAPHICS_ROADMAP_JSON_PATH,
             stable_json(build_graphics_backend_roadmap(matrix)),
+        ),
+        (
+            PROJECT_PORTING_ROADMAP_JSON_PATH,
+            stable_json(build_project_porting_roadmap(matrix)),
         ),
         (DOCS_RST_PATH, render_docs(matrix)),
     )
@@ -1370,71 +1542,26 @@ def evidence_audit(
     return 0
 
 
-def fetch_url(url, timeout):
-    started = time.time()
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "CrossGL-support-matrix/1.0 (+https://github.com/CrossGL)"
-        },
+def docs_report(
+    backends_data,
+    features_data,
+    output_path,
+    timeout,
+    strict,
+    max_linked_pages,
+):
+    support_signals = load_support_signals_module()
+
+    report = support_signals.build_docs_report(
+        backends_data,
+        features_data,
+        timeout=timeout,
+        max_linked_pages=max_linked_pages,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            content = response.read()
-            status = getattr(response, "status", response.getcode())
-            return {
-                "ok": 200 <= int(status) < 400,
-                "status": int(status),
-                "url": url,
-                "final_url": response.geturl(),
-                "content_type": response.headers.get("content-type", ""),
-                "content_length": len(content),
-                "sha256": hashlib.sha256(content).hexdigest(),
-                "elapsed_ms": int((time.time() - started) * 1000),
-            }
-    except urllib.error.HTTPError as exc:
-        return {
-            "ok": False,
-            "status": exc.code,
-            "url": url,
-            "final_url": exc.geturl(),
-            "error": str(exc),
-            "elapsed_ms": int((time.time() - started) * 1000),
-        }
-    except Exception as exc:
-        return {
-            "ok": False,
-            "url": url,
-            "error": f"{exc.__class__.__name__}: {exc}",
-            "elapsed_ms": int((time.time() - started) * 1000),
-        }
-
-
-def docs_report(backends_data, output_path, timeout, strict):
-    rows = []
-    for backend in backends_data["backends"]:
-        for doc in backend.get("docs", []):
-            result = fetch_url(doc["url"], timeout)
-            result["backend_id"] = backend["id"]
-            result["backend"] = backend["name"]
-            result["source"] = doc["name"]
-            rows.append(result)
-
-    report = {
-        "schema_version": 1,
-        "generated_by": "tools/support_matrix.py docs",
-        "source": relpath(BACKENDS_PATH),
-        "documents": rows,
-        "summary": {
-            "total": len(rows),
-            "ok": sum(1 for row in rows if row.get("ok")),
-            "failed": sum(1 for row in rows if not row.get("ok")),
-        },
-    }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(stable_json(report), encoding="utf-8")
 
-    for row in rows:
+    for row in report["documents"]:
         status = row.get("status", "error")
         marker = "OK" if row.get("ok") else "FAIL"
         print("{} {} {} - {}".format(marker, status, row["backend"], row["source"]))
@@ -1556,6 +1683,12 @@ def parse_args(argv):
     )
     docs_parser.add_argument("--timeout", type=float, default=20.0)
     docs_parser.add_argument(
+        "--max-linked-pages",
+        type=int,
+        default=3,
+        help="Fetch up to this many relevant same-site links per configured docs URL",
+    )
+    docs_parser.add_argument(
         "--strict",
         action="store_true",
         help="Exit non-zero when any documentation URL cannot be fetched",
@@ -1576,6 +1709,7 @@ def main(argv=None):
         write_generated(matrix)
         print(f"Updated {relpath(MATRIX_JSON_PATH)}")
         print(f"Updated {relpath(GRAPHICS_ROADMAP_JSON_PATH)}")
+        print(f"Updated {relpath(PROJECT_PORTING_ROADMAP_JSON_PATH)}")
         print(f"Updated {relpath(DOCS_RST_PATH)}")
         return 0
 
@@ -1629,7 +1763,14 @@ def main(argv=None):
         output_path = args.output
         if not output_path.is_absolute():
             output_path = ROOT / output_path
-        return docs_report(backends_data, output_path, args.timeout, args.strict)
+        return docs_report(
+            backends_data,
+            features_data,
+            output_path,
+            args.timeout,
+            args.strict,
+            args.max_linked_pages,
+        )
 
     raise AssertionError(f"unhandled command: {args.command}")
 

@@ -67,6 +67,11 @@ def sample_matrix():
                     "directx": {
                         "status": "partial",
                         "notes": "Cube gather is not audited.",
+                        "current_gap": "Cube-array gather remains unaudited.",
+                        "next_scope": "Add cube-array gather fixtures.",
+                        "completion_criteria": (
+                            "Mark supported after cube-array gather evidence is recorded."
+                        ),
                         "evidence": ["tests/example.py::def test_gather"],
                     }
                 },
@@ -386,8 +391,158 @@ def test_build_desired_issues_creates_parent_and_backlog_entries():
     child = desired["backlog:directx:textures.gather"]
     assert child.parent_key == "parent:directx"
     assert module.LABEL_BACKLOG in child.labels
-    assert "Cube gather is not audited." in child.body
+    assert "Cube-array gather remains unaudited." in child.body
+    assert "## Next Scope\n\nAdd cube-array gather fixtures." in child.body
+    assert (
+        "## Completion Rule\n\nMark supported after cube-array gather evidence is recorded."
+        in child.body
+    )
     assert "`tests/example.py::def test_gather`" in child.body
+
+
+def test_build_desired_issues_routes_project_backlog_to_frontend_parent():
+    module = load_sync_module()
+    matrix = sample_matrix()
+    matrix["summary"]["status_counts"]["opengl"] = {
+        "supported": 1,
+        "partial": 1,
+        "diagnostic": 0,
+        "validated_rejection": 0,
+        "unsupported": 0,
+        "unknown": 0,
+    }
+    matrix["backends"].append({"id": "opengl", "name": "OpenGL / GLSL", "docs": []})
+    matrix["features"].append(
+        {
+            "id": "project.source_provenance",
+            "name": "Source provenance",
+            "category": "project",
+            "description": "Track project source provenance.",
+            "support": {
+                "directx": {
+                    "status": "partial",
+                    "notes": "DirectX provenance is incomplete.",
+                    "current_gap": "Project provenance lacks fine-grained mappings.",
+                    "next_scope": "Define fine-grained source-map validation.",
+                    "completion_criteria": (
+                        "Mark supported after fine-grained provenance validation passes."
+                    ),
+                    "evidence": ["tests/project.py::def test_directx_provenance"],
+                },
+                "opengl": {
+                    "status": "partial",
+                    "notes": "OpenGL provenance is incomplete.",
+                    "current_gap": "Project provenance lacks fine-grained mappings.",
+                    "next_scope": "Define fine-grained source-map validation.",
+                    "completion_criteria": (
+                        "Mark supported after fine-grained provenance validation passes."
+                    ),
+                    "evidence": ["tests/project.py::def test_opengl_provenance"],
+                },
+            },
+        }
+    )
+    matrix["backlog"] = [
+        {
+            "backend_id": "directx",
+            "backend": "DirectX / HLSL",
+            "feature_id": "project.source_provenance",
+            "feature": "Source provenance",
+            "category": "project",
+            "status": "partial",
+            "notes": "DirectX provenance is incomplete.",
+        },
+        {
+            "backend_id": "opengl",
+            "backend": "OpenGL / GLSL",
+            "feature_id": "project.source_provenance",
+            "feature": "Source provenance",
+            "category": "project",
+            "status": "partial",
+            "notes": "OpenGL provenance is incomplete.",
+        },
+    ]
+
+    desired = module.build_desired_issues(matrix)
+
+    assert set(desired) == {
+        "parent:frontend",
+        "backlog:frontend:project.source_provenance",
+    }
+    child = desired["backlog:frontend:project.source_provenance"]
+    assert child.parent_key == "parent:frontend"
+    assert module.LABEL_BACKLOG in child.labels
+    assert module.LABEL_PREFIX_BACKEND + module.FRONTEND_ID in child.labels
+    assert "DirectX / HLSL" in child.body
+    assert "OpenGL / GLSL" in child.body
+    assert "| Backend | Status | Current Gap | Next Scope |" in child.body
+    assert "Project provenance lacks fine-grained mappings." in child.body
+    assert "Define fine-grained source-map validation." in child.body
+    assert (
+        "## Completion Rule\n\nMark supported after fine-grained provenance validation passes."
+        in child.body
+    )
+    assert "`tests/project.py::def test_directx_provenance`" in child.body
+    assert "`tests/project.py::def test_opengl_provenance`" in child.body
+    assert "backlog:directx:project.source_provenance" not in desired
+    assert "backlog:opengl:project.source_provenance" not in desired
+    assert (
+        module.validate_desired_issues(matrix, None, desired, min_desired_issues=2)
+        == []
+    )
+
+    signals = {
+        "features": [
+            {
+                "id": "project.source_provenance",
+                "support": {
+                    "directx": {
+                        "catalog_status": "partial",
+                        "catalog_evidence_count": 1,
+                        "state": "tested",
+                        "docs": [],
+                        "implementation": [
+                            {
+                                "path": "tools/directx_project_probe.py",
+                                "matched_terms": ["source_provenance"],
+                            }
+                        ],
+                        "tests": [],
+                        "unsupported": [],
+                    },
+                    "opengl": {
+                        "catalog_status": "partial",
+                        "catalog_evidence_count": 2,
+                        "state": "not_detected",
+                        "docs": [],
+                        "implementation": [],
+                        "tests": [
+                            {
+                                "path": "tests/project_opengl.py",
+                                "symbol": "test_opengl_project_provenance",
+                                "matched_terms": ["source_provenance"],
+                            }
+                        ],
+                        "unsupported": [],
+                    },
+                },
+            }
+        ],
+        "issues": [],
+    }
+
+    desired_with_signals = module.build_desired_issues(matrix, signals)
+    child_with_signals = desired_with_signals[
+        "backlog:frontend:project.source_provenance"
+    ]
+    assert "### DirectX / HLSL" in child_with_signals.body
+    assert "Extractor state: `tested`" in child_with_signals.body
+    assert "Catalog evidence count: `1`" in child_with_signals.body
+    assert "`tools/directx_project_probe.py`" in child_with_signals.body
+    assert "### OpenGL / GLSL" in child_with_signals.body
+    assert "Extractor state: `not_detected`" in child_with_signals.body
+    assert "Catalog evidence count: `2`" in child_with_signals.body
+    assert "`test_opengl_project_provenance`" in child_with_signals.body
 
 
 def test_build_desired_issues_skips_empty_parent_trackers():
@@ -588,6 +743,45 @@ def test_pytest_failure_issues_are_preserved_without_failure_summary_input():
         close_pytest_failure_issues=True,
     )
     assert closing_closures["stale_extracted"] == 1
+
+
+def test_pytest_failure_issues_are_preserved_when_failure_summary_has_load_errors():
+    module = load_sync_module()
+    signals = sample_signals()
+    signals["summary"]["pytest_failures"] = {
+        "provided": True,
+        "report_count": 1,
+        "load_error_count": 1,
+        "failed_testcase_count": 0,
+        "categories": {},
+        "backends": {},
+    }
+    desired = module.build_desired_issues(sample_matrix(), signals)
+    stale_pytest = issue(
+        77,
+        "extracted:directx:ci.pytest.backend-codegen:pytest_failure_summary",
+        labels=[module.LABEL_MANAGED, module.LABEL_EXTRACTED],
+    )
+    close_pytest_failure_issues = module.signals_allow_pytest_failure_closure(signals)
+
+    preserved_closures = module.planned_issue_closures(
+        desired,
+        [stale_pytest],
+        close_extracted_issues=True,
+        close_pytest_failure_issues=close_pytest_failure_issues,
+    )
+    preserved_samples = module.planned_issue_action_samples(
+        desired,
+        [stale_pytest],
+        close_extracted_issues=True,
+        close_pytest_failure_issues=close_pytest_failure_issues,
+    )
+
+    assert close_pytest_failure_issues is False
+    assert preserved_closures["total"] == 0
+    assert preserved_samples["preserved"][0]["reason"] == (
+        "stale_pytest_failure_preserved"
+    )
 
 
 def test_desired_issue_counts_summarizes_planned_parent_backlog_and_signal_issues():
@@ -2505,8 +2699,40 @@ def test_sync_issues_prefers_open_duplicate_marker_over_closed_issue():
     assert summary["updated"] == 0
     assert summary["closed"] == 0
     assert summary["unchanged"] == 2
-    assert client.updated[0]["number"] == open_parent["number"]
+    assert client.updated == []
     assert client.closed == []
+
+
+def test_sync_issues_skips_update_for_unchanged_existing_issues():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+    existing = []
+    for number, (key, target) in enumerate(desired.items(), start=1):
+        existing.append(
+            {
+                "id": 1000 + number,
+                "number": number,
+                "title": target.title,
+                "body": target.body,
+                "state": "open",
+                "labels": [{"name": label} for label in target.labels],
+            }
+        )
+    client = FakeClient(existing=existing)
+
+    summary = module.sync_issues(
+        client,
+        desired,
+        dry_run=False,
+        manage_sub_issues=False,
+        throttle_seconds=0,
+    )
+
+    assert summary["created"] == 0
+    assert summary["updated"] == 0
+    assert summary["unchanged"] == len(desired)
+    assert client.created == []
+    assert client.updated == []
 
 
 def test_sync_issues_preserves_stale_extracted_issues_when_signals_are_not_clean():

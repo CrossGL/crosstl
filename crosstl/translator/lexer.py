@@ -1,7 +1,9 @@
 """Lexer for tokenizing CrossGL source code."""
 
+import ast
 import re
 from collections import OrderedDict
+from pathlib import Path
 
 TOKENS = OrderedDict(
     [
@@ -255,6 +257,366 @@ TOKENS = OrderedDict(
 )
 
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
+IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z_0-9]*\b")
+PREPROCESSOR_DIRECTIVE_RE = re.compile(r"^\s*#\s*(?P<name>[A-Za-z_]\w*)\b(?P<body>.*)$")
+PREPROCESSOR_DEFINE_RE = re.compile(r"^\s*(?P<name>[A-Za-z_]\w*)(?P<body>.*)$")
+PREPROCESSOR_INCLUDE_RE = re.compile(
+    r'^(?P<target>"(?:[^"\\]|\\.)*"|<[^>\n]+>|[^\s/][^\s]*)'
+)
+PREPROCESSOR_STRING_OR_COMMENT_RE = re.compile(
+    r'"(?:[^"\\]|\\.)*"|' r"'(?:[^'\\]|\\.)'|" r"//.*"
+)
+PREPROCESSOR_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"|' r"'(?:[^'\\]|\\.)'")
+SAFE_PREPROCESSOR_AST_NODES = (
+    ast.Expression,
+    ast.BoolOp,
+    ast.UnaryOp,
+    ast.BinOp,
+    ast.Compare,
+    ast.Constant,
+    ast.And,
+    ast.Or,
+    ast.Not,
+    ast.USub,
+    ast.UAdd,
+    ast.Invert,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.FloorDiv,
+    ast.Mod,
+    ast.BitAnd,
+    ast.BitOr,
+    ast.BitXor,
+    ast.LShift,
+    ast.RShift,
+    ast.Eq,
+    ast.NotEq,
+    ast.Lt,
+    ast.LtE,
+    ast.Gt,
+    ast.GtE,
+)
+
+
+def _normalized_preprocessor_defines(defines):
+    macros = {}
+    for name, value in dict(defines or {}).items():
+        name = str(name).strip()
+        if not IDENTIFIER_RE.fullmatch(name):
+            continue
+        value = str(value).strip() if value is not None else "1"
+        macros[name] = value if value else "1"
+    return macros
+
+
+def _preprocessor_expression_value(value):
+    value = str(value).strip()
+    if not value:
+        return "1"
+    lowered = value.lower()
+    if lowered == "true":
+        return "1"
+    if lowered == "false":
+        return "0"
+    if re.fullmatch(r"[+-]?(?:0[xX][0-9a-fA-F]+|0[bB][01]+|0[oO][0-7]+|\d+)", value):
+        return value
+    if re.fullmatch(r"[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?", value):
+        return value
+    if PREPROCESSOR_STRING_RE.fullmatch(value):
+        return value
+    return "1"
+
+
+def _replace_identifiers_outside_strings(expression, replacer):
+    parts = []
+    start = 0
+    for match in PREPROCESSOR_STRING_RE.finditer(expression):
+        parts.append(IDENTIFIER_RE.sub(replacer, expression[start : match.start()]))
+        parts.append(match.group(0))
+        start = match.end()
+    parts.append(IDENTIFIER_RE.sub(replacer, expression[start:]))
+    return "".join(parts)
+
+
+def _safe_eval_preprocessor_expression(expression):
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError as exc:
+        raise SyntaxError(f"Unsupported preprocessor expression: {expression}") from exc
+
+    for node in ast.walk(tree):
+        if not isinstance(node, SAFE_PREPROCESSOR_AST_NODES):
+            raise SyntaxError(f"Unsupported preprocessor expression: {expression}")
+        if isinstance(node, ast.Constant) and not isinstance(
+            node.value, (bool, int, float, str)
+        ):
+            raise SyntaxError(f"Unsupported preprocessor expression: {expression}")
+    return bool(
+        eval(compile(tree, "<crosstl-preprocessor>", "eval"), {"__builtins__": {}}, {})
+    )
+
+
+def _evaluate_preprocessor_condition(expression, macros):
+    expression = expression.strip()
+    if not expression:
+        return False
+
+    def replace_defined_call(match):
+        return "1" if match.group(1) in macros else "0"
+
+    def replace_defined_name(match):
+        return "1" if match.group(1) in macros else "0"
+
+    expression = re.sub(
+        r"\bdefined\s*\(\s*([A-Za-z_]\w*)\s*\)",
+        replace_defined_call,
+        expression,
+    )
+    expression = re.sub(
+        r"\bdefined\s+([A-Za-z_]\w*)",
+        replace_defined_name,
+        expression,
+    )
+    expression = expression.replace("&&", " and ").replace("||", " or ")
+    expression = re.sub(r"!(?!=)", " not ", expression)
+
+    def replace_identifier(match):
+        name = match.group(0)
+        if name in {"and", "or", "not"}:
+            return name
+        lowered = name.lower()
+        if lowered == "true":
+            return "1"
+        if lowered == "false":
+            return "0"
+        if name in macros:
+            return _preprocessor_expression_value(macros[name])
+        return "0"
+
+    expression = _replace_identifiers_outside_strings(expression, replace_identifier)
+    return _safe_eval_preprocessor_expression(expression)
+
+
+def _expand_object_macros(line, macros):
+    if not macros:
+        return line
+
+    def replace_identifier(match):
+        name = match.group(0)
+        return str(macros.get(name, name))
+
+    parts = []
+    start = 0
+    for match in PREPROCESSOR_STRING_OR_COMMENT_RE.finditer(line):
+        parts.append(IDENTIFIER_RE.sub(replace_identifier, line[start : match.start()]))
+        parts.append(match.group(0))
+        start = match.end()
+    parts.append(IDENTIFIER_RE.sub(replace_identifier, line[start:]))
+    return "".join(parts)
+
+
+def _active_preprocessor_block(stack):
+    return all(frame["active"] for frame in stack)
+
+
+def _parse_include_target(body, macros):
+    expanded = _expand_object_macros(body.strip(), macros).strip()
+    match = PREPROCESSOR_INCLUDE_RE.match(expanded)
+    if match is None:
+        return None
+
+    target = match.group("target")
+    if target.startswith('"') and target.endswith('"'):
+        return target[1:-1], False
+    if target.startswith("<") and target.endswith(">"):
+        return target[1:-1], True
+    return target, False
+
+
+def _normalize_include_paths(include_paths):
+    normalized = []
+    for include_path in include_paths or ():
+        try:
+            normalized.append(Path(include_path).expanduser().resolve())
+        except OSError:
+            normalized.append(Path(include_path).expanduser())
+    return normalized
+
+
+def _resolve_include_target(target, system_include, current_file, include_paths):
+    candidate = Path(target)
+    if candidate.is_absolute():
+        return candidate.resolve() if candidate.is_file() else None
+
+    search_dirs = []
+    if not system_include and current_file is not None:
+        search_dirs.append(current_file.parent)
+    search_dirs.extend(include_paths)
+
+    for search_dir in search_dirs:
+        candidate = search_dir / target
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
+
+
+def _preprocess_code_with_defines(code, defines, file_path=None, include_paths=None):
+    macros = _normalized_preprocessor_defines(defines)
+    normalized_include_paths = _normalize_include_paths(include_paths)
+    process_preprocessor_blocks = defines is not None
+
+    def preprocess_source(source_code, current_file=None, include_stack=()):
+        output = []
+        stack = []
+        preserved_conditional_depth = 0
+
+        for line_number, line in enumerate(source_code.splitlines(), start=1):
+            directive = PREPROCESSOR_DIRECTIVE_RE.match(line)
+            active = _active_preprocessor_block(stack)
+            if directive is None:
+                if active:
+                    output.append(_expand_object_macros(line, macros))
+                continue
+
+            name = directive.group("name")
+            body = directive.group("body").strip()
+
+            if not process_preprocessor_blocks:
+                if name in {"if", "ifdef", "ifndef"}:
+                    preserved_conditional_depth += 1
+                    output.append(line)
+                    continue
+                if name == "endif":
+                    if preserved_conditional_depth:
+                        preserved_conditional_depth -= 1
+                    output.append(line)
+                    continue
+                if name in {"elif", "else"} or preserved_conditional_depth:
+                    output.append(line)
+                    continue
+                if name != "include":
+                    output.append(line)
+                    continue
+
+            if name in {"if", "ifdef", "ifndef"}:
+                parent_active = active
+                if name == "ifdef":
+                    condition = body in macros
+                elif name == "ifndef":
+                    condition = body not in macros
+                else:
+                    condition = (
+                        _evaluate_preprocessor_condition(body, macros)
+                        if parent_active
+                        else False
+                    )
+                branch_active = parent_active and condition
+                stack.append(
+                    {
+                        "parent_active": parent_active,
+                        "active": branch_active,
+                        "branch_taken": branch_active,
+                        "else_seen": False,
+                    }
+                )
+                continue
+
+            if name == "elif":
+                if not stack:
+                    raise SyntaxError(f"#elif without #if at line {line_number}")
+                frame = stack[-1]
+                if frame["else_seen"]:
+                    raise SyntaxError(f"#elif after #else at line {line_number}")
+                if not frame["parent_active"] or frame["branch_taken"]:
+                    frame["active"] = False
+                else:
+                    branch_active = _evaluate_preprocessor_condition(body, macros)
+                    frame["active"] = branch_active
+                    frame["branch_taken"] = branch_active
+                continue
+
+            if name == "else":
+                if not stack:
+                    raise SyntaxError(f"#else without #if at line {line_number}")
+                frame = stack[-1]
+                if frame["else_seen"]:
+                    raise SyntaxError(f"duplicate #else at line {line_number}")
+                frame["active"] = frame["parent_active"] and not frame["branch_taken"]
+                frame["branch_taken"] = frame["branch_taken"] or frame["active"]
+                frame["else_seen"] = True
+                continue
+
+            if name == "endif":
+                if not stack:
+                    raise SyntaxError(f"#endif without #if at line {line_number}")
+                stack.pop()
+                continue
+
+            if not active:
+                continue
+
+            if name == "define":
+                define = PREPROCESSOR_DEFINE_RE.match(body)
+                if define is not None:
+                    macro_name = define.group("name")
+                    macro_body = define.group("body").strip()
+                    if macro_body.startswith("("):
+                        output.append(line)
+                    else:
+                        macros[macro_name] = macro_body or "1"
+                continue
+
+            if name == "undef":
+                macros.pop(body, None)
+                continue
+
+            if name == "include":
+                target = _parse_include_target(body, macros)
+                if target is None:
+                    output.append(line)
+                    continue
+                include_name, system_include = target
+                resolved = _resolve_include_target(
+                    include_name,
+                    system_include,
+                    current_file,
+                    normalized_include_paths,
+                )
+                if resolved is None:
+                    output.append(line)
+                    continue
+                if resolved in include_stack:
+                    include_chain = " -> ".join(str(path) for path in include_stack)
+                    raise SyntaxError(
+                        f"Cyclic #include at line {line_number}: "
+                        f"{include_chain} -> {resolved}"
+                    )
+                included_code = resolved.read_text(encoding="utf-8")
+                output.append(
+                    preprocess_source(
+                        included_code,
+                        current_file=resolved,
+                        include_stack=(*include_stack, resolved),
+                    )
+                )
+                continue
+
+            output.append(line)
+
+        if stack:
+            raise SyntaxError("Unterminated preprocessor conditional")
+        return "\n".join(output)
+
+    current_file = None
+    if file_path is not None:
+        current_file = Path(file_path).expanduser().resolve()
+    include_stack = (current_file,) if current_file is not None else ()
+    return preprocess_source(
+        code, current_file=current_file, include_stack=include_stack
+    )
+
 
 KEYWORDS = {
     "shader": "SHADER",
@@ -447,8 +809,15 @@ KEYWORDS = {
 class Lexer:
     """Tokenizer for CrossGL Universal IR."""
 
-    def __init__(self, code):
+    def __init__(self, code, file_path=None, include_paths=None, defines=None):
         self.code = self._splice_line_continuations(code.lstrip("\ufeff"))
+        if defines is not None or file_path is not None or include_paths:
+            self.code = _preprocess_code_with_defines(
+                self.code,
+                defines,
+                file_path=file_path,
+                include_paths=include_paths,
+            )
         self.tokens = []
         self.token_cache = {}
         self.regex_cache = self._compile_patterns()

@@ -5,6 +5,7 @@ import pytest
 import crosstl
 import crosstl.translator
 import crosstl.translator.codegen as codegen
+from crosstl.project import translate_project
 from crosstl.translator.ast import ShaderStage
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 
@@ -100,6 +101,41 @@ def _assert_generated_output_is_usable(generated):
     assert "<crosstl." not in generated
 
 
+def test_cgl_translate_save_shader_preserves_source_line_endings(tmp_path):
+    source_text = (
+        "shader LineEndingSmoke {\r\n"
+        "    float helper(float value) {\r\n"
+        "        return value + 1.0;\r\n"
+        "    }\r\n"
+        "}\r\n"
+    )
+    source_path = tmp_path / "line-ending-smoke.cgl"
+    output_path = tmp_path / "out.cgl"
+    source_path.write_bytes(source_text.encode("utf-8"))
+
+    generated = crosstl.translate(
+        str(source_path),
+        backend="cgl",
+        save_shader=str(output_path),
+        format_output=False,
+    )
+
+    assert generated == source_text
+    assert output_path.read_bytes() == source_path.read_bytes()
+
+
+def test_root_package_exposes_documented_registry_helpers():
+    assert {"supported_backends", "supported_sources", "translate", "project"}.issubset(
+        crosstl.__all__
+    )
+    assert "project" in dir(crosstl)
+    assert crosstl.supported_backends() == crosstl.translator.supported_backends()
+    assert crosstl.supported_sources() == crosstl.translator.supported_sources()
+    assert crosstl.project.translate_project is translate_project
+    assert "opengl" in crosstl.supported_backends()
+    assert "cgl" in crosstl.supported_sources()
+
+
 def test_registered_native_sources_have_reverse_codegen_factories():
     register_default_sources()
 
@@ -112,6 +148,44 @@ def test_registered_native_sources_have_reverse_codegen_factories():
 
         converter = spec.reverse_codegen_factory()
         assert callable(getattr(converter, "generate", None))
+
+
+def test_source_registry_reports_lexer_option_support():
+    register_default_sources()
+
+    expected_define_support = {
+        "cgl": True,
+        "cuda": True,
+        "directx": True,
+        "hip": True,
+        "metal": True,
+        "mojo": False,
+        "opengl": True,
+        "rust": False,
+        "slang": True,
+        "vulkan": True,
+    }
+    expected_include_support = {
+        "cgl": True,
+        "cuda": True,
+        "directx": True,
+        "hip": True,
+        "metal": True,
+        "mojo": False,
+        "opengl": True,
+        "rust": False,
+        "slang": True,
+        "vulkan": True,
+    }
+
+    for source_name, supports_defines in expected_define_support.items():
+        spec = SOURCE_REGISTRY.get(source_name)
+        assert spec is not None
+        assert spec.supports_lexer_keyword("defines") is supports_defines
+        assert (
+            spec.supports_lexer_keyword("include_paths")
+            is expected_include_support[source_name]
+        )
 
 
 @pytest.mark.parametrize("backend", codegen.backend_names())
@@ -335,6 +409,22 @@ def test_spirv_source_inference_distinguishes_assembly_from_binary():
     assert SOURCE_REGISTRY.get_by_extension("shader.spvasm").name == "vulkan"
     with pytest.raises(ValueError, match="Binary SPIR-V input files"):
         SOURCE_REGISTRY.get_by_extension("shader.spv")
+
+
+def test_source_registry_exposes_known_unsupported_extension_diagnostics():
+    register_default_sources()
+
+    assert (
+        SOURCE_REGISTRY.unsupported_extension_message("shader.spv")
+        == "Binary SPIR-V input files (.spv) are not supported; provide SPIR-V "
+        "assembly (.spvasm) or disassemble the binary with spirv-dis first."
+    )
+    assert (
+        SOURCE_REGISTRY.unsupported_extension_message("shader.spv.json")
+        == "Binary SPIR-V input files (.spv) are not supported; provide SPIR-V "
+        "assembly (.spvasm) or disassemble the binary with spirv-dis first."
+    )
+    assert SOURCE_REGISTRY.unsupported_extension_message("shader.cgl") is None
 
 
 @pytest.mark.parametrize(

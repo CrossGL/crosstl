@@ -12,6 +12,7 @@ systems-language targets.
    quickstart
    architecture
    translation-pipeline
+   project-porting
    lexer
    ast
    codegen-utilities

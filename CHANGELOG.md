@@ -38,7 +38,7 @@ All notable changes to CrossTL are documented in this file.
 ### Removed
 
 - `build/` directory (stale artifact).
-- `.agent-coordination/` directory (AI scaffolding).
+- `.agent-coordination/` directory (obsolete automation scaffolding).
 - `experimental/` backend directory.
 - `pytest` removed from runtime `install_requires` (it was incorrectly listed as a runtime dependency).
 

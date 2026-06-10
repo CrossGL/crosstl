@@ -23,7 +23,7 @@ from functools import lru_cache
 from html.parser import HTMLParser
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from urllib import error, parse, request
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,8 +43,17 @@ DOCS_REPORT_REQUIRED_FIELDS = (
 )
 FRONTEND_ID = "frontend"
 FRONTEND_NAME = "Frontend / IR / Parser"
+PROJECT_FEATURE_PREFIX = "project."
+PROJECT_IMPLEMENTATION_PATHS = (
+    "crosstl/project",
+    "crosstl/_crosstl.py",
+)
+PROJECT_TEST_PATHS = ("tests/test_translator/test_project_translation.py",)
 
-BACKLOG_STATUSES = {
+# Support-signal extraction treats every reviewed non-success catalog row as
+# already accounted for. Issue sync keeps the narrower actionable backlog
+# policy in sync_support_issues.py.
+CATALOG_NON_SUCCESS_STATUSES = {
     "partial",
     "diagnostic",
     "validated_rejection",
@@ -700,6 +709,21 @@ def backend_implementation_paths(backend: dict[str, Any]) -> list[str]:
     return paths
 
 
+def feature_implementation_paths(
+    feature: dict[str, Any],
+    backend: dict[str, Any],
+) -> list[str]:
+    if feature.get("id", "").startswith(PROJECT_FEATURE_PREFIX):
+        return list(PROJECT_IMPLEMENTATION_PATHS)
+    return backend_implementation_paths(backend)
+
+
+def feature_test_paths(feature: dict[str, Any], backend: dict[str, Any]) -> list[str]:
+    if feature.get("id", "").startswith(PROJECT_FEATURE_PREFIX):
+        return list(PROJECT_TEST_PATHS)
+    return list(backend.get("tests", []))
+
+
 def backend_source_kind(backend: dict[str, Any]) -> str:
     return backend.get("source_kind", "native")
 
@@ -1200,7 +1224,7 @@ def infer_state(
         return "unsupported_signal"
     if implementation_hits:
         return "implementation_only"
-    if support.get("status") in BACKLOG_STATUSES:
+    if support.get("status") in CATALOG_NON_SUCCESS_STATUSES:
         return "catalog_backlog"
     return "not_detected"
 
@@ -1214,7 +1238,7 @@ def extraction_issue(
     unsupported_hits: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     status = support.get("status")
-    if status in BACKLOG_STATUSES:
+    if status in CATALOG_NON_SUCCESS_STATUSES:
         return None
     if status != "supported":
         return None
@@ -1397,38 +1421,316 @@ def documented_candidate_issues(
     return issues
 
 
+PYTEST_FAILURE_SUMMARY_COUNTER_FIELDS = (
+    "report_count",
+    "load_error_count",
+    "testcase_count",
+    "failure_count",
+    "error_count",
+    "skipped_count",
+    "failed_testcase_count",
+)
+PYTEST_FAILURE_REQUIRED_FAILURE_FIELDS = (
+    "nodeid",
+    "file",
+    "kind",
+    "category",
+    "backend",
+    "message",
+)
+PYTEST_FAILURE_CLEAN_WORKFLOW_FIELDS = (
+    "workflow",
+    "run_id",
+    "conclusion",
+    "head_sha",
+)
+
+
+def valid_non_negative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def pytest_failure_summary_load_error(
+    path: Path, error_type: str, message: str
+) -> dict[str, Any]:
+    return {
+        "path": relpath(path),
+        "load_error": {
+            "type": error_type,
+            "message": message,
+        },
+    }
+
+
+def pytest_failure_summary_mapping_errors(
+    prefix: str, value: Any, required_fields: tuple[str, ...]
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    errors = []
+    for field_name in required_fields:
+        field_value = value.get(field_name)
+        if not isinstance(field_value, str):
+            errors.append(f"{prefix}.{field_name} must be a string")
+    return errors
+
+
+def pytest_failure_summary_count_map_errors(prefix: str, value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    errors = []
+    for key, count in value.items():
+        if not isinstance(key, str) or not key:
+            errors.append(f"{prefix} keys must be non-empty strings")
+            break
+        if not valid_non_negative_int(count):
+            errors.append(f"{prefix}.{key} must be a non-negative integer")
+    return errors
+
+
+def pytest_failure_summary_report_errors(index: int, report: Any) -> list[str]:
+    prefix = f"reports[{index}]"
+    if not isinstance(report, Mapping):
+        return [f"{prefix} must be an object"]
+    errors = []
+    path = report.get("path")
+    if not isinstance(path, str) or not path:
+        errors.append(f"{prefix}.path must be a non-empty string")
+    if "load_error" in report:
+        errors.extend(
+            pytest_failure_summary_mapping_errors(
+                f"{prefix}.load_error", report.get("load_error"), ("type", "message")
+            )
+        )
+        return errors
+    for field_name in ("tests", "failures", "errors", "skipped"):
+        if not valid_non_negative_int(report.get(field_name)):
+            errors.append(f"{prefix}.{field_name} must be a non-negative integer")
+    failed_testcases = report.get("failed_testcases")
+    if not isinstance(failed_testcases, list):
+        errors.append(f"{prefix}.failed_testcases must be a list")
+    else:
+        for failure_index, failure in enumerate(failed_testcases):
+            errors.extend(
+                pytest_failure_summary_mapping_errors(
+                    f"{prefix}.failed_testcases[{failure_index}]",
+                    failure,
+                    PYTEST_FAILURE_REQUIRED_FAILURE_FIELDS,
+                )
+            )
+    return errors
+
+
+def pytest_failure_summary_loaded_reports(
+    reports: list[Any],
+) -> list[Mapping[str, Any]]:
+    return [
+        report
+        for report in reports
+        if isinstance(report, Mapping) and "load_error" not in report
+    ]
+
+
+def pytest_failure_summary_nested_failures(
+    reports: list[Any],
+) -> list[Any]:
+    nested_failures = []
+    for report in pytest_failure_summary_loaded_reports(reports):
+        failed_testcases = report.get("failed_testcases")
+        if isinstance(failed_testcases, list):
+            nested_failures.extend(failed_testcases)
+    return nested_failures
+
+
+def pytest_failure_summary_counter_mismatch_errors(
+    summary: Mapping[str, Any],
+    reports: list[Any],
+    failures: list[Any],
+) -> list[str]:
+    loaded_reports = pytest_failure_summary_loaded_reports(reports)
+    nested_failures = pytest_failure_summary_nested_failures(reports)
+    valid_nested_failures = [
+        failure for failure in nested_failures if isinstance(failure, Mapping)
+    ]
+    expected_counts = {
+        "report_count": len(reports),
+        "load_error_count": sum(
+            1
+            for report in reports
+            if isinstance(report, Mapping) and report.get("load_error")
+        ),
+        "testcase_count": sum(
+            report.get("tests", 0)
+            for report in loaded_reports
+            if valid_non_negative_int(report.get("tests"))
+        ),
+        "failure_count": sum(
+            report.get("failures", 0)
+            for report in loaded_reports
+            if valid_non_negative_int(report.get("failures"))
+        ),
+        "error_count": sum(
+            report.get("errors", 0)
+            for report in loaded_reports
+            if valid_non_negative_int(report.get("errors"))
+        ),
+        "skipped_count": sum(
+            report.get("skipped", 0)
+            for report in loaded_reports
+            if valid_non_negative_int(report.get("skipped"))
+        ),
+        "failed_testcase_count": len(valid_nested_failures),
+    }
+    errors = []
+    for field_name, expected_count in expected_counts.items():
+        if (
+            valid_non_negative_int(summary.get(field_name))
+            and summary.get(field_name) != expected_count
+        ):
+            errors.append(f"summary.{field_name} must match reports")
+
+    if failures != nested_failures:
+        errors.append("failures must match reports[].failed_testcases")
+
+    categories = Counter(
+        failure.get("category")
+        for failure in valid_nested_failures
+        if isinstance(failure.get("category"), str)
+    )
+    backends = Counter(
+        failure.get("backend")
+        for failure in valid_nested_failures
+        if isinstance(failure.get("backend"), str)
+    )
+    if isinstance(summary.get("categories"), Mapping) and dict(
+        summary["categories"]
+    ) != dict(sorted(categories.items())):
+        errors.append("summary.categories must match failures")
+    if isinstance(summary.get("backends"), Mapping) and dict(
+        summary["backends"]
+    ) != dict(sorted(backends.items())):
+        errors.append("summary.backends must match failures")
+    return errors
+
+
+def pytest_failure_summary_contract_errors(report: Mapping[str, Any]) -> list[str]:
+    errors = []
+    for field_name in (
+        "schema_version",
+        "generator",
+        "summary",
+        "reports",
+        "clean_workflow_runs",
+        "failures",
+    ):
+        if field_name not in report:
+            errors.append(f"{field_name} is required")
+
+    if report.get("schema_version") != 1:
+        errors.append("schema_version must be 1")
+
+    summary = report.get("summary")
+    if not isinstance(summary, Mapping):
+        errors.append("summary must be an object")
+    else:
+        for field_name in PYTEST_FAILURE_SUMMARY_COUNTER_FIELDS:
+            if not valid_non_negative_int(summary.get(field_name)):
+                errors.append(f"summary.{field_name} must be a non-negative integer")
+        errors.extend(
+            pytest_failure_summary_count_map_errors(
+                "summary.categories", summary.get("categories")
+            )
+        )
+        errors.extend(
+            pytest_failure_summary_count_map_errors(
+                "summary.backends", summary.get("backends")
+            )
+        )
+
+    reports = report.get("reports")
+    if not isinstance(reports, list):
+        errors.append("reports must be a list")
+        reports = []
+    else:
+        for index, parsed_report in enumerate(reports):
+            errors.extend(pytest_failure_summary_report_errors(index, parsed_report))
+
+    clean_workflow_runs = report.get("clean_workflow_runs")
+    if not isinstance(clean_workflow_runs, list):
+        errors.append("clean_workflow_runs must be a list")
+        clean_workflow_runs = []
+    else:
+        for index, run in enumerate(clean_workflow_runs):
+            errors.extend(
+                pytest_failure_summary_mapping_errors(
+                    f"clean_workflow_runs[{index}]",
+                    run,
+                    PYTEST_FAILURE_CLEAN_WORKFLOW_FIELDS,
+                )
+            )
+
+    failures = report.get("failures")
+    if not isinstance(failures, list):
+        errors.append("failures must be a list")
+        failures = []
+    else:
+        for index, failure in enumerate(failures):
+            errors.extend(
+                pytest_failure_summary_mapping_errors(
+                    f"failures[{index}]",
+                    failure,
+                    PYTEST_FAILURE_REQUIRED_FAILURE_FIELDS,
+                )
+            )
+
+    if not reports and not clean_workflow_runs and not failures:
+        errors.append(
+            "report must include at least one parsed report, clean workflow run, "
+            "or failure"
+        )
+    if isinstance(summary, Mapping):
+        errors.extend(
+            pytest_failure_summary_counter_mismatch_errors(summary, reports, failures)
+        )
+
+    return errors
+
+
 def load_pytest_failure_report(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return {
-            "path": relpath(path),
-            "load_error": {
-                "type": "FileNotFoundError",
-                "message": "pytest failure summary does not exist",
-            },
-        }
+        return pytest_failure_summary_load_error(
+            path,
+            "FileNotFoundError",
+            "pytest failure summary does not exist",
+        )
     try:
         report = load_json(path)
     except (OSError, json.JSONDecodeError) as exc:
-        return {
-            "path": relpath(path),
-            "load_error": {
-                "type": type(exc).__name__,
-                "message": str(exc),
-            },
-        }
+        return pytest_failure_summary_load_error(path, type(exc).__name__, str(exc))
+    if not isinstance(report, Mapping):
+        return pytest_failure_summary_load_error(
+            path,
+            "InvalidPytestFailureSummary",
+            "expected a JSON object",
+        )
     if report.get("generator") != PYTEST_FAILURE_SUMMARY_GENERATOR:
-        return {
-            "path": relpath(path),
-            "load_error": {
-                "type": "UnexpectedGenerator",
-                "message": "expected {}, got {}".format(
-                    PYTEST_FAILURE_SUMMARY_GENERATOR,
-                    report.get("generator"),
-                ),
-            },
-        }
+        return pytest_failure_summary_load_error(
+            path,
+            "UnexpectedGenerator",
+            "expected {}, got {}".format(
+                PYTEST_FAILURE_SUMMARY_GENERATOR,
+                report.get("generator"),
+            ),
+        )
+    errors = pytest_failure_summary_contract_errors(report)
+    if errors:
+        return pytest_failure_summary_load_error(
+            path,
+            "InvalidPytestFailureSummary",
+            "; ".join(errors),
+        )
     report.setdefault("path", relpath(path))
-    return report
+    return dict(report)
 
 
 def summarize_pytest_failure_reports(
@@ -1440,6 +1742,16 @@ def summarize_pytest_failure_reports(
         if not report.get("load_error")
         for failure in report.get("failures", [])
     ]
+    nested_load_error_count = 0
+    for report in reports:
+        if report.get("load_error"):
+            continue
+        summary = report.get("summary")
+        if not isinstance(summary, Mapping):
+            continue
+        load_error_count = summary.get("load_error_count", 0)
+        if valid_non_negative_int(load_error_count):
+            nested_load_error_count += load_error_count
     category_counts = Counter(
         failure.get("category", "unknown") for failure in failures
     )
@@ -1447,7 +1759,10 @@ def summarize_pytest_failure_reports(
     return {
         "provided": bool(reports),
         "report_count": len(reports),
-        "load_error_count": sum(1 for report in reports if report.get("load_error")),
+        "load_error_count": (
+            sum(1 for report in reports if report.get("load_error"))
+            + nested_load_error_count
+        ),
         "failed_testcase_count": len(failures),
         "categories": dict(sorted(category_counts.items())),
         "backends": dict(sorted(backend_counts.items())),
@@ -1552,13 +1867,11 @@ def build_report(
         support_by_backend = {}
         for backend_id, support in feature.get("support", {}).items():
             backend = backend_by_id[backend_id]
-            implementation_hits = collect_file_hits(
-                backend_implementation_paths(backend), terms
-            )
-            test_hits = collect_test_hits(backend.get("tests", []), terms)
-            unsupported_hits = collect_unsupported_hits(
-                backend_implementation_paths(backend), terms
-            )
+            implementation_paths = feature_implementation_paths(feature, backend)
+            test_paths = feature_test_paths(feature, backend)
+            implementation_hits = collect_file_hits(implementation_paths, terms)
+            test_hits = collect_test_hits(test_paths, terms)
+            unsupported_hits = collect_unsupported_hits(implementation_paths, terms)
             doc_hits = docs_feature_hits(docs_report, backend_id, feature["id"])
             state = infer_state(
                 support, implementation_hits, test_hits, unsupported_hits

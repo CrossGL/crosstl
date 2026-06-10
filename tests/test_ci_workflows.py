@@ -93,15 +93,17 @@ def _matrix_values(workflow_text, key):
     raise AssertionError(f"matrix key not found: {key}")
 
 
-def _assert_windows_legacy_python_uses_windows_2022_runner(workflow_text, os_key="OS"):
+def _assert_windows_python_policy(workflow_text, os_key="OS"):
     assert "runs-on: ${{ matrix.runner || matrix." in workflow_text
-    for python_version in ("3.8", "3.9"):
-        override = (
-            f'python-version: "{python_version}"\n'
-            f"            {os_key}: windows-latest\n"
-            "            runner: windows-2022"
-        )
-        assert override in workflow_text
+    excluded = f'python-version: "3.8"\n            {os_key}: windows-latest'
+    override = (
+        'python-version: "3.9"\n'
+        f"            {os_key}: windows-latest\n"
+        "            runner: windows-2022"
+    )
+    assert "exclude:" in workflow_text
+    assert excluded in workflow_text
+    assert override in workflow_text
 
 
 def _assert_windows_legacy_python_is_excluded(workflow_text, os_key="OS"):
@@ -1670,7 +1672,7 @@ def test_backend_test_matrix_matches_support_catalog_and_platform_policy():
     )
     assert _matrix_values(backend_tests, "python-version") == PYTHON_VERSIONS
     assert _matrix_values(backend_tests, "OS") == RUNNER_OSES
-    _assert_windows_legacy_python_is_excluded(backend_tests)
+    _assert_windows_python_policy(backend_tests)
     assert "fail-fast: false" in backend_tests
     assert "max-parallel: 24" in backend_tests
     assert "id: setup_python" in backend_tests
@@ -1717,7 +1719,7 @@ def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
     assert _matrix_values(translator_tests, "component") == expected_components
     assert _matrix_values(translator_tests, "python-version") == PYTHON_VERSIONS
     assert _matrix_values(translator_tests, "OS") == RUNNER_OSES
-    _assert_windows_legacy_python_is_excluded(translator_tests)
+    _assert_windows_python_policy(translator_tests)
     assert "fail-fast: false" in translator_tests
     assert "max-parallel: 24" in translator_tests
     assert "id: setup_python" in translator_tests
@@ -1823,7 +1825,7 @@ def test_examples_workflow_enforces_backend_outputs_and_platform_matrix():
     assert "workflow_dispatch:" in examples
     assert _matrix_values(examples, "python-version") == PYTHON_VERSIONS
     assert _matrix_values(examples, "os") == RUNNER_OSES
-    _assert_windows_legacy_python_is_excluded(examples, os_key="os")
+    _assert_windows_python_policy(examples, os_key="os")
     for backend in TRANSLATOR_TEST_MATRIX_NAMES:
         assert f'backend: "{backend}"' in examples
     assert "python test.py" in examples

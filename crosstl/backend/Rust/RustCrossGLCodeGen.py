@@ -2752,6 +2752,7 @@ class RustToCrossGLConverter:
                 loop_contexts,
             )
             target_name = self.declare_local_alias(stmt.name)
+            let_keyword = "let mut" if stmt.is_mutable else "let"
             if stmt.vtype:
                 self.add_value_type(target_name, stmt.vtype)
                 type_str = self.format_typed_declarator(stmt.vtype, target_name)
@@ -2760,7 +2761,7 @@ class RustToCrossGLConverter:
             inferred_type = self.infer_value_type(stmt.value)
             if inferred_type:
                 self.add_value_type(target_name, inferred_type)
-            return prelude + f"{indent_str}let {target_name} = {value_str};\n"
+            return prelude + f"{indent_str}{let_keyword} {target_name} = {value_str};\n"
 
         if isinstance(stmt.value, ClosureNode):
             helper_name = self.try_generate_closure_helper(
@@ -2770,7 +2771,8 @@ class RustToCrossGLConverter:
             if helper_name is not None:
                 target_name = self.declare_local_alias(stmt.name)
                 self.add_local_callable(stmt.name, target_name)
-                return f"{indent_str}let {target_name} = {helper_name};\n"
+                let_keyword = "let mut" if stmt.is_mutable else "let"
+                return f"{indent_str}{let_keyword} {target_name} = {helper_name};\n"
 
         if stmt.vtype:
             type_str = self.format_typed_declarator(stmt.vtype, stmt.name)
@@ -2780,6 +2782,7 @@ class RustToCrossGLConverter:
         if stmt.value:
             value_str = self.generate_reparseable_expression(stmt.value)
             target_name = self.declare_local_alias(stmt.name)
+            let_keyword = "let mut" if stmt.is_mutable else "let"
             if isinstance(stmt.value, ClosureNode):
                 self.add_local_callable(stmt.name, target_name)
             if stmt.vtype:
@@ -2789,7 +2792,7 @@ class RustToCrossGLConverter:
             inferred_type = self.infer_value_type(stmt.value)
             if inferred_type:
                 self.add_value_type(target_name, inferred_type)
-            return f"{indent_str}let {target_name} = {value_str};\n"
+            return f"{indent_str}{let_keyword} {target_name} = {value_str};\n"
         else:
             target_name = self.declare_local_alias(stmt.name)
             if stmt.vtype:

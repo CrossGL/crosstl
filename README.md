@@ -285,6 +285,34 @@ hlsl_code = crosstl.translate('shader.cgl', backend='directx', save_shader='shad
 glsl_code = crosstl.translate('shader.cgl', backend='opengl', save_shader='shader.glsl')
 ```
 
+### Project audit workflow
+
+For repositories with many shader or GPU source files, start with a scan-only
+report before writing translated artifacts:
+
+```bash
+python -m crosstl scan /path/to/repo \
+  --target metal \
+  --output scan-report.json
+
+python -m crosstl translate-project /path/to/repo \
+  --target metal \
+  --output-dir crosstl-out \
+  --report crosstl-out/portability-report.json
+
+python -m crosstl validate-project \
+  crosstl-out/portability-report.json \
+  --format text
+
+python -m crosstl inspect-report \
+  crosstl-out/portability-report.json \
+  --format text
+```
+
+Project reports cover shader and kernel source translation, diagnostics,
+artifact provenance, optional toolchain checks, and manual migration actions
+for host/runtime integration. See the [project porting guide](docs/source/project-porting.rst).
+
 ## Reverse Translation - Import Existing Code
 
 ```python

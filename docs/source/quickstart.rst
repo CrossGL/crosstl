@@ -20,7 +20,33 @@ Use the command-line entry point:
 
 .. code-block:: bash
 
-   python -m crosstl._crosstl examples/graphics/SimpleShader.cgl --backend metal
+   python -m crosstl translate examples/graphics/SimpleShader.cgl --backend metal
+
+Audit a repository before writing translated project artifacts:
+
+.. code-block:: bash
+
+   python -m crosstl scan /path/to/repo \
+     --target metal \
+     --output scan-report.json
+
+   python -m crosstl translate-project /path/to/repo \
+     --target metal \
+     --output-dir crosstl-out \
+     --report crosstl-out/portability-report.json
+
+   python -m crosstl validate-project \
+     crosstl-out/portability-report.json \
+     --format text
+
+   python -m crosstl inspect-report \
+     crosstl-out/portability-report.json \
+     --format text
+
+Project reports focus on shader and kernel source translation. Host runtime
+API migration, build-system rewrites, and framework integration remain manual
+migration work tracked in the report. See :doc:`project-porting` for the full
+workflow and report contract.
 
 Inspect registered sources and targets:
 

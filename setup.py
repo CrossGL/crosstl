@@ -17,5 +17,10 @@ setup(
         "Operating System :: OS Independent",
     ],
     python_requires=">=3.8",
-    install_requires=["gast"],
+    install_requires=["gast", "tomli; python_version<'3.11'"],
+    entry_points={
+        "console_scripts": [
+            "crosstl=crosstl._crosstl:main",
+        ]
+    },
 )

@@ -12,6 +12,9 @@ The matrix is intentionally data-driven:
   by `tools/support_matrix.py`.
 - `generated/graphics-backend-roadmap.json` is a focused generated view for the
   DirectX, OpenGL, and Metal roadmap.
+- `generated/project-porting-roadmap.json` is a focused generated view for
+  repository-scale scanning, translation, reports, diagnostics, validation, and
+  corpus coverage.
 - `tools/support_signals.py` generates transient extraction reports from backend
   docs, relevant same-site docs links, implementation files, and tests. CI uses
   those signals to find stale support claims, discover documented API candidates
@@ -19,6 +22,12 @@ The matrix is intentionally data-driven:
   hand-written per-backend evidence files.
 - The generated JSON also records test counts and stable sampled unsupported
   markers from implementation paths for each backend.
+- Project-porting support rows track repository scan, batch translation,
+  project configuration, artifact reports, provenance, validation hooks, and
+  structured diagnostics. The implementation emits scan and portability reports
+  through `python -m crosstl scan`, `report`, and `translate-project`,
+  validates reports through `validate-project`, and summarizes reports through
+  `inspect-report`.
 
 Status values are conservative. Do not mark a feature `supported` unless there is
 implementation and test evidence. Use `partial`, `diagnostic`, `unsupported`,
@@ -39,8 +48,10 @@ python tools/support_matrix.py check
 python tools/support_matrix.py audit
 python tools/support_matrix.py audit --backend directx --backend opengl --backend metal
 python tools/support_matrix.py audit --backend directx --status partial --output /tmp/directx-partial.json
+python tools/support_matrix.py audit --category project --output /tmp/project-porting-roadmap.json
 python tools/support_signals.py docs --output support/generated/backend-docs-report.json
 python tools/support_signals.py extract --docs-report support/generated/backend-docs-report.json --output support/generated/support-signals.json
+python -m crosstl scan /path/to/repo --target metal --output /tmp/crosstl-project-scan.json
 ```
 
 The hourly issue-sync CI fetches official backend documentation URLs, crawls a

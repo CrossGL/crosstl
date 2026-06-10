@@ -265,7 +265,7 @@ def test_wgpu_struct_initializer_lifetime_type_reparse():
     result = parse_and_generate(code)
 
     assert (
-        "let scope = UsageScope { pool: pool, buffers: pooled.field0, textures: pooled.field1 };"
+        "let mut scope = UsageScope { pool: pool, buffers: pooled.field0, textures: pooled.field1 };"
         in result
     )
     assert "UsageScope::<'d>" not in result
@@ -5291,7 +5291,7 @@ def test_let_binding_conversion():
         lines = [line.strip() for line in result.splitlines()]
 
         assert "let x = 42;" in lines
-        assert "let y = 3.14;" in lines
+        assert "let mut y = 3.14;" in lines
         assert "float z = 2.0;" in lines
         crosstl.translator.parse(result)
     except Exception as e:
@@ -8534,6 +8534,7 @@ def test_assignment_operations_conversion():
     """
     try:
         result = parse_and_generate(code)
+        assert "let mut a = 5;" in result
         assert "a += 3;" in result
         assert "a -= 2;" in result
         assert "a *= 4;" in result
@@ -11355,7 +11356,7 @@ def test_callable_trait_parameter_type_codegen_reparse_from_wgpu_bench_iter():
 
     assert "Duration iter(FnMut_to_Duration f)" in result
     assert "FnMut() -> Duration" not in result
-    assert "let duration = Duration::ZERO;" in result
+    assert "let mut duration = Duration::ZERO;" in result
     crosstl.translator.parse(result)
 
 

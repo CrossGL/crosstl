@@ -242,6 +242,167 @@ def test_comment_tokens_are_skipped_as_trivia():
     assert ("COMPUTE", "compute") in tokens
 
 
+def test_preprocessor_directives_are_preserved_without_defines():
+    code = """
+    #ifdef USE_RED
+    float selected = RED_VALUE;
+    #endif
+    """
+
+    tokens = Lexer(code).get_tokens()
+
+    assert ("PREPROCESSOR", "#ifdef USE_RED") in tokens
+    assert ("IDENTIFIER", "RED_VALUE") in tokens
+
+
+def test_define_preprocessing_selects_active_branch_and_expands_macros():
+    code = """
+    #define RED_VALUE 1.0
+    #if USE_RED
+    float selected = RED_VALUE;
+    #else
+    float selected = BLUE_VALUE;
+    #endif
+    """
+
+    tokens = Lexer(
+        code,
+        defines={"BLUE_VALUE": "0.0", "USE_RED": "1"},
+    ).get_tokens()
+
+    assert ("PREPROCESSOR", "#if USE_RED") not in tokens
+    assert ("FLOAT_NUMBER", "1.0") in tokens
+    assert ("FLOAT_NUMBER", "0.0") not in tokens
+    assert ("IDENTIFIER", "RED_VALUE") not in tokens
+    assert ("IDENTIFIER", "BLUE_VALUE") not in tokens
+
+
+def test_define_preprocessing_supports_elif_and_undefined_macros():
+    code = """
+    #if USE_RED
+    float selected = 1.0;
+    #elif USE_BLUE
+    float selected = 2.0;
+    #else
+    float selected = 3.0;
+    #endif
+    """
+
+    tokens = Lexer(code, defines={"USE_BLUE": "1"}).get_tokens()
+
+    assert ("FLOAT_NUMBER", "1.0") not in tokens
+    assert ("FLOAT_NUMBER", "2.0") in tokens
+    assert ("FLOAT_NUMBER", "3.0") not in tokens
+
+
+def test_define_preprocessing_preserves_function_like_macros():
+    code = """
+    #define MIX(a, b) ((a) + (b))
+    float selected = MIX(1.0, 2.0);
+    """
+
+    tokens = Lexer(code, defines={}).get_tokens()
+
+    assert ("PREPROCESSOR", "#define MIX(a, b) ((a) + (b))") in tokens
+    assert ("IDENTIFIER", "MIX") in tokens
+
+
+def test_include_preprocessing_uses_file_path_and_include_dirs(tmp_path):
+    shader = tmp_path / "main.cgl"
+    include_dir = tmp_path / "includes"
+    include_dir.mkdir()
+    local_include = tmp_path / "local.cgl"
+    shared_include = include_dir / "shared.cgl"
+
+    local_include.write_text(
+        """
+        #define LOCAL_SCALE 2.0
+        float localValue = LOCAL_SCALE;
+        """,
+        encoding="utf-8",
+    )
+    shared_include.write_text(
+        """
+        #ifdef ENABLE_SHARED
+        float sharedValue = SHARED_SCALE;
+        #endif
+        """,
+        encoding="utf-8",
+    )
+    shader.write_text(
+        """
+        #define SHARED_HEADER <shared.cgl>
+        #include "local.cgl"
+        #include SHARED_HEADER
+        float combinedValue = localValue + sharedValue;
+        """,
+        encoding="utf-8",
+    )
+
+    tokens = Lexer(
+        shader.read_text(encoding="utf-8"),
+        file_path=str(shader),
+        include_paths=[str(include_dir)],
+        defines={"ENABLE_SHARED": "1", "SHARED_SCALE": "4.0"},
+    ).get_tokens()
+
+    assert ("PREPROCESSOR", '#include "local.cgl"') not in tokens
+    assert ("PREPROCESSOR", "#include SHARED_HEADER") not in tokens
+    assert ("IDENTIFIER", "LOCAL_SCALE") not in tokens
+    assert ("IDENTIFIER", "localValue") in tokens
+    assert ("IDENTIFIER", "sharedValue") in tokens
+    assert ("FLOAT_NUMBER", "2.0") in tokens
+    assert ("FLOAT_NUMBER", "4.0") in tokens
+
+
+def test_include_preprocessing_preserves_unresolved_include(tmp_path):
+    tokens = Lexer(
+        """
+        #include <missing.cgl>
+        float keptValue = 1.0;
+        """,
+        include_paths=[str(tmp_path)],
+    ).get_tokens()
+
+    assert ("PREPROCESSOR", "#include <missing.cgl>") in tokens
+    assert ("IDENTIFIER", "keptValue") in tokens
+
+
+def test_include_preprocessing_preserves_conditionals_without_defines(tmp_path):
+    shader = tmp_path / "main.cgl"
+    shared_include = tmp_path / "shared.cgl"
+    shared_include.write_text("float includedValue = 2.0;\n", encoding="utf-8")
+    shader.write_text(
+        """
+        #ifdef USE_CONDITIONAL_VALUE
+        float conditionalValue = 1.0;
+        #endif
+        #include "shared.cgl"
+        """,
+        encoding="utf-8",
+    )
+
+    tokens = Lexer(
+        shader.read_text(encoding="utf-8"), file_path=str(shader)
+    ).get_tokens()
+
+    assert ("PREPROCESSOR", "#ifdef USE_CONDITIONAL_VALUE") in tokens
+    assert ("PREPROCESSOR", "#endif") in tokens
+    assert ("IDENTIFIER", "conditionalValue") in tokens
+    assert ("IDENTIFIER", "includedValue") in tokens
+    assert ("PREPROCESSOR", '#include "shared.cgl"') not in tokens
+
+
+def test_include_preprocessing_rejects_cycles(tmp_path):
+    first = tmp_path / "first.cgl"
+    second = tmp_path / "second.cgl"
+    first.write_text('#include "second.cgl"\n', encoding="utf-8")
+    second.write_text('#include "first.cgl"\n', encoding="utf-8")
+
+    with pytest.raises(SyntaxError, match="Cyclic #include"):
+        Lexer(first.read_text(encoding="utf-8"), file_path=str(first))
+
+
 def test_stage_and_ray_keywords_tokenization():
     code = """
     object { }
