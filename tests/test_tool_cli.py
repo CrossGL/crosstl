@@ -32,6 +32,7 @@ TOOLS = [
                 "plan-runtime",
                 "runtime-manifest",
                 "package-runtime",
+                "plan-host-bindings",
                 "report",
             ),
         ),
@@ -121,6 +122,14 @@ TOOLS = [
             (
                 "usage:",
                 "--package-dir",
+                "--format",
+                "--output",
+            ),
+        ),
+        (
+            ("plan-host-bindings",),
+            (
+                "usage:",
                 "--format",
                 "--output",
             ),

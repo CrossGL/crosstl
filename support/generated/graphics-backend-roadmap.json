@@ -3057,6 +3057,44 @@
     },
     {
       "category": "project",
+      "description": "Emit host binding plans from runtime package manifests without rewriting host code or executing device code.",
+      "id": "project.runtime_host_binding_plan",
+      "name": "Runtime host binding plan",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_outputs_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_json_writes_output"
+          ],
+          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, records packaged artifact binding actions as bind-runtime-artifact entries, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, and rejects failed runtime packages with structured diagnostics. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_outputs_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_json_writes_output"
+          ],
+          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, records packaged artifact binding actions as bind-runtime-artifact entries, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, and rejects failed runtime packages with structured diagnostics. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_outputs_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_json_writes_output"
+          ],
+          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, records packaged artifact binding actions as bind-runtime-artifact entries, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, and rejects failed runtime packages with structured diagnostics. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Inspect existing project portability reports as concise JSON, text, or SARIF summaries for triage and migration planning.",
       "id": "project.report_inspection",
       "name": "Project report inspection",
@@ -3908,12 +3946,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 57,
+    "feature_count": 58,
     "status_counts": {
       "directx": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 52,
+        "supported": 53,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -3921,7 +3959,7 @@
       "metal": {
         "diagnostic": 3,
         "partial": 3,
-        "supported": 51,
+        "supported": 52,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -3929,7 +3967,7 @@
       "opengl": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 52,
+        "supported": 53,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
