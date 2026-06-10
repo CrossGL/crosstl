@@ -14,6 +14,7 @@ import crosstl._crosstl as crosstl_cli
 import crosstl.project as project_api
 import crosstl.project.pipeline as project_pipeline
 from crosstl.project import (
+    build_runtime_artifact_manifest,
     inspect_project_report,
     load_project_config,
     plan_runtime_integration,
@@ -70,6 +71,7 @@ def test_project_package_exposes_public_api_surface():
         "ProjectPortabilityReport",
         "ProjectScan",
         "ProjectTranslationUnit",
+        "build_runtime_artifact_manifest",
         "inspect_project_report",
         "load_project_config",
         "plan_runtime_integration",
@@ -22382,6 +22384,194 @@ def test_project_cli_plan_runtime_rejects_negative_sample_limit(tmp_path):
 
     assert result.returncode == 2
     assert "must be a non-negative integer" in result.stderr
+
+
+def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        "void run() { cudaLaunchKernel(nullptr); }\n",
+        encoding="utf-8",
+    )
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+
+    payload = build_runtime_artifact_manifest(report_path)
+
+    assert set(payload) == project_pipeline.RUNTIME_ARTIFACT_MANIFEST_FIELDS
+    assert payload["kind"] == project_pipeline.RUNTIME_ARTIFACT_MANIFEST_KIND
+    assert payload["success"] is True
+    assert payload["scope"] == project_pipeline.RUNTIME_ARTIFACT_MANIFEST_SCOPE
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_ARTIFACT_MANIFEST_NON_GOALS
+    )
+    assert payload["project"]["targets"] == ["cgl"]
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "artifactCount": 1,
+        "translatedArtifactCount": 1,
+        "failedArtifactCount": 0,
+        "sourceMapCount": 1,
+        "sourceRemapCount": 1,
+        "runtimeReferenceCount": 1,
+        "compilerRequestCount": 1,
+    }
+    assert len(payload["targets"]) == 1
+    assert set(payload["targets"][0]) == (
+        project_pipeline.RUNTIME_ARTIFACT_MANIFEST_TARGET_FIELDS
+    )
+    assert payload["targets"][0]["target"] == "cgl"
+    assert payload["targets"][0]["translatedArtifactCount"] == 1
+    assert payload["targets"][0]["runtimeReferenceCount"] == 1
+    assert len(payload["targets"][0]["artifacts"]) == 1
+    assert len(payload["artifacts"]) == 1
+
+    report_artifact = report_payload["artifacts"][0]
+    artifact = payload["artifacts"][0]
+    assert set(artifact) == project_pipeline.RUNTIME_ARTIFACT_MANIFEST_ARTIFACT_FIELDS
+    assert artifact["id"] == payload["targets"][0]["artifacts"][0]
+    assert artifact["source"] == "simple.cgl"
+    assert artifact["path"] == "out/cgl/simple.cgl"
+    assert artifact["target"] == "cgl"
+    assert artifact["sourceBackend"] == "cgl"
+    assert artifact["variant"] is None
+    assert artifact["defines"] == {}
+    assert artifact["sourceHash"] == report_artifact["sourceHash"]
+    assert artifact["sourceSizeBytes"] == report_artifact["sourceSizeBytes"]
+    assert artifact["hash"] == report_artifact["generatedHash"]
+    assert artifact["sizeBytes"] == report_artifact["generatedSizeBytes"]
+    assert artifact["provenance"] == report_artifact["provenance"]
+    assert artifact["sourceMap"]["kind"] == "crosstl-artifact-source-map"
+    assert artifact["sourceRemap"]["path"] == "out/cgl/simple.source-remap.json"
+
+    assert set(payload["runtimePlan"]) == (
+        project_pipeline.RUNTIME_ARTIFACT_MANIFEST_RUNTIME_PLAN_FIELDS
+    )
+    assert (
+        payload["runtimePlan"]["kind"] == project_pipeline.RUNTIME_INTEGRATION_PLAN_KIND
+    )
+    assert payload["runtimePlan"]["contract"] == "runtime-loader-plan-v1"
+    assert payload["runtimePlan"]["runtimeReferencesByBackend"] == {"cuda": 1}
+    assert payload["runtimePlan"]["runtimeReferencesByKind"] == {"runtime-api": 1}
+    assert payload["runtimePlan"]["runtimeReferencesByPath"] == {"host.cpp": 1}
+    assert payload["runtimePlan"]["compilerRequests"][0]["target"] == "cgl"
+    assert payload["runtimePlan"]["actionCount"] == 2
+
+
+def test_runtime_artifact_manifest_invalid_report_is_diagnostic_only(tmp_path):
+    report_path = tmp_path / "invalid-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "kind": "not-a-report",
+                "project": {"targets": ["cgl"]},
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "path": "out/cgl/simple.cgl",
+                        "target": "cgl",
+                        "status": "translated",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = build_runtime_artifact_manifest(report_path)
+
+    assert payload["success"] is False
+    assert payload["project"]["targets"] == []
+    assert payload["summary"]["artifactCount"] == 0
+    assert payload["summary"]["runtimeReferenceCount"] == 0
+    assert payload["targets"] == []
+    assert payload["artifacts"] == []
+    assert payload["runtimePlan"]["compilerRequests"] == []
+    assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == "project.validate.invalid-report"
+
+
+def test_project_cli_runtime_manifest_text_outputs_artifacts_and_plan(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        "void run() { cudaLaunchKernel(nullptr); }\n",
+        encoding="utf-8",
+    )
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "runtime-manifest",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Runtime artifact manifest: {report_path}" in result.stdout
+    assert "Status: ok" in result.stdout
+    assert "Manifest scope: translated-artifact-runtime-consumption" in result.stdout
+    assert (
+        "Manifest non-goals: host-code-rewriting, device-execution, "
+        "runtime-framework-generation"
+    ) in result.stdout
+    assert "Summary: 1 targets, 1 runtime artifacts, 0 failed artifacts" in (
+        result.stdout
+    )
+    assert "Runtime plan contract: runtime-loader-plan-v1 (requested)" in result.stdout
+    assert "Runtime references by backend: cuda=1" in result.stdout
+    assert "Runtime targets:" in result.stdout
+    assert "- cgl: 1 translated, 0 failed, 1 runtime references" in result.stdout
+    assert "Runtime artifacts:" in result.stdout
+    assert "- cgl: simple.cgl -> out/cgl/simple.cgl" in result.stdout
+    assert "source remap: out/cgl/simple.source-remap.json" in result.stdout
+
+
+def test_project_cli_runtime_manifest_json_writes_output(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    output_path = repo / "out" / "runtime-artifacts.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "runtime-manifest",
+            str(report_path),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == project_pipeline.RUNTIME_ARTIFACT_MANIFEST_KIND
+    assert payload["artifacts"][0]["path"] == "out/cgl/simple.cgl"
 
 
 def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp_path):

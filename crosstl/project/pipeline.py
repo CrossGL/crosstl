@@ -29,15 +29,22 @@ from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default
 REPORT_KIND = "crosstl-project-portability-report"
 REPORT_INSPECTION_KIND = "crosstl-project-report-inspection"
 RUNTIME_INTEGRATION_PLAN_KIND = "crosstl-runtime-integration-plan"
+RUNTIME_ARTIFACT_MANIFEST_KIND = "crosstl-runtime-artifact-manifest"
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
 RUNTIME_LOADER_PLAN_CONTRACT = "runtime-loader-plan-v1"
 RUNTIME_LOADER_PLAN_CONTRACT_ISSUE = "https://github.com/CrossGL/compiler/issues/29"
 RUNTIME_INTEGRATION_PLAN_SCOPE = "metadata-only-runtime-integration-planning"
+RUNTIME_ARTIFACT_MANIFEST_SCOPE = "translated-artifact-runtime-consumption"
 RUNTIME_INTEGRATION_PLAN_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
     "compiler-internal-python-dependency",
+)
+RUNTIME_ARTIFACT_MANIFEST_NON_GOALS = (
+    "host-code-rewriting",
+    "device-execution",
+    "runtime-framework-generation",
 )
 REPORT_FIELDS = frozenset(
     (
@@ -145,6 +152,67 @@ RUNTIME_INTEGRATION_COMPILER_REQUEST_FIELDS = frozenset(
 )
 RUNTIME_INTEGRATION_ACTION_FIELDS = frozenset(
     ("kind", "severity", "message", "targets", "runtimeReference")
+)
+RUNTIME_ARTIFACT_MANIFEST_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourceReport",
+        "sourceReportHash",
+        "generatedAt",
+        "success",
+        "scope",
+        "nonGoals",
+        "project",
+        "summary",
+        "targets",
+        "artifacts",
+        "runtimePlan",
+        "diagnosticCounts",
+        "diagnostics",
+    )
+)
+RUNTIME_ARTIFACT_MANIFEST_TARGET_FIELDS = frozenset(
+    (
+        "target",
+        "artifactCount",
+        "translatedArtifactCount",
+        "failedArtifactCount",
+        "runtimeReferenceCount",
+        "artifacts",
+    )
+)
+RUNTIME_ARTIFACT_MANIFEST_ARTIFACT_FIELDS = frozenset(
+    (
+        "id",
+        "source",
+        "path",
+        "target",
+        "sourceBackend",
+        "variant",
+        "defines",
+        "sourceHash",
+        "sourceSizeBytes",
+        "hash",
+        "sizeBytes",
+        "provenance",
+        "sourceMap",
+        "sourceRemap",
+    )
+)
+RUNTIME_ARTIFACT_MANIFEST_RUNTIME_PLAN_FIELDS = frozenset(
+    (
+        "kind",
+        "contract",
+        "contractStatus",
+        "contractIssue",
+        "runtimeReferenceCount",
+        "runtimeReferencesByBackend",
+        "runtimeReferencesByKind",
+        "runtimeReferencesByPath",
+        "compilerRequests",
+        "actionCount",
+    )
 )
 REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
 REPORT_PROJECT_FIELDS = frozenset(
@@ -7356,6 +7424,192 @@ def plan_runtime_integration(
         "targetPlans": target_plans,
         "compilerRequests": compiler_requests,
         "actions": plan_actions,
+        "diagnosticCounts": validation_report.get("diagnosticCounts", {}),
+        "diagnostics": validation_report.get("diagnostics", []),
+    }
+
+
+def _runtime_manifest_artifact_id(artifact: Mapping[str, Any]) -> str:
+    variant = artifact.get("variant")
+    variant_label = variant if isinstance(variant, str) and variant else "default"
+    return "|".join(
+        str(part)
+        for part in (
+            artifact.get("source", ""),
+            artifact.get("target", ""),
+            variant_label,
+            artifact.get("path", ""),
+        )
+    )
+
+
+def _runtime_manifest_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    payload = {
+        "id": _runtime_manifest_artifact_id(artifact),
+        "source": artifact.get("source"),
+        "path": artifact.get("path"),
+        "target": artifact.get("target"),
+        "sourceBackend": artifact.get("sourceBackend"),
+        "variant": artifact.get("variant"),
+        "defines": (
+            dict(artifact.get("defines"))
+            if isinstance(artifact.get("defines"), Mapping)
+            else {}
+        ),
+        "sourceHash": artifact.get("sourceHash"),
+        "sourceSizeBytes": artifact.get("sourceSizeBytes"),
+        "hash": artifact.get("generatedHash"),
+        "sizeBytes": artifact.get("generatedSizeBytes"),
+        "provenance": (
+            dict(artifact.get("provenance"))
+            if isinstance(artifact.get("provenance"), Mapping)
+            else {}
+        ),
+        "sourceMap": (
+            dict(artifact.get("sourceMap"))
+            if isinstance(artifact.get("sourceMap"), Mapping)
+            else None
+        ),
+        "sourceRemap": (
+            dict(artifact.get("sourceRemap"))
+            if isinstance(artifact.get("sourceRemap"), Mapping)
+            else None
+        ),
+    }
+    return payload
+
+
+def _runtime_manifest_target(
+    target: str,
+    artifacts: Sequence[Mapping[str, Any]],
+    runtime_reference_count: int,
+) -> dict[str, Any]:
+    target_artifacts = [
+        artifact for artifact in artifacts if artifact.get("target") == target
+    ]
+    translated_artifacts = [
+        artifact
+        for artifact in target_artifacts
+        if artifact.get("status") == "translated"
+    ]
+    failed_artifact_count = sum(
+        1 for artifact in target_artifacts if artifact.get("status") == "failed"
+    )
+    return {
+        "target": target,
+        "artifactCount": len(target_artifacts),
+        "translatedArtifactCount": len(translated_artifacts),
+        "failedArtifactCount": failed_artifact_count,
+        "runtimeReferenceCount": runtime_reference_count,
+        "artifacts": [
+            _runtime_manifest_artifact_id(artifact) for artifact in translated_artifacts
+        ],
+    }
+
+
+def _runtime_manifest_runtime_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
+    compiler_contract = plan.get("compilerContract")
+    contract = compiler_contract if isinstance(compiler_contract, Mapping) else {}
+    return {
+        "kind": plan.get("kind"),
+        "contract": contract.get("name"),
+        "contractStatus": contract.get("status"),
+        "contractIssue": contract.get("issue"),
+        "runtimeReferenceCount": (
+            plan.get("summary", {}).get("runtimeReferenceCount")
+            if isinstance(plan.get("summary"), Mapping)
+            else 0
+        ),
+        "runtimeReferencesByBackend": (
+            dict(plan.get("runtimeReferencesByBackend", {}))
+            if isinstance(plan.get("runtimeReferencesByBackend"), Mapping)
+            else {}
+        ),
+        "runtimeReferencesByKind": (
+            dict(plan.get("runtimeReferencesByKind", {}))
+            if isinstance(plan.get("runtimeReferencesByKind"), Mapping)
+            else {}
+        ),
+        "runtimeReferencesByPath": (
+            dict(plan.get("runtimeReferencesByPath", {}))
+            if isinstance(plan.get("runtimeReferencesByPath"), Mapping)
+            else {}
+        ),
+        "compilerRequests": (
+            [dict(request) for request in plan.get("compilerRequests", [])]
+            if isinstance(plan.get("compilerRequests"), list)
+            else []
+        ),
+        "actionCount": (
+            plan.get("summary", {}).get("actionCount")
+            if isinstance(plan.get("summary"), Mapping)
+            else 0
+        ),
+    }
+
+
+def build_runtime_artifact_manifest(
+    report_path: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Build a runtime artifact manifest from a validated project report."""
+
+    path = _filesystem_path_arg(report_path, field_name="Project report path")
+    validation_report = validate_project_report(path)
+    validation_success = bool(validation_report.get("success"))
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        report = {}
+
+    report_mapping = (
+        report if validation_success and isinstance(report, Mapping) else {}
+    )
+    project_payload = _runtime_plan_project(report_mapping.get("project"))
+    targets = project_payload["targets"]
+    artifacts = [
+        artifact
+        for artifact in _record_sequence(report_mapping.get("artifacts"))
+        if isinstance(artifact, Mapping)
+    ]
+    translated_artifacts = [
+        artifact for artifact in artifacts if artifact.get("status") == "translated"
+    ]
+    failed_artifact_count = sum(
+        1 for artifact in artifacts if artifact.get("status") == "failed"
+    )
+    runtime_plan = plan_runtime_integration(path)
+    runtime_plan_payload = _runtime_manifest_runtime_plan(runtime_plan)
+    runtime_reference_count = runtime_plan_payload["runtimeReferenceCount"]
+    source_map_rollups = _source_map_rollups(translated_artifacts)
+    manifest_artifacts = [
+        _runtime_manifest_artifact(artifact) for artifact in translated_artifacts
+    ]
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_ARTIFACT_MANIFEST_KIND,
+        "sourceReport": str(path),
+        "sourceReportHash": _optional_source_hash(path),
+        "generatedAt": int(time.time()),
+        "success": validation_success,
+        "scope": RUNTIME_ARTIFACT_MANIFEST_SCOPE,
+        "nonGoals": list(RUNTIME_ARTIFACT_MANIFEST_NON_GOALS),
+        "project": project_payload,
+        "summary": {
+            "targetCount": len(targets),
+            "artifactCount": len(manifest_artifacts),
+            "translatedArtifactCount": len(translated_artifacts),
+            "failedArtifactCount": failed_artifact_count,
+            "sourceMapCount": source_map_rollups["sourceMapCount"],
+            "sourceRemapCount": source_map_rollups["sourceRemapCount"],
+            "runtimeReferenceCount": runtime_reference_count,
+            "compilerRequestCount": len(runtime_plan_payload["compilerRequests"]),
+        },
+        "targets": [
+            _runtime_manifest_target(target, artifacts, runtime_reference_count)
+            for target in targets
+        ],
+        "artifacts": manifest_artifacts,
+        "runtimePlan": runtime_plan_payload,
         "diagnosticCounts": validation_report.get("diagnosticCounts", {}),
         "diagnostics": validation_report.get("diagnostics", []),
     }

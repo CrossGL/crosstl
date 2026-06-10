@@ -29,6 +29,8 @@ TOOLS = [
                 "translate-project",
                 "validate-project",
                 "inspect-report",
+                "plan-runtime",
+                "runtime-manifest",
                 "report",
             ),
         ),
@@ -103,6 +105,14 @@ TOOLS = [
                 "--format",
                 "--output",
                 "--max-runtime-references",
+            ),
+        ),
+        (
+            ("runtime-manifest",),
+            (
+                "usage:",
+                "--format",
+                "--output",
             ),
         ),
     ],

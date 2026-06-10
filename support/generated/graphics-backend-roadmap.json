@@ -2981,6 +2981,44 @@
     },
     {
       "category": "project",
+      "description": "Emit runtime artifact manifests from validated project portability reports without rewriting host code or executing device code.",
+      "id": "project.runtime_artifact_manifest",
+      "name": "Runtime artifact manifest",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_artifact_manifest_from_project_report",
+            "tests/test_translator/test_project_translation.py::def test_runtime_artifact_manifest_invalid_report_is_diagnostic_only",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_manifest_text_outputs_artifacts_and_plan",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_manifest_json_writes_output"
+          ],
+          "notes": "runtime-manifest builds crosstl-runtime-artifact-manifest JSON, text, and SARIF output from validated portability reports, records translated artifact consumption metadata, generated artifact hash and byte-size metadata, source-map anchors, source-remap sidecars, per-target artifact ids, and runtime-loader-plan-v1 summary linkage. Invalid source reports produce diagnostic-only failed manifests. The manifest does not generate runtime framework code, execute device code, or rewrite host application code.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_artifact_manifest_from_project_report",
+            "tests/test_translator/test_project_translation.py::def test_runtime_artifact_manifest_invalid_report_is_diagnostic_only",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_manifest_text_outputs_artifacts_and_plan",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_manifest_json_writes_output"
+          ],
+          "notes": "runtime-manifest builds crosstl-runtime-artifact-manifest JSON, text, and SARIF output from validated portability reports, records translated artifact consumption metadata, generated artifact hash and byte-size metadata, source-map anchors, source-remap sidecars, per-target artifact ids, and runtime-loader-plan-v1 summary linkage. Invalid source reports produce diagnostic-only failed manifests. The manifest does not generate runtime framework code, execute device code, or rewrite host application code.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_artifact_manifest_from_project_report",
+            "tests/test_translator/test_project_translation.py::def test_runtime_artifact_manifest_invalid_report_is_diagnostic_only",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_manifest_text_outputs_artifacts_and_plan",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_manifest_json_writes_output"
+          ],
+          "notes": "runtime-manifest builds crosstl-runtime-artifact-manifest JSON, text, and SARIF output from validated portability reports, records translated artifact consumption metadata, generated artifact hash and byte-size metadata, source-map anchors, source-remap sidecars, per-target artifact ids, and runtime-loader-plan-v1 summary linkage. Invalid source reports produce diagnostic-only failed manifests. The manifest does not generate runtime framework code, execute device code, or rewrite host application code.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Inspect existing project portability reports as concise JSON, text, or SARIF summaries for triage and migration planning.",
       "id": "project.report_inspection",
       "name": "Project report inspection",
@@ -3832,12 +3870,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 55,
+    "feature_count": 56,
     "status_counts": {
       "directx": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 50,
+        "supported": 51,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -3845,7 +3883,7 @@
       "metal": {
         "diagnostic": 3,
         "partial": 3,
-        "supported": 49,
+        "supported": 50,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -3853,7 +3891,7 @@
       "opengl": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 50,
+        "supported": 51,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

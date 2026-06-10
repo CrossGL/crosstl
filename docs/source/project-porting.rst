@@ -345,6 +345,24 @@ for runtime references found in host or build files. The compiler request
 entries point at the metadata-only ``runtime-loader-plan-v1`` contract request
 in the compiler repository. This is planning evidence only: it does not import
 compiler internals, execute device code, or rewrite host application code.
+
+Build a runtime artifact manifest for downstream host or package tooling:
+
+.. code-block:: bash
+
+   python -m crosstl runtime-manifest crosstl-out/portability-report.json \
+     --format text
+
+Runtime artifact manifests emit a ``crosstl-runtime-artifact-manifest`` JSON
+document from a validated portability report. The manifest lists translated
+artifacts by target with source/backend/variant identity, generated artifact
+hash and byte-size metadata, source-map anchors, optional compiler
+``source-remap`` sidecars, and the runtime planning contract summary required
+by downstream packaging or host integration tooling. Invalid source reports
+produce diagnostic-only failed manifests. The manifest is a handoff contract;
+it does not generate runtime framework code, execute device code, or rewrite
+host application code.
+
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a
 related location. Remapped diagnostics also expose sanitized
