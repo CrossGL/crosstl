@@ -2,6 +2,15 @@
 from math import *
 from gpu import *
 
+# CrossGL GPU builtin placeholders
+@value
+struct _CrossGLGpuBuiltinU32Vec3:
+    var x: UInt32
+    var y: UInt32
+    var z: UInt32
+
+var global_idx_uint = _CrossGLGpuBuiltinU32Vec3(0, 0, 0)
+
 # CrossGL resource placeholders
 @value
 struct Image2DFloat4:
@@ -78,6 +87,30 @@ fn magnitude(v: SIMD[DType.float32, 4]) -> Float32:
 fn max(a: Float32, b: Float32) -> Float32:
     return a if a >= b else b
 
+fn max(a: Int8, b: Int8) -> Int8:
+    return a if a >= b else b
+
+fn max(a: Int16, b: Int16) -> Int16:
+    return a if a >= b else b
+
+fn max(a: Int32, b: Int32) -> Int32:
+    return a if a >= b else b
+
+fn max(a: Int64, b: Int64) -> Int64:
+    return a if a >= b else b
+
+fn max(a: UInt8, b: UInt8) -> UInt8:
+    return a if a >= b else b
+
+fn max(a: UInt16, b: UInt16) -> UInt16:
+    return a if a >= b else b
+
+fn max(a: UInt32, b: UInt32) -> UInt32:
+    return a if a >= b else b
+
+fn max(a: UInt64, b: UInt64) -> UInt64:
+    return a if a >= b else b
+
 fn max(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:
     return SIMD[DType.float32, 2](a[0] if a[0] >= b[0] else b[0], a[1] if a[1] >= b[1] else b[1])
 
@@ -97,6 +130,30 @@ fn max(a: Float32, b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:
     return SIMD[DType.float32, 4](a if a >= b[0] else b[0], a if a >= b[1] else b[1], a if a >= b[2] else b[2], a if a >= b[3] else b[3])
 
 fn min(a: Float32, b: Float32) -> Float32:
+    return a if a <= b else b
+
+fn min(a: Int8, b: Int8) -> Int8:
+    return a if a <= b else b
+
+fn min(a: Int16, b: Int16) -> Int16:
+    return a if a <= b else b
+
+fn min(a: Int32, b: Int32) -> Int32:
+    return a if a <= b else b
+
+fn min(a: Int64, b: Int64) -> Int64:
+    return a if a <= b else b
+
+fn min(a: UInt8, b: UInt8) -> UInt8:
+    return a if a <= b else b
+
+fn min(a: UInt16, b: UInt16) -> UInt16:
+    return a if a <= b else b
+
+fn min(a: UInt32, b: UInt32) -> UInt32:
+    return a if a <= b else b
+
+fn min(a: UInt64, b: UInt64) -> UInt64:
     return a if a <= b else b
 
 fn min(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:
@@ -493,29 +550,29 @@ alias UP_VECTOR = SIMD[DType.float32, 4](0.0, 1.0, 0.0, 0.0)
 fn distributionGGX(N: SIMD[DType.float32, 4], H: SIMD[DType.float32, 4], roughness: Float32) -> Float32:
     var a: Float32 = (roughness * roughness)
     var a2: Float32 = (a * a)
-    var NdotH: Float32 = max(dot_product(N, H), 0.0)
+    var NdotH: Float32 = max(Float32(dot_product(N, H)), Float32(0.0))
     var NdotH2: Float32 = (NdotH * NdotH)
     var num: Float32 = a2
     var denom: Float32 = ((NdotH2 * (a2 - 1.0)) + 1.0)
     denom = ((PI * denom) * denom)
-    return (num / max(denom, EPSILON))
+    return (num / max(Float32(denom), Float32(EPSILON)))
 
 fn geometrySchlickGGX(NdotV: Float32, roughness: Float32) -> Float32:
     var r: Float32 = (roughness + 1.0)
     var k: Float32 = ((r * r) / 8.0)
     var num: Float32 = NdotV
     var denom: Float32 = ((NdotV * (1.0 - k)) + k)
-    return (num / max(denom, EPSILON))
+    return (num / max(Float32(denom), Float32(EPSILON)))
 
 fn geometrySmith(N: SIMD[DType.float32, 4], V: SIMD[DType.float32, 4], L: SIMD[DType.float32, 4], roughness: Float32) -> Float32:
-    var NdotV: Float32 = max(dot_product(N, V), 0.0)
-    var NdotL: Float32 = max(dot_product(N, L), 0.0)
+    var NdotV: Float32 = max(Float32(dot_product(N, V)), Float32(0.0))
+    var NdotL: Float32 = max(Float32(dot_product(N, L)), Float32(0.0))
     var ggx2: Float32 = geometrySchlickGGX(NdotV, roughness)
     var ggx1: Float32 = geometrySchlickGGX(NdotL, roughness)
     return (ggx1 * ggx2)
 
 fn fresnelSchlick(cosTheta: Float32, F0: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:
-    return _crossgl_vec3_add_f32_vv(F0, _crossgl_vec3_mul_f32_vs(_crossgl_vec3_sub_f32_sv(1.0, F0), power(max((1.0 - cosTheta), 0.0), 5.0)))
+    return _crossgl_vec3_add_f32_vv(F0, _crossgl_vec3_mul_f32_vs(_crossgl_vec3_sub_f32_sv(1.0, F0), power(max(Float32((1.0 - cosTheta)), Float32(0.0)), 5.0)))
 
 fn noise3D(p: SIMD[DType.float32, 4]) -> Float32:
     var i: SIMD[DType.float32, 4] = floor(p)
@@ -593,7 +650,7 @@ fn vertex_main(input: VertexInput) -> VertexOutput:
         worldPosition[1] += __cgl_swizzle_0[1]
         worldPosition[2] += __cgl_swizzle_0[2]
     var viewDir: SIMD[DType.float32, 4] = normalize(_crossgl_vec3_sub_f32_vv(globals.cameraPosition, SIMD[DType.float32, 4](worldPosition[0], worldPosition[1], worldPosition[2], 0.0)))
-    var fresnel: Float32 = power((1.0 - max(0.0, dot_product(worldNormal, viewDir))), 5.0)
+    var fresnel: Float32 = power((1.0 - max(Float32(0.0), Float32(dot_product(worldNormal, viewDir)))), 5.0)
     if (input.materialIndex < globals.scene.activeLightCount):
         output.color = (input.color * SIMD[DType.float32, 4](1.0, 1.0, 1.0, 1.0))
         var i: Int32 = 0
@@ -605,7 +662,7 @@ fn vertex_main(input: VertexInput) -> VertexOutput:
             var lightDistance: Float32 = magnitude(_crossgl_vec3_sub_f32_vv(light.position, SIMD[DType.float32, 4](worldPosition[0], worldPosition[1], worldPosition[2], 0.0)))
             var attenuation: Float32 = (1.0 / (1.0 + (lightDistance * lightDistance)))
             var lightIntensity: Float32 = (light.intensity * attenuation)
-            var __cgl_swizzle_1: SIMD[DType.float32, 4] = _crossgl_vec3_mul_f32_vs(_crossgl_vec3_mul_f32_vs(_crossgl_vec3_mul_f32_vs(light.color, lightIntensity), max(0.0, dot_product(worldNormal, lightDir))), 0.025)
+            var __cgl_swizzle_1: SIMD[DType.float32, 4] = _crossgl_vec3_mul_f32_vs(_crossgl_vec3_mul_f32_vs(_crossgl_vec3_mul_f32_vs(light.color, lightIntensity), max(Float32(0.0), Float32(dot_product(worldNormal, lightDir)))), 0.025)
             output.color[0] += __cgl_swizzle_1[0]
             output.color[1] += __cgl_swizzle_1[1]
             output.color[2] += __cgl_swizzle_1[2]
@@ -638,7 +695,7 @@ fn shadowCalculation(fragPosLightSpace: SIMD[DType.float32, 4], iteration: Int32
     projCoords = _crossgl_vec3_add_f32_vs(_crossgl_vec3_mul_f32_vs(projCoords, 0.5), 0.5)
     var closestDepth: Float32 = sample(shadowMap, SIMD[DType.float32, 2](projCoords[0], projCoords[1]))[0]
     var currentDepth: Float32 = projCoords[2]
-    var bias: Float32 = max((0.05 * (1.0 - dot_product(input.worldNormal, normalize(_crossgl_vec3_sub_f32_vv(globals.cameraPosition, input.worldPosition))))), 0.005)
+    var bias: Float32 = max(Float32((0.05 * (1.0 - dot_product(input.worldNormal, normalize(_crossgl_vec3_sub_f32_vv(globals.cameraPosition, input.worldPosition)))))), Float32(0.005))
     var shadow: Float32 = (1.0 if ((currentDepth - bias) > closestDepth) else 0.0)
     var pcfDepth: Float32 = 0.0
     var texelSize: SIMD[DType.float32, 2] = (1.0 / SIMD[DType.float32, 2](globals.screenSize[0], globals.screenSize[1]))
@@ -684,14 +741,14 @@ fn fragment_main(input: VertexOutput) -> FragmentOutput:
         var radiance: SIMD[DType.float32, 4] = _crossgl_vec3_mul_f32_vs(_crossgl_vec3_mul_f32_vs(light.color, light.intensity), attenuation)
         var NDF: Float32 = distributionGGX(worldNormal, halfway, roughness)
         var G: Float32 = geometrySmith(worldNormal, viewDir, lightDir, roughness)
-        var F: SIMD[DType.float32, 4] = fresnelSchlick(max(dot_product(halfway, viewDir), 0.0), F0)
+        var F: SIMD[DType.float32, 4] = fresnelSchlick(max(Float32(dot_product(halfway, viewDir)), Float32(0.0)), F0)
         var kS: SIMD[DType.float32, 4] = F
         var kD: SIMD[DType.float32, 4] = _crossgl_vec3_sub_f32_vv(SIMD[DType.float32, 4](1.0, 1.0, 1.0, 0.0), kS)
         kD *= (1.0 - metallic)
         var numerator: SIMD[DType.float32, 4] = _crossgl_vec3_mul_f32_sv((NDF * G), F)
-        var denominator: Float32 = (((4.0 * max(dot_product(worldNormal, viewDir), 0.0)) * max(dot_product(worldNormal, lightDir), 0.0)) + EPSILON)
+        var denominator: Float32 = (((4.0 * max(Float32(dot_product(worldNormal, viewDir)), Float32(0.0))) * max(Float32(dot_product(worldNormal, lightDir)), Float32(0.0))) + EPSILON)
         var specular: SIMD[DType.float32, 4] = _crossgl_vec3_div_f32_vs(numerator, denominator)
-        var NdotL: Float32 = max(dot_product(worldNormal, lightDir), 0.0)
+        var NdotL: Float32 = max(Float32(dot_product(worldNormal, lightDir)), Float32(0.0))
         var shadow: Float32 = 0.0
         if light.castShadows:
             var fragPosLightSpace: SIMD[DType.float32, 4] = (light.viewProjection * SIMD[DType.float32, 4](input.worldPosition[0], input.worldPosition[1], input.worldPosition[2], 1.0))
@@ -753,7 +810,7 @@ fn compute_main() -> None:
     color[1] /= __cgl_swizzle_3[1]
     color[2] /= __cgl_swizzle_3[2]
     color[3] = 1.0
-    var vignette: Float32 = (1.0 - smoothstep(0.5, 1.0, (magnitude((uv - 0.5)) * 1.5)))
+    var vignette: Float32 = (1.0 - smoothstep(Float32(0.5), Float32(1.0), Float32((magnitude((uv - 0.5)) * 1.5))))
     var __cgl_swizzle_4: SIMD[DType.float32, 4] = vignette
     color[0] *= __cgl_swizzle_4[0]
     color[1] *= __cgl_swizzle_4[1]

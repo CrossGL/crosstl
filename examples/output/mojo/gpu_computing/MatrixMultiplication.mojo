@@ -2,6 +2,18 @@
 from math import *
 from gpu import *
 
+# CrossGL GPU builtin placeholders
+@value
+struct _CrossGLGpuBuiltinU32Vec3:
+    var x: UInt32
+    var y: UInt32
+    var z: UInt32
+
+var block_idx_uint = _CrossGLGpuBuiltinU32Vec3(0, 0, 0)
+var global_idx_uint = _CrossGLGpuBuiltinU32Vec3(0, 0, 0)
+var grid_dim_uint = _CrossGLGpuBuiltinU32Vec3(0, 0, 0)
+var thread_idx_uint = _CrossGLGpuBuiltinU32Vec3(0, 0, 0)
+
 # CrossGL synchronization placeholders
 fn _crossgl_workgroup_barrier():
     pass

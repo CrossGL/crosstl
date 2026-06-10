@@ -86,8 +86,9 @@ float3 resolveCollision(float3 pos1, float3 vel1, float3 pos2, float3 vel2,
 }
 
 // Compute Shader
-kernel void kernel_main(uint3 gl_GlobalInvocationID [[thread_position_in_grid]],
-                        uint3 gl_LocalInvocationID
+kernel void kernel_main(uint3 thread_position_in_grid
+                        [[thread_position_in_grid]],
+                        uint3 thread_position_in_threadgroup
                         [[thread_position_in_threadgroup]],
                         constant PhysicsConstants &physics [[buffer(0)]],
                         constant SimulationState &sim_state [[buffer(1)]],
@@ -97,8 +98,8 @@ kernel void kernel_main(uint3 gl_GlobalInvocationID [[thread_position_in_grid]],
   __attribute__((unused)) threadgroup float3 shared_velocities[WORKGROUP_SIZE];
   __attribute__((unused)) threadgroup int shared_types[WORKGROUP_SIZE];
   __attribute__((unused)) threadgroup bool shared_active[WORKGROUP_SIZE];
-  int particle_id = int(gl_GlobalInvocationID.x);
-  int local_id = int(gl_LocalInvocationID.x);
+  int particle_id = int(thread_position_in_grid.x);
+  int local_id = int(thread_position_in_threadgroup.x);
   if (particle_id >= physics.max_particles) {
     return;
   }

@@ -1,7 +1,7 @@
 ; SPIR-V
 ; Version: 1.0
 ; Generator: Khronos SPIR-V Tools Assembler; 0
-; Bound: 746
+; Bound: 745
 ; Schema: 0
                OpCapability Shader
           %1 = OpExtInstImport "GLSL.std.450"
@@ -169,8 +169,8 @@
 %WORKGROUP_SIZE = OpConstant %int 64
          %PI = OpConstant %float 3.14159274
     %float_0 = OpConstant %float 0
-%float_9_81000042 = OpConstant %float 9.81000042
-%GRAVITY_VECTOR = OpConstantComposite %v3float %float_0 %float_0 %float_0
+%float_n9_81000042 = OpConstant %float -9.81000042
+%GRAVITY_VECTOR = OpConstantComposite %v3float %float_0 %float_n9_81000042 %float_0
          %73 = OpTypeFunction %float %v2float
 %float_12_9898005 = OpConstant %float 12.9898005
 %float_78_2330017 = OpConstant %float 78.2330017
@@ -264,152 +264,151 @@
 %shared_active = OpVariable %_ptr_Private__arr_bool_WORKGROUP_SIZE Private
 %gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
 %gl_LocalInvocationID = OpVariable %_ptr_Input_v3uint Input
-        %151 = OpFNegate %float %float_9_81000042
-        %152 = OpFunction %float None %73
+        %151 = OpFunction %float None %73
          %st = OpFunctionParameter %v2float
-        %153 = OpLabel
-        %154 = OpVectorShuffle %v2float %st %st 0 1
-        %155 = OpCompositeConstruct %v2float %float_12_9898005 %float_78_2330017
-        %156 = OpDot %float %154 %155
-        %157 = OpExtInst %float %1 Sin %156
-        %158 = OpFMul %float %157 %float_43758_5469
-        %159 = OpExtInst %float %1 Fract %158
-               OpReturnValue %159
+        %152 = OpLabel
+        %153 = OpVectorShuffle %v2float %st %st 0 1
+        %154 = OpCompositeConstruct %v2float %float_12_9898005 %float_78_2330017
+        %155 = OpDot %float %153 %154
+        %156 = OpExtInst %float %1 Sin %155
+        %157 = OpFMul %float %156 %float_43758_5469
+        %158 = OpExtInst %float %1 Fract %157
+               OpReturnValue %158
                OpFunctionEnd
-        %160 = OpFunction %v3float None %77
+        %159 = OpFunction %v3float None %77
        %seed = OpFunctionParameter %v3float
-        %161 = OpLabel
+        %160 = OpLabel
           %p = OpVariable %_ptr_Function_v3float Function
-        %162 = OpCompositeConstruct %v3float %float_127_099998 %float_311_700012 %float_74_6999969
-        %163 = OpDot %float %seed %162
-        %164 = OpCompositeConstruct %v3float %float_269_5 %float_183_300003 %float_246_100006
-        %165 = OpDot %float %seed %164
-        %166 = OpCompositeConstruct %v3float %float_113_5 %float_271_899994 %float_124_599998
-        %167 = OpDot %float %seed %166
-        %168 = OpCompositeConstruct %v3float %163 %165 %167
-               OpStore %p %168
-        %169 = OpFNegate %float %float_1
-        %170 = OpLoad %v3float %p
-        %171 = OpExtInst %v3float %1 Sin %170
-        %172 = OpCompositeConstruct %v3float %float_43758_5469 %float_43758_5469 %float_43758_5469
-        %173 = OpFMul %v3float %171 %172
-        %174 = OpExtInst %v3float %1 Fract %173
-        %175 = OpCompositeConstruct %v3float %float_2 %float_2 %float_2
-        %176 = OpFMul %v3float %175 %174
-        %177 = OpCompositeConstruct %v3float %169 %169 %169
-        %178 = OpFAdd %v3float %177 %176
-               OpReturnValue %178
+        %161 = OpCompositeConstruct %v3float %float_127_099998 %float_311_700012 %float_74_6999969
+        %162 = OpDot %float %seed %161
+        %163 = OpCompositeConstruct %v3float %float_269_5 %float_183_300003 %float_246_100006
+        %164 = OpDot %float %seed %163
+        %165 = OpCompositeConstruct %v3float %float_113_5 %float_271_899994 %float_124_599998
+        %166 = OpDot %float %seed %165
+        %167 = OpCompositeConstruct %v3float %162 %164 %166
+               OpStore %p %167
+        %168 = OpFNegate %float %float_1
+        %169 = OpLoad %v3float %p
+        %170 = OpExtInst %v3float %1 Sin %169
+        %171 = OpCompositeConstruct %v3float %float_43758_5469 %float_43758_5469 %float_43758_5469
+        %172 = OpFMul %v3float %170 %171
+        %173 = OpExtInst %v3float %1 Fract %172
+        %174 = OpCompositeConstruct %v3float %float_2 %float_2 %float_2
+        %175 = OpFMul %v3float %174 %173
+        %176 = OpCompositeConstruct %v3float %168 %168 %168
+        %177 = OpFAdd %v3float %176 %175
+               OpReturnValue %177
                OpFunctionEnd
-        %179 = OpFunction %v3float None %90
+        %178 = OpFunction %v3float None %90
    %position = OpFunctionParameter %v3float
 %attractor_pos = OpFunctionParameter %v3float
    %strength = OpFunctionParameter %float
-        %180 = OpLabel
+        %179 = OpLabel
   %direction = OpVariable %_ptr_Function_v3float Function
    %distance = OpVariable %_ptr_Function_float Function
       %force = OpVariable %_ptr_Function_float Function
-        %181 = OpFSub %v3float %attractor_pos %position
-               OpStore %direction %181
-        %182 = OpLoad %v3float %direction
-        %183 = OpExtInst %float %1 Length %182
-               OpStore %distance %183
-        %184 = OpLoad %float %distance
-        %185 = OpFOrdLessThan %bool %184 %float_0_00100000005
-               OpSelectionMerge %186 None
-               OpBranchConditional %185 %187 %188
-        %187 = OpLabel
-        %189 = OpCompositeConstruct %v3float %float_0 %float_0 %float_0
-               OpReturnValue %189
-        %188 = OpLabel
-               OpBranch %186
+        %180 = OpFSub %v3float %attractor_pos %position
+               OpStore %direction %180
+        %181 = OpLoad %v3float %direction
+        %182 = OpExtInst %float %1 Length %181
+               OpStore %distance %182
+        %183 = OpLoad %float %distance
+        %184 = OpFOrdLessThan %bool %183 %float_0_00100000005
+               OpSelectionMerge %185 None
+               OpBranchConditional %184 %186 %187
         %186 = OpLabel
+        %188 = OpCompositeConstruct %v3float %float_0 %float_0 %float_0
+               OpReturnValue %188
+        %187 = OpLabel
+               OpBranch %185
+        %185 = OpLabel
+        %189 = OpLoad %float %distance
         %190 = OpLoad %float %distance
-        %191 = OpLoad %float %distance
-        %192 = OpFMul %float %190 %191
-        %193 = OpFAdd %float %192 %float_0_100000001
-        %194 = OpFDiv %float %strength %193
-               OpStore %force %194
-        %195 = OpLoad %v3float %direction
-        %196 = OpExtInst %v3float %1 Normalize %195
-        %197 = OpLoad %float %force
-        %198 = OpCompositeConstruct %v3float %197 %197 %197
-        %199 = OpFMul %v3float %196 %198
-               OpReturnValue %199
+        %191 = OpFMul %float %189 %190
+        %192 = OpFAdd %float %191 %float_0_100000001
+        %193 = OpFDiv %float %strength %192
+               OpStore %force %193
+        %194 = OpLoad %v3float %direction
+        %195 = OpExtInst %v3float %1 Normalize %194
+        %196 = OpLoad %float %force
+        %197 = OpCompositeConstruct %v3float %196 %196 %196
+        %198 = OpFMul %v3float %195 %197
+               OpReturnValue %198
                OpFunctionEnd
-        %200 = OpFunction %bool None %94
+        %199 = OpFunction %bool None %94
        %pos1 = OpFunctionParameter %v3float
        %pos2 = OpFunctionParameter %v3float
      %radius = OpFunctionParameter %float
-        %201 = OpLabel
-        %202 = OpFSub %v3float %pos1 %pos2
-        %203 = OpExtInst %float %1 Length %202
-        %204 = OpFMul %float %radius %float_2
-        %205 = OpFOrdLessThan %bool %203 %204
-               OpReturnValue %205
+        %200 = OpLabel
+        %201 = OpFSub %v3float %pos1 %pos2
+        %202 = OpExtInst %float %1 Length %201
+        %203 = OpFMul %float %radius %float_2
+        %204 = OpFOrdLessThan %bool %202 %203
+               OpReturnValue %204
                OpFunctionEnd
-        %206 = OpFunction %v3float None %95
+        %205 = OpFunction %v3float None %95
      %pos1_0 = OpFunctionParameter %v3float
        %vel1 = OpFunctionParameter %v3float
      %pos2_0 = OpFunctionParameter %v3float
        %vel2 = OpFunctionParameter %v3float
       %mass1 = OpFunctionParameter %float
       %mass2 = OpFunctionParameter %float
-        %207 = OpLabel
+        %206 = OpLabel
 %relative_pos = OpVariable %_ptr_Function_v3float Function
 %relative_vel = OpVariable %_ptr_Function_v3float Function
  %distance_0 = OpVariable %_ptr_Function_float Function
      %normal = OpVariable %_ptr_Function_v3float Function
 %relative_speed = OpVariable %_ptr_Function_float Function
     %impulse = OpVariable %_ptr_Function_float Function
-        %208 = OpFSub %v3float %pos1_0 %pos2_0
-               OpStore %relative_pos %208
-        %209 = OpFSub %v3float %vel1 %vel2
-               OpStore %relative_vel %209
-        %210 = OpLoad %v3float %relative_pos
-        %211 = OpExtInst %float %1 Length %210
-               OpStore %distance_0 %211
-        %212 = OpLoad %float %distance_0
-        %213 = OpFOrdLessThan %bool %212 %float_0_00100000005
-               OpSelectionMerge %214 None
-               OpBranchConditional %213 %215 %216
-        %215 = OpLabel
-               OpReturnValue %vel1
-        %216 = OpLabel
-               OpBranch %214
+        %207 = OpFSub %v3float %pos1_0 %pos2_0
+               OpStore %relative_pos %207
+        %208 = OpFSub %v3float %vel1 %vel2
+               OpStore %relative_vel %208
+        %209 = OpLoad %v3float %relative_pos
+        %210 = OpExtInst %float %1 Length %209
+               OpStore %distance_0 %210
+        %211 = OpLoad %float %distance_0
+        %212 = OpFOrdLessThan %bool %211 %float_0_00100000005
+               OpSelectionMerge %213 None
+               OpBranchConditional %212 %214 %215
         %214 = OpLabel
-        %217 = OpLoad %v3float %relative_pos
-        %218 = OpLoad %float %distance_0
-        %219 = OpCompositeConstruct %v3float %218 %218 %218
-        %220 = OpFDiv %v3float %217 %219
-               OpStore %normal %220
-        %221 = OpLoad %v3float %relative_vel
-        %222 = OpLoad %v3float %normal
-        %223 = OpDot %float %221 %222
-               OpStore %relative_speed %223
-        %224 = OpLoad %float %relative_speed
-        %225 = OpFOrdGreaterThan %bool %224 %float_0
-               OpSelectionMerge %226 None
-               OpBranchConditional %225 %227 %228
-        %227 = OpLabel
                OpReturnValue %vel1
-        %228 = OpLabel
-               OpBranch %226
+        %215 = OpLabel
+               OpBranch %213
+        %213 = OpLabel
+        %216 = OpLoad %v3float %relative_pos
+        %217 = OpLoad %float %distance_0
+        %218 = OpCompositeConstruct %v3float %217 %217 %217
+        %219 = OpFDiv %v3float %216 %218
+               OpStore %normal %219
+        %220 = OpLoad %v3float %relative_vel
+        %221 = OpLoad %v3float %normal
+        %222 = OpDot %float %220 %221
+               OpStore %relative_speed %222
+        %223 = OpLoad %float %relative_speed
+        %224 = OpFOrdGreaterThan %bool %223 %float_0
+               OpSelectionMerge %225 None
+               OpBranchConditional %224 %226 %227
         %226 = OpLabel
-        %229 = OpLoad %float %relative_speed
-        %230 = OpFMul %float %float_2 %229
-        %231 = OpFAdd %float %mass1 %mass2
-        %232 = OpFDiv %float %230 %231
-               OpStore %impulse %232
-        %233 = OpLoad %float %impulse
-        %234 = OpFMul %float %233 %mass2
-        %235 = OpLoad %v3float %normal
-        %236 = OpCompositeConstruct %v3float %234 %234 %234
-        %237 = OpFMul %v3float %236 %235
-        %238 = OpFSub %v3float %vel1 %237
-               OpReturnValue %238
+               OpReturnValue %vel1
+        %227 = OpLabel
+               OpBranch %225
+        %225 = OpLabel
+        %228 = OpLoad %float %relative_speed
+        %229 = OpFMul %float %float_2 %228
+        %230 = OpFAdd %float %mass1 %mass2
+        %231 = OpFDiv %float %229 %230
+               OpStore %impulse %231
+        %232 = OpLoad %float %impulse
+        %233 = OpFMul %float %232 %mass2
+        %234 = OpLoad %v3float %normal
+        %235 = OpCompositeConstruct %v3float %233 %233 %233
+        %236 = OpFMul %v3float %235 %234
+        %237 = OpFSub %v3float %vel1 %236
+               OpReturnValue %237
                OpFunctionEnd
           %2 = OpFunction %void None %107
-        %239 = OpLabel
+        %238 = OpLabel
 %particle_id = OpVariable %_ptr_Function_int Function
    %local_id = OpVariable %_ptr_Function_int Function
    %particle = OpVariable %_ptr_Function_Particle Function
@@ -418,631 +417,631 @@
           %i = OpVariable %_ptr_Function_int Function
  %attraction = OpVariable %_ptr_Function_v3float Function
       %speed = OpVariable %_ptr_Function_float Function
-        %240 = OpLoad %v3uint %gl_GlobalInvocationID
-        %241 = OpCompositeExtract %uint %240 0
-        %242 = OpBitcast %int %241
-               OpStore %particle_id %242
-        %243 = OpLoad %v3uint %gl_LocalInvocationID
-        %244 = OpCompositeExtract %uint %243 0
-        %245 = OpBitcast %int %244
-               OpStore %local_id %245
-        %246 = OpLoad %int %particle_id
-        %247 = OpAccessChain %_ptr_Uniform_int %physics %int_6
-        %248 = OpLoad %int %247
-        %249 = OpSGreaterThanEqual %bool %246 %248
-               OpSelectionMerge %250 None
-               OpBranchConditional %249 %251 %252
-        %251 = OpLabel
-               OpReturn
-        %252 = OpLabel
-               OpBranch %250
+        %239 = OpLoad %v3uint %gl_GlobalInvocationID
+        %240 = OpCompositeExtract %uint %239 0
+        %241 = OpBitcast %int %240
+               OpStore %particle_id %241
+        %242 = OpLoad %v3uint %gl_LocalInvocationID
+        %243 = OpCompositeExtract %uint %242 0
+        %244 = OpBitcast %int %243
+               OpStore %local_id %244
+        %245 = OpLoad %int %particle_id
+        %246 = OpAccessChain %_ptr_Uniform_int %physics %int_6
+        %247 = OpLoad %int %246
+        %248 = OpSGreaterThanEqual %bool %245 %247
+               OpSelectionMerge %249 None
+               OpBranchConditional %248 %250 %251
         %250 = OpLabel
-        %253 = OpLoad %int %particle_id
-        %254 = OpAccessChain %_ptr_Uniform__arr_Particle_std430_9_MAX_PARTICLES %particle_buffer %int_0
-        %255 = OpAccessChain %_ptr_Uniform_Particle_std430_9 %254 %253
-        %256 = OpLoad %int %particle_id
-        %257 = OpAccessChain %_ptr_Uniform__arr_Particle_std430_9_MAX_PARTICLES %particle_buffer %int_0
-        %258 = OpAccessChain %_ptr_Uniform_Particle_std430_9 %257 %256
-        %259 = OpLoad %Particle_std430_9 %258
-        %260 = OpCompositeExtract %v3float %259 0
-        %261 = OpCompositeExtract %v3float %259 1
-        %262 = OpCompositeExtract %v3float %259 2
-        %263 = OpCompositeExtract %float %259 3
-        %264 = OpCompositeExtract %float %259 4
-        %265 = OpCompositeExtract %v4float %259 5
-        %266 = OpCompositeExtract %int %259 6
-        %267 = OpCompositeExtract %uint %259 7
-        %268 = OpINotEqual %bool %267 %uint_0
-        %269 = OpCompositeConstruct %Particle %260 %261 %262 %263 %264 %265 %266 %268
-               OpStore %particle %269
-        %270 = OpAccessChain %_ptr_Function_bool %particle %int_7
-        %271 = OpLoad %bool %270
-        %272 = OpLogicalNot %bool %271
-               OpSelectionMerge %273 None
-               OpBranchConditional %272 %274 %275
-        %274 = OpLabel
-        %276 = OpLoad %int %local_id
-        %277 = OpAccessChain %_ptr_Private_bool %shared_active %276
-               OpStore %277 %false
+               OpReturn
+        %251 = OpLabel
+               OpBranch %249
+        %249 = OpLabel
+        %252 = OpLoad %int %particle_id
+        %253 = OpAccessChain %_ptr_Uniform__arr_Particle_std430_9_MAX_PARTICLES %particle_buffer %int_0
+        %254 = OpAccessChain %_ptr_Uniform_Particle_std430_9 %253 %252
+        %255 = OpLoad %int %particle_id
+        %256 = OpAccessChain %_ptr_Uniform__arr_Particle_std430_9_MAX_PARTICLES %particle_buffer %int_0
+        %257 = OpAccessChain %_ptr_Uniform_Particle_std430_9 %256 %255
+        %258 = OpLoad %Particle_std430_9 %257
+        %259 = OpCompositeExtract %v3float %258 0
+        %260 = OpCompositeExtract %v3float %258 1
+        %261 = OpCompositeExtract %v3float %258 2
+        %262 = OpCompositeExtract %float %258 3
+        %263 = OpCompositeExtract %float %258 4
+        %264 = OpCompositeExtract %v4float %258 5
+        %265 = OpCompositeExtract %int %258 6
+        %266 = OpCompositeExtract %uint %258 7
+        %267 = OpINotEqual %bool %266 %uint_0
+        %268 = OpCompositeConstruct %Particle %259 %260 %261 %262 %263 %264 %265 %267
+               OpStore %particle %268
+        %269 = OpAccessChain %_ptr_Function_bool %particle %int_7
+        %270 = OpLoad %bool %269
+        %271 = OpLogicalNot %bool %270
+               OpSelectionMerge %272 None
+               OpBranchConditional %271 %273 %274
+        %273 = OpLabel
+        %275 = OpLoad %int %local_id
+        %276 = OpAccessChain %_ptr_Private_bool %shared_active %275
+               OpStore %276 %false
                OpControlBarrier %uint_2 %uint_2 %uint_264
                OpReturn
-        %275 = OpLabel
-               OpBranch %273
-        %273 = OpLabel
-        %278 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %279 = OpLoad %v3float %278
-        %280 = OpLoad %int %local_id
-        %281 = OpAccessChain %_ptr_Private_v3float %shared_positions %280
-               OpStore %281 %279
-        %282 = OpAccessChain %_ptr_Function_v3float %particle %int_1
-        %283 = OpLoad %v3float %282
-        %284 = OpLoad %int %local_id
-        %285 = OpAccessChain %_ptr_Private_v3float %shared_velocities %284
-               OpStore %285 %283
-        %286 = OpAccessChain %_ptr_Function_int %particle %int_6
-        %287 = OpLoad %int %286
-        %288 = OpLoad %int %local_id
-        %289 = OpAccessChain %_ptr_Private_int %shared_types %288
-               OpStore %289 %287
-        %290 = OpLoad %int %local_id
-        %291 = OpAccessChain %_ptr_Private_bool %shared_active %290
-               OpStore %291 %true
+        %274 = OpLabel
+               OpBranch %272
+        %272 = OpLabel
+        %277 = OpAccessChain %_ptr_Function_v3float %particle %int_0
+        %278 = OpLoad %v3float %277
+        %279 = OpLoad %int %local_id
+        %280 = OpAccessChain %_ptr_Private_v3float %shared_positions %279
+               OpStore %280 %278
+        %281 = OpAccessChain %_ptr_Function_v3float %particle %int_1
+        %282 = OpLoad %v3float %281
+        %283 = OpLoad %int %local_id
+        %284 = OpAccessChain %_ptr_Private_v3float %shared_velocities %283
+               OpStore %284 %282
+        %285 = OpAccessChain %_ptr_Function_int %particle %int_6
+        %286 = OpLoad %int %285
+        %287 = OpLoad %int %local_id
+        %288 = OpAccessChain %_ptr_Private_int %shared_types %287
+               OpStore %288 %286
+        %289 = OpLoad %int %local_id
+        %290 = OpAccessChain %_ptr_Private_bool %shared_active %289
+               OpStore %290 %true
                OpControlBarrier %uint_2 %uint_2 %uint_264
-        %292 = OpCompositeConstruct %v3float %float_0 %float_0 %float_0
-               OpStore %force_0 %292
-        %293 = OpAccessChain %_ptr_Function_int %particle %int_6
-        %294 = OpLoad %int %293
-        %295 = OpIEqual %bool %294 %int_0
-               OpSelectionMerge %296 None
-               OpBranchConditional %295 %297 %298
-        %297 = OpLabel
-        %299 = OpLoad %v3float %force_0
-        %300 = OpAccessChain %_ptr_Function_float %particle %int_3
-        %301 = OpLoad %float %300
-        %302 = OpCompositeConstruct %v3float %301 %301 %301
-        %303 = OpFMul %v3float %GRAVITY_VECTOR %302
-        %304 = OpFAdd %v3float %299 %303
-               OpStore %force_0 %304
-               OpBranch %296
-        %298 = OpLabel
-               OpBranch %296
+        %291 = OpCompositeConstruct %v3float %float_0 %float_0 %float_0
+               OpStore %force_0 %291
+        %292 = OpAccessChain %_ptr_Function_int %particle %int_6
+        %293 = OpLoad %int %292
+        %294 = OpIEqual %bool %293 %int_0
+               OpSelectionMerge %295 None
+               OpBranchConditional %294 %296 %297
         %296 = OpLabel
-        %305 = OpAccessChain %_ptr_Function_int %particle %int_6
-        %306 = OpLoad %int %305
-        %307 = OpINotEqual %bool %306 %int_2
-               OpSelectionMerge %308 None
-               OpBranchConditional %307 %309 %310
-        %309 = OpLabel
-        %311 = OpLoad %v3float %force_0
-        %312 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %313 = OpLoad %v3float %312
-        %314 = OpAccessChain %_ptr_Uniform_v3float %sim_state %int_3
-        %315 = OpLoad %v3float %314
-        %316 = OpAccessChain %_ptr_Uniform_float %physics %int_7
-        %317 = OpLoad %float %316
-        %318 = OpFunctionCall %v3float %179 %313 %315 %317
-        %319 = OpFAdd %v3float %311 %318
-               OpStore %force_0 %319
-               OpBranch %308
-        %310 = OpLabel
-               OpBranch %308
+        %298 = OpLoad %v3float %force_0
+        %299 = OpAccessChain %_ptr_Function_float %particle %int_3
+        %300 = OpLoad %float %299
+        %301 = OpCompositeConstruct %v3float %300 %300 %300
+        %302 = OpFMul %v3float %GRAVITY_VECTOR %301
+        %303 = OpFAdd %v3float %298 %302
+               OpStore %force_0 %303
+               OpBranch %295
+        %297 = OpLabel
+               OpBranch %295
+        %295 = OpLabel
+        %304 = OpAccessChain %_ptr_Function_int %particle %int_6
+        %305 = OpLoad %int %304
+        %306 = OpINotEqual %bool %305 %int_2
+               OpSelectionMerge %307 None
+               OpBranchConditional %306 %308 %309
         %308 = OpLabel
+        %310 = OpLoad %v3float %force_0
+        %311 = OpAccessChain %_ptr_Function_v3float %particle %int_0
+        %312 = OpLoad %v3float %311
+        %313 = OpAccessChain %_ptr_Uniform_v3float %sim_state %int_3
+        %314 = OpLoad %v3float %313
+        %315 = OpAccessChain %_ptr_Uniform_float %physics %int_7
+        %316 = OpLoad %float %315
+        %317 = OpFunctionCall %v3float %178 %312 %314 %316
+        %318 = OpFAdd %v3float %310 %317
+               OpStore %force_0 %318
+               OpBranch %307
+        %309 = OpLabel
+               OpBranch %307
+        %307 = OpLabel
                OpStore %collision_count %int_0
                OpStore %i %int_0
-               OpBranch %320
-        %320 = OpLabel
-        %321 = OpLoad %int %i
-        %322 = OpSLessThan %bool %321 %WORKGROUP_SIZE
-               OpLoopMerge %323 %324 None
-               OpBranchConditional %322 %325 %323
-        %325 = OpLabel
-        %326 = OpLoad %int %i
-        %327 = OpLoad %int %local_id
-        %328 = OpIEqual %bool %326 %327
-        %329 = OpLoad %int %i
-        %330 = OpAccessChain %_ptr_Private_bool %shared_active %329
-        %331 = OpLoad %bool %330
-        %332 = OpLogicalNot %bool %331
-        %333 = OpLogicalOr %bool %328 %332
-               OpSelectionMerge %334 None
-               OpBranchConditional %333 %335 %336
-        %335 = OpLabel
-               OpBranch %324
-        %336 = OpLabel
-               OpBranch %334
-        %334 = OpLabel
-        %337 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %338 = OpLoad %v3float %337
-        %339 = OpLoad %int %i
-        %340 = OpAccessChain %_ptr_Private_v3float %shared_positions %339
-        %341 = OpLoad %v3float %340
-        %342 = OpAccessChain %_ptr_Uniform_float %physics %int_3
-        %343 = OpLoad %float %342
-        %344 = OpFunctionCall %bool %200 %338 %341 %343
-               OpSelectionMerge %345 None
-               OpBranchConditional %344 %346 %347
-        %346 = OpLabel
-        %348 = OpLoad %int %collision_count
-        %349 = OpIAdd %int %348 %int_1
-               OpStore %collision_count %349
-        %350 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %351 = OpLoad %v3float %350
-        %352 = OpAccessChain %_ptr_Function_v3float %particle %int_1
-        %353 = OpLoad %v3float %352
-        %354 = OpLoad %int %i
-        %355 = OpAccessChain %_ptr_Private_v3float %shared_positions %354
-        %356 = OpLoad %v3float %355
-        %357 = OpLoad %int %i
-        %358 = OpAccessChain %_ptr_Private_v3float %shared_velocities %357
-        %359 = OpLoad %v3float %358
-        %360 = OpAccessChain %_ptr_Function_float %particle %int_3
-        %361 = OpLoad %float %360
-        %362 = OpFunctionCall %v3float %206 %351 %353 %356 %359 %361 %float_1
-        %363 = OpAccessChain %_ptr_Function_v3float %particle %int_1
-               OpStore %363 %362
-        %364 = OpAccessChain %_ptr_Function_v4float %particle %int_5
-        %365 = OpLoad %v4float %364
-        %366 = OpCompositeConstruct %v4float %float_1 %float_0 %float_0 %float_1
-        %367 = OpCompositeConstruct %v4float %float_0_100000001 %float_0_100000001 %float_0_100000001 %float_0_100000001
-        %368 = OpExtInst %v4float %1 FMix %365 %366 %367
-        %369 = OpAccessChain %_ptr_Function_v4float %particle %int_5
-               OpStore %369 %368
-               OpBranch %345
-        %347 = OpLabel
-               OpBranch %345
-        %345 = OpLabel
-        %370 = OpLoad %int %i
-        %371 = OpAccessChain %_ptr_Private_int %shared_types %370
-        %372 = OpLoad %int %371
-        %373 = OpIEqual %bool %372 %int_1
-        %374 = OpAccessChain %_ptr_Function_int %particle %int_6
-        %375 = OpLoad %int %374
-        %376 = OpIEqual %bool %375 %int_0
-        %377 = OpLogicalAnd %bool %373 %376
-               OpSelectionMerge %378 None
-               OpBranchConditional %377 %379 %380
-        %379 = OpLabel
-        %381 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %382 = OpLoad %v3float %381
-        %383 = OpLoad %int %i
-        %384 = OpAccessChain %_ptr_Private_v3float %shared_positions %383
-        %385 = OpLoad %v3float %384
-        %386 = OpFunctionCall %v3float %179 %382 %385 %float_0_5
-               OpStore %attraction %386
-        %387 = OpLoad %v3float %force_0
-        %388 = OpLoad %v3float %attraction
-        %389 = OpFAdd %v3float %387 %388
-               OpStore %force_0 %389
-               OpBranch %378
-        %380 = OpLabel
-               OpBranch %378
-        %378 = OpLabel
-               OpBranch %324
+               OpBranch %319
+        %319 = OpLabel
+        %320 = OpLoad %int %i
+        %321 = OpSLessThan %bool %320 %WORKGROUP_SIZE
+               OpLoopMerge %322 %323 None
+               OpBranchConditional %321 %324 %322
         %324 = OpLabel
-        %390 = OpLoad %int %i
-        %391 = OpIAdd %int %390 %int_1
-               OpStore %i %391
-               OpBranch %320
+        %325 = OpLoad %int %i
+        %326 = OpLoad %int %local_id
+        %327 = OpIEqual %bool %325 %326
+        %328 = OpLoad %int %i
+        %329 = OpAccessChain %_ptr_Private_bool %shared_active %328
+        %330 = OpLoad %bool %329
+        %331 = OpLogicalNot %bool %330
+        %332 = OpLogicalOr %bool %327 %331
+               OpSelectionMerge %333 None
+               OpBranchConditional %332 %334 %335
+        %334 = OpLabel
+               OpBranch %323
+        %335 = OpLabel
+               OpBranch %333
+        %333 = OpLabel
+        %336 = OpAccessChain %_ptr_Function_v3float %particle %int_0
+        %337 = OpLoad %v3float %336
+        %338 = OpLoad %int %i
+        %339 = OpAccessChain %_ptr_Private_v3float %shared_positions %338
+        %340 = OpLoad %v3float %339
+        %341 = OpAccessChain %_ptr_Uniform_float %physics %int_3
+        %342 = OpLoad %float %341
+        %343 = OpFunctionCall %bool %199 %337 %340 %342
+               OpSelectionMerge %344 None
+               OpBranchConditional %343 %345 %346
+        %345 = OpLabel
+        %347 = OpLoad %int %collision_count
+        %348 = OpIAdd %int %347 %int_1
+               OpStore %collision_count %348
+        %349 = OpAccessChain %_ptr_Function_v3float %particle %int_0
+        %350 = OpLoad %v3float %349
+        %351 = OpAccessChain %_ptr_Function_v3float %particle %int_1
+        %352 = OpLoad %v3float %351
+        %353 = OpLoad %int %i
+        %354 = OpAccessChain %_ptr_Private_v3float %shared_positions %353
+        %355 = OpLoad %v3float %354
+        %356 = OpLoad %int %i
+        %357 = OpAccessChain %_ptr_Private_v3float %shared_velocities %356
+        %358 = OpLoad %v3float %357
+        %359 = OpAccessChain %_ptr_Function_float %particle %int_3
+        %360 = OpLoad %float %359
+        %361 = OpFunctionCall %v3float %205 %350 %352 %355 %358 %360 %float_1
+        %362 = OpAccessChain %_ptr_Function_v3float %particle %int_1
+               OpStore %362 %361
+        %363 = OpAccessChain %_ptr_Function_v4float %particle %int_5
+        %364 = OpLoad %v4float %363
+        %365 = OpCompositeConstruct %v4float %float_1 %float_0 %float_0 %float_1
+        %366 = OpCompositeConstruct %v4float %float_0_100000001 %float_0_100000001 %float_0_100000001 %float_0_100000001
+        %367 = OpExtInst %v4float %1 FMix %364 %365 %366
+        %368 = OpAccessChain %_ptr_Function_v4float %particle %int_5
+               OpStore %368 %367
+               OpBranch %344
+        %346 = OpLabel
+               OpBranch %344
+        %344 = OpLabel
+        %369 = OpLoad %int %i
+        %370 = OpAccessChain %_ptr_Private_int %shared_types %369
+        %371 = OpLoad %int %370
+        %372 = OpIEqual %bool %371 %int_1
+        %373 = OpAccessChain %_ptr_Function_int %particle %int_6
+        %374 = OpLoad %int %373
+        %375 = OpIEqual %bool %374 %int_0
+        %376 = OpLogicalAnd %bool %372 %375
+               OpSelectionMerge %377 None
+               OpBranchConditional %376 %378 %379
+        %378 = OpLabel
+        %380 = OpAccessChain %_ptr_Function_v3float %particle %int_0
+        %381 = OpLoad %v3float %380
+        %382 = OpLoad %int %i
+        %383 = OpAccessChain %_ptr_Private_v3float %shared_positions %382
+        %384 = OpLoad %v3float %383
+        %385 = OpFunctionCall %v3float %178 %381 %384 %float_0_5
+               OpStore %attraction %385
+        %386 = OpLoad %v3float %force_0
+        %387 = OpLoad %v3float %attraction
+        %388 = OpFAdd %v3float %386 %387
+               OpStore %force_0 %388
+               OpBranch %377
+        %379 = OpLabel
+               OpBranch %377
+        %377 = OpLabel
+               OpBranch %323
         %323 = OpLabel
-        %392 = OpLoad %v3float %force_0
-        %393 = OpAccessChain %_ptr_Function_float %particle %int_3
-        %394 = OpLoad %float %393
-        %395 = OpCompositeConstruct %v3float %394 %394 %394
-        %396 = OpFDiv %v3float %392 %395
-        %397 = OpAccessChain %_ptr_Function_v3float %particle %int_2
-               OpStore %397 %396
-        %398 = OpAccessChain %_ptr_Function_v3float %particle %int_1
-        %399 = OpLoad %v3float %398
-        %400 = OpAccessChain %_ptr_Function_v3float %particle %int_2
-        %401 = OpLoad %v3float %400
-        %402 = OpAccessChain %_ptr_Uniform_float %physics %int_2
-        %403 = OpLoad %float %402
-        %404 = OpCompositeConstruct %v3float %403 %403 %403
-        %405 = OpFMul %v3float %401 %404
-        %406 = OpFAdd %v3float %399 %405
-               OpStore %398 %406
-        %407 = OpAccessChain %_ptr_Function_v3float %particle %int_1
-        %408 = OpLoad %v3float %407
-        %409 = OpAccessChain %_ptr_Uniform_float %physics %int_1
-        %410 = OpLoad %float %409
-        %411 = OpCompositeConstruct %v3float %410 %410 %410
-        %412 = OpFMul %v3float %408 %411
-               OpStore %407 %412
-        %413 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %414 = OpLoad %v3float %413
-        %415 = OpAccessChain %_ptr_Function_v3float %particle %int_1
-        %416 = OpLoad %v3float %415
-        %417 = OpAccessChain %_ptr_Uniform_float %physics %int_2
-        %418 = OpLoad %float %417
-        %419 = OpCompositeConstruct %v3float %418 %418 %418
-        %420 = OpFMul %v3float %416 %419
-        %421 = OpFAdd %v3float %414 %420
-               OpStore %413 %421
+        %389 = OpLoad %int %i
+        %390 = OpIAdd %int %389 %int_1
+               OpStore %i %390
+               OpBranch %319
+        %322 = OpLabel
+        %391 = OpLoad %v3float %force_0
+        %392 = OpAccessChain %_ptr_Function_float %particle %int_3
+        %393 = OpLoad %float %392
+        %394 = OpCompositeConstruct %v3float %393 %393 %393
+        %395 = OpFDiv %v3float %391 %394
+        %396 = OpAccessChain %_ptr_Function_v3float %particle %int_2
+               OpStore %396 %395
+        %397 = OpAccessChain %_ptr_Function_v3float %particle %int_1
+        %398 = OpLoad %v3float %397
+        %399 = OpAccessChain %_ptr_Function_v3float %particle %int_2
+        %400 = OpLoad %v3float %399
+        %401 = OpAccessChain %_ptr_Uniform_float %physics %int_2
+        %402 = OpLoad %float %401
+        %403 = OpCompositeConstruct %v3float %402 %402 %402
+        %404 = OpFMul %v3float %400 %403
+        %405 = OpFAdd %v3float %398 %404
+               OpStore %397 %405
+        %406 = OpAccessChain %_ptr_Function_v3float %particle %int_1
+        %407 = OpLoad %v3float %406
+        %408 = OpAccessChain %_ptr_Uniform_float %physics %int_1
+        %409 = OpLoad %float %408
+        %410 = OpCompositeConstruct %v3float %409 %409 %409
+        %411 = OpFMul %v3float %407 %410
+               OpStore %406 %411
+        %412 = OpAccessChain %_ptr_Function_v3float %particle %int_0
+        %413 = OpLoad %v3float %412
+        %414 = OpAccessChain %_ptr_Function_v3float %particle %int_1
+        %415 = OpLoad %v3float %414
+        %416 = OpAccessChain %_ptr_Uniform_float %physics %int_2
+        %417 = OpLoad %float %416
+        %418 = OpCompositeConstruct %v3float %417 %417 %417
+        %419 = OpFMul %v3float %415 %418
+        %420 = OpFAdd %v3float %413 %419
+               OpStore %412 %420
+        %421 = OpAccessChain %_ptr_Function_v3float %particle %int_0
         %422 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %423 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %424 = OpLoad %v3float %423
-        %425 = OpCompositeExtract %float %424 0
+        %423 = OpLoad %v3float %422
+        %424 = OpCompositeExtract %float %423 0
+        %425 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
         %426 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
-        %427 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
-        %428 = OpLoad %v3float %427
-        %429 = OpCompositeExtract %float %428 0
-        %430 = OpFOrdLessThan %bool %425 %429
+        %427 = OpLoad %v3float %426
+        %428 = OpCompositeExtract %float %427 0
+        %429 = OpFOrdLessThan %bool %424 %428
+        %430 = OpAccessChain %_ptr_Function_v3float %particle %int_0
         %431 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %432 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %433 = OpLoad %v3float %432
-        %434 = OpCompositeExtract %float %433 0
+        %432 = OpLoad %v3float %431
+        %433 = OpCompositeExtract %float %432 0
+        %434 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
         %435 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
-        %436 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
-        %437 = OpLoad %v3float %436
-        %438 = OpCompositeExtract %float %437 0
-        %439 = OpFOrdGreaterThan %bool %434 %438
-        %440 = OpLogicalOr %bool %430 %439
-               OpSelectionMerge %441 None
-               OpBranchConditional %440 %442 %443
-        %442 = OpLabel
-        %444 = OpAccessChain %_ptr_Function_v3float %particle %int_1
-        %445 = OpLoad %v3float %444
-        %446 = OpCompositeExtract %float %445 0
-        %447 = OpFNegate %float %float_0_800000012
-        %448 = OpFMul %float %446 %447
-        %449 = OpCompositeInsert %v3float %448 %445 0
-               OpStore %444 %449
-        %450 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %451 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %452 = OpLoad %v3float %451
-        %453 = OpCompositeExtract %float %452 0
-        %454 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
-        %455 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
-        %456 = OpLoad %v3float %455
-        %457 = OpCompositeExtract %float %456 0
-        %458 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
-        %459 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
-        %460 = OpLoad %v3float %459
-        %461 = OpCompositeExtract %float %460 0
-        %462 = OpExtInst %float %1 FClamp %453 %457 %461
-        %463 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %464 = OpLoad %v3float %463
-        %465 = OpCompositeInsert %v3float %462 %464 0
-               OpStore %463 %465
-               OpBranch %441
-        %443 = OpLabel
-               OpBranch %441
+        %436 = OpLoad %v3float %435
+        %437 = OpCompositeExtract %float %436 0
+        %438 = OpFOrdGreaterThan %bool %433 %437
+        %439 = OpLogicalOr %bool %429 %438
+               OpSelectionMerge %440 None
+               OpBranchConditional %439 %441 %442
         %441 = OpLabel
+        %443 = OpAccessChain %_ptr_Function_v3float %particle %int_1
+        %444 = OpLoad %v3float %443
+        %445 = OpCompositeExtract %float %444 0
+        %446 = OpFNegate %float %float_0_800000012
+        %447 = OpFMul %float %445 %446
+        %448 = OpCompositeInsert %v3float %447 %444 0
+               OpStore %443 %448
+        %449 = OpAccessChain %_ptr_Function_v3float %particle %int_0
+        %450 = OpAccessChain %_ptr_Function_v3float %particle %int_0
+        %451 = OpLoad %v3float %450
+        %452 = OpCompositeExtract %float %451 0
+        %453 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
+        %454 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
+        %455 = OpLoad %v3float %454
+        %456 = OpCompositeExtract %float %455 0
+        %457 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
+        %458 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
+        %459 = OpLoad %v3float %458
+        %460 = OpCompositeExtract %float %459 0
+        %461 = OpExtInst %float %1 FClamp %452 %456 %460
+        %462 = OpAccessChain %_ptr_Function_v3float %particle %int_0
+        %463 = OpLoad %v3float %462
+        %464 = OpCompositeInsert %v3float %461 %463 0
+               OpStore %462 %464
+               OpBranch %440
+        %442 = OpLabel
+               OpBranch %440
+        %440 = OpLabel
+        %465 = OpAccessChain %_ptr_Function_v3float %particle %int_0
         %466 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %467 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %468 = OpLoad %v3float %467
-        %469 = OpCompositeExtract %float %468 1
+        %467 = OpLoad %v3float %466
+        %468 = OpCompositeExtract %float %467 1
+        %469 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
         %470 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
-        %471 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
-        %472 = OpLoad %v3float %471
-        %473 = OpCompositeExtract %float %472 1
-        %474 = OpFOrdLessThan %bool %469 %473
+        %471 = OpLoad %v3float %470
+        %472 = OpCompositeExtract %float %471 1
+        %473 = OpFOrdLessThan %bool %468 %472
+        %474 = OpAccessChain %_ptr_Function_v3float %particle %int_0
         %475 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %476 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %477 = OpLoad %v3float %476
-        %478 = OpCompositeExtract %float %477 1
+        %476 = OpLoad %v3float %475
+        %477 = OpCompositeExtract %float %476 1
+        %478 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
         %479 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
-        %480 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
-        %481 = OpLoad %v3float %480
-        %482 = OpCompositeExtract %float %481 1
-        %483 = OpFOrdGreaterThan %bool %478 %482
-        %484 = OpLogicalOr %bool %474 %483
-               OpSelectionMerge %485 None
-               OpBranchConditional %484 %486 %487
-        %486 = OpLabel
-        %488 = OpAccessChain %_ptr_Function_v3float %particle %int_1
-        %489 = OpLoad %v3float %488
-        %490 = OpCompositeExtract %float %489 1
-        %491 = OpFNegate %float %float_0_800000012
-        %492 = OpFMul %float %490 %491
-        %493 = OpCompositeInsert %v3float %492 %489 1
-               OpStore %488 %493
-        %494 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %495 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %496 = OpLoad %v3float %495
-        %497 = OpCompositeExtract %float %496 1
-        %498 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
-        %499 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
-        %500 = OpLoad %v3float %499
-        %501 = OpCompositeExtract %float %500 1
-        %502 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
-        %503 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
-        %504 = OpLoad %v3float %503
-        %505 = OpCompositeExtract %float %504 1
-        %506 = OpExtInst %float %1 FClamp %497 %501 %505
-        %507 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %508 = OpLoad %v3float %507
-        %509 = OpCompositeInsert %v3float %506 %508 1
-               OpStore %507 %509
-               OpBranch %485
-        %487 = OpLabel
-               OpBranch %485
+        %480 = OpLoad %v3float %479
+        %481 = OpCompositeExtract %float %480 1
+        %482 = OpFOrdGreaterThan %bool %477 %481
+        %483 = OpLogicalOr %bool %473 %482
+               OpSelectionMerge %484 None
+               OpBranchConditional %483 %485 %486
         %485 = OpLabel
+        %487 = OpAccessChain %_ptr_Function_v3float %particle %int_1
+        %488 = OpLoad %v3float %487
+        %489 = OpCompositeExtract %float %488 1
+        %490 = OpFNegate %float %float_0_800000012
+        %491 = OpFMul %float %489 %490
+        %492 = OpCompositeInsert %v3float %491 %488 1
+               OpStore %487 %492
+        %493 = OpAccessChain %_ptr_Function_v3float %particle %int_0
+        %494 = OpAccessChain %_ptr_Function_v3float %particle %int_0
+        %495 = OpLoad %v3float %494
+        %496 = OpCompositeExtract %float %495 1
+        %497 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
+        %498 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
+        %499 = OpLoad %v3float %498
+        %500 = OpCompositeExtract %float %499 1
+        %501 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
+        %502 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
+        %503 = OpLoad %v3float %502
+        %504 = OpCompositeExtract %float %503 1
+        %505 = OpExtInst %float %1 FClamp %496 %500 %504
+        %506 = OpAccessChain %_ptr_Function_v3float %particle %int_0
+        %507 = OpLoad %v3float %506
+        %508 = OpCompositeInsert %v3float %505 %507 1
+               OpStore %506 %508
+               OpBranch %484
+        %486 = OpLabel
+               OpBranch %484
+        %484 = OpLabel
+        %509 = OpAccessChain %_ptr_Function_v3float %particle %int_0
         %510 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %511 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %512 = OpLoad %v3float %511
-        %513 = OpCompositeExtract %float %512 2
+        %511 = OpLoad %v3float %510
+        %512 = OpCompositeExtract %float %511 2
+        %513 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
         %514 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
-        %515 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
-        %516 = OpLoad %v3float %515
-        %517 = OpCompositeExtract %float %516 2
-        %518 = OpFOrdLessThan %bool %513 %517
+        %515 = OpLoad %v3float %514
+        %516 = OpCompositeExtract %float %515 2
+        %517 = OpFOrdLessThan %bool %512 %516
+        %518 = OpAccessChain %_ptr_Function_v3float %particle %int_0
         %519 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %520 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %521 = OpLoad %v3float %520
-        %522 = OpCompositeExtract %float %521 2
+        %520 = OpLoad %v3float %519
+        %521 = OpCompositeExtract %float %520 2
+        %522 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
         %523 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
-        %524 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
-        %525 = OpLoad %v3float %524
-        %526 = OpCompositeExtract %float %525 2
-        %527 = OpFOrdGreaterThan %bool %522 %526
-        %528 = OpLogicalOr %bool %518 %527
-               OpSelectionMerge %529 None
-               OpBranchConditional %528 %530 %531
-        %530 = OpLabel
-        %532 = OpAccessChain %_ptr_Function_v3float %particle %int_1
-        %533 = OpLoad %v3float %532
-        %534 = OpCompositeExtract %float %533 2
-        %535 = OpFNegate %float %float_0_800000012
-        %536 = OpFMul %float %534 %535
-        %537 = OpCompositeInsert %v3float %536 %533 2
-               OpStore %532 %537
-        %538 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %539 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %540 = OpLoad %v3float %539
-        %541 = OpCompositeExtract %float %540 2
-        %542 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
-        %543 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
-        %544 = OpLoad %v3float %543
-        %545 = OpCompositeExtract %float %544 2
-        %546 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
-        %547 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
-        %548 = OpLoad %v3float %547
-        %549 = OpCompositeExtract %float %548 2
-        %550 = OpExtInst %float %1 FClamp %541 %545 %549
-        %551 = OpAccessChain %_ptr_Function_v3float %particle %int_0
-        %552 = OpLoad %v3float %551
-        %553 = OpCompositeInsert %v3float %550 %552 2
-               OpStore %551 %553
-               OpBranch %529
-        %531 = OpLabel
-               OpBranch %529
+        %524 = OpLoad %v3float %523
+        %525 = OpCompositeExtract %float %524 2
+        %526 = OpFOrdGreaterThan %bool %521 %525
+        %527 = OpLogicalOr %bool %517 %526
+               OpSelectionMerge %528 None
+               OpBranchConditional %527 %529 %530
         %529 = OpLabel
-        %554 = OpAccessChain %_ptr_Function_float %particle %int_4
-        %555 = OpLoad %float %554
-        %556 = OpAccessChain %_ptr_Uniform_float %physics %int_2
-        %557 = OpLoad %float %556
-        %558 = OpFSub %float %555 %557
-               OpStore %554 %558
-        %559 = OpAccessChain %_ptr_Function_float %particle %int_4
-        %560 = OpLoad %float %559
-        %561 = OpFOrdLessThanEqual %bool %560 %float_0
-               OpSelectionMerge %562 None
-               OpBranchConditional %561 %563 %564
-        %563 = OpLabel
-        %565 = OpAccessChain %_ptr_Function_bool %particle %int_7
-               OpStore %565 %false
-        %566 = OpAccessChain %_ptr_Uniform_int %counters %int_1
-        %567 = OpSNegate %int %int_1
-        %568 = OpAtomicIAdd %int %566 %uint_1 %uint_0 %567
-               OpBranch %562
-        %564 = OpLabel
-               OpBranch %562
+        %531 = OpAccessChain %_ptr_Function_v3float %particle %int_1
+        %532 = OpLoad %v3float %531
+        %533 = OpCompositeExtract %float %532 2
+        %534 = OpFNegate %float %float_0_800000012
+        %535 = OpFMul %float %533 %534
+        %536 = OpCompositeInsert %v3float %535 %532 2
+               OpStore %531 %536
+        %537 = OpAccessChain %_ptr_Function_v3float %particle %int_0
+        %538 = OpAccessChain %_ptr_Function_v3float %particle %int_0
+        %539 = OpLoad %v3float %538
+        %540 = OpCompositeExtract %float %539 2
+        %541 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
+        %542 = OpAccessChain %_ptr_Uniform_v3float %physics %int_4
+        %543 = OpLoad %v3float %542
+        %544 = OpCompositeExtract %float %543 2
+        %545 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
+        %546 = OpAccessChain %_ptr_Uniform_v3float %physics %int_5
+        %547 = OpLoad %v3float %546
+        %548 = OpCompositeExtract %float %547 2
+        %549 = OpExtInst %float %1 FClamp %540 %544 %548
+        %550 = OpAccessChain %_ptr_Function_v3float %particle %int_0
+        %551 = OpLoad %v3float %550
+        %552 = OpCompositeInsert %v3float %549 %551 2
+               OpStore %550 %552
+               OpBranch %528
+        %530 = OpLabel
+               OpBranch %528
+        %528 = OpLabel
+        %553 = OpAccessChain %_ptr_Function_float %particle %int_4
+        %554 = OpLoad %float %553
+        %555 = OpAccessChain %_ptr_Uniform_float %physics %int_2
+        %556 = OpLoad %float %555
+        %557 = OpFSub %float %554 %556
+               OpStore %553 %557
+        %558 = OpAccessChain %_ptr_Function_float %particle %int_4
+        %559 = OpLoad %float %558
+        %560 = OpFOrdLessThanEqual %bool %559 %float_0
+               OpSelectionMerge %561 None
+               OpBranchConditional %560 %562 %563
         %562 = OpLabel
-        %569 = OpAccessChain %_ptr_Function_v3float %particle %int_1
-        %570 = OpLoad %v3float %569
-        %571 = OpExtInst %float %1 Length %570
-               OpStore %speed %571
-        %572 = OpCompositeConstruct %v3float %float_0_200000003 %float_0_400000006 %float_1
-        %573 = OpCompositeConstruct %v3float %float_1 %float_0_400000006 %float_0_200000003
-        %574 = OpLoad %float %speed
-        %575 = OpFDiv %float %574 %float_10
-        %576 = OpExtInst %float %1 FClamp %575 %float_0 %float_1
-        %577 = OpCompositeConstruct %v3float %576 %576 %576
-        %578 = OpExtInst %v3float %1 FMix %572 %573 %577
-        %579 = OpAccessChain %_ptr_Function_v4float %particle %int_5
-        %580 = OpCompositeExtract %float %578 0
-        %581 = OpCompositeExtract %float %578 1
-        %582 = OpCompositeExtract %float %578 2
-        %583 = OpLoad %v4float %579
-        %584 = OpCompositeInsert %v4float %580 %583 0
-        %585 = OpCompositeInsert %v4float %581 %584 1
-        %586 = OpCompositeInsert %v4float %582 %585 2
-               OpStore %579 %586
-        %587 = OpLoad %Particle %particle
-        %588 = OpLoad %int %particle_id
-        %589 = OpAccessChain %_ptr_Uniform__arr_Particle_std430_9_MAX_PARTICLES %particle_buffer %int_0
-        %590 = OpAccessChain %_ptr_Uniform_Particle_std430_9 %589 %588
-        %591 = OpCompositeExtract %v3float %587 0
-        %592 = OpCompositeExtract %v3float %587 1
-        %593 = OpCompositeExtract %v3float %587 2
-        %594 = OpCompositeExtract %float %587 3
-        %595 = OpCompositeExtract %float %587 4
-        %596 = OpCompositeExtract %v4float %587 5
-        %597 = OpCompositeExtract %int %587 6
-        %598 = OpCompositeExtract %bool %587 7
-        %599 = OpSelect %uint %598 %uint_1 %uint_0
-        %600 = OpCompositeConstruct %Particle_std430_9 %591 %592 %593 %594 %595 %596 %597 %599
-               OpStore %590 %600
-        %601 = OpLoad %int %collision_count
-        %602 = OpSGreaterThan %bool %601 %int_0
-               OpSelectionMerge %603 None
-               OpBranchConditional %602 %604 %605
-        %604 = OpLabel
-        %606 = OpAccessChain %_ptr_Uniform_int %counters %int_0
-        %607 = OpLoad %int %collision_count
-        %608 = OpAtomicIAdd %int %606 %uint_1 %uint_0 %607
-               OpBranch %603
-        %605 = OpLabel
-               OpBranch %603
+        %564 = OpAccessChain %_ptr_Function_bool %particle %int_7
+               OpStore %564 %false
+        %565 = OpAccessChain %_ptr_Uniform_int %counters %int_1
+        %566 = OpSNegate %int %int_1
+        %567 = OpAtomicIAdd %int %565 %uint_1 %uint_0 %566
+               OpBranch %561
+        %563 = OpLabel
+               OpBranch %561
+        %561 = OpLabel
+        %568 = OpAccessChain %_ptr_Function_v3float %particle %int_1
+        %569 = OpLoad %v3float %568
+        %570 = OpExtInst %float %1 Length %569
+               OpStore %speed %570
+        %571 = OpCompositeConstruct %v3float %float_0_200000003 %float_0_400000006 %float_1
+        %572 = OpCompositeConstruct %v3float %float_1 %float_0_400000006 %float_0_200000003
+        %573 = OpLoad %float %speed
+        %574 = OpFDiv %float %573 %float_10
+        %575 = OpExtInst %float %1 FClamp %574 %float_0 %float_1
+        %576 = OpCompositeConstruct %v3float %575 %575 %575
+        %577 = OpExtInst %v3float %1 FMix %571 %572 %576
+        %578 = OpAccessChain %_ptr_Function_v4float %particle %int_5
+        %579 = OpCompositeExtract %float %577 0
+        %580 = OpCompositeExtract %float %577 1
+        %581 = OpCompositeExtract %float %577 2
+        %582 = OpLoad %v4float %578
+        %583 = OpCompositeInsert %v4float %579 %582 0
+        %584 = OpCompositeInsert %v4float %580 %583 1
+        %585 = OpCompositeInsert %v4float %581 %584 2
+               OpStore %578 %585
+        %586 = OpLoad %Particle %particle
+        %587 = OpLoad %int %particle_id
+        %588 = OpAccessChain %_ptr_Uniform__arr_Particle_std430_9_MAX_PARTICLES %particle_buffer %int_0
+        %589 = OpAccessChain %_ptr_Uniform_Particle_std430_9 %588 %587
+        %590 = OpCompositeExtract %v3float %586 0
+        %591 = OpCompositeExtract %v3float %586 1
+        %592 = OpCompositeExtract %v3float %586 2
+        %593 = OpCompositeExtract %float %586 3
+        %594 = OpCompositeExtract %float %586 4
+        %595 = OpCompositeExtract %v4float %586 5
+        %596 = OpCompositeExtract %int %586 6
+        %597 = OpCompositeExtract %bool %586 7
+        %598 = OpSelect %uint %597 %uint_1 %uint_0
+        %599 = OpCompositeConstruct %Particle_std430_9 %590 %591 %592 %593 %594 %595 %596 %598
+               OpStore %589 %599
+        %600 = OpLoad %int %collision_count
+        %601 = OpSGreaterThan %bool %600 %int_0
+               OpSelectionMerge %602 None
+               OpBranchConditional %601 %603 %604
         %603 = OpLabel
+        %605 = OpAccessChain %_ptr_Uniform_int %counters %int_0
+        %606 = OpLoad %int %collision_count
+        %607 = OpAtomicIAdd %int %605 %uint_1 %uint_0 %606
+               OpBranch %602
+        %604 = OpLabel
+               OpBranch %602
+        %602 = OpLabel
                OpReturn
                OpFunctionEnd
           %5 = OpFunction %void None %107
-        %609 = OpLabel
+        %608 = OpLabel
         %i_0 = OpVariable %_ptr_Function_int Function
 %new_particle = OpVariable %_ptr_Function_Particle Function
 %random_offset = OpVariable %_ptr_Function_v3float Function
-        %610 = OpAccessChain %_ptr_Uniform_int %counters %int_1
-        %611 = OpLoad %int %610
-        %612 = OpAccessChain %_ptr_Uniform_int %physics %int_6
-        %613 = OpLoad %int %612
-        %614 = OpSGreaterThanEqual %bool %611 %613
-               OpSelectionMerge %615 None
-               OpBranchConditional %614 %616 %617
-        %616 = OpLabel
-               OpReturn
-        %617 = OpLabel
-               OpBranch %615
+        %609 = OpAccessChain %_ptr_Uniform_int %counters %int_1
+        %610 = OpLoad %int %609
+        %611 = OpAccessChain %_ptr_Uniform_int %physics %int_6
+        %612 = OpLoad %int %611
+        %613 = OpSGreaterThanEqual %bool %610 %612
+               OpSelectionMerge %614 None
+               OpBranchConditional %613 %615 %616
         %615 = OpLabel
+               OpReturn
+        %616 = OpLabel
+               OpBranch %614
+        %614 = OpLabel
                OpStore %i_0 %int_0
-               OpBranch %618
-        %618 = OpLabel
-        %619 = OpLoad %int %i_0
-        %620 = OpAccessChain %_ptr_Uniform_int %physics %int_6
-        %621 = OpLoad %int %620
-        %622 = OpSLessThan %bool %619 %621
-               OpLoopMerge %623 %624 None
-               OpBranchConditional %622 %625 %623
-        %625 = OpLabel
-        %626 = OpLoad %int %i_0
-        %627 = OpAccessChain %_ptr_Uniform__arr_Particle_std430_9_MAX_PARTICLES %particle_buffer %int_0
-        %628 = OpAccessChain %_ptr_Uniform_Particle_std430_9 %627 %626
-        %629 = OpAccessChain %_ptr_Uniform_uint %628 %int_7
-        %630 = OpLoad %uint %629
-        %631 = OpINotEqual %bool %630 %uint_0
-        %632 = OpLogicalNot %bool %631
-               OpSelectionMerge %633 None
-               OpBranchConditional %632 %634 %635
-        %634 = OpLabel
-        %636 = OpLoad %int %i_0
-        %637 = OpAccessChain %_ptr_Uniform_int %sim_state %int_1
-        %638 = OpLoad %int %637
-        %639 = OpAccessChain %_ptr_Uniform_float %sim_state %int_2
-        %640 = OpLoad %float %639
-        %641 = OpConvertSToF %float %636
-        %642 = OpConvertSToF %float %638
-        %643 = OpCompositeConstruct %v3float %641 %642 %640
-        %644 = OpFunctionCall %v3float %160 %643
-               OpStore %random_offset %644
-        %645 = OpAccessChain %_ptr_Uniform_v3float %sim_state %int_3
-        %646 = OpLoad %v3float %645
-        %647 = OpLoad %v3float %random_offset
-        %648 = OpCompositeConstruct %v3float %float_2 %float_2 %float_2
-        %649 = OpFMul %v3float %647 %648
-        %650 = OpFAdd %v3float %646 %649
-        %651 = OpAccessChain %_ptr_Function_v3float %new_particle %int_0
-               OpStore %651 %650
-        %652 = OpLoad %int %i_0
-        %653 = OpIAdd %int %652 %int_1000
-        %654 = OpAccessChain %_ptr_Uniform_int %sim_state %int_1
-        %655 = OpLoad %int %654
-        %656 = OpAccessChain %_ptr_Uniform_float %sim_state %int_2
-        %657 = OpLoad %float %656
-        %658 = OpConvertSToF %float %653
-        %659 = OpConvertSToF %float %655
-        %660 = OpCompositeConstruct %v3float %658 %659 %657
-        %661 = OpFunctionCall %v3float %160 %660
-        %662 = OpCompositeConstruct %v3float %float_5 %float_5 %float_5
-        %663 = OpFMul %v3float %661 %662
-        %664 = OpAccessChain %_ptr_Function_v3float %new_particle %int_1
-               OpStore %664 %663
-        %665 = OpCompositeConstruct %v3float %float_0 %float_0 %float_0
-        %666 = OpAccessChain %_ptr_Function_v3float %new_particle %int_2
-               OpStore %666 %665
-        %667 = OpLoad %int %i_0
-        %668 = OpAccessChain %_ptr_Uniform_int %sim_state %int_1
-        %669 = OpLoad %int %668
-        %670 = OpConvertSToF %float %667
-        %671 = OpConvertSToF %float %669
-        %672 = OpCompositeConstruct %v2float %670 %671
-        %673 = OpFunctionCall %float %152 %672
-        %674 = OpFMul %float %673 %float_2
-        %675 = OpFAdd %float %float_1 %674
-        %676 = OpAccessChain %_ptr_Function_float %new_particle %int_3
-               OpStore %676 %675
-        %677 = OpLoad %int %i_0
-        %678 = OpIAdd %int %677 %int_500
-        %679 = OpAccessChain %_ptr_Uniform_int %sim_state %int_1
-        %680 = OpLoad %int %679
-        %681 = OpConvertSToF %float %678
-        %682 = OpConvertSToF %float %680
-        %683 = OpCompositeConstruct %v2float %681 %682
-        %684 = OpFunctionCall %float %152 %683
-        %685 = OpFMul %float %684 %float_20
-        %686 = OpFAdd %float %float_10 %685
-        %687 = OpAccessChain %_ptr_Function_float %new_particle %int_4
-               OpStore %687 %686
-        %688 = OpLoad %int %i_0
-        %689 = OpIAdd %int %688 %int_100
-        %690 = OpAccessChain %_ptr_Uniform_int %sim_state %int_1
-        %691 = OpLoad %int %690
-        %692 = OpConvertSToF %float %689
-        %693 = OpConvertSToF %float %691
-        %694 = OpCompositeConstruct %v2float %692 %693
-        %695 = OpFunctionCall %float %152 %694
-        %696 = OpLoad %int %i_0
-        %697 = OpIAdd %int %696 %int_200
-        %698 = OpAccessChain %_ptr_Uniform_int %sim_state %int_1
-        %699 = OpLoad %int %698
-        %700 = OpConvertSToF %float %697
-        %701 = OpConvertSToF %float %699
-        %702 = OpCompositeConstruct %v2float %700 %701
-        %703 = OpFunctionCall %float %152 %702
-        %704 = OpLoad %int %i_0
-        %705 = OpIAdd %int %704 %int_300
-        %706 = OpAccessChain %_ptr_Uniform_int %sim_state %int_1
-        %707 = OpLoad %int %706
-        %708 = OpConvertSToF %float %705
-        %709 = OpConvertSToF %float %707
-        %710 = OpCompositeConstruct %v2float %708 %709
-        %711 = OpFunctionCall %float %152 %710
-        %712 = OpCompositeConstruct %v4float %695 %703 %711 %float_1
-        %713 = OpAccessChain %_ptr_Function_v4float %new_particle %int_5
-               OpStore %713 %712
-        %714 = OpLoad %int %i_0
-        %715 = OpIAdd %int %714 %int_400
-        %716 = OpAccessChain %_ptr_Uniform_int %sim_state %int_1
-        %717 = OpLoad %int %716
-        %718 = OpConvertSToF %float %715
-        %719 = OpConvertSToF %float %717
-        %720 = OpCompositeConstruct %v2float %718 %719
-        %721 = OpFunctionCall %float %152 %720
-        %722 = OpFMul %float %721 %float_3
-        %723 = OpConvertFToS %int %722
-        %724 = OpAccessChain %_ptr_Function_int %new_particle %int_6
-               OpStore %724 %723
-        %725 = OpAccessChain %_ptr_Function_bool %new_particle %int_7
-               OpStore %725 %true
-        %726 = OpLoad %Particle %new_particle
-        %727 = OpLoad %int %i_0
-        %728 = OpAccessChain %_ptr_Uniform__arr_Particle_std430_9_MAX_PARTICLES %particle_buffer %int_0
-        %729 = OpAccessChain %_ptr_Uniform_Particle_std430_9 %728 %727
-        %730 = OpCompositeExtract %v3float %726 0
-        %731 = OpCompositeExtract %v3float %726 1
-        %732 = OpCompositeExtract %v3float %726 2
-        %733 = OpCompositeExtract %float %726 3
-        %734 = OpCompositeExtract %float %726 4
-        %735 = OpCompositeExtract %v4float %726 5
-        %736 = OpCompositeExtract %int %726 6
-        %737 = OpCompositeExtract %bool %726 7
-        %738 = OpSelect %uint %737 %uint_1 %uint_0
-        %739 = OpCompositeConstruct %Particle_std430_9 %730 %731 %732 %733 %734 %735 %736 %738
-               OpStore %729 %739
-        %740 = OpAccessChain %_ptr_Uniform_int %counters %int_1
-        %741 = OpAtomicIAdd %int %740 %uint_1 %uint_0 %int_1
-        %742 = OpAccessChain %_ptr_Uniform_int %counters %int_2
-        %743 = OpAtomicIAdd %int %742 %uint_1 %uint_0 %int_1
-               OpBranch %623
-        %635 = OpLabel
-               OpBranch %633
-        %633 = OpLabel
-               OpBranch %624
+               OpBranch %617
+        %617 = OpLabel
+        %618 = OpLoad %int %i_0
+        %619 = OpAccessChain %_ptr_Uniform_int %physics %int_6
+        %620 = OpLoad %int %619
+        %621 = OpSLessThan %bool %618 %620
+               OpLoopMerge %622 %623 None
+               OpBranchConditional %621 %624 %622
         %624 = OpLabel
-        %744 = OpLoad %int %i_0
-        %745 = OpIAdd %int %744 %int_1
-               OpStore %i_0 %745
-               OpBranch %618
+        %625 = OpLoad %int %i_0
+        %626 = OpAccessChain %_ptr_Uniform__arr_Particle_std430_9_MAX_PARTICLES %particle_buffer %int_0
+        %627 = OpAccessChain %_ptr_Uniform_Particle_std430_9 %626 %625
+        %628 = OpAccessChain %_ptr_Uniform_uint %627 %int_7
+        %629 = OpLoad %uint %628
+        %630 = OpINotEqual %bool %629 %uint_0
+        %631 = OpLogicalNot %bool %630
+               OpSelectionMerge %632 None
+               OpBranchConditional %631 %633 %634
+        %633 = OpLabel
+        %635 = OpLoad %int %i_0
+        %636 = OpAccessChain %_ptr_Uniform_int %sim_state %int_1
+        %637 = OpLoad %int %636
+        %638 = OpAccessChain %_ptr_Uniform_float %sim_state %int_2
+        %639 = OpLoad %float %638
+        %640 = OpConvertSToF %float %635
+        %641 = OpConvertSToF %float %637
+        %642 = OpCompositeConstruct %v3float %640 %641 %639
+        %643 = OpFunctionCall %v3float %159 %642
+               OpStore %random_offset %643
+        %644 = OpAccessChain %_ptr_Uniform_v3float %sim_state %int_3
+        %645 = OpLoad %v3float %644
+        %646 = OpLoad %v3float %random_offset
+        %647 = OpCompositeConstruct %v3float %float_2 %float_2 %float_2
+        %648 = OpFMul %v3float %646 %647
+        %649 = OpFAdd %v3float %645 %648
+        %650 = OpAccessChain %_ptr_Function_v3float %new_particle %int_0
+               OpStore %650 %649
+        %651 = OpLoad %int %i_0
+        %652 = OpIAdd %int %651 %int_1000
+        %653 = OpAccessChain %_ptr_Uniform_int %sim_state %int_1
+        %654 = OpLoad %int %653
+        %655 = OpAccessChain %_ptr_Uniform_float %sim_state %int_2
+        %656 = OpLoad %float %655
+        %657 = OpConvertSToF %float %652
+        %658 = OpConvertSToF %float %654
+        %659 = OpCompositeConstruct %v3float %657 %658 %656
+        %660 = OpFunctionCall %v3float %159 %659
+        %661 = OpCompositeConstruct %v3float %float_5 %float_5 %float_5
+        %662 = OpFMul %v3float %660 %661
+        %663 = OpAccessChain %_ptr_Function_v3float %new_particle %int_1
+               OpStore %663 %662
+        %664 = OpCompositeConstruct %v3float %float_0 %float_0 %float_0
+        %665 = OpAccessChain %_ptr_Function_v3float %new_particle %int_2
+               OpStore %665 %664
+        %666 = OpLoad %int %i_0
+        %667 = OpAccessChain %_ptr_Uniform_int %sim_state %int_1
+        %668 = OpLoad %int %667
+        %669 = OpConvertSToF %float %666
+        %670 = OpConvertSToF %float %668
+        %671 = OpCompositeConstruct %v2float %669 %670
+        %672 = OpFunctionCall %float %151 %671
+        %673 = OpFMul %float %672 %float_2
+        %674 = OpFAdd %float %float_1 %673
+        %675 = OpAccessChain %_ptr_Function_float %new_particle %int_3
+               OpStore %675 %674
+        %676 = OpLoad %int %i_0
+        %677 = OpIAdd %int %676 %int_500
+        %678 = OpAccessChain %_ptr_Uniform_int %sim_state %int_1
+        %679 = OpLoad %int %678
+        %680 = OpConvertSToF %float %677
+        %681 = OpConvertSToF %float %679
+        %682 = OpCompositeConstruct %v2float %680 %681
+        %683 = OpFunctionCall %float %151 %682
+        %684 = OpFMul %float %683 %float_20
+        %685 = OpFAdd %float %float_10 %684
+        %686 = OpAccessChain %_ptr_Function_float %new_particle %int_4
+               OpStore %686 %685
+        %687 = OpLoad %int %i_0
+        %688 = OpIAdd %int %687 %int_100
+        %689 = OpAccessChain %_ptr_Uniform_int %sim_state %int_1
+        %690 = OpLoad %int %689
+        %691 = OpConvertSToF %float %688
+        %692 = OpConvertSToF %float %690
+        %693 = OpCompositeConstruct %v2float %691 %692
+        %694 = OpFunctionCall %float %151 %693
+        %695 = OpLoad %int %i_0
+        %696 = OpIAdd %int %695 %int_200
+        %697 = OpAccessChain %_ptr_Uniform_int %sim_state %int_1
+        %698 = OpLoad %int %697
+        %699 = OpConvertSToF %float %696
+        %700 = OpConvertSToF %float %698
+        %701 = OpCompositeConstruct %v2float %699 %700
+        %702 = OpFunctionCall %float %151 %701
+        %703 = OpLoad %int %i_0
+        %704 = OpIAdd %int %703 %int_300
+        %705 = OpAccessChain %_ptr_Uniform_int %sim_state %int_1
+        %706 = OpLoad %int %705
+        %707 = OpConvertSToF %float %704
+        %708 = OpConvertSToF %float %706
+        %709 = OpCompositeConstruct %v2float %707 %708
+        %710 = OpFunctionCall %float %151 %709
+        %711 = OpCompositeConstruct %v4float %694 %702 %710 %float_1
+        %712 = OpAccessChain %_ptr_Function_v4float %new_particle %int_5
+               OpStore %712 %711
+        %713 = OpLoad %int %i_0
+        %714 = OpIAdd %int %713 %int_400
+        %715 = OpAccessChain %_ptr_Uniform_int %sim_state %int_1
+        %716 = OpLoad %int %715
+        %717 = OpConvertSToF %float %714
+        %718 = OpConvertSToF %float %716
+        %719 = OpCompositeConstruct %v2float %717 %718
+        %720 = OpFunctionCall %float %151 %719
+        %721 = OpFMul %float %720 %float_3
+        %722 = OpConvertFToS %int %721
+        %723 = OpAccessChain %_ptr_Function_int %new_particle %int_6
+               OpStore %723 %722
+        %724 = OpAccessChain %_ptr_Function_bool %new_particle %int_7
+               OpStore %724 %true
+        %725 = OpLoad %Particle %new_particle
+        %726 = OpLoad %int %i_0
+        %727 = OpAccessChain %_ptr_Uniform__arr_Particle_std430_9_MAX_PARTICLES %particle_buffer %int_0
+        %728 = OpAccessChain %_ptr_Uniform_Particle_std430_9 %727 %726
+        %729 = OpCompositeExtract %v3float %725 0
+        %730 = OpCompositeExtract %v3float %725 1
+        %731 = OpCompositeExtract %v3float %725 2
+        %732 = OpCompositeExtract %float %725 3
+        %733 = OpCompositeExtract %float %725 4
+        %734 = OpCompositeExtract %v4float %725 5
+        %735 = OpCompositeExtract %int %725 6
+        %736 = OpCompositeExtract %bool %725 7
+        %737 = OpSelect %uint %736 %uint_1 %uint_0
+        %738 = OpCompositeConstruct %Particle_std430_9 %729 %730 %731 %732 %733 %734 %735 %737
+               OpStore %728 %738
+        %739 = OpAccessChain %_ptr_Uniform_int %counters %int_1
+        %740 = OpAtomicIAdd %int %739 %uint_1 %uint_0 %int_1
+        %741 = OpAccessChain %_ptr_Uniform_int %counters %int_2
+        %742 = OpAtomicIAdd %int %741 %uint_1 %uint_0 %int_1
+               OpBranch %622
+        %634 = OpLabel
+               OpBranch %632
+        %632 = OpLabel
+               OpBranch %623
         %623 = OpLabel
+        %743 = OpLoad %int %i_0
+        %744 = OpIAdd %int %743 %int_1
+               OpStore %i_0 %744
+               OpBranch %617
+        %622 = OpLabel
                OpReturn
                OpFunctionEnd

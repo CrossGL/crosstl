@@ -507,7 +507,7 @@ float3 getSamplingVector(float2 uv, int face) {
 
 // Compute Shader
 kernel void kernel_precompute_environment(
-    uint3 gl_GlobalInvocationID [[thread_position_in_grid]],
+    uint3 thread_position_in_grid [[thread_position_in_grid]],
     constant float4x4 &model_matrix [[buffer(0)]],
     constant float4x4 &view_matrix [[buffer(1)]],
     constant float4x4 &projection_matrix [[buffer(2)]],
@@ -530,7 +530,7 @@ kernel void kernel_precompute_environment(
     array<texture2d<float>, MAX_SHADOW_CASCADES> shadow_maps [[texture(6)]],
     texturecube<float> environment_map [[texture(10)]],
     texture2d_array<float, access::read_write> irradiance_map [[texture(11)]]) {
-  int2 coord = int2(gl_GlobalInvocationID.xy);
+  int2 coord = int2(thread_position_in_grid.xy);
   int2 size = int2(irradiance_map.get_width(), irradiance_map.get_height());
   if (coord.x >= size.x || coord.y >= size.y) {
     return;

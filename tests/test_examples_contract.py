@@ -1,4 +1,6 @@
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -109,6 +111,34 @@ def _assert_generated_output_is_usable(generated):
 @pytest.mark.parametrize("example_path", sorted(EXAMPLES_ROOT.rglob("*.cgl")))
 def test_checked_in_examples_parse_as_crossgl(example_path):
     crosstl.translator.parse(example_path.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    "spvasm_path",
+    sorted((EXAMPLES_ROOT / "output" / "vulkan").rglob("*.spvasm")),
+)
+def test_checked_in_vulkan_example_outputs_validate_with_spirv_tools(
+    tmp_path, spvasm_path
+):
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is None or spirv_val is None:
+        pytest.skip("spirv-as and spirv-val are not installed")
+
+    binary_path = tmp_path / f"{spvasm_path.stem}.spv"
+    assemble = subprocess.run(
+        [spirv_as, str(spvasm_path), "-o", str(binary_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert assemble.returncode == 0, assemble.stderr
+
+    validate = subprocess.run(
+        [spirv_val, str(binary_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert validate.returncode == 0, validate.stderr
 
 
 @pytest.mark.parametrize("relative_path,backend", FULL_BACKEND_EXAMPLE_CASES)
