@@ -46,6 +46,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `directx-graphics-samples-hello-texture` | `microsoft/DirectX-Graphics-Samples` at `31ae3c91160d8634264004cdaf4e41a99c41243e` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Hello Texture shader file without source edits. Host texture setup remains outside the demo scope. |
 | `glslang-push-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream push-constant vertex shader unchanged. DirectX validation is tracked in issue #813. |
 | `lonelydevil-vulkan-tutorial-triangle` | `lonelydevil/vulkan-tutorial-C-implementation` at `780ff146a6eccd7064a10e86363f3c2f7323825d` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream triangle shader pair unchanged. |
+| `spirv-cross-round-fragment` | `KhronosGroup/SPIRV-Cross` at `146679ff8255a6068518685599d7fb8761d1b570` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream fragment reference shader unchanged. |
 | `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. |
 | `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, Metal, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. OpenGL validation is tracked in issue #805. |
 | `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. DirectX output validation is tracked in issue #807. |
@@ -64,8 +65,9 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 ## Source adjustments
 
 The DirectX, glslang, Metal performance, NVIDIA CUDA Samples, OpenCL-SDK,
-Rust-GPU VulkanShaderExamples, SPIRV-Tools, raylib, SaschaWillems triangle, and
-Slang cases keep upstream source files unchanged apart from repository
+Rust-GPU VulkanShaderExamples, SPIRV-Cross, SPIRV-Tools, raylib,
+SaschaWillems triangle, and Slang cases keep upstream source files unchanged
+apart from repository
 formatting checks. The DirectX Hello Texture shader was retested after issue
 #783 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan output.
 The SaschaWillems headless compute shader was retested after issue #756 closed
@@ -93,6 +95,15 @@ constant semantics without placeholder output.
 The checked `KhronosGroup/glslang` push-constant vertex shader currently
 excludes DirectX output because the generated HLSL declares `SV_POSITION` but
 does not write it on all paths. That translator issue is tracked in issue #813.
+
+The `DiligentGraphics/DiligentSamples` Tutorial02 Cube shaders from
+`Tutorials/Tutorial02_Cube/assets/cube.vsh` and
+`Tutorials/Tutorial02_Cube/assets/cube.psh` at
+`30b94f26e7d10cde0be48c75a2c252185f564b69` were tested as a candidate. They
+currently expose invalid generated GLSL for HLSL `in`/`out` parameter shaders
+and invalid Metal stage entry points. That translator issue is tracked in issue
+#814, and the case is intentionally not checked in until generated OpenGL and
+Metal artifacts compile directly.
 
 The `KhronosGroup/OpenCL-SDK` reduce kernel from `samples/core/reduce/reduce.cl`
 at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` was tested as a candidate. It
@@ -171,4 +182,5 @@ depend on host `clang-format` availability.
 ## Third-party notices
 
 The source slices remain under their upstream project licenses. See
-`THIRD_PARTY_NOTICES.md` for repository, license, and source URL details.
+`THIRD_PARTY_NOTICES.md` for repository, license, and source path details.
+Exact pinned source URLs are recorded in each case's `corpus.json` manifest.

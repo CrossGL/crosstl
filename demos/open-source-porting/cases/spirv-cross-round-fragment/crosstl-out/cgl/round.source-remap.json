@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/round.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 332,
+        "file": "crosstl-out/cgl/round.cgl",
+        "length": 332,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 188,
+        "file": "round.frag",
+        "length": 188,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

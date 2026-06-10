@@ -107,6 +107,7 @@ def _validate_report(
     *,
     run_toolchains: bool,
     require_toolchain_runs: bool,
+    selected_targets: list[str],
     reports_dir: Path | None,
     case_name: str,
 ) -> dict[str, object]:
@@ -141,10 +142,34 @@ def _validate_report(
         counts = payload.get("toolchainRunStatusCounts", {})
         ok_count = int(counts.get("ok", 0)) if isinstance(counts, dict) else 0
         failed_count = int(counts.get("failed", 0)) if isinstance(counts, dict) else 0
-        if ok_count <= 0 or failed_count:
+        run_counts_by_target = payload.get("toolchainRunStatusByTarget", {})
+        target_failures = []
+        for target in selected_targets:
+            target_counts = (
+                run_counts_by_target.get(target, {})
+                if isinstance(run_counts_by_target, dict)
+                else {}
+            )
+            target_ok_count = (
+                int(target_counts.get("okCount", 0))
+                if isinstance(target_counts, dict)
+                else 0
+            )
+            target_failed_count = (
+                int(target_counts.get("failedCount", 0))
+                if isinstance(target_counts, dict)
+                else 0
+            )
+            if target_ok_count <= 0 or target_failed_count:
+                target_failures.append(
+                    f"{target}: ok={target_ok_count}, failed={target_failed_count}"
+                )
+        if ok_count <= 0 or failed_count or target_failures:
             raise SystemExit(
                 f"{case_name}: expected at least one successful toolchain run "
-                f"and no failed runs, got ok={ok_count}, failed={failed_count}"
+                f"for each selected target and no failed runs, "
+                f"got ok={ok_count}, failed={failed_count}, "
+                f"targets={target_failures}"
             )
     if reports_dir is not None:
         reports_dir.mkdir(parents=True, exist_ok=True)
@@ -276,6 +301,7 @@ def _run_case(
             report_path,
             run_toolchains=run_toolchains,
             require_toolchain_runs=require_toolchain_runs,
+            selected_targets=selected_targets,
             reports_dir=reports_dir,
             case_name=case_dir.name,
         )
@@ -295,6 +321,7 @@ def _run_case(
             report_path,
             run_toolchains=run_toolchains,
             require_toolchain_runs=require_toolchain_runs,
+            selected_targets=selected_targets,
             reports_dir=reports_dir,
             case_name=case_dir.name,
         )

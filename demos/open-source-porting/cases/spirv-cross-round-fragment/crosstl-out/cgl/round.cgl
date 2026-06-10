@@ -1,0 +1,17 @@
+#version 450
+
+shader main {
+    struct FragmentInput {
+    vec4 vA @location(0);
+    float vB @location(1);
+    };
+
+    fragment {
+    vec4 main(FragmentInput input) @location(0) @ FragColor {
+        vec4 FragColor;
+        FragColor = round(input.vA);
+        FragColor *= round(input.vB);
+        return FragColor;
+    }
+    }
+}

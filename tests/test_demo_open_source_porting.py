@@ -42,6 +42,7 @@ def test_open_source_demo_cases_have_pinned_manifests_and_references():
         "sascha-willems-vulkan-conservative-triangle",
         "sascha-willems-vulkan-headless-compute",
         "slang-hello-world-compute",
+        "spirv-cross-round-fragment",
         "spirv-tools-basic-src",
         "vulkan-samples-dynamic-line-grid",
     }
@@ -59,6 +60,18 @@ def test_open_source_demo_cases_have_pinned_manifests_and_references():
             assert entry["sourceUrl"].startswith(entry["repository"])
             assert re.fullmatch(r"[0-9a-f]{40}", entry["commit"])
             assert set(entry["targets"]).issubset(config_targets)
+
+        assert {
+            target for entry in manifest["entries"] for target in entry["targets"]
+        } == config_targets
+
+        output_targets = {
+            target_dir.name
+            for target_dir in (case_dir / "crosstl-out").iterdir()
+            if target_dir.is_dir()
+            and any(path.is_file() for path in target_dir.rglob("*"))
+        }
+        assert output_targets == config_targets
 
         for target in config_targets:
             target_dir = case_dir / "crosstl-out" / target
@@ -103,6 +116,29 @@ def _workflow_step_cases(workflow: str, step_name: str) -> set[str]:
     )
 
 
+def _workflow_run_demo_invocations(workflow: str, step_name: str):
+    block = _workflow_step_block(workflow, step_name)
+    normalized = re.sub(r"\\\n\s*", " ", block)
+    invocations = []
+    for line in normalized.splitlines():
+        if "python demos/open-source-porting/run_demo.py" not in line:
+            continue
+        invocations.append(
+            {
+                "cases": set(re.findall(r"--case ([a-z0-9-]+)", line)),
+                "targets": set(re.findall(r"--target ([a-z0-9-]+)", line)),
+            }
+        )
+    return invocations
+
+
+def _smoke_covers_target(invocations, case_name: str, target: str) -> bool:
+    return any(
+        case_name in invocation["cases"] and target in invocation["targets"]
+        for invocation in invocations
+    )
+
+
 def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
     workflow = (ROOT / ".github" / "workflows" / "demo.yml").read_text(encoding="utf-8")
 
@@ -123,6 +159,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "sascha-willems-vulkan-conservative-triangle",
         "sascha-willems-vulkan-headless-compute",
         "slang-hello-world-compute",
+        "spirv-cross-round-fragment",
         "spirv-tools-basic-src",
         "vulkan-samples-dynamic-line-grid",
     }
@@ -155,6 +192,29 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "sascha-willems-vulkan-headless-compute",
         "vulkan-samples-dynamic-line-grid",
     }
+
+
+def test_open_source_demo_workflow_covers_platform_targets():
+    runner = _load_demo_runner()
+    workflow = (ROOT / ".github" / "workflows" / "demo.yml").read_text(encoding="utf-8")
+    linux_invocations = _workflow_run_demo_invocations(
+        workflow, "Linux OpenGL and Vulkan smoke checks"
+    )
+    macos_invocations = _workflow_run_demo_invocations(
+        workflow, "macOS Metal smoke checks"
+    )
+    windows_invocations = _workflow_run_demo_invocations(
+        workflow, "Windows DirectX smoke checks"
+    )
+
+    for case_dir in sorted(path for path in CASE_ROOT.iterdir() if path.is_dir()):
+        targets = set(runner._case_targets(case_dir))
+        for target in {"opengl", "vulkan"} & targets:
+            assert _smoke_covers_target(linux_invocations, case_dir.name, target)
+        if "metal" in targets:
+            assert _smoke_covers_target(macos_invocations, case_dir.name, "metal")
+        if "directx" in targets:
+            assert _smoke_covers_target(windows_invocations, case_dir.name, "directx")
 
 
 def test_open_source_demo_workflow_compile_reference_paths_exist():
@@ -226,6 +286,46 @@ def test_open_source_demo_artifact_comparison_normalizes_platform_text(tmp_path)
     assert runner._comparison_bytes(lf_source_map) == runner._comparison_bytes(
         windows_source_map
     )
+
+
+def test_open_source_demo_runner_requires_toolchain_runs_per_selected_target(tmp_path):
+    runner = _load_demo_runner()
+    original_run = runner.subprocess.run
+
+    class Completed:
+        returncode = 0
+        stdout = json.dumps(
+            {
+                "success": True,
+                "diagnosticCounts": {},
+                "toolchainRunStatusCounts": {"ok": 1, "failed": 0},
+                "toolchainRunStatusByTarget": {
+                    "opengl": {"okCount": 1, "failedCount": 0, "runCount": 1}
+                },
+            }
+        )
+        stderr = ""
+
+    def fake_run(*args, **kwargs):
+        return Completed()
+
+    runner.subprocess.run = fake_run
+    try:
+        try:
+            runner._validate_report(
+                tmp_path / "report.json",
+                run_toolchains=True,
+                require_toolchain_runs=True,
+                selected_targets=["opengl", "vulkan"],
+                reports_dir=None,
+                case_name="example",
+            )
+        except SystemExit as exc:
+            assert "vulkan: ok=0, failed=0" in str(exc)
+        else:
+            raise AssertionError("Expected missing target toolchain run to fail")
+    finally:
+        runner.subprocess.run = original_run
 
 
 def test_open_source_demo_runner_verifies_fast_reference_subset():
