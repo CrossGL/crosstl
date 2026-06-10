@@ -20,6 +20,7 @@ from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.project import (
     build_runtime_artifact_manifest,
+    build_runtime_host_integration_handoff,
     build_runtime_host_loader_scaffolds,
     build_runtime_loader_manifest,
     build_runtime_package,
@@ -195,6 +196,7 @@ def test_project_package_exposes_public_api_surface():
         "ProjectTranslationUnit",
         "build_runtime_artifact_manifest",
         "build_runtime_host_loader_scaffolds",
+        "build_runtime_host_integration_handoff",
         "build_runtime_loader_manifest",
         "build_runtime_package",
         "inspect_runtime_host_loader_scaffolds",
@@ -27065,6 +27067,172 @@ def test_project_cli_plan_host_loader_consumption_json_writes_output(tmp_path):
     assert payload["kind"] == project_pipeline.RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_KIND
     assert payload["summary"]["readyLoaderUnitCount"] == 1
     assert payload["actions"][0]["kind"] == "consume-host-loader-unit"
+
+
+def _write_host_loader_consumption_plan_fixture(tmp_path, targets=("cgl",)):
+    repo, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
+        tmp_path, targets=targets
+    )
+    plan_payload = plan_runtime_host_loader_consumption(
+        scaffold_dir / "host-loader-scaffolds.json"
+    )
+    plan_path = repo / "host-loader-consumption-plan.json"
+    plan_path.write_text(json.dumps(plan_payload, indent=2), encoding="utf-8")
+    return repo, plan_path, plan_payload
+
+
+def test_build_runtime_host_integration_handoff_writes_ready_bundle(tmp_path):
+    repo, plan_path, _ = _write_host_loader_consumption_plan_fixture(tmp_path)
+    handoff_dir = repo / "host-integration"
+
+    payload = build_runtime_host_integration_handoff(plan_path, handoff_dir)
+
+    assert set(payload) == project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_FIELDS
+    assert payload["kind"] == project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_KIND
+    assert payload["success"] is True
+    assert payload["status"] == "ready"
+    assert payload["scope"] == project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_SCOPE
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_NON_GOALS
+    )
+    assert payload["summary"]["targetCount"] == 1
+    assert payload["summary"]["loaderUnitCount"] == 1
+    assert payload["summary"]["readyLoaderUnitCount"] == 1
+    assert payload["summary"]["blockedLoaderUnitCount"] == 0
+    assert payload["summary"]["generatedFileCount"] == 3
+    assert set(payload["targets"][0]) == (
+        project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_TARGET_FIELDS
+    )
+    assert payload["targets"][0]["target"] == "cgl"
+    assert payload["targets"][0]["status"] == "ready"
+    assert payload["targets"][0]["handoffFile"] == "targets/cgl.integration.json"
+    for generated_file in payload["generatedFiles"]:
+        assert set(generated_file) == (
+            project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_GENERATED_FILE_FIELDS
+        )
+    assert (handoff_dir / "host-integration.json").is_file()
+    assert (handoff_dir / "HOST_INTEGRATION.md").is_file()
+    assert (handoff_dir / "targets" / "cgl.integration.json").is_file()
+    manifest = json.loads(
+        (handoff_dir / "host-integration.json").read_text(encoding="utf-8")
+    )
+    assert manifest["kind"] == project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_KIND
+    target_payload = json.loads(
+        (handoff_dir / "targets" / "cgl.integration.json").read_text(encoding="utf-8")
+    )
+    assert target_payload["kind"] == "crosstl-runtime-host-integration-target"
+    assert target_payload["target"] == "cgl"
+    assert target_payload["actions"][0]["kind"] == "consume-host-loader-unit"
+    assert "does not rewrite host application code" in (
+        handoff_dir / "HOST_INTEGRATION.md"
+    ).read_text(encoding="utf-8")
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+
+
+def test_build_runtime_host_integration_handoff_writes_blocked_bundle(tmp_path):
+    repo, plan_path, _ = _write_host_loader_consumption_plan_fixture(
+        tmp_path, targets=("vulkan",)
+    )
+    handoff_dir = repo / "host-integration"
+
+    payload = build_runtime_host_integration_handoff(plan_path, handoff_dir)
+
+    assert payload["success"] is True
+    assert payload["status"] == "blocked"
+    assert payload["summary"]["blockedLoaderUnitCount"] == 1
+    assert payload["targets"][0]["status"] == "blocked"
+    assert payload["actions"][0]["kind"] == "resolve-loader-scaffold-blockers"
+    assert (handoff_dir / "targets" / "vulkan.integration.json").is_file()
+
+
+def test_build_runtime_host_integration_handoff_rejects_wrong_plan_kind(tmp_path):
+    plan_path = tmp_path / "host-loader-consumption-plan.json"
+    handoff_dir = tmp_path / "host-integration"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-runtime-loader-manifest",
+                "success": True,
+                "loaderUnits": [],
+                "actions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = build_runtime_host_integration_handoff(plan_path, handoff_dir)
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["summary"]["generatedFileCount"] == 0
+    assert not handoff_dir.exists()
+    assert payload["diagnostics"][0]["code"] == (
+        "project.runtime-host-integration-handoff.plan-kind-invalid"
+    )
+
+
+def test_project_cli_host_integration_handoff_text_outputs_bundle(tmp_path):
+    repo, plan_path, _ = _write_host_loader_consumption_plan_fixture(tmp_path)
+    handoff_dir = repo / "host-integration"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "host-integration-handoff",
+            str(plan_path),
+            "--handoff-dir",
+            str(handoff_dir),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Runtime host integration handoff: {plan_path}" in result.stdout
+    assert "Status: ready" in result.stdout
+    assert "Handoff scope: host-integration-handoff-bundle" in result.stdout
+    assert "Summary: 1 targets, 1 loader units, 1 ready, 0 blocked" in result.stdout
+    assert "Generated files:" in result.stdout
+    assert "targets/cgl.integration.json" in result.stdout
+    assert (handoff_dir / "host-integration.json").is_file()
+
+
+def test_project_cli_host_integration_handoff_json_writes_output(tmp_path):
+    repo, plan_path, _ = _write_host_loader_consumption_plan_fixture(tmp_path)
+    handoff_dir = repo / "host-integration"
+    output_path = repo / "host-integration-handoff.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "host-integration-handoff",
+            str(plan_path),
+            "--handoff-dir",
+            str(handoff_dir),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_KIND
+    assert payload["summary"]["generatedFileCount"] == 3
+    assert (handoff_dir / "HOST_INTEGRATION.md").is_file()
 
 
 def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp_path):
