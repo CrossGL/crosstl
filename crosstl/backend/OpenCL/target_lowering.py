@@ -3,7 +3,9 @@
 from crosstl.translator.ast import (
     ArrayType,
     AttributeNode,
+    FunctionCallNode,
     FunctionNode,
+    IdentifierNode,
     LiteralNode,
     NamedType,
     PrimitiveType,
@@ -15,6 +17,7 @@ from crosstl.translator.ast import (
     VectorType,
 )
 
+OPENCL_TARGET_UNSUPPORTED_CODE = "opencl.target.unsupported"
 _TARGET_SCALAR_TYPE_ALIASES = {
     "f32": "float",
     "f64": "double",
@@ -22,12 +25,148 @@ _TARGET_SCALAR_TYPE_ALIASES = {
     "u32": "uint",
 }
 _STAGE_CONTROL_ATTRIBUTES = {"compute", "workgroup_size", "local_size"}
+_EVENT_LOCAL_MEMORY_BUILTINS = {
+    "async_work_group_copy",
+    "wait_group_events",
+}
 _SYNTHETIC_BUILTIN_ALIASES = {
     "thread_id": "gl_GlobalInvocationID",
     "block_id": "gl_WorkGroupID",
     "thread_local_id": "gl_LocalInvocationID",
     "block_dim": "gl_WorkGroupSize",
 }
+
+
+class OpenCLTargetUnsupportedError(ValueError):
+    """Raised when OpenCL target lowering would emit invalid target code."""
+
+
+def _target_backend_label(target_backend):
+    target = str(target_backend or "target").strip()
+    return target or "target"
+
+
+def _type_label(type_node):
+    if isinstance(type_node, PrimitiveType):
+        return type_node.name
+    if isinstance(type_node, VectorType):
+        return f"vec{type_node.size}<{_type_label(type_node.element_type)}>"
+    if isinstance(type_node, ArrayType):
+        element = _type_label(type_node.element_type)
+        if type_node.size is None:
+            return f"array<{element}>"
+        return f"array<{element}, {type_node.size}>"
+    if isinstance(type_node, NamedType):
+        if not type_node.generic_args:
+            return type_node.name
+        args = ", ".join(_type_label(arg) for arg in type_node.generic_args)
+        return f"{type_node.name}<{args}>"
+    return str(type_node)
+
+
+def _is_void_type(type_node):
+    return isinstance(type_node, PrimitiveType) and type_node.name == "void"
+
+
+def _function_statements(function):
+    body = getattr(function, "body", None)
+    statements = getattr(body, "statements", None)
+    return statements if isinstance(statements, list) else None
+
+
+def _is_empty_nonvoid_function(function):
+    if not isinstance(function, FunctionNode) or _is_void_type(function.return_type):
+        return False
+    statements = _function_statements(function)
+    return statements is not None and len(statements) == 0
+
+
+def _is_pointer_named_type(type_node):
+    return isinstance(type_node, NamedType) and type_node.name == "ptr"
+
+
+def _pointer_parameter_labels(function):
+    labels = []
+    for parameter in getattr(function, "parameters", []) or []:
+        param_type = getattr(parameter, "param_type", None)
+        if _is_pointer_named_type(param_type):
+            labels.append(f"{parameter.name}: {_type_label(param_type)}")
+    return labels
+
+
+def _function_call_name(call):
+    function = getattr(call, "function", None)
+    if isinstance(function, IdentifierNode):
+        return function.name
+    if isinstance(function, str):
+        return function
+    return getattr(function, "name", None)
+
+
+def _collect_called_function_names(node):
+    calls = set()
+    for child in node.walk():
+        if isinstance(child, FunctionCallNode):
+            name = _function_call_name(child)
+            if name:
+                calls.add(str(name))
+    return calls
+
+
+def _format_list(values):
+    return ", ".join(sorted(set(values)))
+
+
+def validate_opencl_intermediate_for_target(cgl_ast, target_backend=None):
+    """Reject OpenCL intermediates that target codegen cannot lower correctly."""
+
+    functions = [
+        function
+        for function in getattr(cgl_ast, "functions", []) or []
+        if isinstance(function, FunctionNode)
+    ]
+    called_names = set()
+    for function in functions:
+        called_names.update(_collect_called_function_names(function))
+
+    unsupported = []
+
+    empty_helpers = [
+        function.name for function in functions if _is_empty_nonvoid_function(function)
+    ]
+    if empty_helpers:
+        unsupported.append(
+            "unresolved non-void helper declarations without bodies: "
+            f"{_format_list(empty_helpers)}"
+        )
+
+    pointer_helpers = []
+    for function in functions:
+        labels = _pointer_parameter_labels(function)
+        if labels:
+            pointer_helpers.append(f"{function.name}({', '.join(labels)})")
+    if pointer_helpers:
+        unsupported.append(
+            "OpenCL pointer helper parameters are not representable in target "
+            f"codegen: {_format_list(pointer_helpers)}"
+        )
+
+    event_local_calls = called_names.intersection(_EVENT_LOCAL_MEMORY_BUILTINS)
+    if event_local_calls:
+        unsupported.append(
+            "OpenCL event/local-memory builtins require semantics not preserved by "
+            f"target lowering: {_format_list(event_local_calls)}"
+        )
+
+    if not unsupported:
+        return
+
+    target = _target_backend_label(target_backend)
+    details = "; ".join(unsupported)
+    raise OpenCLTargetUnsupportedError(
+        f"{OPENCL_TARGET_UNSUPPORTED_CODE}: cannot lower OpenCL source to "
+        f"{target} because target lowering would produce invalid artifacts: {details}"
+    )
 
 
 def _clone_target_type(type_node):
