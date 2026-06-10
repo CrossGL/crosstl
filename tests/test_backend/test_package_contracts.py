@@ -13,6 +13,14 @@ def _catalog_backends():
     return catalog["backends"]
 
 
+def _native_source_backends():
+    return [
+        backend
+        for backend in _catalog_backends()
+        if backend.get("source_kind", "native") == "native"
+    ]
+
+
 def _module_name(path):
     return ".".join(path.with_suffix("").relative_to(ROOT).parts)
 
@@ -28,7 +36,7 @@ def _classes_declared_in(module):
 def test_native_backend_modules_are_importable():
     failures = []
 
-    for backend in _catalog_backends():
+    for backend in _native_source_backends():
         backend_path = ROOT / backend["native_backend"]
         for module_path in sorted(backend_path.glob("*.py")):
             if module_path.name == "__init__.py":
@@ -45,7 +53,7 @@ def test_native_backend_modules_are_importable():
 def test_native_backend_packages_expose_core_frontend_classes():
     missing = []
 
-    for backend in _catalog_backends():
+    for backend in _native_source_backends():
         backend_id = backend["id"]
         backend_path = ROOT / backend["native_backend"]
         modules = {

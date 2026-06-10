@@ -22,6 +22,15 @@ class BackendSpec:
     aliases: Sequence[str] = ()
     file_extensions: Sequence[str] = ()
     format_backend: str | None = None
+    source_name: str | None = None
+    has_source_frontend: bool = True
+
+    @property
+    def source_registry_name(self) -> str | None:
+        """Return the native source frontend name paired with this target."""
+        if not self.has_source_frontend:
+            return None
+        return self.source_name or self.name
 
 
 class BackendRegistry:
@@ -97,6 +106,14 @@ class BackendRegistry:
         """Return registered canonical backend names in sorted order."""
         return sorted(self._by_name.keys())
 
+    def source_backend_names(self) -> Sequence[str]:
+        """Return targets that also have native source frontends."""
+        return sorted(
+            name
+            for name, spec in self._by_name.items()
+            if spec.source_registry_name is not None
+        )
+
     def aliases(self) -> dict[str, str]:
         """Return a copy of the alias-to-backend mapping."""
         return dict(self._by_alias)
@@ -127,6 +144,11 @@ def get_backend(name: str) -> BackendSpec | None:
 def backend_names() -> Sequence[str]:
     """Return registered backend names from the global registry."""
     return BACKEND_REGISTRY.names()
+
+
+def source_backend_names() -> Sequence[str]:
+    """Return registered targets that also have native source frontends."""
+    return BACKEND_REGISTRY.source_backend_names()
 
 
 def get_backend_extension(name: str) -> str | None:

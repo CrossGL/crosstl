@@ -7,6 +7,7 @@ import pytest
 import crosstl.translator.codegen as codegen
 from crosstl.formatter import CodeFormatter, ShaderLanguage
 from crosstl.translator import parse
+from crosstl.translator.codegen.registry import BackendRegistry, BackendSpec
 from crosstl.translator.plugin_loader import discover_backend_plugins
 from crosstl.translator.source_registry import (
     BINARY_SPIRV_UNSUPPORTED_MESSAGE,
@@ -87,6 +88,10 @@ REAL_WORLD_TARGET_EXTENSION_BACKENDS = (
 SOURCE_ONLY_BACKEND_DIRS = {"OpenCL"}
 
 
+class _DummyCodeGen:
+    pass
+
+
 def _backend_root():
     return os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "..", "crosstl", "backend")
@@ -137,12 +142,53 @@ def test_backend_registry_covers_backend_dirs():
 def test_source_registry_covers_backend_dirs():
     register_default_sources()
     discover_backend_plugins()
+    source_backend_names = set(codegen.source_backend_names()) | {
+        name.lower() for name in SOURCE_ONLY_BACKEND_DIRS
+    }
     missing = []
     for name in _backend_dirs():
         normalized = _normalize_backend_dir(name)
+        if normalized not in source_backend_names:
+            continue
         if not SOURCE_REGISTRY.get(normalized):
             missing.append(name)
     assert not missing, f"Unregistered source backends: {missing}"
+
+
+def test_backend_registry_tracks_target_only_backends_separately():
+    registry = BackendRegistry()
+    registry.register(
+        BackendSpec(
+            name="wgsl",
+            codegen_class=_DummyCodeGen,
+            aliases=("webgpu",),
+            file_extensions=(".wgsl",),
+            has_source_frontend=False,
+        )
+    )
+
+    assert registry.names() == ["wgsl"]
+    assert registry.source_backend_names() == []
+    assert registry.resolve_name("shader.WGSL") == "wgsl"
+    assert registry.get("webgpu").source_registry_name is None
+
+
+def test_backend_registry_can_map_target_to_differently_named_source_frontend():
+    registry = BackendRegistry()
+    registry.register(
+        BackendSpec(
+            name="webgl",
+            codegen_class=_DummyCodeGen,
+            aliases=("webgl2", "glsl-es"),
+            file_extensions=(".webgl.glsl",),
+            source_name="opengl",
+        )
+    )
+
+    assert registry.names() == ["webgl"]
+    assert registry.source_backend_names() == ["webgl"]
+    assert registry.resolve_name("shader.webgl.glsl") == "webgl"
+    assert registry.get("glsl-es").source_registry_name == "opengl"
 
 
 @pytest.mark.parametrize(

@@ -4,6 +4,7 @@
     {
       "id": "directx",
       "name": "DirectX / HLSL",
+      "source_kind": "native",
       "aliases": ["hlsl", "dx"],
       "target_extension": ".hlsl",
       "translator_codegen": "crosstl/translator/codegen/directx_codegen.py",
@@ -26,6 +27,7 @@
     {
       "id": "opengl",
       "name": "OpenGL / GLSL",
+      "source_kind": "native",
       "aliases": ["glsl", "ogl"],
       "target_extension": ".glsl",
       "translator_codegen": "crosstl/translator/codegen/GLSL_codegen.py",
@@ -48,6 +50,7 @@
     {
       "id": "metal",
       "name": "Metal",
+      "source_kind": "native",
       "aliases": ["metal", "msl"],
       "target_extension": ".metal",
       "translator_codegen": "crosstl/translator/codegen/metal_codegen.py",
@@ -70,6 +73,7 @@
     {
       "id": "vulkan",
       "name": "Vulkan SPIR-V",
+      "source_kind": "native",
       "aliases": ["spirv", "spv"],
       "target_extension": ".spvasm",
       "translator_codegen": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -92,6 +96,7 @@
     {
       "id": "cuda",
       "name": "CUDA",
+      "source_kind": "native",
       "aliases": ["cu"],
       "target_extension": ".cu",
       "translator_codegen": "crosstl/translator/codegen/cuda_codegen.py",
@@ -110,6 +115,7 @@
     {
       "id": "hip",
       "name": "HIP",
+      "source_kind": "native",
       "aliases": ["hip"],
       "target_extension": ".hip",
       "translator_codegen": "crosstl/translator/codegen/hip_codegen.py",
@@ -128,6 +134,7 @@
     {
       "id": "mojo",
       "name": "Mojo",
+      "source_kind": "native",
       "aliases": ["mojo"],
       "target_extension": ".mojo",
       "translator_codegen": "crosstl/translator/codegen/mojo_codegen.py",
@@ -146,6 +153,7 @@
     {
       "id": "rust",
       "name": "Rust",
+      "source_kind": "native",
       "aliases": ["rs"],
       "target_extension": ".rs",
       "translator_codegen": "crosstl/translator/codegen/rust_codegen.py",
@@ -164,6 +172,7 @@
     {
       "id": "slang",
       "name": "Slang",
+      "source_kind": "native",
       "aliases": ["slang"],
       "target_extension": ".slang",
       "translator_codegen": "crosstl/translator/codegen/slang_codegen.py",
