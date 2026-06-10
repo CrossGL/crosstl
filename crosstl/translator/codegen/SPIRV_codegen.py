@@ -10922,6 +10922,7 @@ class VulkanSPIRVCodeGen:
             "readonly",
             "set",
             "space",
+            "stage_entry",
             "compute",
             "fragment",
             "geometry",
@@ -11224,6 +11225,11 @@ class VulkanSPIRVCodeGen:
     ):
         for param, _param_type, param_value_type in runtime_parameters:
             param_name = getattr(param, "name", None) or "param"
+            if self.is_storage_resource_parameter(param):
+                variable = self.process_entry_point_storage_buffer_parameter(param)
+                self.local_variables[param_name] = variable
+                continue
+
             initial_value = self.entry_point_parameter_value(
                 param, param_value_type, execution_model
             )
@@ -11236,6 +11242,36 @@ class VulkanSPIRVCodeGen:
             self.register_declared_resource_metadata(
                 param, local_variable, param_value_type
             )
+
+    def resource_parameter_qualifier_names(self, param) -> set:
+        return {
+            str(qualifier).lower()
+            for qualifier in getattr(param, "resource_qualifiers", []) or []
+        }
+
+    def is_storage_resource_parameter(self, param) -> bool:
+        qualifiers = self.resource_parameter_qualifier_names(param)
+        if "storage" not in qualifiers:
+            return False
+
+        param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+        if param_type is None:
+            return False
+        param_type_id = self.map_crossgl_type(param_type)
+        return self.array_type_info_from_type(param_type_id) is not None
+
+    def process_entry_point_storage_buffer_parameter(self, param) -> SpirvId:
+        variable = VariableNode(
+            getattr(param, "name", "param"),
+            getattr(param, "param_type", getattr(param, "vtype", None)),
+            attributes=list(getattr(param, "attributes", []) or []),
+            qualifiers=list(getattr(param, "qualifiers", []) or []),
+        )
+        variable.resource_qualifiers = list(
+            getattr(param, "resource_qualifiers", []) or []
+        )
+        type_name = self.type_name_from_value(variable.var_type)
+        return self.process_glsl_buffer_block_declaration(variable, type_name)
 
     def entry_point_parameter_value(
         self, param, param_value_type: SpirvId, execution_model: Optional[str]
@@ -12764,6 +12800,11 @@ class VulkanSPIRVCodeGen:
         qualifiers = set()
 
         for qualifier in getattr(node, "qualifiers", []) or []:
+            qualifier = str(qualifier).lower()
+            if qualifier in supported:
+                qualifiers.add(aliases.get(qualifier, qualifier))
+
+        for qualifier in getattr(node, "resource_qualifiers", []) or []:
             qualifier = str(qualifier).lower()
             if qualifier in supported:
                 qualifiers.add(aliases.get(qualifier, qualifier))

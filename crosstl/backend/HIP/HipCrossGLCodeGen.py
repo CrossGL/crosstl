@@ -4729,6 +4729,7 @@ class HipToCrossGLConverter:
                 self.emit(f"// HIP AMDGPU flat work group size: ({bounds})")
 
         self.emit("@compute")
+        self.emit("@stage_entry")
         self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
 
         params = []
@@ -4756,8 +4757,15 @@ class HipToCrossGLConverter:
                         self.register_variable_type(
                             param_name, f"array<{element_type}>"
                         )
+                        access = (
+                            "read"
+                            if self.is_readonly_pointer_type(raw_type)
+                            else "read_write"
+                        )
                         params.append(
-                            f"@group(0) @binding({len(params)}) var<storage, read_write> {output_name}: array<{element_type}>"
+                            f"@group(0) @binding({len(params)}) "
+                            f"var<storage, {access}> "
+                            f"{output_name}: array<{element_type}>"
                         )
                     else:
                         param_type = self.convert_hip_variable_type_to_crossgl(
@@ -4780,12 +4788,6 @@ class HipToCrossGLConverter:
             self.emit(") {")
 
             self.indent_level += 1
-            self.emit("let thread_id = gl_GlobalInvocationID;")
-            self.emit("let block_id = gl_WorkGroupID;")
-            self.emit("let thread_local_id = gl_LocalInvocationID;")
-            self.emit("let block_dim = gl_WorkGroupSize;")
-            self.emit("")
-
             if hasattr(kernel, "body") and kernel.body:
                 self.push_packed_argument_scope()
                 self.push_type_alias_scope()
@@ -7605,6 +7607,13 @@ class HipToCrossGLConverter:
             mapped_type = f"ptr<{mapped_type}>"
 
         return mapped_type
+
+    def is_readonly_pointer_type(self, hip_type):
+        base_type, pointer_depth = self.split_pointer_declarators(hip_type)
+        if pointer_depth <= 0:
+            return False
+        qualifiers = set(re.findall(r"\b(?:const|readonly)\b", str(base_type)))
+        return bool(qualifiers)
 
     def strip_function_pointer_parameter_list(self, type_name):
         """Keep imported C++ function-pointer types reparsable in CrossGL."""
