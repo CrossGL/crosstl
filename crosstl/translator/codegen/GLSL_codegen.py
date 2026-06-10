@@ -295,6 +295,7 @@ class GLSLCodeGen:
 
     OPENGL_DESCRIPTOR_SET_BINDING_STRIDE = 1024
     MESH_STAGE_NAMES = {"mesh", "task", "amplification", "object"}
+    UNSIGNED_VECTOR_COMPUTE_BUILTINS = {"gl_GlobalInvocationID"}
     GLSL_STAGE_GUARD_MACROS = {
         "vertex": "GL_VERTEX_SHADER",
         "fragment": "GL_FRAGMENT_SHADER",
@@ -8324,6 +8325,16 @@ class GLSLCodeGen:
         finally:
             self.current_expression_expected_type = previous_expected_type
 
+    def signed_compute_builtin_member_cast(self, object_name, member_name):
+        expected_type = self.map_type(self.current_expression_expected_type)
+        if expected_type != "int":
+            return None
+        if object_name not in self.UNSIGNED_VECTOR_COMPUTE_BUILTINS:
+            return None
+        if member_name not in {"x", "y", "z"}:
+            return None
+        return f"int({object_name}.{member_name})"
+
     def is_scalar_value_type(self, vtype):
         vtype = self.type_name_string(vtype)
         if not vtype:
@@ -9772,6 +9783,9 @@ class GLSLCodeGen:
                 self.validate_glsl_buffer_block_member_access(expr, "read")
             obj = self.generate_expression_with_expected(expr.object, None)
             member_name = self.glsl_member_access_name(expr.object, str(expr.member))
+            cast_member = self.signed_compute_builtin_member_cast(obj, member_name)
+            if cast_member is not None:
+                return cast_member
             return f"{obj}.{member_name}"
         elif hasattr(expr, "__class__") and "TernaryOpNode" in str(type(expr)):
             condition = self.generate_expression(expr.condition)
@@ -10280,11 +10294,11 @@ class GLSLCodeGen:
     def generate_buffer_call(self, func_name, args):
         if func_name == "buffer_load" and len(args) >= 2:
             self.validate_structured_buffer_access_argument(func_name, args)
-            index = self.generate_expression(args[1])
+            index = self.generate_expression_with_expected(args[1], None)
             return f"{self.structured_buffer_access_expression(args[0], index)}"
         if func_name == "buffer_store" and len(args) >= 3:
             self.validate_structured_buffer_access_argument(func_name, args)
-            index = self.generate_expression(args[1])
+            index = self.generate_expression_with_expected(args[1], None)
             value = self.generate_expression(args[2])
             array_access = self.structured_buffer_array_parameter_access(args[0])
             if array_access is not None:
@@ -10417,7 +10431,7 @@ class GLSLCodeGen:
             and self.is_resource_array_access(expr)
         ):
             return "0"
-        return self.generate_expression(index_expr)
+        return self.generate_expression_with_expected(index_expr, None)
 
     def is_resource_array_access(self, expr):
         array_expr = getattr(expr, "array", getattr(expr, "array_expr", None))
