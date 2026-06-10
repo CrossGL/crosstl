@@ -1531,6 +1531,53 @@ def test_scan_report_records_runtime_reference_evidence(tmp_path):
     ]
 
 
+def test_scan_report_records_cuda_hip_async_memcpy_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "CMakeLists.txt").write_text(
+        textwrap.dedent("""
+            cmake_minimum_required(VERSION 3.27)
+            find_package(CUDAToolkit REQUIRED)
+            find_package(HIP REQUIRED)
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            void copy_async(void* dst, const void* src, size_t bytes) {
+              cudaMemcpyAsync(dst, src, bytes, cudaMemcpyHostToDevice, cuda_stream);
+              hipMemcpyAsync(dst, src, bytes, hipMemcpyHostToDevice, hip_stream);
+              cudaMemcpyAsyncHelper();
+              hipMemcpyAsyncBytes = bytes;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 4
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"cuda": 2, "hip": 2}
+    assert payload["migration"]["runtimeReferencesByKind"] == {
+        "build-system": 2,
+        "runtime-api": 2,
+    }
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "CMakeLists.txt": 2,
+        "host.cpp": 2,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("CMakeLists.txt", "cuda", "build-system", "cuda-build-system"),
+        ("CMakeLists.txt", "hip", "build-system", "hip-build-system"),
+        ("host.cpp", "cuda", "runtime-api", "cudaMemcpyAsync"),
+        ("host.cpp", "hip", "runtime-api", "hipMemcpyAsync"),
+    ]
+
+
 def test_scan_report_records_build_system_runtime_reference(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1582,6 +1629,127 @@ def test_scan_report_records_metal_framework_linker_runtime_reference(tmp_path):
     ] == [("Makefile", "metal", "build-system", "metal-build-system")]
 
 
+def test_scan_report_records_metal_host_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "Host.swift").write_text(
+        textwrap.dedent("""
+            import Metal
+
+            func render(device: MTLDevice, descriptor: MTLRenderPassDescriptor) throws {
+              let queue = device.makeCommandQueue()
+              let library = device.makeDefaultLibrary()
+              let function = library!.makeFunction(name: "main0")
+              let pipeline = try device.makeRenderPipelineState(
+                descriptor: pipelineDescriptor)
+              let commandBuffer = queue!.makeCommandBuffer()
+              let encoder = commandBuffer!.makeRenderCommandEncoder(
+                descriptor: descriptor)
+              encoder!.setRenderPipelineState(pipeline)
+              encoder!.setVertexBuffer(buffer, offset: 0, index: 0)
+              encoder!.drawPrimitives(
+                type: .triangle, vertexStart: 0, vertexCount: 3)
+              encoder!.endEncoding()
+              commandBuffer!.commit()
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "NearMiss.swift").write_text(
+        textwrap.dedent("""
+            func helper(builder: Builder) {
+              builder.makeRenderPipeline()
+              makeCommandQueue()
+              let commit = false
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["metal"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 13
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"metal": 13}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 13}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"Host.swift": 13}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("Host.swift", "metal", "runtime-api", "MTLDevice"),
+        ("Host.swift", "metal", "runtime-api", "MTLRenderPassDescriptor"),
+        ("Host.swift", "metal", "runtime-api", "makeCommandQueue"),
+        ("Host.swift", "metal", "runtime-api", "makeDefaultLibrary"),
+        ("Host.swift", "metal", "runtime-api", "makeFunction"),
+        ("Host.swift", "metal", "runtime-api", "makeRenderPipelineState"),
+        ("Host.swift", "metal", "runtime-api", "makeCommandBuffer"),
+        ("Host.swift", "metal", "runtime-api", "makeRenderCommandEncoder"),
+        ("Host.swift", "metal", "runtime-api", "setRenderPipelineState"),
+        ("Host.swift", "metal", "runtime-api", "setVertexBuffer"),
+        ("Host.swift", "metal", "runtime-api", "drawPrimitives"),
+        ("Host.swift", "metal", "runtime-api", "endEncoding"),
+        ("Host.swift", "metal", "runtime-api", "commit"),
+    ]
+
+
+def test_scan_report_records_metal_kit_host_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "Host.swift").write_text(
+        textwrap.dedent("""
+            import MetalKit
+
+            final class Renderer: NSObject, MTKViewDelegate {
+              func draw(in view: MTKView) {
+                _ = MTKTextureLoader(device: view.device!)
+                _ = MTLCreateSystemDefaultDevice()
+              }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "NearMiss.swift").write_text(
+        textwrap.dedent("""
+            let theme = "MetalKitten"
+            let appSpecific = "MTKWidget"
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "Renderer.m").write_text(
+        textwrap.dedent("""
+            #import <MetalKit/MetalKit.h>
+
+            @interface Renderer : NSObject <MTKViewDelegate>
+            - (void)drawInMTKView:(MTKView *)view;
+            @end
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["metal"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 6
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"metal": 6}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 6}
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "Host.swift": 4,
+        "Renderer.m": 2,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("Host.swift", "metal", "runtime-api", "MTKViewDelegate"),
+        ("Host.swift", "metal", "runtime-api", "MTKView"),
+        ("Host.swift", "metal", "runtime-api", "MTKTextureLoader"),
+        ("Host.swift", "metal", "runtime-api", "MTLCreateSystemDefaultDevice"),
+        ("Renderer.m", "metal", "runtime-api", "MTKViewDelegate"),
+        ("Renderer.m", "metal", "runtime-api", "MTKView"),
+    ]
+
+
 def test_scan_report_records_vulkan_loader_linker_runtime_reference(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1601,6 +1769,41 @@ def test_scan_report_records_vulkan_loader_linker_runtime_reference(tmp_path):
         (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
         for ref in payload["migration"]["actions"][0]["runtimeReferences"]
     ] == [("Makefile", "vulkan", "build-system", "vulkan-build-system")]
+
+
+def test_scan_report_records_vulkan_namespace_create_info_runtime_reference(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.rs").write_text(
+        textwrap.dedent("""
+            fn configure() {
+                let shader = vk::ShaderModuleCreateInfo::default();
+                let pipeline = ash::vk::PipelineLayoutCreateInfo::default();
+                let instance = vulkano::instance::InstanceCreateInfo::default();
+                let slang_attr = "[[vk::binding(0, 0)]]";
+                let not_host_runtime = "vk::Literal<vk::integral_constant<uint, 8>>";
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["vulkan"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 3
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"vulkan": 3}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 3}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.rs": 3}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.rs", "vulkan", "runtime-api", "vk::ShaderModuleCreateInfo"),
+        ("host.rs", "vulkan", "runtime-api", "ash::vk::PipelineLayoutCreateInfo"),
+        ("host.rs", "vulkan", "runtime-api", "vulkano::instance::InstanceCreateInfo"),
+    ]
 
 
 def test_scan_report_records_webgl_host_runtime_reference_evidence(tmp_path):

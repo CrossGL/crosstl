@@ -1320,7 +1320,7 @@ RUNTIME_REFERENCE_RULES = (
         "runtime-api",
         re.compile(
             r"\b(cuda(?:DeviceSynchronize|Free|GetDevice|LaunchKernel|Malloc|"
-            r"Memcpy|SetDevice))\b"
+            r"Memcpy(?:Async)?|SetDevice))\b"
         ),
         None,
     ),
@@ -1338,7 +1338,7 @@ RUNTIME_REFERENCE_RULES = (
         "runtime-api",
         re.compile(
             r"\b(hip(?:DeviceSynchronize|Free|GetDevice|LaunchKernel|Malloc|"
-            r"Memcpy|SetDevice))\b"
+            r"Memcpy(?:Async)?|SetDevice))\b"
         ),
         None,
     ),
@@ -1352,6 +1352,27 @@ RUNTIME_REFERENCE_RULES = (
         "metal",
         "runtime-api",
         re.compile(r"\b(MTL(?:CreateSystemDefaultDevice|[A-Za-z_][A-Za-z0-9_]*))\b"),
+        None,
+    ),
+    (
+        "metal",
+        "runtime-api",
+        re.compile(r"\b(MTK(?:View|ViewDelegate|TextureLoader))\b"),
+        None,
+    ),
+    (
+        "metal",
+        "runtime-api",
+        re.compile(
+            r"\b(?:device|mtlDevice|metalDevice|commandQueue|queue|library|"
+            r"commandBuffer|encoder|renderEncoder|computeEncoder)\s*[!?]?\."
+            r"(make(?:DefaultLibrary|Library|Function|CommandQueue|CommandBuffer|"
+            r"RenderPipelineState|ComputePipelineState|Buffer|Texture|"
+            r"RenderCommandEncoder|ComputeCommandEncoder)|"
+            r"set(?:RenderPipelineState|ComputePipelineState|VertexBuffer|"
+            r"FragmentTexture|FragmentSamplerState|Buffer)|dispatchThreadgroups|"
+            r"draw(?:Primitives|IndexedPrimitives)|endEncoding|commit)(?=\s*\()"
+        ),
         None,
     ),
     (
@@ -1382,6 +1403,16 @@ RUNTIME_REFERENCE_RULES = (
         "vulkan",
         "runtime-api",
         re.compile(r"\b((?:vk|Vk)[A-Z][A-Za-z0-9_]*)\b"),
+        None,
+    ),
+    (
+        "vulkan",
+        "runtime-api",
+        re.compile(
+            r"(?<!\w)(((?:ash::)?vk::(?:raii::)?|"
+            r"vulkano::(?:[a-z_]+::){1,4})"
+            r"[A-Z][A-Za-z0-9_]*CreateInfo)\b"
+        ),
         None,
     ),
     (
