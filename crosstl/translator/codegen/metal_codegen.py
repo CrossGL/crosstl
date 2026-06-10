@@ -3307,6 +3307,8 @@ class MetalCodeGen:
         texture_parameter_array_sizes = {}
         image_format_parameters = {}
         stage_builtin_parameter_alias_declarations = []
+        vertex_stage_input_parameters = []
+        vertex_stage_input_alias_declarations = []
         stage_output_parameters = []
         stage_output_struct_name = None
         previous_function_name = self.current_function_name
@@ -3565,6 +3567,18 @@ class MetalCodeGen:
                 reserved_parameter_names.add(builtin_lowering["name"])
                 stage_builtin_parameter_alias_declarations.append(
                     f"{param_type} {p.name} = {param_type}({builtin_lowering['name']});"
+                )
+                continue
+
+            if self.is_plain_metal_vertex_stage_input_parameter(
+                raw_param_type, param_type, p, shader_type
+            ):
+                vertex_stage_input_parameters.append(
+                    {
+                        "name": p.name,
+                        "raw_type": raw_param_type,
+                        "mapped_type": param_type,
+                    }
                 )
                 continue
 
@@ -3873,13 +3887,38 @@ class MetalCodeGen:
             return code
 
         if shader_type == "vertex":
+            function_name = entry_name or f"vertex_{func.name}"
+            if vertex_stage_input_parameters:
+                stage_input_struct_name = (
+                    self.unique_vertex_stage_input_struct_name(function_name)
+                )
+                stage_input_parameter_name = self.unique_metal_generated_name(
+                    "_crossglInput",
+                    reserved_parameter_names
+                    | self.metal_function_local_variable_names(func),
+                )
+                self.local_variable_types[stage_input_parameter_name] = (
+                    stage_input_struct_name
+                )
+                code += self.generate_metal_vertex_stage_input_parameter_struct(
+                    stage_input_struct_name, vertex_stage_input_parameters
+                )
+                params_str = self.append_parameter_declaration(
+                    params_str,
+                    f"{stage_input_struct_name} {stage_input_parameter_name} "
+                    "[[stage_in]]",
+                )
+                vertex_stage_input_alias_declarations = (
+                    self.generate_metal_vertex_stage_input_alias_declarations(
+                        stage_input_parameter_name, vertex_stage_input_parameters
+                    )
+                )
             params_str = self.append_global_resource_parameters(
                 params_str,
                 self.current_function_name,
                 func,
                 filter_writable_textures=True,
             )
-            function_name = entry_name or f"vertex_{func.name}"
             if stage_output_parameters:
                 stage_output_struct_name = self.unique_return_wrapper_struct_name(
                     function_name
@@ -4076,6 +4115,8 @@ class MetalCodeGen:
         for diagnostic in unsupported_metal_ray_function_table_parameter_diagnostics:
             code += f"    {diagnostic}\n"
         for declaration in stage_builtin_parameter_alias_declarations:
+            code += f"    {declaration}\n"
+        for declaration in vertex_stage_input_alias_declarations:
             code += f"    {declaration}\n"
         code += self.generate_metal_stage_output_parameter_locals(
             stage_output_parameters
@@ -4583,6 +4624,83 @@ class MetalCodeGen:
             "attribute": metal_semantic,
             "source_type": raw_param_type,
         }
+
+    def is_plain_metal_vertex_stage_input_parameter(
+        self, raw_param_type, mapped_param_type, parameter, shader_type
+    ):
+        if shader_type != "vertex":
+            return False
+        if self.is_graphics_stage_output_parameter(parameter, shader_type):
+            return False
+        if self.semantic_from_node(parameter) is not None:
+            return False
+        if self.is_resource_parameter_type(raw_param_type):
+            return False
+        if isinstance(raw_param_type, (PointerType, ReferenceType)):
+            return False
+        if self.metal_parameter_user_struct_type(parameter) is not None:
+            return False
+
+        mapped_type = self.type_name_string(mapped_param_type)
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        if array_suffix:
+            return False
+        if self.metal_matrix_dimensions(base_type) is not None:
+            return False
+        if base_type in self.structs_by_name:
+            return False
+        return self.is_metal_scalar_or_vector_type_name(base_type)
+
+    def is_metal_scalar_or_vector_type_name(self, type_name):
+        type_name = str(type_name).strip()
+        return (
+            re.fullmatch(
+                r"(?:packed_)?(?:half|float|double|bool|char|uchar|short|ushort|"
+                r"int|uint|long|ulong)(?:[234])?",
+                type_name,
+            )
+            is not None
+        )
+
+    def unique_vertex_stage_input_struct_name(self, function_name):
+        base_name = f"{function_name}_Input"
+        if base_name[:1].isdigit():
+            base_name = f"Generated_{base_name}"
+        used_names = set(self.structs_by_name)
+        used_names.update(self.generated_return_wrapper_struct_names)
+        used_names.update(getattr(self, "metal_generated_struct_names", set()))
+        candidate = base_name
+        suffix = 2
+        while candidate in used_names:
+            candidate = f"{base_name}_{suffix}"
+            suffix += 1
+        self.generated_return_wrapper_struct_names.add(candidate)
+        return candidate
+
+    def generate_metal_vertex_stage_input_parameter_struct(
+        self, struct_name, parameters
+    ):
+        code = f"struct {struct_name} {{\n"
+        for attribute_index, parameter in enumerate(parameters):
+            field_decl = format_c_style_array_declaration(
+                parameter["mapped_type"], parameter["name"]
+            )
+            code += f"    {field_decl} [[attribute({attribute_index})]];\n"
+        code += "};\n\n"
+        return code
+
+    def generate_metal_vertex_stage_input_alias_declarations(
+        self, input_parameter_name, parameters
+    ):
+        declarations = []
+        for parameter in parameters:
+            declaration = format_c_style_array_declaration(
+                parameter["mapped_type"], parameter["name"]
+            )
+            declarations.append(
+                f"{declaration} = {input_parameter_name}.{parameter['name']};"
+            )
+        return declarations
 
     def metal_stage_output_parameter_attribute(self, parameter, stage_name):
         semantic = self.semantic_from_node(parameter)
