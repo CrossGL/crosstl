@@ -217,6 +217,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
         "path": "clang/lib/Headers/opencl-c-base.h",
     },
+    "llvm_clang_opencl_c_base_builtin_typedef_macros": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "ef7d2c97b4e5158a230aca54100b15cd3b9fa815",
+        "path": "clang/lib/Headers/opencl-c-base.h",
+    },
     "llvm_clang_opencl_generic_address_space_keyword": {
         "url": "https://github.com/llvm/llvm-project",
         "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
@@ -1184,6 +1189,28 @@ def test_external_pocl_opencl_c_typedef_builtin_alias_name_parses():
     ast = OpenCLParser(OpenCLLexer(source).tokenize()).parse()
 
     assert [stmt.name for stmt in ast.statements] == ["size_t", "ptrdiff_t", "char2"]
+
+
+def test_external_llvm_clang_opencl_c_base_builtin_typedef_macros_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "llvm_clang_opencl_c_base_builtin_typedef_macros"
+    ]
+    assert source_info["commit"] == "ef7d2c97b4e5158a230aca54100b15cd3b9fa815"
+    assert source_info["path"] == "clang/lib/Headers/opencl-c-base.h"
+
+    source = """
+    typedef __SIZE_TYPE__ size_t;
+    typedef __PTRDIFF_TYPE__ ptrdiff_t;
+    typedef __INTPTR_TYPE__ intptr_t;
+    typedef __UINTPTR_TYPE__ uintptr_t;
+    """
+
+    _ast, crossgl = assert_crossgl_reparses(source)
+
+    assert "typedef u64 size_t;" in crossgl
+    assert "typedef i64 ptrdiff_t;" in crossgl
+    assert "typedef i64 intptr_t;" in crossgl
+    assert "typedef u64 uintptr_t;" in crossgl
 
 
 def test_external_pocl_opencl_c_sync_builtin_declarations_parse():

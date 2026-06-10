@@ -240,7 +240,10 @@ class SlangParser:
                 global_variables.extend(
                     getattr(struct, "variable_declarations", []) or []
                 )
-            elif declaration_token == "EXTENSION":
+            elif (
+                declaration_token == "EXTENSION"
+                or self.is_generic_prefixed_extension_declaration_start()
+            ):
                 extensions.append(self.parse_extension())
             elif declaration_token in {"CBUFFER", "TBUFFER"}:
                 cbuffers.append(self.parse_cbuffer(attributes=pending_attributes))
@@ -746,6 +749,15 @@ class SlangParser:
         return current_pos < len(
             self.tokens
         ) and self.is_struct_like_declaration_token_at(current_pos)
+
+    def is_generic_prefixed_extension_declaration_start(self):
+        current_pos = self.skip_declaration_prefix_tokens(
+            self.pos, include_generic=True
+        )
+        return (
+            current_pos < len(self.tokens)
+            and self.tokens[current_pos][0] == "EXTENSION"
+        )
 
     def is_class_declaration_start(self):
         current_pos = self.skip_declaration_prefix_tokens(
@@ -1492,7 +1504,10 @@ class SlangParser:
             or self.is_generic_prefixed_struct_declaration_start()
         ):
             exported_item = self.parse_struct()
-        elif declaration_token == "EXTENSION":
+        elif (
+            declaration_token == "EXTENSION"
+            or self.is_generic_prefixed_extension_declaration_start()
+        ):
             exported_item = self.parse_extension()
         elif self.is_func_keyword_declaration_start():
             exported_item = self.parse_func_keyword_function(attributes=attributes)
@@ -2183,14 +2198,17 @@ class SlangParser:
         )
 
     def parse_extension(self):
-        qualifiers = self.parse_qualifiers()
+        qualifiers, prefix_generic_parameters, prefix_generic_constraints = (
+            self.parse_typedef_prefixes()
+        )
         self.eat("EXTENSION")
-        generic_parameters = None
+        generic_parameters = prefix_generic_parameters
         if self.current_token[0] == "LESS_THAN":
             generic_parameters = self.parse_generic_type_suffix()
         extended_type = self.parse_type_name()
         conformances = self.parse_conformance_clause()
-        generic_constraints = self.parse_generic_constraint_clauses()
+        generic_constraints = prefix_generic_constraints
+        generic_constraints.extend(self.parse_generic_constraint_clauses())
         self.eat("LBRACE")
         methods = []
         typedefs = []

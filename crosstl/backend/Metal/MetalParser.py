@@ -134,6 +134,7 @@ SIGNED_PREFIX_TYPE_TOKENS = {"CHAR", "SHORT", "INT", "LONG"}
 KEYWORD_IDENTIFIER_TOKENS = {"BUFFER", "SAMPLER", "METAL", "RESTRICT"}
 TYPE_IDENTIFIER_TOKENS = {"PACKED_VECTOR"}
 GNU_EXTENSION_PREFIXES = {"__extension__"}
+STRUCT_METHOD_PREFIXES = {"virtual"}
 OPERATOR_OVERLOAD_TOKENS = {
     "PLUS",
     "MINUS",
@@ -2207,6 +2208,12 @@ class MetalParser:
             if self.current_token == ("IDENTIFIER", "friend"):
                 self.skip_struct_method()
                 continue
+            if (
+                self.current_token[0] == "IDENTIFIER"
+                and self.current_token[1] in STRUCT_METHOD_PREFIXES
+            ):
+                self.skip_struct_method()
+                continue
             if self.current_token[0] == "STATIC_ASSERT":
                 members.append(self.parse_static_assert())
                 continue
@@ -2224,6 +2231,9 @@ class MetalParser:
                 self.skip_nested_aggregate_declaration()
                 continue
             if self.is_struct_conversion_operator_start():
+                self.skip_struct_method()
+                continue
+            if self.is_struct_destructor_start():
                 self.skip_struct_method()
                 continue
             vtype, qualifiers = self.parse_type_specifier()
@@ -2391,6 +2401,14 @@ class MetalParser:
         while idx < len(self.tokens) and self.tokens[idx] == ("IDENTIFIER", "explicit"):
             idx += 1
         return idx < len(self.tokens) and self.tokens[idx] == ("IDENTIFIER", "operator")
+
+    def is_struct_destructor_start(self):
+        return (
+            self.current_token[0] == "BITWISE_NOT"
+            and self.pos + 2 < len(self.tokens)
+            and self.is_name_token_at(self.pos + 1)
+            and self.tokens[self.pos + 2][0] == "LPAREN"
+        )
 
     def is_access_specifier_label(self):
         return (

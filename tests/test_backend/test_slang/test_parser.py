@@ -1255,6 +1255,46 @@ def test_dunder_extension_multi_interface_conformance_parse():
     assert isinstance(extension.methods[0].body[0], ReturnNode)
 
 
+def test_generic_prefixed_extension_from_autodiff_force_unroll_sample():
+    # Reduced from shader-slang/slang@0658ed79219d6e4ee526182104ce71d476f787be
+    # tests/autodiff/force-unroll-late-specialization.slang.
+    code = """
+    __generic<T : __BuiltinFloatingPointType, A : IDiffTensorWrapper>
+    extension DiffTensorView<T, A>
+    {
+        [Differentiable]
+        __generic<let M : int, let R : int, let N : int>
+        vector<T, M> loadVecOnce(vector<uint, N> x)
+        {
+            vector<T, M> result;
+            [ForceUnroll]
+            for (int j = 0; j < M; j++)
+            {
+                result[j] = this.loadOnce(x);
+                x[R] += 1;
+            }
+            return result;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    extension = ast.extensions[0]
+    method = extension.methods[0]
+
+    assert extension.extended_type == "DiffTensorView<T, A>"
+    assert extension.generic_parameters == "<T, A>"
+    assert [
+        (constraint.parameter, constraint.constraint_type)
+        for constraint in extension.generic_constraints
+    ] == [("T", "__BuiltinFloatingPointType"), ("A", "IDiffTensorWrapper")]
+    assert method.name == "loadVecOnce"
+    assert method.is_generic is True
+    assert isinstance(method.body[1], ForNode)
+    assert isinstance(method.body[2], ReturnNode)
+
+
 def test_interface_associated_type_requirement_from_model_viewer_sample():
     code = """
     interface IMaterial

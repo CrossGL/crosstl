@@ -1420,6 +1420,41 @@ def test_reverse_codegen_rejects_extension_conformance_constructs():
     assert "extension MyType : IBar" in message
 
 
+def test_reverse_codegen_rejects_generic_prefixed_extension_after_parse():
+    # Reduced from shader-slang/slang@0658ed79219d6e4ee526182104ce71d476f787be
+    # tests/autodiff/force-unroll-late-specialization.slang.
+    code = """
+    __generic<T : __BuiltinFloatingPointType, A : IDiffTensorWrapper>
+    extension DiffTensorView<T, A>
+    {
+        [Differentiable]
+        __generic<let M : int, let R : int, let N : int>
+        vector<T, M> loadVecOnce(vector<uint, N> x)
+        {
+            vector<T, M> result;
+            [ForceUnroll]
+            for (int j = 0; j < M; j++)
+            {
+                result[j] = this.loadOnce(x);
+                x[R] += 1;
+            }
+            return result;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(
+        NotImplementedError,
+        match="interface/conformance constructs",
+    ) as exc:
+        generate_code(ast)
+
+    assert "extension DiffTensorView<T, A>" in str(exc.value)
+
+
 def test_reverse_codegen_erases_builtin_generic_where_constraints_from_wave_matrix():
     # Reduced from shader-slang/slang source/standard-modules/neural/WaveMatrix.slang
     # at 5230a81f2fe68afe5cb8d04a1b09d56476f6b960.
