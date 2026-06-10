@@ -9592,6 +9592,71 @@ def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch)
     ]
 
 
+def test_translate_project_opengl_smoke_uses_source_stage_metadata(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "grid.frag").write_text("#version 450\nvoid main() {}\n", encoding="utf-8")
+    expected_command = ["glslangValidator", "--stdin", "-S", "frag"]
+    commands = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/usr/bin/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
+
+    def write_generic_glsl(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del backend, format_output, include_paths, defines
+        assert Path(file_path).name == "grid.frag"
+        assert source_backend == "opengl"
+        Path(save_shader).write_text("#version 450\nvoid main() {}\n", encoding="utf-8")
+        return "#version 450\nvoid main() {}\n"
+
+    monkeypatch.setattr(project_pipeline, "translate", write_generic_glsl)
+
+    def run_toolchain(command, **kwargs):
+        commands.append(command)
+        assert command == expected_command
+        assert kwargs["cwd"] == str(repo)
+        assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
+        assert kwargs["input"] == "#version 450\nvoid main() {}\n"
+        return SimpleNamespace(returncode=0, stdout="validation ok", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    report = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path, run_toolchains=True)
+
+    assert commands == [expected_command, expected_command]
+    assert payload["artifacts"][0]["source"] == "grid.frag"
+    assert payload["artifacts"][0]["sourceBackend"] == "opengl"
+    assert payload["artifacts"][0]["path"] == "out/opengl/grid.glsl"
+    assert payload["validation"]["toolchainRuns"][0]["command"] == expected_command
+    assert validation["success"] is True
+    assert validation["validation"]["toolchainRuns"][0]["command"] == expected_command
+
+
 def test_opengl_toolchain_smoke_command_selects_glslang_stage(tmp_path):
     vertex_shader = tmp_path / "shader.glsl"
     vertex_shader.write_text(
@@ -9607,6 +9672,24 @@ def test_opengl_toolchain_smoke_command_selects_glslang_stage(tmp_path):
     assert project_pipeline._toolchain_smoke_command(
         "opengl", ["glslangValidator"], fragment_shader
     ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
+
+
+def test_opengl_toolchain_smoke_command_prefers_opengl_source_stage(tmp_path):
+    generic_shader = tmp_path / "grid.glsl"
+    generic_shader.write_text("#version 450\nvoid main() {}\n", encoding="utf-8")
+
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl",
+        ["glslangValidator"],
+        generic_shader,
+        artifact={"source": "shaders/grid.frag", "sourceBackend": "opengl"},
+    ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl",
+        ["glslangValidator"],
+        generic_shader,
+        artifact={"source": "shaders/grid.frag", "sourceBackend": "cgl"},
+    ) == (["glslangValidator", "--stdin", "-S", "comp"], "artifact")
 
 
 def test_vulkan_toolchain_smoke_command_selects_spirv_tool(tmp_path):
