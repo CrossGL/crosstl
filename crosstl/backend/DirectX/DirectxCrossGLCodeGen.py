@@ -2033,6 +2033,102 @@ class HLSLToCrossGLConverter:
                     return f"{scalar}{len(swizzle)}"
         return None
 
+    def scalar_splat_swizzle_components(self, member):
+        if not isinstance(member, str) or not 1 <= len(member) <= 4:
+            return None
+        if all(component == "x" for component in member):
+            return member
+        if all(component == "r" for component in member):
+            return member
+        return None
+
+    def scalar_splat_constructor_from_expected_type(
+        self, expected_type, component_count
+    ):
+        if expected_type is None:
+            return None
+        mapped_type = self.map_type(expected_type)
+        mapped_base = str(mapped_type).strip()
+        crossgl_vectors = (
+            "vec",
+            "dvec",
+            "ivec",
+            "uvec",
+            "bvec",
+            "f16vec",
+            "i16vec",
+            "u16vec",
+        )
+        if any(
+            mapped_base == f"{prefix}{component_count}" for prefix in crossgl_vectors
+        ):
+            return mapped_base
+
+        expected_base = self.canonical_composite_type(str(expected_type).strip())
+        hlsl_vector_type = self.vector_swizzle_raw_type(
+            expected_base, "x" * component_count
+        )
+        if hlsl_vector_type is None:
+            return None
+        return self.map_type(hlsl_vector_type)
+
+    def scalar_splat_constructor_from_scalar_type(self, scalar_type, component_count):
+        if scalar_type is None:
+            return None
+        scalar_name = self.map_type(scalar_type)
+        scalar_vectors = {
+            "float": "vec",
+            "double": "dvec",
+            "int": "ivec",
+            "uint": "uvec",
+            "bool": "bvec",
+            "float16": "f16vec",
+            "int16": "i16vec",
+            "uint16": "u16vec",
+        }
+        vector_prefix = scalar_vectors.get(str(scalar_name).strip())
+        if vector_prefix is None:
+            return None
+        return f"{vector_prefix}{component_count}"
+
+    def literal_raw_type(self, expr):
+        if isinstance(expr, bool):
+            return "bool"
+        if isinstance(expr, float):
+            return "float"
+        if isinstance(expr, int):
+            return "int"
+        return None
+
+    def scalar_splat_swizzle_expression(
+        self, expr, rendered_object, expected_type=None
+    ):
+        components = self.scalar_splat_swizzle_components(getattr(expr, "member", None))
+        if components is None:
+            return None
+
+        object_expr = getattr(expr, "object", None)
+        object_type = self.expression_value_raw_type(
+            object_expr
+        ) or self.literal_raw_type(object_expr)
+        if object_type is None:
+            return None
+        if self.vector_swizzle_raw_type(object_type, components) is not None:
+            return None
+
+        component_count = len(components)
+        if component_count == 1:
+            return None
+
+        constructor_type = self.scalar_splat_constructor_from_expected_type(
+            expected_type, component_count
+        ) or self.scalar_splat_constructor_from_scalar_type(
+            object_type, component_count
+        )
+        if constructor_type is None:
+            return None
+        return f"{constructor_type}({rendered_object})"
+
     def member_access_raw_type(self, object_type, member):
         if not object_type:
             return None
@@ -2157,6 +2253,10 @@ class HLSLToCrossGLConverter:
 
     def function_call_value_raw_type(self, expr):
         if not isinstance(expr.name, MemberAccessNode):
+            if isinstance(expr.name, str):
+                type_name = self.canonical_composite_type(expr.name)
+                if self.map_type(type_name) != self.sanitize_type_name(type_name):
+                    return type_name
             return None
 
         member = self.templated_method_base(expr.name.member)
@@ -2185,6 +2285,13 @@ class HLSLToCrossGLConverter:
             return value_type if value_type is not None else array_type
         if isinstance(expr, FunctionCallNode):
             return self.function_call_value_raw_type(expr)
+        if isinstance(expr, VectorConstructorNode):
+            return getattr(expr, "type_name", None)
+        if isinstance(expr, CastNode):
+            return getattr(expr, "target_type", None)
+        literal_type = self.literal_raw_type(expr)
+        if literal_type is not None:
+            return literal_type
         return self.expression_raw_type(expr)
 
     def bitcast_intrinsic_expression(self, func_name, original_args, rendered_args):
@@ -3337,7 +3444,9 @@ class HLSLToCrossGLConverter:
             array_suffix = ""
         initializer = ""
         if getattr(node, "value", None) is not None:
-            initializer = f" = {self.generate_expression(node.value)}"
+            initializer = (
+                f" = {self.generate_expression(node.value, expected_type=node.vtype)}"
+            )
         if storage_prefix == "const " and precise_prefix:
             declaration_prefix = f"{precise_prefix}{storage_prefix}"
         else:
@@ -3375,7 +3484,10 @@ class HLSLToCrossGLConverter:
                     qualifier_prefix = self.format_precise_qualifier_prefix(member)
                     initializer = ""
                     if getattr(member, "value", None) is not None:
-                        initializer = f" = {self.generate_expression(member.value)}"
+                        initializer_value = self.generate_expression(
+                            member.value, expected_type=member.vtype
+                        )
+                        initializer = f" = {initializer_value}"
                     code += (
                         f"        {qualifier_prefix}{self.map_variable_type(member)} "
                         f"{self.render_identifier(member.name)}{array_suffix}"
@@ -3450,7 +3562,9 @@ class HLSLToCrossGLConverter:
                     stmt
                 ) + self.format_precise_qualifier_prefix(stmt)
                 if stmt.value is not None:
-                    value = self.generate_expression(stmt.value, is_main)
+                    value = self.generate_expression(
+                        stmt.value, is_main, expected_type=stmt.vtype
+                    )
                     self.record_variable_type(stmt)
                     code += (
                         f"{qualifier_prefix}{self.map_variable_type(stmt)} "
@@ -3999,7 +4113,12 @@ class HLSLToCrossGLConverter:
                 else:
                     text = declarator
                 if initializer.value is not None:
-                    text += f" = {self.generate_expression(initializer.value, is_main)}"
+                    initializer_value = self.generate_expression(
+                        initializer.value,
+                        is_main,
+                        expected_type=initializer.vtype,
+                    )
+                    text += f" = {initializer_value}"
                 self.record_variable_type(initializer)
                 return text
             return self.generate_expression(initializer, is_main)
@@ -4098,7 +4217,7 @@ class HLSLToCrossGLConverter:
         op = node.operator
         return f"{lhs} {op} {rhs}"
 
-    def generate_expression(self, expr, is_main=False):
+    def generate_expression(self, expr, is_main=False, expected_type=None):
         """Render a DirectX backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
             return self.render_identifier(expr)
@@ -4259,6 +4378,11 @@ class HLSLToCrossGLConverter:
             return f"{func_name}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object, is_main)
+            scalar_splat = self.scalar_splat_swizzle_expression(
+                expr, obj, expected_type
+            )
+            if scalar_splat is not None:
+                return scalar_splat
             if isinstance(expr.object, (int, float)):
                 obj = f"({obj})"
             return f"{obj}.{expr.member}"
