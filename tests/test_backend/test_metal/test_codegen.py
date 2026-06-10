@@ -319,6 +319,39 @@ def test_codegen_type_mapping_vectors_and_matrices():
     assert "mat4" in result
 
 
+def test_codegen_xhalf_vectors_lower_before_opengl_generation():
+    code = """
+    struct Camera {
+        float4x4 invViewMatrix;
+    };
+
+    struct Input {
+        float3 position;
+    };
+
+    struct Output {
+        xhalf3 viewDir;
+    };
+
+    vertex Output main_vertex(Input in [[stage_in]],
+                              constant Camera& camera [[buffer(0)]]) {
+        Output out;
+        out.viewDir = (xhalf3)normalize(camera.invViewMatrix[3].xyz - in.position);
+        return out;
+    }
+    """
+
+    crossgl = convert(code)
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "f16vec3 viewDir;" in crossgl
+    assert "(f16vec3)normalize" in crossgl
+    assert "xhalf" not in crossgl
+    assert "out vec3 viewDir;" in glsl
+    assert "xhalf" not in glsl
+    assert "f16vec3" not in glsl
+
+
 def test_codegen_packed_integer_vertex_storage_types_do_not_leak_metal_names():
     code = """
     struct VertexInput {
