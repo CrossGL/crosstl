@@ -15,6 +15,7 @@ from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.slang_codegen import SlangCodeGen
+from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
 
 FRAGMENT_SMOKE_SHADER = """
 shader ExternalValidatorSmoke {
@@ -65,6 +66,64 @@ shader ExternalValidatorWaveQuad {
             bool quadAll = QuadAll(allLane);
             outputValues[tid.x] = quadX + quadLane
                 + (quadAny ? 1u : 0u) + (quadAll ? 1u : 0u);
+        }
+    }
+}
+"""
+
+
+CROSSGL_WGSL_GRAPHICS_SHADER = """
+shader ExternalValidatorWGSLGraphics {
+    struct VSInput {
+        vec3 position @ POSITION;
+        vec2 uv @ TEXCOORD0;
+    };
+    struct VSOutput {
+        vec4 position @ gl_Position;
+        vec2 uv @ TEXCOORD0;
+    };
+    vertex {
+        VSOutput main(VSInput input) {
+            VSOutput output;
+            output.position = vec4(input.position, 1.0);
+            output.uv = input.uv;
+            return output;
+        }
+    }
+    fragment {
+        vec4 main(VSOutput input) @ gl_FragColor {
+            return vec4(input.uv, 0.0, 1.0);
+        }
+    }
+}
+"""
+
+
+CROSSGL_WGSL_RESOURCE_SHADER = """
+shader ExternalValidatorWGSLResource {
+    samplerCube envMap;
+    vec4 sampleEnv(samplerCube tex, vec3 direction) {
+        uint2 size = textureSize(tex, 0);
+        return textureLod(tex, direction + vec3(float(size.x) * 0.0), 1.0);
+    }
+    fragment {
+        vec4 main(vec3 normal @ NORMAL) @ gl_FragColor {
+            return sampleEnv(envMap, normal);
+        }
+    }
+}
+"""
+
+
+CROSSGL_WGSL_COMPUTE_SHADER = """
+shader ExternalValidatorWGSLCompute {
+    RWStructuredBuffer<float> outputValues;
+    compute {
+        layout(local_size_x = 4, local_size_y = 1, local_size_z = 1) in;
+        void main(uint3 gid @ gl_GlobalInvocationID) {
+            barrier();
+            outputValues[gid.x] = float(gid.x);
+            return;
         }
     }
 }
@@ -1820,6 +1879,24 @@ def _run_validator_or_skip_unsupported_extension(
             f"{extension} qualifier path is not supported by this validator build"
         )
     assert result.returncode == 0, diagnostics
+
+
+@pytest.mark.parametrize(
+    "shader_source",
+    (
+        CROSSGL_WGSL_GRAPHICS_SHADER,
+        CROSSGL_WGSL_RESOURCE_SHADER,
+        CROSSGL_WGSL_COMPUTE_SHADER,
+    ),
+)
+def test_generated_wgsl_validates_with_naga(tmp_path, shader_source):
+    naga = _require_tool("naga")
+    ast = crosstl.translator.parse(shader_source)
+    generated = WGSLCodeGen().generate(ast)
+    source_path = tmp_path / "shader.wgsl"
+    source_path.write_text(generated, encoding="utf-8")
+
+    _run_validator([naga, "--input-kind", "wgsl", str(source_path)])
 
 
 def test_real_world_urp_hlsl_include_imports_to_parseable_crossgl():

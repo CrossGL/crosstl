@@ -91,6 +91,10 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install glslang
 
+      - name: Install WGSL validator (macOS)
+        if: runner.os == 'macOS'
+        run: brew install naga-cli
+
       - name: Install GLSL validator (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
