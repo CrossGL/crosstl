@@ -17911,6 +17911,54 @@ GLSLANG_STAGE_BY_SUFFIX = {
 GLSLANG_STAGE_FILENAME_SUFFIXES = tuple(
     (f"_{suffix[1:]}", stage) for suffix, stage in GLSLANG_STAGE_BY_SUFFIX.items()
 )
+GLSLANG_STAGE_BY_GENERATED_COMMENT = {
+    "vertex": "vert",
+    "fragment": "frag",
+    "compute": "comp",
+    "geometry": "geom",
+    "tessellation_control": "tesc",
+    "tessellation_evaluation": "tese",
+    "mesh": "mesh",
+    "task": "task",
+    "ray_generation": "rgen",
+    "ray_intersection": "rint",
+    "ray_any_hit": "rahit",
+    "ray_closest_hit": "rchit",
+    "ray_miss": "rmiss",
+    "ray_callable": "rcall",
+}
+GLSLANG_STAGE_BY_GUARD_MACRO = {
+    "GL_VERTEX_SHADER": "vert",
+    "GL_FRAGMENT_SHADER": "frag",
+    "GL_COMPUTE_SHADER": "comp",
+    "GL_GEOMETRY_SHADER": "geom",
+    "GL_TESS_CONTROL_SHADER": "tesc",
+    "GL_TESS_EVALUATION_SHADER": "tese",
+    "GL_MESH_SHADER_EXT": "mesh",
+    "GL_TASK_SHADER_EXT": "task",
+    "GL_RAYGEN_SHADER_EXT": "rgen",
+    "GL_INTERSECTION_SHADER_EXT": "rint",
+    "GL_ANY_HIT_SHADER_EXT": "rahit",
+    "GL_CLOSEST_HIT_SHADER_EXT": "rchit",
+    "GL_MISS_SHADER_EXT": "rmiss",
+    "GL_CALLABLE_SHADER_EXT": "rcall",
+}
+GLSLANG_GENERATED_STAGE_COMMENT_RE = re.compile(
+    r"^\s*//\s*([A-Za-z_ -]+)\s+Shader\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+GLSLANG_STAGE_GUARD_RE = re.compile(
+    r"^\s*#\s*(?:if|ifdef)\s+"
+    r"(GL_[A-Z0-9_]+(?:_SHADER|_SHADER_EXT))\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+GLSLANG_GLOBAL_STAGE_IO_RE = re.compile(
+    r"^\s*"
+    r"(?:layout\s*\([^;\n]*\)\s*)?"
+    r"(?:(?:flat|smooth|noperspective|centroid|sample|patch|invariant|precise)\s+)*"
+    r"(in|out)\s+\w",
+    re.MULTILINE,
+)
 
 
 def _glslang_stage(
@@ -17929,13 +17977,41 @@ def _glslang_stage(
     except OSError:
         return "comp"
 
+    generated_stage = _glslang_stage_from_generated_source(source)
+    if generated_stage:
+        return generated_stage
+
     if "local_size_" in source or "gl_globalinvocationid" in source:
         return "comp"
     if "gl_position" in source:
         return "vert"
     if "gl_fragcoord" in source or "gl_fragcolor" in source:
         return "frag"
+    stage_io_directions = _glslang_global_stage_io_directions(source)
+    if "in" in stage_io_directions:
+        return "vert"
+    if "out" in stage_io_directions:
+        return "frag"
     return "comp"
+
+
+def _glslang_stage_from_generated_source(source: str) -> str | None:
+    for match in GLSLANG_GENERATED_STAGE_COMMENT_RE.finditer(source):
+        stage_name = match.group(1).strip().lower().replace("-", "_").replace(" ", "_")
+        stage = GLSLANG_STAGE_BY_GENERATED_COMMENT.get(stage_name)
+        if stage:
+            return stage
+
+    for match in GLSLANG_STAGE_GUARD_RE.finditer(source):
+        stage = GLSLANG_STAGE_BY_GUARD_MACRO.get(match.group(1).upper())
+        if stage:
+            return stage
+
+    return None
+
+
+def _glslang_global_stage_io_directions(source: str) -> set[str]:
+    return {match.group(1) for match in GLSLANG_GLOBAL_STAGE_IO_RE.finditer(source)}
 
 
 def _glslang_source_stage(artifact: Mapping[str, Any] | None) -> str | None:

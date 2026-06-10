@@ -10029,7 +10029,7 @@ def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch)
 
     def run_toolchain(command, **kwargs):
         commands.append((command, kwargs))
-        assert command == ["glslangValidator", "--stdin", "-S", "comp"]
+        assert command == ["glslangValidator", "--stdin", "-S", "vert"]
         assert kwargs["cwd"] == str(repo)
         assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
         assert kwargs["input"]
@@ -10078,7 +10078,7 @@ def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch)
             "sourceBackend": "cgl",
             "target": "opengl",
             "path": "out/opengl/simple.glsl",
-            "command": ["glslangValidator", "--stdin", "-S", "comp"],
+            "command": ["glslangValidator", "--stdin", "-S", "vert"],
             "checkKind": "artifact",
             "returncode": 0,
             "status": "ok",
@@ -10165,6 +10165,90 @@ def test_opengl_toolchain_smoke_command_selects_glslang_stage(tmp_path):
     assert project_pipeline._toolchain_smoke_command(
         "opengl", ["glslangValidator"], vertex_shader
     ) == (["glslangValidator", "--stdin", "-S", "vert"], "artifact")
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl", ["glslangValidator"], fragment_shader
+    ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
+
+
+def test_opengl_toolchain_smoke_command_uses_generated_stage_comment(tmp_path):
+    vertex_shader = tmp_path / "generated.glsl"
+    vertex_shader.write_text(
+        "\n".join(
+            [
+                "#version 450 core",
+                "layout(location = 0) in vec3 position;",
+                "out vec3 out_position;",
+                "// Vertex Shader",
+                "void main() {",
+                "  out_position = position;",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl",
+        ["glslangValidator"],
+        vertex_shader,
+        artifact={"source": "AAPLMeshRenderer.metal", "sourceBackend": "metal"},
+    ) == (["glslangValidator", "--stdin", "-S", "vert"], "artifact")
+
+    guarded_shader = tmp_path / "guarded.glsl"
+    guarded_shader.write_text(
+        "\n".join(
+            [
+                "#version 450 core",
+                "#ifdef GL_FRAGMENT_SHADER",
+                "out vec4 fragColor;",
+                "void main() {",
+                "  fragColor = vec4(1.0);",
+                "}",
+                "#endif",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl", ["glslangValidator"], guarded_shader
+    ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
+
+
+def test_opengl_toolchain_smoke_command_uses_global_stage_io_direction(tmp_path):
+    vertex_shader = tmp_path / "stage_io.glsl"
+    vertex_shader.write_text(
+        "\n".join(
+            [
+                "#version 450 core",
+                "layout(location = 0) in vec3 position;",
+                "out vec3 out_position;",
+                "void main() {",
+                "  out_position = position;",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl", ["glslangValidator"], vertex_shader
+    ) == (["glslangValidator", "--stdin", "-S", "vert"], "artifact")
+
+    fragment_shader = tmp_path / "fragment_output_only.glsl"
+    fragment_shader.write_text(
+        "\n".join(
+            [
+                "#version 450 core",
+                "out vec4 fragColor;",
+                "void main() {",
+                "  fragColor = vec4(1.0);",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
     assert project_pipeline._toolchain_smoke_command(
         "opengl", ["glslangValidator"], fragment_shader
     ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
