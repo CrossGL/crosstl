@@ -1173,6 +1173,76 @@ def test_project_runtime_host_integration_handoff_is_first_class_support_feature
         ) in backend_support["evidence"]
 
 
+def test_project_runtime_host_integration_handoff_inspection_is_first_class_support_feature():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.runtime_host_integration_handoff_inspection"]
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Runtime host integration handoff inspection"
+    assert set(feature["support"]) == {backend["id"] for backend in matrix["backends"]}
+    for backend_support in feature["support"].values():
+        assert backend_support["status"] == "supported"
+        assert (
+            "crosstl-runtime-host-integration-handoff-inspection"
+            in backend_support["notes"]
+        )
+        assert "inspect-host-integration-handoff" in backend_support["notes"]
+        assert "host-integration.json" in backend_support["notes"]
+        assert "HOST_INTEGRATION.md" in backend_support["notes"]
+        assert "targets/*.integration.json" in backend_support["notes"]
+        assert "parses target handoff files" in backend_support["notes"]
+        assert "handoff status is blocked" in backend_support["notes"]
+        assert "target, status, loader-unit count, and action-count consistency" in (
+            backend_support["notes"]
+        )
+        assert "rejects absolute or outside-root generated paths" in (
+            backend_support["notes"]
+        )
+        assert "structured diagnostics" in backend_support["notes"]
+        assert "read-only and bundle-local" in backend_support["notes"]
+        assert "does not rewrite host application code" in backend_support["notes"]
+        assert "execute device code" in backend_support["notes"]
+        assert "install target SDKs" in backend_support["notes"]
+        assert "re-run host integration" in backend_support["notes"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_runtime_host_integration_handoff_reports_ready_bundle"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_runtime_host_integration_handoff_detects_missing_target_file"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_runtime_host_integration_handoff_rejects_unsafe_generated_path"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_runtime_host_integration_handoff_reports_blocked_bundle"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_runtime_host_integration_handoff_rejects_wrong_manifest_kind"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_host_integration_handoff_text_outputs_readiness"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_host_integration_handoff_json_writes_output"
+        ) in backend_support["evidence"]
+
+
 def test_project_include_resolution_documents_status_reporting():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(

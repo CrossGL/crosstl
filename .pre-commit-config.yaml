@@ -3,6 +3,14 @@ default_install_hook_types: [pre-commit]
 default_stages: [pre-commit]
 fail_fast: false
 
+ci:
+  skip:
+    - crosstl-support-automation-tests
+    - crosstl-ci-workflow-tests
+    - crosstl-pr-issue-link-tests
+    - crosstl-pytest-failure-summary-tests
+    - crosstl-examples-script-tests
+
 exclude: |
   (?x)^(
     \.agent-coordination/|
