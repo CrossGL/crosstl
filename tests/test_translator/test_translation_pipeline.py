@@ -835,6 +835,28 @@ def test_hlsl_compute_scalar_splat_swizzle_lowers_for_vulkan_and_metal(tmp_path)
     assert "unsupported Metal program-scope groupshared store" in metal
 
 
+def test_hlsl_legacy_sampler_register_lowers_to_opengl_binding(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "sprite.fx",
+        """
+        sampler2D Texture : register(s0);
+
+        float4 main(float2 uv : TEXCOORD0) : SV_Target
+        {
+            return tex2D(Texture, uv);
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="opengl", format_output=False
+    )
+
+    assert "layout(binding = 0) uniform sampler2D Texture;" in generated
+    assert "fragColor = texture(Texture, uv);" in generated
+
+
 def test_metal_max_total_threads_metadata_translates_to_vulkan(tmp_path):
     source_path = _write_source(
         tmp_path,
