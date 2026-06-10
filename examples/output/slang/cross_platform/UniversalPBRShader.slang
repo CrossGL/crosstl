@@ -7,6 +7,15 @@ int2 cgl_textureSize_sampler2D(Sampler2D<float4> tex, uint mipLevel)
     return int2(width, height);
 }
 
+int2 cgl_imageSize_imageCube(RWTexture2DArray<float4> tex)
+{
+    int width;
+    int height;
+    int elements;
+    tex.GetDimensions(width, height, elements);
+    return int2(width, height);
+}
+
 static const float PI = 3.14159265359;
 static const float EPSILON = 0.0001;
 static const int MAX_LIGHTS = 32;
@@ -79,9 +88,9 @@ struct RenderSettings
     float lod_bias;
 };
 
-[[vk::binding(0, 0)]] SamplerCube<float4> irradiance_map : register(t0);
-[[vk::binding(1, 0)]] SamplerCube<float4> prefilter_map : register(t1);
-[[vk::binding(2, 0)]] Sampler2D<float4> brdf_lut : register(t2);
+[[vk::binding(0, 0)]] SamplerCube<float4> EnvironmentData_irradiance_map : register(t0);
+[[vk::binding(1, 0)]] SamplerCube<float4> EnvironmentData_prefilter_map : register(t1);
+[[vk::binding(2, 0)]] Sampler2D<float4> EnvironmentData_brdf_lut : register(t2);
 float3 getNormalFromMap(Sampler2D<float4> normal_map, float2 uv, float3x3 tbn, float scale)
 {
     float3 tangent_normal = normal_map.Sample(uv).xyz * 2.0 - 1.0;
@@ -164,11 +173,11 @@ float3 calculateIBL(float3 N, float3 V, float3 albedo, float metallic, float rou
     float3 kS = F;
     float3 kD = 1.0 - kS;
     kD *= 1.0 - metallic;
-    float3 irradiance = irradiance_map.Sample(N).rgb;
+    float3 irradiance = EnvironmentData_irradiance_map.Sample(N).rgb;
     float3 diffuse = irradiance * albedo;
     float3 R = reflect(-V, N);
-    float3 prefiltered_color = prefilter_map.SampleLevel(R, roughness * env.max_reflection_lod).rgb;
-    float2 brdf = brdf_lut.Sample(float2(max(dot(N, V), 0.0), roughness)).rg;
+    float3 prefiltered_color = EnvironmentData_prefilter_map.SampleLevel(R, roughness * env.max_reflection_lod).rgb;
+    float2 brdf = EnvironmentData_brdf_lut.Sample(float2(max(dot(N, V), 0.0), roughness)).rg;
     float3 specular = prefiltered_color * (F * brdf.x + brdf.y);
     return (kD * diffuse + specular) * env.exposure;
 }
@@ -393,7 +402,7 @@ float3 getSamplingVector(float2 uv, int face)
 [numthreads(8, 8, 1)][shader("compute")] void precompute_environment(
     uint3 gl_GlobalInvocationID : SV_DispatchThreadID) {
     int2 coord = int2(gl_GlobalInvocationID.xy);
-    int2 size = /* unsupported Slang resource query: imageSize requires an image resource */ 0;
+    int2 size = cgl_imageSize_imageCube(irradiance_map);
     if (coord.x >= size.x || coord.y >= size.y)
     {
         return;

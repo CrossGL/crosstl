@@ -3,8 +3,8 @@
 from copy import copy
 
 from ..ast import BinaryOpNode, FunctionCallNode, StageMap, TernaryOpNode
-from .GLSL_codegen import GLSLCodeGen
 from .array_utils import format_c_style_array_declaration
+from .GLSL_codegen import GLSLCodeGen
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 
