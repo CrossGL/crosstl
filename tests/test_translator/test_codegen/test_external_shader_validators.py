@@ -15,6 +15,7 @@ from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.slang_codegen import SlangCodeGen
+from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
 from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
 
 FRAGMENT_SMOKE_SHADER = """
@@ -1938,6 +1939,34 @@ def test_dxc_style_struct_constructors_import_to_parseable_crossgl():
     assert "return vec4(sample.normal * sample.roughness, 1);" in crossgl
 
 
+def test_generated_hlsl_vertex_compiles_with_dxc(tmp_path):
+    dxc = _require_tool("dxc")
+    shader_path = tmp_path / "validator_vertex_smoke.hlsl"
+    output_path = tmp_path / "validator_vertex_smoke.dxil"
+
+    shader_path.write_text(
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(CROSSGL_WGSL_GRAPHICS_SHADER),
+            "vertex",
+        ),
+        encoding="utf-8",
+    )
+
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "vs_6_0",
+            "-E",
+            "VSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
 def test_generated_hlsl_fragment_compiles_with_dxc(tmp_path):
     dxc = _require_tool("dxc")
     shader_path = tmp_path / "validator_smoke.hlsl"
@@ -3434,6 +3463,26 @@ def test_mixed_glsl_tessellation_multidimensional_patch_arrays_validate_with_gls
         shader_path.write_text(code, encoding="utf-8")
 
         _run_validator([glslang, "-S", stage_suffix, str(shader_path)])
+
+
+def test_generated_webgl_graphics_validate_with_glslangvalidator(tmp_path):
+    glslang = _require_tool("glslangValidator")
+    vertex_path = tmp_path / "webgl_graphics.vert"
+    fragment_path = tmp_path / "webgl_graphics.frag"
+
+    ast = crosstl.translator.parse(CROSSGL_WGSL_GRAPHICS_SHADER)
+    vertex_code = WebGLCodeGen().generate_program(ast, target_stage="vertex")
+    fragment_code = WebGLCodeGen().generate_program(ast, target_stage="fragment")
+
+    assert "#version 300 es" in vertex_code
+    assert "#version 300 es" in fragment_code
+    assert "layout(location = 5) out vec2 out_uv;" not in vertex_code
+    assert "layout(location = 5) in vec2 uv;" not in fragment_code
+    vertex_path.write_text(vertex_code, encoding="utf-8")
+    fragment_path.write_text(fragment_code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "vert", str(vertex_path)])
+    _run_validator([glslang, "-S", "frag", str(fragment_path)])
 
 
 def test_generated_glsl_stage_io_multidimensional_arrays_validate_with_glslangvalidator(

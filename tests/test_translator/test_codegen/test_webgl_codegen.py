@@ -173,6 +173,37 @@ def test_webgl_codegen_omits_fragment_input_location_layouts():
     assert "layout(location = 5) in vec2 uv;" not in generated
 
 
+def test_webgl_codegen_omits_vertex_output_location_layouts():
+    shader = """
+    shader WebGLVertexOutput {
+        struct VSInput {
+            vec3 position @ POSITION;
+            vec2 uv @ TEXCOORD0;
+        };
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.position = vec4(input.position, 1.0);
+                output.uv = input.uv;
+                return output;
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate_program(
+        parse_shader(shader),
+        target_stage="vertex",
+    )
+
+    assert "layout(location = 5) out vec2 out_uv;" not in generated
+    assert "out vec2 out_uv;" in generated
+
+
 def test_webgl_codegen_casts_texture_size_for_float_vector_arithmetic():
     shader = """
     shader WebGLTextureSizeCast {

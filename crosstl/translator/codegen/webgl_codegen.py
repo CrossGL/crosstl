@@ -396,7 +396,13 @@ class WebGLCodeGen(GLSLCodeGen):
         return code
 
     def should_emit_stage_io_layout(self, stage_name, direction):
-        if normalize_stage_name(stage_name) == "fragment" and direction == "in":
+        normalized_stage = normalize_stage_name(stage_name)
+        if (
+            normalized_stage == "fragment"
+            and direction == "in"
+            or normalized_stage == "vertex"
+            and direction == "out"
+        ):
             return False
         return super().should_emit_stage_io_layout(stage_name, direction)
 
