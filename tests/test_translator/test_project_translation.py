@@ -102,12 +102,18 @@ def test_project_config_accepts_path_like_values_when_constructed_directly(tmp_p
     repo.mkdir()
     config_path = repo / "crosstl.toml"
     config_path.write_text('[project]\noutput_dir = "out"\n', encoding="utf-8")
+    include_dir = repo / "includes"
+    include_dir.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
 
     config = project_api.ProjectConfig(
-        root=str(repo),
-        config_path=str(config_path),
-        output_dir="out",
+        root=ProjectPathLike(repo),
+        config_path=ProjectPathLike(config_path),
+        source_roots=ProjectPathLike("."),
+        include_patterns=ProjectPathLike("*.cgl"),
+        exclude_patterns=(ProjectPathLike("ignored"),),
+        output_dir=ProjectPathLike("out"),
+        include_dirs=(ProjectPathLike("includes"),),
     )
     scan = scan_project(config)
     report = translate_project(config, targets=["cgl"])
@@ -115,6 +121,11 @@ def test_project_config_accepts_path_like_values_when_constructed_directly(tmp_p
 
     assert config.root == repo.resolve()
     assert config.config_path == config_path.resolve()
+    assert config.source_roots == ["."]
+    assert config.include_patterns == ["*.cgl"]
+    assert config.exclude_patterns == ["ignored"]
+    assert config.output_dir == "out"
+    assert config.include_dirs == ["includes"]
     assert [unit.relative_path for unit in scan.units] == ["simple.cgl"]
     assert payload["project"]["root"] == str(repo.resolve())
     assert payload["summary"]["translatedCount"] == 1

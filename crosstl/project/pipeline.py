@@ -607,8 +607,15 @@ def _mapping_key_path(prefix: str, key: str) -> str:
     return f"{prefix}[{json.dumps(key)}]"
 
 
-def _as_str_list(value: Any, *, field_name: str) -> list[str]:
+def _as_str_list(
+    value: Any, *, field_name: str, allow_pathlike: bool = False
+) -> list[str]:
     def append_item(result: list[str], item: Any) -> None:
+        if allow_pathlike:
+            try:
+                item = os.fspath(item)
+            except TypeError:
+                pass
         if not isinstance(item, str):
             raise ValueError(f"{field_name} entries must be strings")
         if not item.strip():
@@ -621,6 +628,15 @@ def _as_str_list(value: Any, *, field_name: str) -> list[str]:
         result: list[str] = []
         append_item(result, value)
         return result
+    if allow_pathlike:
+        try:
+            path_value = os.fspath(value)
+        except TypeError:
+            path_value = None
+        if isinstance(path_value, str):
+            result = []
+            append_item(result, path_value)
+            return result
     if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
         result: list[str] = []
         for item in value:
@@ -3355,6 +3371,7 @@ class ProjectConfig:
                     _as_str_list(
                         getattr(self, field_name),
                         field_name=f"ProjectConfig.{field_name}",
+                        allow_pathlike=True,
                     )
                 ),
             )
