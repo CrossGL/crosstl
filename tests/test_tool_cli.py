@@ -92,6 +92,7 @@ TOOLS = [
                 "--output",
                 "--max-diagnostics",
                 "--max-artifact-matrix-artifacts",
+                "--max-runtime-references",
                 "--run-toolchains",
             ),
         ),

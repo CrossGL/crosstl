@@ -179,10 +179,19 @@ REPORT_MIGRATION_FIELDS = frozenset(
         "actionsByKind",
         "actionsBySeverity",
         "actionsByTarget",
+        "runtimeReferenceCount",
+        "runtimeReferencesByBackend",
+        "runtimeReferencesByKind",
+        "runtimeReferencesByPath",
         "actions",
     )
 )
-REPORT_MIGRATION_ACTION_FIELDS = frozenset(("kind", "severity", "message", "targets"))
+REPORT_MIGRATION_ACTION_FIELDS = frozenset(
+    ("kind", "severity", "message", "targets", "runtimeReferences")
+)
+REPORT_RUNTIME_REFERENCE_FIELDS = frozenset(
+    ("path", "line", "column", "backend", "kind", "symbol")
+)
 REPORT_ARTIFACT_MATRIX_FIELDS = frozenset(
     (
         "unitCount",
@@ -468,6 +477,156 @@ REPORT_MIGRATION_ACTION_KINDS = (
     "manual-runtime-integration",
     "manual-include-resolution",
 )
+REPORT_RUNTIME_REFERENCE_KINDS = (
+    "runtime-api",
+    "kernel-launch",
+    "build-system",
+)
+RUNTIME_REFERENCE_LIMIT = 100
+RUNTIME_REFERENCE_FILE_SIZE_LIMIT = 1_000_000
+RUNTIME_REFERENCE_EXTENSIONS = frozenset(
+    (
+        ".c",
+        ".cc",
+        ".cmake",
+        ".cpp",
+        ".cuh",
+        ".cu",
+        ".cxx",
+        ".h",
+        ".hh",
+        ".hip",
+        ".hpp",
+        ".hxx",
+        ".js",
+        ".m",
+        ".mm",
+        ".py",
+        ".rs",
+        ".swift",
+        ".ts",
+    )
+)
+RUNTIME_REFERENCE_FILENAMES = frozenset(
+    (
+        "BUILD",
+        "BUILD.bazel",
+        "CMakeLists.txt",
+        "Cargo.toml",
+        "Makefile",
+        "WORKSPACE",
+        "WORKSPACE.bazel",
+        "build.gradle",
+        "build.gradle.kts",
+        "meson.build",
+        "package.json",
+        "pyproject.toml",
+    )
+)
+RUNTIME_REFERENCE_RULES = (
+    (
+        "cuda",
+        "kernel-launch",
+        re.compile(r"<<<"),
+        "kernel-launch",
+    ),
+    (
+        "cuda",
+        "runtime-api",
+        re.compile(
+            r"\b(cuda(?:DeviceSynchronize|Free|GetDevice|LaunchKernel|Malloc|"
+            r"Memcpy|SetDevice))\b"
+        ),
+        None,
+    ),
+    (
+        "cuda",
+        "build-system",
+        re.compile(
+            r"\b(?:find_package\s*\(\s*(?:CUDAToolkit|CUDA)|"
+            r"enable_language\s*\(\s*CUDA|nvcc)\b"
+        ),
+        "cuda-build-system",
+    ),
+    (
+        "hip",
+        "runtime-api",
+        re.compile(
+            r"\b(hip(?:DeviceSynchronize|Free|GetDevice|LaunchKernel|Malloc|"
+            r"Memcpy|SetDevice))\b"
+        ),
+        None,
+    ),
+    (
+        "hip",
+        "build-system",
+        re.compile(r"\b(?:find_package\s*\(\s*HIP|enable_language\s*\(\s*HIP|hipcc)\b"),
+        "hip-build-system",
+    ),
+    (
+        "metal",
+        "runtime-api",
+        re.compile(r"\b(MTL(?:CreateSystemDefaultDevice|[A-Za-z_][A-Za-z0-9_]*))\b"),
+        None,
+    ),
+    (
+        "metal",
+        "build-system",
+        re.compile(r"\b(?:Metal(?:Kit)?\.framework|-framework\s+Metal(?:Kit)?)\b"),
+        "metal-build-system",
+    ),
+    (
+        "directx",
+        "runtime-api",
+        re.compile(r"\b((?:D3D12|ID3D12|D3DCompile)[A-Za-z0-9_]*)\b"),
+        None,
+    ),
+    (
+        "directx",
+        "build-system",
+        re.compile(r"\b(?:d3d12|dxgi|dxcompiler)\.lib\b", re.IGNORECASE),
+        "directx-build-system",
+    ),
+    (
+        "vulkan",
+        "runtime-api",
+        re.compile(r"\b((?:vk|Vk)[A-Z][A-Za-z0-9_]*)\b"),
+        None,
+    ),
+    (
+        "vulkan",
+        "build-system",
+        re.compile(r"\b(?:find_package\s*\(\s*Vulkan|Vulkan::Vulkan)\b"),
+        "vulkan-build-system",
+    ),
+    (
+        "opengl",
+        "runtime-api",
+        re.compile(
+            r"\b(gl(?:BindBuffer|CompileShader|CreateProgram|CreateShader|"
+            r"DispatchCompute|GetUniformLocation|ShaderSource|UseProgram)[A-Za-z0-9_]*)\b"
+        ),
+        None,
+    ),
+    (
+        "opengl",
+        "build-system",
+        re.compile(r"\b(?:find_package\s*\(\s*OpenGL|OpenGL::GL|GL\.lib)\b"),
+        "opengl-build-system",
+    ),
+    (
+        "webgl",
+        "runtime-api",
+        re.compile(r"\b(WebGL2RenderingContext|WebGLRenderingContext|createShader)\b"),
+        None,
+    ),
+    (
+        "webgl",
+        "build-system",
+        re.compile(r'"(?:@webgpu/types|webgl|three)"'),
+        "webgl-build-system",
+    ),
+)
 REPORT_PACKAGE_NAME = "crosstl"
 UNKNOWN_PACKAGE_VERSION = "unknown"
 EXTERNAL_CORPUS_SCHEMA_VERSION = 1
@@ -478,6 +637,7 @@ EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT = 20
 INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT = 20
 INCLUDE_PATH_PROCESSING_INSPECTION_SAMPLE_LIMIT = 20
 MIGRATION_ACTION_INSPECTION_SAMPLE_LIMIT = 20
+RUNTIME_REFERENCE_INSPECTION_SAMPLE_LIMIT = 20
 SKIPPED_SOURCE_INSPECTION_SAMPLE_LIMIT = 20
 SOURCE_MAP_INSPECTION_SAMPLE_LIMIT = 20
 VALIDATION_INSPECTION_SAMPLE_LIMIT = 20
@@ -2025,12 +2185,59 @@ def _migration_action_counts_by_target(actions: Sequence[Any]) -> dict[str, int]
     return dict(sorted(counts.items()))
 
 
+def _migration_runtime_references(actions: Sequence[Any]) -> list[Mapping[str, Any]]:
+    references: list[Mapping[str, Any]] = []
+    for action in actions:
+        if not isinstance(action, Mapping):
+            continue
+        action_references = action.get("runtimeReferences")
+        if not isinstance(action_references, list):
+            continue
+        references.extend(
+            reference
+            for reference in action_references
+            if isinstance(reference, Mapping)
+        )
+    return references
+
+
+def _migration_runtime_reference_counts_by_field(
+    references: Sequence[Mapping[str, Any]], field_name: str
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for reference in references:
+        value = reference.get(field_name)
+        if not _is_non_empty_string(value):
+            continue
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _migration_runtime_reference_rollups(
+    actions: Sequence[Any],
+) -> dict[str, Any]:
+    references = _migration_runtime_references(actions)
+    return {
+        "runtimeReferenceCount": len(references),
+        "runtimeReferencesByBackend": _migration_runtime_reference_counts_by_field(
+            references, "backend"
+        ),
+        "runtimeReferencesByKind": _migration_runtime_reference_counts_by_field(
+            references, "kind"
+        ),
+        "runtimeReferencesByPath": _migration_runtime_reference_counts_by_field(
+            references, "path"
+        ),
+    }
+
+
 def _migration_action_rollups(actions: Sequence[Any]) -> dict[str, Any]:
     return {
         "actionCount": len(actions),
         "actionsByKind": _migration_action_counts_by_kind(actions),
         "actionsBySeverity": _migration_action_counts_by_severity(actions),
         "actionsByTarget": _migration_action_counts_by_target(actions),
+        **_migration_runtime_reference_rollups(actions),
     }
 
 
@@ -3992,7 +4199,9 @@ class ProjectScan:
             artifacts=[],
             diagnostics=diagnostics,
             validation={"toolchains": [], "artifacts": []},
-            migration_actions=_project_migration_actions(self.units, report_targets),
+            migration_actions=_project_migration_actions(
+                self.config, self.units, report_targets
+            ),
             artifact_matrix=_artifact_matrix_report(
                 self.config, self.units, report_targets, self.config.variants, []
             ),
@@ -4902,6 +5111,90 @@ def _compiler_source_remap_payload_reasons(payload: Any) -> list[str]:
     return reasons
 
 
+def _is_runtime_reference_candidate(path: Path) -> bool:
+    return (
+        path.name in RUNTIME_REFERENCE_FILENAMES
+        or path.suffix.lower() in RUNTIME_REFERENCE_EXTENSIONS
+    )
+
+
+def _is_runtime_build_reference_candidate(path: Path) -> bool:
+    return path.name in RUNTIME_REFERENCE_FILENAMES or path.suffix.lower() == ".cmake"
+
+
+def _iter_runtime_reference_candidates(config: ProjectConfig) -> list[Path]:
+    exclude_patterns = _repository_relative_globs(config.exclude_patterns)
+    internal_exclude_patterns = _internal_exclude_patterns(config)
+    candidates: list[Path] = []
+    for path in config.root.rglob("*"):
+        if not path.is_file() or not _is_runtime_reference_candidate(path):
+            continue
+        try:
+            relative_path = _relpath(path, config.root)
+        except ValueError:
+            continue
+        if _path_matches(relative_path, exclude_patterns):
+            continue
+        if _path_matches(relative_path, internal_exclude_patterns):
+            continue
+        candidates.append(path)
+    return sorted(candidates, key=lambda candidate: _relpath(candidate, config.root))
+
+
+def _runtime_reference_for_match(
+    *,
+    config: ProjectConfig,
+    path: Path,
+    line_number: int,
+    match: re.Match[str],
+    backend: str,
+    kind: str,
+    fallback_symbol: str | None,
+) -> dict[str, Any]:
+    symbol = fallback_symbol or match.group(1)
+    return {
+        "path": _relpath(path, config.root),
+        "line": line_number,
+        "column": match.start() + 1,
+        "backend": backend,
+        "kind": kind,
+        "symbol": symbol,
+    }
+
+
+def _runtime_references(config: ProjectConfig) -> list[dict[str, Any]]:
+    references: list[dict[str, Any]] = []
+    for path in _iter_runtime_reference_candidates(config):
+        try:
+            if path.stat().st_size > RUNTIME_REFERENCE_FILE_SIZE_LIMIT:
+                continue
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line_number, line in enumerate(lines, start=1):
+            for backend, kind, pattern, fallback_symbol in RUNTIME_REFERENCE_RULES:
+                if (
+                    kind == "build-system"
+                    and not _is_runtime_build_reference_candidate(path)
+                ):
+                    continue
+                for match in pattern.finditer(line):
+                    references.append(
+                        _runtime_reference_for_match(
+                            config=config,
+                            path=path,
+                            line_number=line_number,
+                            match=match,
+                            backend=backend,
+                            kind=kind,
+                            fallback_symbol=fallback_symbol,
+                        )
+                    )
+                    if len(references) >= RUNTIME_REFERENCE_LIMIT:
+                        return references
+    return references
+
+
 def _runtime_migration_targets(
     units: Sequence[ProjectTranslationUnit],
     targets: Sequence[str],
@@ -4925,6 +5218,7 @@ def _runtime_migration_targets(
 
 
 def _runtime_migration_actions(
+    config: ProjectConfig,
     units: Sequence[ProjectTranslationUnit],
     targets: Sequence[str],
     artifacts: Sequence[Mapping[str, Any]] | None = None,
@@ -4932,6 +5226,7 @@ def _runtime_migration_actions(
     action_targets = _runtime_migration_targets(units, targets, artifacts)
     if not action_targets:
         return []
+    runtime_references = _runtime_references(config)
     return [
         {
             "kind": "manual-runtime-integration",
@@ -4942,6 +5237,7 @@ def _runtime_migration_actions(
                 "and backend framework integration separately."
             ),
             "targets": action_targets,
+            "runtimeReferences": runtime_references,
         }
     ]
 
@@ -4985,12 +5281,13 @@ def _include_migration_actions(
 
 
 def _project_migration_actions(
+    config: ProjectConfig,
     units: Sequence[ProjectTranslationUnit],
     targets: Sequence[str],
     artifacts: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     return [
-        *_runtime_migration_actions(units, targets, artifacts),
+        *_runtime_migration_actions(config, units, targets, artifacts),
         *_include_migration_actions(units, targets, artifacts),
     ]
 
@@ -5204,7 +5501,7 @@ def translate_project(
         diagnostics=diagnostics,
         validation=validation,
         migration_actions=_project_migration_actions(
-            scan.units, selected_targets, artifacts
+            config, scan.units, selected_targets, artifacts
         ),
         artifact_matrix=_artifact_matrix_report(
             config, scan.units, selected_targets, config.variants, artifacts
@@ -6251,6 +6548,9 @@ def _inspection_migration_action(action: Any) -> dict[str, Any] | None:
     targets = action.get("targets")
     if isinstance(targets, list):
         payload["targets"] = [target for target in targets if isinstance(target, str)]
+    runtime_references = action.get("runtimeReferences")
+    if isinstance(runtime_references, list):
+        payload["runtimeReferenceCount"] = len(runtime_references)
     return payload
 
 
@@ -6262,6 +6562,12 @@ def _empty_inspection_migration_summary() -> dict[str, Any]:
         "actionsByKind": {},
         "actionsBySeverity": {},
         "actionsByTarget": {},
+        "runtimeReferenceCount": 0,
+        "runtimeReferencesByBackend": {},
+        "runtimeReferencesByKind": {},
+        "runtimeReferencesByPath": {},
+        "truncatedRuntimeReferenceCount": 0,
+        "runtimeReferences": [],
         "truncatedActionCount": 0,
         "actions": [],
     }
@@ -6287,6 +6593,7 @@ def inspect_project_report(
     max_validation_artifacts: int = VALIDATION_INSPECTION_SAMPLE_LIMIT,
     max_toolchain_runs: int = VALIDATION_INSPECTION_SAMPLE_LIMIT,
     max_migration_actions: int = MIGRATION_ACTION_INSPECTION_SAMPLE_LIMIT,
+    max_runtime_references: int = RUNTIME_REFERENCE_INSPECTION_SAMPLE_LIMIT,
     max_external_corpus_entries: int = EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
     """Build a concise inspection summary for a project portability report."""
@@ -6331,6 +6638,9 @@ def inspect_project_report(
     )
     migration_action_limit = _inspection_limit_arg(
         max_migration_actions, field_name="max_migration_actions"
+    )
+    runtime_reference_limit = _inspection_limit_arg(
+        max_runtime_references, field_name="max_runtime_references"
     )
     external_corpus_entry_limit = _inspection_limit_arg(
         max_external_corpus_entries, field_name="max_external_corpus_entries"
@@ -6666,6 +6976,10 @@ def inspect_project_report(
             for action in actions
             if (sample := _inspection_migration_action(action)) is not None
         ]
+        runtime_reference_rollups = _migration_runtime_reference_rollups(actions)
+        runtime_references = [
+            dict(reference) for reference in _migration_runtime_references(actions)
+        ]
         payload["migration"] = {
             "scope": migration.get("scope"),
             "nonGoals": (
@@ -6693,6 +7007,31 @@ def inspect_project_report(
                 if isinstance(migration.get("actionsByTarget"), Mapping)
                 else _migration_action_counts_by_target(actions)
             ),
+            "runtimeReferenceCount": (
+                migration.get("runtimeReferenceCount")
+                if _is_non_negative_int(migration.get("runtimeReferenceCount"))
+                else runtime_reference_rollups["runtimeReferenceCount"]
+            ),
+            "runtimeReferencesByBackend": (
+                dict(migration.get("runtimeReferencesByBackend", {}))
+                if isinstance(migration.get("runtimeReferencesByBackend"), Mapping)
+                else runtime_reference_rollups["runtimeReferencesByBackend"]
+            ),
+            "runtimeReferencesByKind": (
+                dict(migration.get("runtimeReferencesByKind", {}))
+                if isinstance(migration.get("runtimeReferencesByKind"), Mapping)
+                else runtime_reference_rollups["runtimeReferencesByKind"]
+            ),
+            "runtimeReferencesByPath": (
+                dict(migration.get("runtimeReferencesByPath", {}))
+                if isinstance(migration.get("runtimeReferencesByPath"), Mapping)
+                else runtime_reference_rollups["runtimeReferencesByPath"]
+            ),
+            "truncatedRuntimeReferenceCount": max(
+                0,
+                len(runtime_references) - runtime_reference_limit,
+            ),
+            "runtimeReferences": runtime_references[:runtime_reference_limit],
             "truncatedActionCount": max(
                 0,
                 len(action_samples) - migration_action_limit,
@@ -12743,6 +13082,46 @@ def _external_corpus_contract_reasons(
     return reasons
 
 
+def _runtime_reference_contract_reasons(prefix: str, reference: Any) -> list[str]:
+    if not isinstance(reference, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = _unsupported_mapping_field_reasons(
+        prefix, reference, REPORT_RUNTIME_REFERENCE_FIELDS
+    )
+    reasons.extend(
+        _repository_path_contract_reasons(f"{prefix}.path", reference.get("path"))
+    )
+    for field_name in ("line", "column"):
+        value = reference.get(field_name)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            reasons.append(f"{prefix}.{field_name} must be a positive integer")
+
+    backend = reference.get("backend")
+    if not _is_non_empty_string(backend):
+        reasons.append(f"{prefix}.backend must be a string")
+    else:
+        normalized_backend = _normalized_targets([backend])
+        if (
+            len(normalized_backend) != 1
+            or normalized_backend[0] != backend
+            or backend not in _supported_target_names()
+        ):
+            reasons.append(f"{prefix}.backend must be a normalized backend name")
+
+    kind = reference.get("kind")
+    if kind not in REPORT_RUNTIME_REFERENCE_KINDS:
+        reasons.append(
+            "{}.kind must be one of {}".format(
+                prefix, ", ".join(REPORT_RUNTIME_REFERENCE_KINDS)
+            )
+        )
+
+    if not _is_non_empty_string(reference.get("symbol")):
+        reasons.append(f"{prefix}.symbol must be a string")
+    return reasons
+
+
 def _migration_contract_reasons(
     report: Mapping[str, Any], *, require_migration: bool
 ) -> list[str]:
@@ -12820,6 +13199,23 @@ def _migration_contract_reasons(
             severity = action.get("severity")
             if severity not in {"note", "warning", "error"}:
                 reasons.append(f"{prefix}.severity must be note, warning, or error")
+            if "runtimeReferences" in action:
+                runtime_references = action.get("runtimeReferences")
+                if kind != "manual-runtime-integration":
+                    reasons.append(
+                        f"{prefix}.runtimeReferences is only allowed for "
+                        "manual-runtime-integration actions"
+                    )
+                elif not isinstance(runtime_references, list):
+                    reasons.append(f"{prefix}.runtimeReferences must be a list")
+                else:
+                    for reference_index, reference in enumerate(runtime_references):
+                        reasons.extend(
+                            _runtime_reference_contract_reasons(
+                                f"{prefix}.runtimeReferences[{reference_index}]",
+                                reference,
+                            )
+                        )
             target_reasons = _string_list_contract_reasons(
                 f"{prefix}.targets", action.get("targets")
             )
@@ -12859,7 +13255,22 @@ def _migration_contract_reasons(
                 "migration.actions",
             )
         )
-        for field_name in ("actionsByKind", "actionsBySeverity", "actionsByTarget"):
+        reasons.extend(
+            _count_field_contract_reasons(
+                "migration.runtimeReferenceCount",
+                migration.get("runtimeReferenceCount"),
+                rollups["runtimeReferenceCount"],
+                "migration.actions.runtimeReferences",
+            )
+        )
+        for field_name in (
+            "actionsByKind",
+            "actionsBySeverity",
+            "actionsByTarget",
+            "runtimeReferencesByBackend",
+            "runtimeReferencesByKind",
+            "runtimeReferencesByPath",
+        ):
             reasons.extend(
                 _mapping_field_contract_reasons(
                     f"migration.{field_name}",

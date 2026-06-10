@@ -78,12 +78,12 @@ TOKENS = tuple(
         ("BUFFER", r"\bbuffer\b"),
         ("SAMPLER", r"\bsampler\b"),
         # Matrix types (must come before vector types)
-        ("MATRIX", r"\b(float|half|double)[2-4]x[2-4]\b"),
+        ("MATRIX", r"\b(float|x?half|double)[2-4]x[2-4]\b"),
         ("SIMD_MATRIX", r"\bsimd_float[2-4]x[2-4]\b"),
         # Vector types
         (
             "VECTOR",
-            r"\b(float|half|double|int|uint|short|ushort|char|uchar|bool)[2-4]\b",
+            r"\b(float|x?half|double|int|uint|short|ushort|char|uchar|bool)[2-4]\b",
         ),
         (
             "PACKED_VECTOR",
