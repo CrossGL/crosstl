@@ -83,6 +83,35 @@ SIMPLE_CROSSL = textwrap.dedent("""
     }
     """).strip()
 
+DIRECTX_GRAPHICS_CROSSL = textwrap.dedent("""
+    shader ProjectDirectXGraphics {
+        struct VSInput {
+            vec3 position @ POSITION;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.position = vec4(input.position, 1.0);
+                output.uv = input.uv;
+                return output;
+            }
+        }
+
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                return vec4(input.uv, 0.0, 1.0);
+            }
+        }
+    }
+    """).strip()
+
 
 class ProjectPathLike:
     def __init__(self, path):
@@ -10008,6 +10037,81 @@ def test_translate_project_directx_smoke_compiles_generated_artifact_with_dxc(
     ]
 
 
+def test_translate_project_directx_smoke_compiles_all_graphics_entries_with_dxc(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "graphics.cgl").write_text(DIRECTX_GRAPHICS_CROSSL, encoding="utf-8")
+    artifact_path = (repo / "out" / "directx" / "graphics.hlsl").resolve()
+    expected_commands = [
+        [
+            "dxc",
+            "-T",
+            "vs_6_0",
+            "-E",
+            "VSMain",
+            str(artifact_path),
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+        [
+            "dxc",
+            "-T",
+            "ps_6_0",
+            "-E",
+            "PSMain",
+            str(artifact_path),
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+    ]
+    commands = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: "/usr/bin/dxc" if tool == "dxc" else None,
+    )
+
+    def run_toolchain(command, **kwargs):
+        commands.append((command, kwargs))
+        assert command in expected_commands
+        assert kwargs["cwd"] == str(repo)
+        assert kwargs["input"] is None
+        assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert [command for command, _kwargs in commands] == expected_commands
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["validation"]["artifacts"][0]["path"] == "out/directx/graphics.hlsl"
+    assert payload["validation"]["artifacts"][0]["status"] == "ok"
+    assert [
+        run["command"] for run in payload["validation"]["toolchainRuns"]
+    ] == expected_commands
+    assert all(
+        run["checkKind"] == "artifact"
+        and run["status"] == "ok"
+        and run["target"] == "directx"
+        and run["path"] == "out/directx/graphics.hlsl"
+        for run in payload["validation"]["toolchainRuns"]
+    )
+    assert validation["success"] is True
+
+
 def test_translate_project_webgl_smoke_validates_generated_artifact_with_glslang(
     tmp_path, monkeypatch
 ):
@@ -10305,6 +10409,46 @@ def test_directx_toolchain_smoke_command_compiles_detected_entry(tmp_path):
         ],
         "artifact",
     )
+
+
+def test_directx_toolchain_smoke_commands_compile_all_detected_entries(tmp_path):
+    shader = tmp_path / "graphics.hlsl"
+    shader.write_text(
+        textwrap.dedent("""
+            float4 VSMain() : SV_Position { return 0.0.xxxx; }
+            float4 PSMain() : SV_Target { return 1.0.xxxx; }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_commands("directx", ["dxc"], shader) == [
+        (
+            [
+                "dxc",
+                "-T",
+                "vs_6_0",
+                "-E",
+                "VSMain",
+                str(shader),
+                "-Fo",
+                project_pipeline.os.devnull,
+            ],
+            "artifact",
+        ),
+        (
+            [
+                "dxc",
+                "-T",
+                "ps_6_0",
+                "-E",
+                "PSMain",
+                str(shader),
+                "-Fo",
+                project_pipeline.os.devnull,
+            ],
+            "artifact",
+        ),
+    ]
 
 
 def test_directx_toolchain_smoke_command_compiles_library_targets(tmp_path):

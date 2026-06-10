@@ -12735,6 +12735,41 @@ def _duplicate_identity_contract_reasons(
     return reasons
 
 
+def _toolchain_run_identity(record: Mapping[str, Any]) -> tuple[Any, ...] | None:
+    artifact_identity = _artifact_identity(record)
+    command = record.get("command")
+    check_kind = record.get("checkKind")
+    if artifact_identity is None or not isinstance(command, list):
+        return None
+    return (
+        artifact_identity,
+        tuple(command),
+        check_kind,
+    )
+
+
+def _duplicate_toolchain_run_identity_contract_reasons(
+    records: Sequence[Any],
+) -> list[str]:
+    reasons = []
+    identities: dict[tuple[Any, ...], int] = {}
+    for index, record in enumerate(records):
+        if not isinstance(record, Mapping):
+            continue
+        identity = _toolchain_run_identity(record)
+        if identity is None:
+            continue
+        previous_index = identities.get(identity)
+        if previous_index is None:
+            identities[identity] = index
+            continue
+        reasons.append(
+            "validation.toolchainRuns[{}] duplicates "
+            "validation.toolchainRuns[{}] identity".format(index, previous_index)
+        )
+    return reasons
+
+
 def _duplicate_toolchain_target_contract_reasons(records: Sequence[Any]) -> list[str]:
     reasons = []
     targets: dict[str, int] = {}
@@ -15493,23 +15528,24 @@ def _toolchain_run_contract_reasons(
             artifact_path = Path(str(path))
             if root_path is not None and not artifact_path.is_absolute():
                 artifact_path = (root_path / artifact_path).resolve()
-            smoke_command = _toolchain_smoke_command(
+            smoke_commands = _toolchain_smoke_commands(
                 normalized_target,
                 configured_tools,
                 artifact_path,
                 artifact=referenced_artifact[1] if referenced_artifact else run,
             )
-            if smoke_command is not None:
-                expected_command, expected_check_kind = smoke_command
-                if check_kind != expected_check_kind:
+            if smoke_commands:
+                expected_check_kinds = {kind for _command, kind in smoke_commands}
+                if check_kind not in expected_check_kinds:
+                    expected_check_kind = smoke_commands[0][1]
                     reasons.append(
                         f"{prefix}.checkKind must be {expected_check_kind} "
                         f"for target {normalized_target}"
                     )
-                elif command != expected_command:
+                elif (command, check_kind) not in smoke_commands:
                     check_label = (
                         "tool availability"
-                        if expected_check_kind == "tool-availability"
+                        if check_kind == "tool-availability"
                         else "artifact"
                     )
                     reasons.append(
@@ -15701,9 +15737,7 @@ def _validation_contract_reasons(
                     )
                 )
             reasons.extend(
-                _duplicate_identity_contract_reasons(
-                    "validation.toolchainRuns", toolchain_runs
-                )
+                _duplicate_toolchain_run_identity_contract_reasons(toolchain_runs)
             )
             if require_validation:
                 reasons.extend(
@@ -17731,57 +17765,76 @@ def _run_toolchain_smoke(
             continue
         if not artifact_path.is_file():
             continue
-        smoke_command = _toolchain_smoke_command(
+        smoke_commands = _toolchain_smoke_commands(
             target, tools, artifact_path, artifact=artifact
         )
-        if smoke_command is None:
-            continue
-        command, check_kind = smoke_command
-        if not command or not shutil.which(command[0]):
-            continue
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=str(root),
-                input=(
-                    artifact_path.read_text(encoding="utf-8", errors="replace")
-                    if "--stdin" in command
-                    else None
-                ),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=TOOLCHAIN_SMOKE_TIMEOUT_SECONDS,
-            )
-            returncode = completed.returncode
-            stdout = _toolchain_output_text(completed.stdout)
-            stderr = _toolchain_output_text(completed.stderr)
-        except subprocess.TimeoutExpired as exc:
-            returncode = TOOLCHAIN_TIMEOUT_RETURNCODE
-            stdout = _toolchain_output_text(getattr(exc, "stdout", None))
-            stderr = _toolchain_output_text(getattr(exc, "stderr", None))
-            timeout_message = (
-                "Validation toolchain timed out after "
-                f"{TOOLCHAIN_SMOKE_TIMEOUT_SECONDS} seconds."
-            )
-            stderr = f"{stderr.rstrip()}\n{timeout_message}".strip()
-        run = {
-            "source": str(artifact.get("source", "")),
-            "target": target,
-            "path": str(artifact["path"]),
-            "command": command,
-            "checkKind": check_kind,
-            "returncode": returncode,
-            "status": "ok" if returncode == 0 else "failed",
-            "stdout": stdout[-4000:],
-            "stderr": stderr[-4000:],
-        }
-        if _is_non_empty_string(artifact.get("sourceBackend")):
-            run["sourceBackend"] = artifact["sourceBackend"]
-        if artifact.get("variant") is not None:
-            run["variant"] = artifact["variant"]
-        runs.append(run)
+        for command, check_kind in smoke_commands:
+            if not command or not shutil.which(command[0]):
+                continue
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=str(root),
+                    input=(
+                        artifact_path.read_text(encoding="utf-8", errors="replace")
+                        if "--stdin" in command
+                        else None
+                    ),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=TOOLCHAIN_SMOKE_TIMEOUT_SECONDS,
+                )
+                returncode = completed.returncode
+                stdout = _toolchain_output_text(completed.stdout)
+                stderr = _toolchain_output_text(completed.stderr)
+            except subprocess.TimeoutExpired as exc:
+                returncode = TOOLCHAIN_TIMEOUT_RETURNCODE
+                stdout = _toolchain_output_text(getattr(exc, "stdout", None))
+                stderr = _toolchain_output_text(getattr(exc, "stderr", None))
+                timeout_message = (
+                    "Validation toolchain timed out after "
+                    f"{TOOLCHAIN_SMOKE_TIMEOUT_SECONDS} seconds."
+                )
+                stderr = f"{stderr.rstrip()}\n{timeout_message}".strip()
+            run = {
+                "source": str(artifact.get("source", "")),
+                "target": target,
+                "path": str(artifact["path"]),
+                "command": command,
+                "checkKind": check_kind,
+                "returncode": returncode,
+                "status": "ok" if returncode == 0 else "failed",
+                "stdout": stdout[-4000:],
+                "stderr": stderr[-4000:],
+            }
+            if _is_non_empty_string(artifact.get("sourceBackend")):
+                run["sourceBackend"] = artifact["sourceBackend"]
+            if artifact.get("variant") is not None:
+                run["variant"] = artifact["variant"]
+            runs.append(run)
     return runs
+
+
+def _toolchain_smoke_commands(
+    target: str,
+    tools: Sequence[str],
+    artifact_path: Path,
+    *,
+    artifact: Mapping[str, Any] | None = None,
+) -> list[tuple[list[str], str]]:
+    if target == "directx":
+        return [
+            (command, "artifact")
+            for command in _directx_dxc_smoke_commands(tools[0], artifact_path)
+        ]
+    smoke_command = _toolchain_smoke_command(
+        target,
+        tools,
+        artifact_path,
+        artifact=artifact,
+    )
+    return [] if smoke_command is None else [smoke_command]
 
 
 def _toolchain_smoke_command(
@@ -17811,11 +17864,23 @@ def _toolchain_smoke_command(
 
 
 def _directx_dxc_smoke_command(tool: str, artifact_path: Path) -> list[str]:
-    entry_profile = _directx_dxc_entry_profile(artifact_path)
-    if entry_profile is None:
-        return [tool, "-T", "lib_6_3", str(artifact_path), "-Fo", os.devnull]
+    return _directx_dxc_smoke_commands(tool, artifact_path)[0]
 
-    entry, profile = entry_profile
+
+def _directx_dxc_smoke_commands(tool: str, artifact_path: Path) -> list[list[str]]:
+    entry_profiles = _directx_dxc_entry_profiles(artifact_path)
+    if entry_profiles is None:
+        return [[tool, "-T", "lib_6_3", str(artifact_path), "-Fo", os.devnull]]
+
+    return [
+        _directx_dxc_entry_smoke_command(tool, artifact_path, entry, profile)
+        for entry, profile in entry_profiles
+    ]
+
+
+def _directx_dxc_entry_smoke_command(
+    tool: str, artifact_path: Path, entry: str, profile: str
+) -> list[str]:
     return [
         tool,
         "-T",
@@ -17829,10 +17894,19 @@ def _directx_dxc_smoke_command(tool: str, artifact_path: Path) -> list[str]:
 
 
 def _directx_dxc_entry_profile(artifact_path: Path) -> tuple[str, str] | None:
+    entry_profiles = _directx_dxc_entry_profiles(artifact_path)
+    if entry_profiles is None:
+        return None
+    return entry_profiles[0]
+
+
+def _directx_dxc_entry_profiles(
+    artifact_path: Path,
+) -> tuple[tuple[str, str], ...] | None:
     try:
         source = artifact_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return DIRECTX_DXC_DEFAULT_ENTRY_PROFILE
+        return (DIRECTX_DXC_DEFAULT_ENTRY_PROFILE,)
 
     lowered = source.lower()
     if any(
@@ -17847,10 +17921,9 @@ def _directx_dxc_entry_profile(artifact_path: Path) -> tuple[str, str] | None:
         if match:
             matches.append((match.start(), entry, profile))
     if not matches:
-        return DIRECTX_DXC_DEFAULT_ENTRY_PROFILE
+        return (DIRECTX_DXC_DEFAULT_ENTRY_PROFILE,)
 
-    _position, entry, profile = min(matches, key=lambda item: item[0])
-    return entry, profile
+    return tuple((entry, profile) for _position, entry, profile in sorted(matches))
 
 
 GLSLANG_STAGE_BY_SUFFIX = {
