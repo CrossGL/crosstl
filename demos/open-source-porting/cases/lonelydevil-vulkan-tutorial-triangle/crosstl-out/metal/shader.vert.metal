@@ -15,4 +15,3 @@ vertex VertexOutput vertex_main(uint _crossglVertexID [[vertex_id]]) {
     output.fragColor = colors[_crossglVertexID];
     return output;
 }
-
