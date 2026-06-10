@@ -46,6 +46,30 @@ class WebGLCodeGen(GLSLCodeGen):
         "atomicCounter",
         "atomicCounterAdd",
     }
+    UNSUPPORTED_SAMPLED_RESOURCE_TYPES = {
+        "sampler1D",
+        "sampler1DArray",
+        "sampler2DMS",
+        "sampler2DMSArray",
+        "sampler2DRect",
+        "samplerBuffer",
+        "samplerCubeArray",
+        "samplerCubeArrayShadow",
+        "isampler1D",
+        "isampler1DArray",
+        "isampler2DMS",
+        "isampler2DMSArray",
+        "isampler2DRect",
+        "isamplerBuffer",
+        "isamplerCubeArray",
+        "usampler1D",
+        "usampler1DArray",
+        "usampler2DMS",
+        "usampler2DMSArray",
+        "usampler2DRect",
+        "usamplerBuffer",
+        "usamplerCubeArray",
+    }
 
     def default_glsl_version_line(self, ast, target_stage=None):
         return "#version 300 es"
@@ -452,6 +476,14 @@ class WebGLCodeGen(GLSLCodeGen):
                 "WebGL target does not support storage image resource "
                 f"'{self.resource_node_name(node, '<unnamed>')}' "
                 f"({self.type_name_string(self.resource_base_type(node_type))})"
+            )
+        sampled_type = self.sampled_image_type(node_type)
+        sampled_base_type = self.map_type(self.resource_base_type(sampled_type))
+        if sampled_base_type in self.UNSUPPORTED_SAMPLED_RESOURCE_TYPES:
+            raise ValueError(
+                "WebGL target does not support sampled resource "
+                f"'{self.resource_node_name(node, '<unnamed>')}' "
+                f"({sampled_base_type})"
             )
 
     def is_webgl_glsl_buffer_block_node(self, node):

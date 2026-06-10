@@ -548,6 +548,44 @@ def test_webgl_codegen_rejects_storage_image_resources():
         WebGLCodeGen().generate(parse_shader(shader))
 
 
+@pytest.mark.parametrize(
+    "resource_type,diagnostic_type",
+    (
+        ("sampler1D", "sampler1D"),
+        ("samplerBuffer", "samplerBuffer"),
+        ("sampler2DMS", "sampler2DMS"),
+        ("samplerCubeArray", "samplerCubeArray"),
+        ("Texture1D", "sampler1D"),
+        ("Texture2DMS", "sampler2DMS"),
+        ("TextureCubeArray", "samplerCubeArray"),
+    ),
+)
+def test_webgl_codegen_rejects_sampled_resource_types_outside_glsl_es300(
+    resource_type,
+    diagnostic_type,
+):
+    shader = f"""
+    shader WebGLNoUnsupportedSampler {{
+        {resource_type} colorTex;
+
+        fragment {{
+            vec4 main() @ gl_FragColor {{
+                return vec4(1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target does not support sampled resource "
+            rf"'colorTex' \({diagnostic_type}\)"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
 def test_webgl_codegen_rejects_storage_image_intrinsics():
     shader = """
     shader WebGLNoStorageImageIntrinsic {

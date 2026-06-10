@@ -275,11 +275,15 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 16,
+        "unsupported_marker_count": 19,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "UNSUPPORTED_STAGE_NAMES = ("
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "UNSUPPORTED_SAMPLED_RESOURCE_TYPES = {"
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
@@ -304,6 +308,14 @@
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "\"WebGL target does not support storage image resource \""
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "if sampled_base_type in self.UNSUPPORTED_SAMPLED_RESOURCE_TYPES:"
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "\"WebGL target does not support sampled resource \""
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
@@ -347,7 +359,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_webgl_codegen.py"
         ],
-        "test_count": 26
+        "test_count": 27
       },
       "translator_codegen": {
         "exists": true,
