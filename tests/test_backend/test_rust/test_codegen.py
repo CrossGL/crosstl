@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 import crosstl
@@ -910,12 +912,110 @@ def test_vulkan_shader_examples_helper_parameter_keyword_codegen_reparse():
     )
     assert "res += (kernel_[i] * data[i]);" in result
     assert (
-        "let kernel_ = {(-1.0), 0.0, 0.0, 0.0, (-1.0), 0.0, 0.0, "
+        "float kernel_[9] = {(-1.0), 0.0, 0.0, 0.0, (-1.0), 0.0, 0.0, "
         "0.0, 2.0};" in result
     )
+    assert "float avg[9] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, " "0.0, 0.0};" in result
     assert "let gray = conv(kernel_, avg, 1.0, 0.50);" in result
     assert "float kernel[9]" not in result
     crosstl.translator.parse(result)
+
+
+def test_rust_gpu_compute_option_lowers_for_metal(tmp_path):
+    code = """
+    use spirv_std::{glam::UVec3, spirv};
+
+    pub fn collatz(mut n: u32) -> Option<u32> {
+        let mut i = 0;
+        if n == 0 {
+            return None;
+        }
+        while n != 1 {
+            n = if n.is_multiple_of(2) {
+                n / 2
+            } else {
+                if n >= 0x5555_5555 {
+                    return None;
+                }
+                3 * n + 1
+            };
+            i += 1;
+        }
+        Some(i)
+    }
+
+    #[spirv(compute(threads(1)))]
+    pub fn main_cs(#[spirv(global_invocation_id)] id: UVec3) {
+        let value = collatz(id.x);
+    }
+    """
+    rust_file = tmp_path / "collatz.rs"
+    rust_file.write_text(code)
+
+    result = crosstl.translate(str(rust_file), backend="metal", format_output=False)
+
+    assert "uint collatz(uint n)" in result
+    assert "__attribute__((unused)) uint value = collatz(id.x);" in result
+    assert "return uint(0);" in result
+    assert "return i;" in result
+    assert "Option" not in result
+    assert "Some" not in result
+    assert "None" not in result
+
+
+def test_rust_gpu_fixed_arrays_preserve_target_array_types(tmp_path):
+    code = """
+    fn conv(kernel: &[f32; 9], data: &[f32; 9], denom: f32, offset: f32) -> f32 {
+        let mut res = 0.0;
+        for i in 0..9 {
+            res += kernel[i] * data[i];
+        }
+        (res / denom + offset).clamp(0.0, 1.0)
+    }
+
+    #[spirv(compute(threads(16, 16)))]
+    pub fn main_cs() {
+        let kernel = [-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 2.0];
+        let avg = [0.0; 9];
+        let gray = conv(&kernel, &avg, 1.0, 0.50);
+    }
+    """
+    rust_file = tmp_path / "emboss.rs"
+    rust_file.write_text(code)
+
+    metal = crosstl.translate(str(rust_file), backend="metal", format_output=False)
+    spirv = crosstl.translate(str(rust_file), backend="vulkan", format_output=False)
+
+    assert "float kernel_[9] =" in metal
+    assert "float avg[9] =" in metal
+    assert "float kernel_ =" not in metal
+    assert "float avg =" not in metal
+    assert "OpTypeArray %5" in spirv
+    assert "OpCompositeConstruct %5" not in spirv
+    assert "WARNING: Unknown type None" not in spirv
+
+
+def test_rust_gpu_u32_max_uses_unsigned_spirv_constant(tmp_path):
+    code = """
+    use spirv_std::{glam::UVec3, spirv};
+
+    #[spirv(compute(threads(1)))]
+    pub fn main_cs(#[spirv(global_invocation_id)] id: UVec3) {
+        let max_value: u32 = u32::MAX;
+        let active = id.x == max_value;
+    }
+    """
+    rust_file = tmp_path / "u32max.rs"
+    rust_file.write_text(code)
+
+    result = crosstl.translate(str(rust_file), backend="vulkan", format_output=False)
+
+    uint_type_match = re.search(r"(%\d+) = OpTypeInt 32 0", result)
+    int_type_match = re.search(r"(%\d+) = OpTypeInt 32 1", result)
+    assert uint_type_match is not None
+    assert int_type_match is not None
+    assert f"OpConstant {uint_type_match.group(1)} 4294967295" in result
+    assert f"OpConstant {int_type_match.group(1)} 4294967295" not in result
 
 
 def test_rust_gpu_final_parenthesized_binary_expression_codegen():
