@@ -1,0 +1,18 @@
+shader main {
+    // vertex Shader
+    vertex {
+    vec4 VS(vec4 Pos @ Position) @ gl_Position @ stage_entry {
+        return Pos;
+    }
+
+    }
+
+    // fragment Shader
+    fragment {
+    vec4 PS(vec4 Pos @ gl_FragCoord) @ gl_FragColor @ stage_entry {
+        return vec4(1.0, 1.0, 0.0, 1.0);
+    }
+
+    }
+
+}

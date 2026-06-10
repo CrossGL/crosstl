@@ -35,6 +35,15 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/microsoft/DirectXShaderCompiler/blob/d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652/LICENSE.TXT
 
+## walbourn/directx-sdk-samples-reworked
+
+- Repository: https://github.com/walbourn/directx-sdk-samples-reworked
+- Commit: `1ad8f0f6a3e4d9be7e54ca52640ac12b6565ab0c`
+- Source path: `Direct3D11Tutorials/Tutorial02/Tutorial02.fxh`
+- License: MIT
+- License URL:
+  https://github.com/walbourn/directx-sdk-samples-reworked/blob/1ad8f0f6a3e4d9be7e54ca52640ac12b6565ab0c/LICENSE
+
 ## KhronosGroup/Vulkan-Samples
 
 - Repository: https://github.com/KhronosGroup/Vulkan-Samples

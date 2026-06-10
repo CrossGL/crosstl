@@ -89,6 +89,7 @@ jobs:
             --case directx-graphics-samples-hello-triangle \
             --case directx-graphics-samples-hello-texture \
             --case directx-shader-compiler-neg1 \
+            --case directx-sdk-samples-tutorial02 \
             --case glslang-push-constant-vertex \
             --case lonelydevil-vulkan-tutorial-triangle \
             --case nvpro-vk-mini-samples-rectangle \
@@ -133,6 +134,7 @@ jobs:
             --case directx-graphics-samples-hello-triangle \
             --case directx-graphics-samples-hello-texture \
             --case directx-shader-compiler-neg1 \
+            --case directx-sdk-samples-tutorial02 \
             --case glslang-push-constant-vertex \
             --case lonelydevil-vulkan-tutorial-triangle \
             --case vulkan-samples-dynamic-line-grid \
@@ -168,6 +170,7 @@ jobs:
             demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/metal/Cube_cube.vert.metal \
             demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/metal/shaders.metal \
             demos/open-source-porting/cases/directx-shader-compiler-neg1/crosstl-out/metal/neg1.metal \
+            demos/open-source-porting/cases/directx-sdk-samples-tutorial02/crosstl-out/metal/Tutorial02.metal \
             demos/open-source-porting/cases/glslang-push-constant-vertex/crosstl-out/metal/spv.pushConstant.metal \
             demos/open-source-porting/cases/lonelydevil-vulkan-tutorial-triangle/crosstl-out/metal/shader.frag.metal \
             demos/open-source-porting/cases/lonelydevil-vulkan-tutorial-triangle/crosstl-out/metal/shader.vert.metal \
@@ -200,6 +203,7 @@ jobs:
             --case directx-graphics-samples-hello-triangle \
             --case directx-graphics-samples-hello-texture \
             --case directx-shader-compiler-neg1 \
+            --case directx-sdk-samples-tutorial02 \
             --case lonelydevil-vulkan-tutorial-triangle \
             --case vulkan-samples-dynamic-line-grid \
             --case angle-simple-texture-2d \
@@ -230,6 +234,8 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/directx/shaders.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/directx/shaders.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/directx-shader-compiler-neg1/crosstl-out/directx/neg1.hlsl PSMain ps_6_0
+          compile_hlsl demos/open-source-porting/cases/directx-sdk-samples-tutorial02/crosstl-out/directx/Tutorial02.hlsl VSMain vs_6_0
+          compile_hlsl demos/open-source-porting/cases/directx-sdk-samples-tutorial02/crosstl-out/directx/Tutorial02.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.vert.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.frag.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.vert.hlsl VSMain vs_6_0
