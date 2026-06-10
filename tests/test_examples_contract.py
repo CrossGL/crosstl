@@ -23,14 +23,11 @@ WEBGL_COMPUTE_EXAMPLE_DIAGNOSTICS = (
     ("gpu_computing/MatrixMultiplication.cgl", "webgl"),
 )
 WEBGL_COMPUTE_EXAMPLE_DIAGNOSTIC_CASES = set(WEBGL_COMPUTE_EXAMPLE_DIAGNOSTICS)
-WGSL_POINTER_EXAMPLE_DIAGNOSTICS = (("gpu_computing/MatrixMultiplication.cgl", "wgsl"),)
-WGSL_POINTER_EXAMPLE_DIAGNOSTIC_CASES = set(WGSL_POINTER_EXAMPLE_DIAGNOSTICS)
 FULL_BACKEND_EXAMPLE_CASES = tuple(
     (relative_path, backend)
     for relative_path in FULL_BACKEND_EXAMPLES
     for backend in codegen.backend_names()
     if (relative_path, backend) not in WEBGL_COMPUTE_EXAMPLE_DIAGNOSTIC_CASES
-    and (relative_path, backend) not in WGSL_POINTER_EXAMPLE_DIAGNOSTIC_CASES
 )
 
 KNOWN_PRIMARY_GRAPHICS_GAPS = ()
@@ -63,7 +60,31 @@ GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES = (
     ("advanced/GenericPatternMatching.cgl", "slang", "Slang"),
 )
 
-KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = ()
+KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
+    (
+        "advanced/GenericPatternMatching.cgl",
+        "wgsl",
+        ValueError,
+        "WGSL target does not support generic structs yet",
+    ),
+    (
+        "cross_platform/UniversalPBRShader.cgl",
+        "wgsl",
+        ValueError,
+        "WGSL target does not support resource member "
+        "EnvironmentData.irradiance_map of type samplerCube; declare textures, "
+        "samplers, and storage resources as module-scope bindings instead of "
+        "user-struct fields",
+    ),
+    (
+        "graphics/ComplexShader.cgl",
+        "wgsl",
+        ValueError,
+        "WGSL target does not support resource member Material.albedoMap of "
+        "type sampler2D; declare textures, samplers, and storage resources as "
+        "module-scope bindings instead of user-struct fields",
+    ),
+)
 
 
 def _example_path(relative_path):
@@ -107,17 +128,6 @@ def test_webgl_compute_examples_report_actionable_diagnostics(relative_path, bac
     with pytest.raises(
         ValueError,
         match="WebGL target does not support shader stage\\(s\\): compute",
-    ):
-        crosstl.translate(
-            str(_example_path(relative_path)), backend=backend, format_output=False
-        )
-
-
-@pytest.mark.parametrize("relative_path,backend", WGSL_POINTER_EXAMPLE_DIAGNOSTICS)
-def test_wgsl_pointer_examples_report_actionable_diagnostics(relative_path, backend):
-    with pytest.raises(
-        ValueError,
-        match="WGSL target does not support pointer types yet",
     ):
         crosstl.translate(
             str(_example_path(relative_path)), backend=backend, format_output=False

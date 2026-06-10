@@ -29,6 +29,18 @@ class WebGLCodeGen(GLSLCodeGen):
     def default_glsl_version_line(self, ast, target_stage=None):
         return "#version 300 es"
 
+    def map_image_base_type_with_format(self, vtype, node=None):
+        mapped_type = super().map_image_base_type_with_format(vtype, node)
+        return self.sampled_image_type(mapped_type)
+
+    def glsl_resource_binding_layouts_supported(self, version_line):
+        return False
+
+    def should_emit_stage_io_layout(self, stage_name, direction):
+        if normalize_stage_name(stage_name) == "fragment" and direction == "in":
+            return False
+        return super().should_emit_stage_io_layout(stage_name, direction)
+
     def generate_program(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
         self.validate_webgl_stage_support(ast, target_stage)

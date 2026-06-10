@@ -275,6 +275,73 @@ def test_wgsl_codegen_lowers_structured_buffers_to_storage_bindings():
     assert "outValues[gid.x] = values[gid.x];" in generated
 
 
+def test_wgsl_codegen_lowers_buffer_pointers_to_storage_bindings():
+    shader = """
+    shader WGSLBufferPointers {
+        float readAt(buffer float* values, int index) {
+            return values[index];
+        }
+        float readAlias(buffer float* values, int index) {
+            return readAt(values, index);
+        }
+        void writeAt(buffer float* values, int index, float value) {
+            values[index] = value;
+        }
+        compute {
+            buffer float* inputValues;
+            buffer float* outputValues;
+            void main(uint3 gid @ gl_GlobalInvocationID) {
+                float value = readAlias(inputValues, int(gid.x));
+                writeAt(outputValues, int(gid.x), value);
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "@group(0) @binding(0)\nvar<storage, read_write> inputValues: array<f32>;"
+        in generated
+    )
+    assert (
+        "@group(0) @binding(1)\nvar<storage, read_write> outputValues: array<f32>;"
+        in generated
+    )
+    assert (
+        "fn readAt(values: ptr<storage, array<f32>, read_write>, index: i32) -> f32"
+        in generated
+    )
+    assert "return (*values)[index];" in generated
+    assert "return readAt(values, index);" in generated
+    assert "(*values)[index] = value;" in generated
+    assert "var value: f32 = readAlias(&inputValues, i32(gid.x));" in generated
+    assert "writeAt(&outputValues, i32(gid.x), value);" in generated
+
+
+def test_wgsl_codegen_emits_unique_entry_names_for_duplicate_stages():
+    shader = """
+    shader WGSLDuplicateComputeStages {
+        compute {
+            void main() {
+                return;
+            }
+        }
+        compute {
+            void main() {
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "fn compute_main()" in generated
+    assert "fn compute_main_1()" in generated
+
+
 def test_wgsl_codegen_rejects_structured_buffers_inside_user_structs():
     shader = """
     shader WGSLStructuredBufferMember {
@@ -457,8 +524,28 @@ def test_wgsl_codegen_rejects_do_while_statement():
                 }
             }
             """,
-            "WGSL target does not support CrossGL resource type sampler2D yet; "
-            "split texture/sampler/storage bindings are required",
+            "WGSL target does not support resource member "
+            "Material.colorTex of type sampler2D; declare textures, samplers, "
+            "and storage resources as module-scope bindings instead of "
+            "user-struct fields",
+        ),
+        (
+            """
+            shader WGSLStructCubeTextureResource {
+                struct EnvironmentData {
+                    samplerCube irradiance_map;
+                };
+                fragment {
+                    vec4 main() @ gl_FragColor {
+                        return vec4(1.0);
+                    }
+                }
+            }
+            """,
+            "WGSL target does not support resource member "
+            "EnvironmentData.irradiance_map of type samplerCube; declare "
+            "textures, samplers, and storage resources as module-scope "
+            "bindings instead of user-struct fields",
         ),
         (
             """

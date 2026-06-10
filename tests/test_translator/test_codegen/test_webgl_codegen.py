@@ -63,10 +63,11 @@ def test_webgl_backend_is_target_only():
 
 def test_webgl_codegen_emits_glsl_es_header_and_default_precision():
     generated = WebGLCodeGen().generate(parse_shader(WEBGL_SHADER))
-    stripped = generated.lstrip()
 
-    assert stripped.startswith("#version 300 es\n")
-    assert stripped.index("#version 300 es") < stripped.index("precision highp float;")
+    assert generated.startswith("#version 300 es\n")
+    assert generated.index("#version 300 es") < generated.index(
+        "precision highp float;"
+    )
     assert "precision highp float;\n" in generated
     assert "precision highp int;\n" in generated
     assert "#version 450 core" not in generated
@@ -92,6 +93,102 @@ def test_webgl_codegen_preserves_explicit_precision_qualifiers():
     assert "precision lowp int;" in generated
     assert "precision highp float;" not in generated
     assert "precision highp int;" not in generated
+
+
+def test_webgl_codegen_omits_es300_binding_layouts_for_resources():
+    shader = """
+    shader WebGLResourceBindings {
+        sampler2D colorTex @binding(2);
+        cbuffer MaterialData @binding(1) {
+            float tint;
+        };
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(colorTex, uv) * tint;
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "binding =" not in generated
+    assert "uniform sampler2D colorTex;" in generated
+    assert "layout(std140) uniform MaterialData" in generated
+
+
+def test_webgl_codegen_emits_stage_local_cbuffers():
+    shader = """
+    shader WebGLStageLocalCBuffer {
+        vertex {
+            cbuffer LocalParams {
+                float scale;
+            };
+            vec4 main(vec3 position @ POSITION) @ gl_Position {
+                return vec4(position * scale, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "layout(std140) uniform LocalParams" in generated
+    assert "float scale;" in generated
+    assert "(position * scale)" in generated
+
+
+def test_webgl_codegen_maps_separate_texture_resources_to_samplers():
+    shader = """
+    shader WebGLSeparateTexture {
+        texture2D colorTex;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(colorTex, uv);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "uniform sampler2D colorTex;" in generated
+    assert "uniform texture2D colorTex;" not in generated
+
+
+def test_webgl_codegen_omits_fragment_input_location_layouts():
+    shader = """
+    shader WebGLFragmentInput {
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return vec4(uv, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "in vec2 uv;" in generated
+    assert "layout(location = 5) in vec2 uv;" not in generated
+
+
+def test_webgl_codegen_casts_texture_size_for_float_vector_arithmetic():
+    shader = """
+    shader WebGLTextureSizeCast {
+        sampler2D shadowMap;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec2 texelSize = 1.0 / textureSize(shadowMap, 0);
+                return vec4(texelSize, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "vec2 texelSize = (1.0 / vec2(textureSize(shadowMap, 0)));" in generated
 
 
 def test_webgl_aliases_format_as_glsl():
