@@ -7,7 +7,7 @@
       "id": "lonelydevil-vulkan-tutorial-triangle-vertex",
       "path": "shader.vert",
       "sourceBackend": "opengl",
-      "targets": ["cgl", "opengl", "directx", "vulkan"],
+      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
       "repository": "https://github.com/lonelydevil/vulkan-tutorial-C-implementation",
       "commit": "780ff146a6eccd7064a10e86363f3c2f7323825d",
       "sourceUrl": "https://github.com/lonelydevil/vulkan-tutorial-C-implementation/blob/780ff146a6eccd7064a10e86363f3c2f7323825d/shader.vert"
@@ -16,7 +16,7 @@
       "id": "lonelydevil-vulkan-tutorial-triangle-fragment",
       "path": "shader.frag",
       "sourceBackend": "opengl",
-      "targets": ["cgl", "opengl", "directx", "vulkan"],
+      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
       "repository": "https://github.com/lonelydevil/vulkan-tutorial-C-implementation",
       "commit": "780ff146a6eccd7064a10e86363f3c2f7323825d",
       "sourceUrl": "https://github.com/lonelydevil/vulkan-tutorial-C-implementation/blob/780ff146a6eccd7064a10e86363f3c2f7323825d/shader.frag"

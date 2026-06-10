@@ -117,6 +117,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
     assert _workflow_step_cases(workflow, "macOS Metal smoke checks") == {
         "apple-modern-rendering-mesh-viewdir",
         "directx-graphics-samples-hello-triangle",
+        "lonelydevil-vulkan-tutorial-triangle",
         "metal-performance-testing-matmul",
         "nvidia-cuda-samples-vector-add",
         "opencl-sdk-saxpy",

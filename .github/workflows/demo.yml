@@ -120,6 +120,7 @@ jobs:
             --run-toolchains \
             --require-toolchain-runs \
             --case directx-graphics-samples-hello-triangle \
+            --case lonelydevil-vulkan-tutorial-triangle \
             --case vulkan-samples-dynamic-line-grid \
             --case apple-modern-rendering-mesh-viewdir \
             --case metal-performance-testing-matmul \
@@ -144,6 +145,8 @@ jobs:
           out_dir="${RUNNER_TEMP}/demo-metal-air"
           mkdir -p "$out_dir"
           for shader in \
+            demos/open-source-porting/cases/lonelydevil-vulkan-tutorial-triangle/crosstl-out/metal/shader.frag.metal \
+            demos/open-source-porting/cases/lonelydevil-vulkan-tutorial-triangle/crosstl-out/metal/shader.vert.metal \
             demos/open-source-porting/cases/metal-performance-testing-matmul/crosstl-out/metal/mat_mul_simple1.metal \
             demos/open-source-porting/cases/nvidia-cuda-samples-vector-add/crosstl-out/metal/vectorAdd_kernel.metal \
             demos/open-source-porting/cases/opencl-sdk-saxpy/crosstl-out/metal/saxpy.metal \
