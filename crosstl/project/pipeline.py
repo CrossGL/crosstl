@@ -1356,10 +1356,12 @@ RUNTIME_REFERENCE_RULES = (
         "wgsl",
         "runtime-api",
         re.compile(
-            r"\b(navigator\.gpu|GPU(?:Adapter|BindGroup(?:Layout)?|CanvasContext|"
+            r"(?<!\w)(navigator\.gpu|GPU(?:Adapter|BindGroup(?:Layout)?|CanvasContext|"
             r"CommandEncoder|ComputePipeline|Device|PipelineLayout|Queue|"
             r"RenderPipeline|ShaderModule)|create(?:BindGroup(?:Layout)?|"
-            r"PipelineLayout|ShaderModule)|setBindGroup)\b"
+            r"PipelineLayout|ShaderModule)|setBindGroup|wgpu::(?:BindGroup"
+            r"(?:Layout)?Descriptor|PipelineLayoutDescriptor|ShaderModuleDescriptor|"
+            r"include_wgsl!)|(?<=\.)set_bind_group)(?!\w)"
         ),
         None,
     ),

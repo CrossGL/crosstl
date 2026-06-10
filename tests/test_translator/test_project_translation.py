@@ -1722,6 +1722,72 @@ def test_scan_report_records_webgpu_bind_group_runtime_reference_evidence(tmp_pa
     ]
 
 
+def test_scan_report_records_rust_wgpu_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.rs").write_text(
+        textwrap.dedent("""
+            fn bind(device: &wgpu::Device, pass: &mut wgpu::RenderPass<'_>) {
+                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: None,
+                    source: wgpu::include_wgsl!("shader.wgsl").source,
+                });
+                let layout = device.create_bind_group_layout(
+                    &wgpu::BindGroupLayoutDescriptor {
+                        entries: &[],
+                        label: None,
+                    },
+                );
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    layout: &layout,
+                    entries: &[],
+                    label: None,
+                });
+                let pipeline_layout = device.create_pipeline_layout(
+                    &wgpu::PipelineLayoutDescriptor {
+                        bind_group_layouts: &[&layout],
+                        push_constant_ranges: &[],
+                        label: None,
+                    },
+                );
+                pass.set_bind_group(0, &bind_group, &[]);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.rs").write_text(
+        textwrap.dedent("""
+            fn helper(render_pass: &mut Pass) {
+                let descriptor = other::ShaderModuleDescriptor;
+                let layout = not_wgpu::BindGroupLayoutDescriptor;
+                let source = include_str!("shader.wgsl");
+                render_pass.set_bind_group_layout(0);
+                let set_bind_group = false;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 6
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 6}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 6}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.rs": 6}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.rs", "wgsl", "runtime-api", "wgpu::ShaderModuleDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::include_wgsl!"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::BindGroupLayoutDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::BindGroupDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::PipelineLayoutDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "set_bind_group"),
+    ]
+
+
 def test_scan_report_records_system_include_migration_actions(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -24656,6 +24722,64 @@ def test_inspect_runtime_package_reflects_generated_wgsl_resource_bindings(tmp_p
             "set": 0,
             "binding": 4,
             "access": "read_write",
+        },
+    ]
+    assert host_interface["resources"] == expected_resources
+    assert host_interface["diagnostics"] == []
+
+    loader_manifest = build_runtime_loader_manifest(
+        package_dir / "runtime-package.json"
+    )
+    assert (
+        loader_manifest["loadUnits"][0]["hostInterface"]["resources"]
+        == expected_resources
+    )
+
+
+def test_inspect_runtime_package_reflects_explicit_wgsl_texture_sampler_group(
+    tmp_path,
+):
+    source = textwrap.dedent("""
+        shader ResourceShader {
+            layout(set = 2, binding = 4) uniform sampler2D sourceTexture;
+
+            fragment {
+                vec4 main() {
+                    return vec4(1.0);
+                }
+            }
+        }
+        """).strip()
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path,
+        source=source,
+        source_name="resource.cgl",
+        targets=("wgsl",),
+    )
+
+    payload = inspect_runtime_package(package_dir / "runtime-package.json")
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["source"] == "package-artifact"
+    assert host_interface["parser"] == "wgsl-reflection"
+    assert host_interface["resourceCount"] == 2
+    expected_resources = [
+        {
+            "name": "sourceTexture",
+            "kind": "texture",
+            "type": "texture_2d<f32>",
+            "set": 2,
+            "binding": 4,
+            "access": None,
+        },
+        {
+            "name": "sourceTexture_sampler",
+            "kind": "sampler",
+            "type": "sampler",
+            "set": 2,
+            "binding": 5,
+            "access": None,
         },
     ]
     assert host_interface["resources"] == expected_resources
