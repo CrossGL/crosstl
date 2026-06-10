@@ -3600,14 +3600,21 @@ class MetalCodeGen:
                         "name": p.name,
                         "raw_type": raw_param_type,
                         "mapped_type": param_type,
+                        "attribute": self.metal_vertex_input_location_attribute(p),
                         "semantic": semantic,
                     }
                 )
                 continue
 
-            param_attr = self.parameter_attribute(
-                raw_param_type, semantic, shader_type, p
+            param_attr = (
+                self.metal_vertex_input_location_attribute(p)
+                if shader_type == "vertex"
+                else None
             )
+            if param_attr is None:
+                param_attr = self.parameter_attribute(
+                    raw_param_type, semantic, shader_type, p
+                )
             declaration = self.format_parameter_declaration(
                 raw_param_type, param_type, p.name, p, shader_type
             )
@@ -4776,7 +4783,10 @@ class MetalCodeGen:
             return False
         if self.is_graphics_stage_output_parameter(parameter, shader_type):
             return False
-        if self.semantic_from_node(parameter) is not None:
+        if (
+            self.semantic_from_node(parameter) is not None
+            and self.metal_vertex_input_location_semantic(parameter) is None
+        ):
             return False
         if self.is_resource_parameter_type(raw_param_type):
             return False
@@ -13437,7 +13447,9 @@ class MetalCodeGen:
     def metal_default_vertex_input_member_semantics(self, struct_node):
         used_attributes = set()
         for member in getattr(struct_node, "members", []) or []:
-            semantic = self.semantic_from_node(member)
+            semantic = self.metal_vertex_input_location_semantic(member)
+            if semantic is None:
+                semantic = self.semantic_from_node(member)
             attribute_index = self.metal_attribute_index_from_semantic(semantic)
             if attribute_index is not None:
                 span = self.metal_stage_io_member_attribute_span(member)
@@ -13447,7 +13459,13 @@ class MetalCodeGen:
         next_attribute = 0
         for member in getattr(struct_node, "members", []) or []:
             member_name = getattr(member, "name", None)
-            if not member_name or self.semantic_from_node(member) is not None:
+            if not member_name:
+                continue
+            location_semantic = self.metal_vertex_input_location_semantic(member)
+            if location_semantic is not None:
+                defaults[member_name] = location_semantic
+                continue
+            if self.semantic_from_node(member) is not None:
                 continue
             if not self.metal_can_default_stage_io_semantic(
                 self.struct_member_raw_type(member)
@@ -13461,6 +13479,30 @@ class MetalCodeGen:
             used_attributes.update(range(next_attribute, next_attribute + span))
             next_attribute += span
         return defaults
+
+    def explicit_location_attribute_index(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != "location":
+                continue
+            arguments = getattr(attr, "arguments", []) or []
+            if len(arguments) != 1:
+                continue
+            location = self.binding_index_value(arguments[0])
+            if location is not None:
+                return location
+        return None
+
+    def metal_vertex_input_location_semantic(self, node):
+        location = self.explicit_location_attribute_index(node)
+        if location is None:
+            return None
+        return f"attribute({location})"
+
+    def metal_vertex_input_location_attribute(self, node):
+        semantic = self.metal_vertex_input_location_semantic(node)
+        if semantic is None:
+            return None
+        return self.map_semantic(semantic)
 
     def metal_default_user_stage_io_member_semantics(
         self, struct_node, existing_defaults=None
