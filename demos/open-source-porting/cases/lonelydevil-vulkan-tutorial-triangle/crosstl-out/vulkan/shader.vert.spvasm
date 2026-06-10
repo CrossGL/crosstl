@@ -1,0 +1,76 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 52
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %25 "main" %28 %30
+OpName %9 "VertexOutput"
+OpMemberName %9 0 "fragColor"
+OpMemberName %9 1 "gl_Position"
+OpName %16 "positions"
+OpName %23 "colors"
+OpName %28 "CrossGL_vertex_output_main_fragColor"
+OpName %30 "gl_Position"
+OpName %32 "output"
+OpDecorate %28 Location 0
+OpDecorate %30 BuiltIn Position
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypeStruct %7 %8
+%11 = OpConstant %4 3
+%10 = OpTypeArray %6 %11
+%12 = OpConstant %5 0.0
+%13 = OpConstant %5 0.5
+%15 = OpTypePointer Private %10
+%17 = OpTypeArray %7 %11
+%18 = OpConstantComposite %7 %13 %13 %12
+%19 = OpConstantComposite %7 %12 %13 %13
+%20 = OpConstantComposite %7 %13 %12 %13
+%21 = OpConstantComposite %17 %18 %19 %20
+%22 = OpTypePointer Private %17
+%24 = OpTypeFunction %2
+%27 = OpTypePointer Output %7
+%29 = OpTypePointer Output %8
+%31 = OpTypePointer Function %9
+%33 = OpTypePointer Private %6
+%36 = OpConstant %5 1.0
+%40 = OpConstant %4 1
+%41 = OpTypePointer Function %8
+%43 = OpTypePointer Private %7
+%46 = OpConstant %4 0
+%47 = OpTypePointer Function %7
+%16 = OpVariable %15 Private
+%23 = OpVariable %22 Private %21
+%28 = OpVariable %27 Output
+%30 = OpVariable %29 Output
+%14 = OpFNegate %5 %13
+%25 = OpFunction %2 None %24
+%26 = OpLabel
+%32 = OpVariable %31 Function
+; WARNING: Unknown variable gl_VertexIndex
+%34 = OpAccessChain %33 %16 %12
+%35 = OpLoad %6 %34
+%37 = OpCompositeExtract %5 %35 0
+%38 = OpCompositeExtract %5 %35 1
+%39 = OpCompositeConstruct %8 %37 %38 %12 %36
+%42 = OpAccessChain %41 %32 %40
+OpStore %42 %39
+; WARNING: Unknown variable gl_VertexIndex
+%44 = OpAccessChain %43 %23 %12
+%45 = OpLoad %7 %44
+%48 = OpAccessChain %47 %32 %46
+OpStore %48 %45
+%49 = OpLoad %9 %32
+%50 = OpCompositeExtract %7 %49 0
+OpStore %28 %50
+%51 = OpCompositeExtract %8 %49 1
+OpStore %30 %51
+OpReturn
+OpFunctionEnd

@@ -28,6 +28,7 @@ def test_open_source_demo_cases_have_pinned_manifests_and_references():
     assert {path.name for path in case_dirs} == {
         "apple-modern-rendering-mesh-viewdir",
         "directx-graphics-samples-hello-triangle",
+        "lonelydevil-vulkan-tutorial-triangle",
         "metal-performance-testing-matmul",
         "opencl-sdk-saxpy",
         "raylib-base-fragment",
@@ -95,6 +96,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
     assert _workflow_step_cases(workflow, "Linux OpenGL and Vulkan smoke checks") == {
         "apple-modern-rendering-mesh-viewdir",
         "directx-graphics-samples-hello-triangle",
+        "lonelydevil-vulkan-tutorial-triangle",
         "metal-performance-testing-matmul",
         "opencl-sdk-saxpy",
         "raylib-base-fragment",
@@ -120,6 +122,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "apple-modern-rendering-mesh-viewdir",
         "directx-graphics-samples-hello-triangle",
         "slang-hello-world-compute",
+        "lonelydevil-vulkan-tutorial-triangle",
         "vulkan-samples-dynamic-line-grid",
     }
 

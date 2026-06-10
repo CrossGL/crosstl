@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/shader.vert.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 530,
+        "file": "crosstl-out/cgl/shader.vert.cgl",
+        "length": 530,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 323,
+        "file": "shader.vert",
+        "length": 323,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

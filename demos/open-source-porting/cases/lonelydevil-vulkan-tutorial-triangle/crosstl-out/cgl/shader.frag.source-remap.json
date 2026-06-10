@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/shader.frag.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 281,
+        "file": "crosstl-out/cgl/shader.frag.cgl",
+        "length": 281,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 138,
+        "file": "shader.frag",
+        "length": 138,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

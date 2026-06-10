@@ -4,6 +4,17 @@ The demo source files are copied or reduced from the upstream projects listed
 below. Generated CrossTL artifacts are derived from those source files and
 should be treated with the same upstream license context when redistributed.
 
+## lonelydevil/vulkan-tutorial-C-implementation
+
+- Repository: https://github.com/lonelydevil/vulkan-tutorial-C-implementation
+- Commit: `780ff146a6eccd7064a10e86363f3c2f7323825d`
+- Source paths:
+  - `shader.vert`
+  - `shader.frag`
+- License: MIT
+- License URL:
+  https://github.com/lonelydevil/vulkan-tutorial-C-implementation/blob/780ff146a6eccd7064a10e86363f3c2f7323825d/LICENSE
+
 ## microsoft/DirectX-Graphics-Samples
 
 - Repository: https://github.com/microsoft/DirectX-Graphics-Samples

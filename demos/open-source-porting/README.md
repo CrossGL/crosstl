@@ -43,6 +43,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | Case | Upstream | License | Source backend | Checked targets | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `directx-graphics-samples-hello-triangle` | `microsoft/DirectX-Graphics-Samples` at `31ae3c91160d8634264004cdaf4e41a99c41243e` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Hello Triangle shader file without source edits. |
+| `lonelydevil-vulkan-tutorial-triangle` | `lonelydevil/vulkan-tutorial-C-implementation` at `780ff146a6eccd7064a10e86363f3c2f7323825d` | MIT | GLSL | CrossGL, OpenGL, DirectX, Vulkan | Uses the upstream triangle shader pair unchanged. Metal vertex-index lowering is tracked in issue #788. |
 | `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, Metal, DirectX, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. OpenGL smoke validation for this case is tracked in issue #745. |
 | `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, Metal, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. OpenGL output is tracked in issue #746. |
 | `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. DirectX constant-parameter lowering is tracked in issue #755. |
@@ -61,13 +62,6 @@ apart from repository formatting checks. The Vulkan Samples and Apple cases are
 reduced source slices copied from fixture-backed upstream examples so the demo
 remains small and deterministic. The reductions remove unrelated code around
 the shader construct being demonstrated; they do not patch translator output.
-
-The complete `lonelydevil/vulkan-tutorial-C-implementation` shader pair was
-retested after project artifact naming was fixed in issue #743. The pair now
-emits distinct artifacts for `shader.vert` and `shader.frag`, but the vertex
-shader uses Vulkan-style `gl_VertexIndex`; OpenGL and DirectX target lowering
-for that builtin is tracked in issue #763, and the case remains intentionally
-unchecked until target output preserves the vertex-index semantics.
 
 The `glfw/glfw` OpenGL triangle shader strings were tested as a candidate and
 exposed a CrossGL intermediate keyword collision: the fragment shader uses

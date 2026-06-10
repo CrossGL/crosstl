@@ -87,6 +87,7 @@ jobs:
             --run-toolchains \
             --require-toolchain-runs \
             --case directx-graphics-samples-hello-triangle \
+            --case lonelydevil-vulkan-tutorial-triangle \
             --case raylib-base-vertex \
             --case sascha-willems-vulkan-conservative-triangle \
             --case slang-hello-world-compute \
@@ -156,6 +157,7 @@ jobs:
             --run-toolchains \
             --require-toolchain-runs \
             --case directx-graphics-samples-hello-triangle \
+            --case lonelydevil-vulkan-tutorial-triangle \
             --case vulkan-samples-dynamic-line-grid \
             --case apple-modern-rendering-mesh-viewdir \
             --case slang-hello-world-compute \
