@@ -27,4 +27,3 @@ VertexOutput VSMain() {
     }
     return output;
 }
-

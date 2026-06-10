@@ -30,4 +30,3 @@ vertex VertexOutput vertex_main(constant Material& material [[buffer(0)]]) {
     }
     return output;
 }
-
