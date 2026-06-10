@@ -80,6 +80,15 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/KhronosGroup/glslang/blob/98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515/LICENSE.txt
 
+## godotengine/godot
+
+- Repository: https://github.com/godotengine/godot
+- Commit: `3df26a02c446710c979daa541b74f87edeca81b0`
+- Source path: `modules/betsy/alpha_stitch.glsl`
+- License: MIT
+- License URL:
+  https://github.com/godotengine/godot/blob/3df26a02c446710c979daa541b74f87edeca81b0/LICENSE.txt
+
 ## donaldwuid/apple_metal_sample_code
 
 - Repository: https://github.com/donaldwuid/apple_metal_sample_code

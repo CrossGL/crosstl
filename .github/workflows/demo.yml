@@ -114,6 +114,13 @@ jobs:
             --check \
             --run-toolchains \
             --require-toolchain-runs \
+            --case godot-betsy-alpha-stitch \
+            --target opengl \
+            --reports-dir support/generated/demo-reports/linux-opengl
+          python demos/open-source-porting/run_demo.py \
+            --check \
+            --run-toolchains \
+            --require-toolchain-runs \
             --case angle-simple-texture-2d \
             --case arm-opengl-es-sdk-cube \
             --case apple-modern-rendering-mesh-viewdir \

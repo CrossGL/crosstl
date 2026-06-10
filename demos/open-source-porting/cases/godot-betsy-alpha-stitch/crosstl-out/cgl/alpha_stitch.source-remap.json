@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/alpha_stitch.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 557,
+        "file": "crosstl-out/cgl/alpha_stitch.cgl",
+        "length": 557,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 760,
+        "file": "alpha_stitch.glsl",
+        "length": 760,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}
