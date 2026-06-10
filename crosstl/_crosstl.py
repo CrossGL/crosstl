@@ -1201,11 +1201,28 @@ def _format_runtime_adapter_plan(payload):
                     details.append(f"source remap: {source_remap_path}")
             host_interface = adapter.get("hostInterface")
             if isinstance(host_interface, Mapping):
-                details.append(
-                    "interface: "
-                    f"{host_interface.get('entryPointCount', 0)} entry points, "
-                    f"{host_interface.get('resourceCount', 0)} resources"
-                )
+                interface_status = host_interface.get("status")
+                if interface_status == "ready":
+                    details.append(
+                        "interface: ready, "
+                        f"{host_interface.get('entryPointCount', 0)} entry points, "
+                        f"{host_interface.get('resourceCount', 0)} resources"
+                    )
+                else:
+                    diagnostics = [
+                        diagnostic
+                        for diagnostic in host_interface.get("diagnostics", [])
+                        if isinstance(diagnostic, str) and diagnostic
+                    ]
+                    diagnostic_suffix = (
+                        f", diagnostics: {', '.join(diagnostics)}"
+                        if diagnostics
+                        else ""
+                    )
+                    details.append(
+                        f"interface: {interface_status or 'not-inspected'}"
+                        f"{diagnostic_suffix}"
+                    )
             suffix = f" [{'; '.join(details)}]" if details else ""
             lines.append(
                 "- "

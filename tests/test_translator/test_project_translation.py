@@ -23104,7 +23104,10 @@ def test_project_cli_package_runtime_json_writes_output(tmp_path):
 
 
 def _build_runtime_package_fixture(
-    tmp_path, source=SIMPLE_CROSSL, source_name="simple.cgl"
+    tmp_path,
+    source=SIMPLE_CROSSL,
+    source_name="simple.cgl",
+    targets=("cgl",),
 ):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -23113,7 +23116,7 @@ def _build_runtime_package_fixture(
         "void run() { cudaLaunchKernel(nullptr); }\n",
         encoding="utf-8",
     )
-    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report = translate_project(repo, targets=list(targets), output_dir="out")
     report_path = repo / "out" / "portability-report.json"
     report.write_json(report_path)
     manifest_path = repo / "out" / "runtime-manifest.json"
@@ -23779,6 +23782,10 @@ def test_plan_runtime_adapters_from_runtime_package(tmp_path):
         "source-remaps/out/cgl/simple.source-remap.json"
     )
     assert len(payload["actions"]) == 2
+    assert {action["kind"] for action in payload["actions"]} == {
+        "wire-runtime-adapter",
+        "review-runtime-references",
+    }
     assert set(payload["actions"][0]) == (
         project_pipeline.RUNTIME_ADAPTER_PLAN_ACTION_FIELDS
     )
@@ -23790,6 +23797,59 @@ def test_plan_runtime_adapters_from_runtime_package(tmp_path):
         "readyBindingCount": 1,
         "failedBindingCount": 0,
     }
+
+
+def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target(
+    tmp_path,
+):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("opengl",))
+
+    payload = plan_runtime_adapters(package_dir / "runtime-package.json")
+
+    assert payload["success"] is True
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "bindingCount": 1,
+        "readyBindingCount": 1,
+        "failedBindingCount": 0,
+        "adapterCount": 1,
+        "actionCount": 3,
+        "runtimeReferenceCount": 1,
+    }
+    assert payload["targets"][0]["target"] == "opengl"
+    assert payload["targets"][0]["adapterKind"] == "opengl-glsl-adapter"
+    assert len(payload["adapters"]) == 1
+    adapter = payload["adapters"][0]
+    assert adapter["target"] == "opengl"
+    assert adapter["adapterKind"] == "opengl-glsl-adapter"
+    assert adapter["hostInterface"] == {
+        "status": "unavailable",
+        "source": "package-artifact",
+        "parser": None,
+        "entryPointCount": 0,
+        "resourceCount": 0,
+        "entryPoints": [],
+        "resources": [],
+        "diagnostics": [
+            "project.runtime-package-inspection.host-interface-parser-unavailable"
+        ],
+    }
+    assert [action["kind"] for action in payload["actions"]] == [
+        "wire-runtime-adapter",
+        "resolve-host-interface-metadata",
+        "review-runtime-references",
+    ]
+    host_interface_action = payload["actions"][1]
+    assert set(host_interface_action) == (
+        project_pipeline.RUNTIME_ADAPTER_PLAN_ACTION_FIELDS
+    )
+    assert host_interface_action["severity"] == "warning"
+    assert host_interface_action["target"] == "opengl"
+    assert host_interface_action["adapter"] == adapter["id"]
+    assert host_interface_action["binding"] == adapter["binding"]
+    assert host_interface_action["packagePath"] == adapter["packagePath"]
+    assert "status is unavailable" in host_interface_action["message"]
+    assert "host-interface-parser-unavailable" in host_interface_action["message"]
 
 
 def test_plan_runtime_adapters_rejects_failed_package(tmp_path):
@@ -23861,10 +23921,40 @@ def test_project_cli_plan_runtime_adapters_text_outputs_adapters(tmp_path):
         "- cgl: artifacts/out/cgl/simple.cgl via crossgl-source-adapter "
         "[format: CrossGL source;"
     ) in result.stdout
-    assert "interface: 1 entry points, 0 resources" in result.stdout
+    assert "interface: ready, 1 entry points, 0 resources" in result.stdout
     assert "Runtime adapter actions:" in result.stdout
     assert "wire-runtime-adapter" in result.stdout
     assert "review-runtime-references" in result.stdout
+
+
+def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status(
+    tmp_path,
+):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("opengl",))
+    package_manifest = package_dir / "runtime-package.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-runtime-adapters",
+            str(package_manifest),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Runtime adapters:" in result.stdout
+    assert "interface: unavailable" in result.stdout
+    assert "host-interface-parser-unavailable" in result.stdout
+    assert "Runtime adapter actions:" in result.stdout
+    assert "resolve-host-interface-metadata" in result.stdout
 
 
 def test_project_cli_plan_runtime_adapters_json_writes_output(tmp_path):
