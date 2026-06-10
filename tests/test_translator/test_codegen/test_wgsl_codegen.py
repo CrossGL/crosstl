@@ -513,42 +513,6 @@ def test_wgsl_codegen_rejects_do_while_statement():
         ),
         (
             """
-            shader WGSLStructTextureResource {
-                struct Material {
-                    sampler2D colorTex;
-                };
-                fragment {
-                    vec4 main() @ gl_FragColor {
-                        return vec4(1.0);
-                    }
-                }
-            }
-            """,
-            "WGSL target does not support resource member "
-            "Material.colorTex of type sampler2D; declare textures, samplers, "
-            "and storage resources as module-scope bindings instead of "
-            "user-struct fields",
-        ),
-        (
-            """
-            shader WGSLStructCubeTextureResource {
-                struct EnvironmentData {
-                    samplerCube irradiance_map;
-                };
-                fragment {
-                    vec4 main() @ gl_FragColor {
-                        return vec4(1.0);
-                    }
-                }
-            }
-            """,
-            "WGSL target does not support resource member "
-            "EnvironmentData.irradiance_map of type samplerCube; declare "
-            "textures, samplers, and storage resources as module-scope "
-            "bindings instead of user-struct fields",
-        ),
-        (
-            """
             shader WGSLUnsupportedTextureCall {
                 sampler2D colorTex;
                 fragment {
@@ -568,6 +532,149 @@ def test_wgsl_codegen_rejects_unsupported_resource_texture_constructs(shader, me
         match=message,
     ):
         WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_lowers_struct_texture_members_to_module_bindings():
+    shader = """
+    shader WGSLStructTextureResource {
+        struct Material {
+            vec3 tint;
+            sampler2D colorTex;
+        };
+        uniform Material material;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(material.colorTex, uv) * vec4(material.tint, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    struct_block = generated.split("};", 1)[0] + "};"
+    assert (
+        "struct Material {\n    tint: vec3<f32>,\n};" == struct_block.split("\n\n")[-1]
+    )
+    assert "    colorTex:" not in struct_block
+    assert "@group(0) @binding(1)\nvar material_colorTex: texture_2d<f32>;" in generated
+    assert "@group(0) @binding(2)\nvar material_colorTex_sampler: sampler;" in generated
+    assert (
+        "textureSample(material_colorTex, material_colorTex_sampler, uv)" in generated
+    )
+    assert "material.tint" in generated
+
+
+def test_wgsl_codegen_lowers_struct_texture_members_in_helper_parameters():
+    shader = """
+    shader WGSLStructCubeTextureResource {
+        struct EnvironmentData {
+            samplerCube irradiance_map;
+            float exposure;
+        };
+        vec4 sampleEnv(EnvironmentData env, vec3 direction) {
+            return texture(env.irradiance_map, direction) * env.exposure;
+        }
+        uniform EnvironmentData environment;
+        fragment {
+            vec4 main(vec3 normal @ NORMAL) @ gl_FragColor {
+                return sampleEnv(environment, normal);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    struct_block = generated.split("};", 1)[0] + "};"
+    assert (
+        "struct EnvironmentData {\n    exposure: f32,\n};"
+        == struct_block.split("\n\n")[-1]
+    )
+    assert "    irradiance_map:" not in struct_block
+    assert (
+        "@group(0) @binding(1)\nvar environment_irradiance_map: " "texture_cube<f32>;"
+    ) in generated
+    assert (
+        "@group(0) @binding(2)\nvar environment_irradiance_map_sampler: sampler;"
+        in generated
+    )
+    assert (
+        "fn sampleEnv(env: EnvironmentData, env_irradiance_map: texture_cube<f32>, "
+        "env_irradiance_map_sampler: sampler, direction: vec3<f32>)"
+    ) in generated
+    assert (
+        "textureSample(env_irradiance_map, env_irradiance_map_sampler, direction)"
+    ) in generated
+    assert (
+        "return sampleEnv(environment, environment_irradiance_map, "
+        "environment_irradiance_map_sampler, normal);"
+    ) in generated
+    assert "env.exposure" in generated
+
+
+def test_wgsl_codegen_keeps_scalar_member_with_same_name_as_resource_member():
+    shader = """
+    shader WGSLStructResourceCollision {
+        struct Textured {
+            sampler2D colorTex;
+        };
+        struct Plain {
+            float colorTex;
+        };
+        uniform Textured textured;
+        uniform Plain plain;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(textured.colorTex, uv) + vec4(plain.colorTex);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var textured_colorTex: texture_2d<f32>;" in generated
+    assert (
+        "textureSample(textured_colorTex, textured_colorTex_sampler, uv)" in generated
+    )
+    assert "plain.colorTex" in generated
+    assert "textureSample(plain_colorTex" not in generated
+
+
+def test_wgsl_codegen_aliases_nested_resource_member_paths_from_initializer():
+    shader = """
+    shader WGSLStructResourceAlias {
+        struct Material {
+            vec3 albedo;
+            sampler2D albedoMap;
+        };
+        struct Scene {
+            Material materials[4];
+        };
+        struct GlobalUniforms {
+            Scene scene;
+        };
+        uniform GlobalUniforms globals;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0, int materialIndex @ TEXCOORD1) @ gl_FragColor {
+                Material material = globals.scene.materials[materialIndex];
+                return texture(material.albedoMap, uv) * vec4(material.albedo, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "albedoMap:" not in generated.split("struct Scene", 1)[0]
+    assert "var globals_scene_materials_albedoMap: texture_2d<f32>;" in generated
+    assert (
+        "textureSample(globals_scene_materials_albedoMap, "
+        "globals_scene_materials_albedoMap_sampler, uv)"
+    ) in generated
+    assert "material.albedo" in generated
+    assert "material.albedoMap" not in generated
 
 
 def test_wgsl_codegen_lowers_sampled_texture_resources_and_calls():

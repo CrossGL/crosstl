@@ -71,18 +71,15 @@ KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
         "cross_platform/UniversalPBRShader.cgl",
         "wgsl",
         ValueError,
-        "WGSL target does not support resource member "
-        "EnvironmentData.irradiance_map of type samplerCube; declare textures, "
-        "samplers, and storage resources as module-scope bindings instead of "
-        "user-struct fields",
+        "WGSL target does not support CrossGL resource type sampler2D yet; "
+        "split texture/sampler/storage bindings are required",
     ),
     (
         "graphics/ComplexShader.cgl",
         "wgsl",
         ValueError,
-        "WGSL target does not support resource member Material.albedoMap of "
-        "type sampler2D; declare textures, samplers, and storage resources as "
-        "module-scope bindings instead of user-struct fields",
+        "WGSL target does not support CrossGL resource type image2D yet; "
+        "split texture/sampler/storage bindings are required",
     ),
 )
 

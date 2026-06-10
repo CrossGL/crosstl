@@ -343,7 +343,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 33,
+        "unsupported_marker_count": 34,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
@@ -435,7 +435,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 32
+        "test_count": 36
       },
       "translator_codegen": {
         "exists": true,
