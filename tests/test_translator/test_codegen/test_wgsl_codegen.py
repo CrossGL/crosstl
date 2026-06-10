@@ -852,6 +852,28 @@ def test_wgsl_codegen_lowers_compute_barrier_to_workgroup_barrier():
     assert "barrier();" not in generated
 
 
+def test_wgsl_codegen_lowers_prefix_increment_and_decrement_statements():
+    shader = """
+    shader WGSLPrefixUpdate {
+        compute {
+            void main() {
+                int i = 0;
+                ++i;
+                --i;
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "++i;" not in generated
+    assert "--i;" not in generated
+    assert "i += 1;" in generated
+    assert "i -= 1;" in generated
+
+
 def test_wgsl_codegen_rejects_barrier_outside_compute_stages():
     shader = """
     shader WGSLFragmentBarrier {

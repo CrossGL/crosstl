@@ -1314,6 +1314,14 @@ RUNTIME_REFERENCE_FILENAMES = frozenset(
         "pyproject.toml",
     )
 )
+RUNTIME_REFERENCE_BUILD_EXTENSIONS = frozenset(
+    (
+        ".cmake",
+        ".props",
+        ".targets",
+        ".vcxproj",
+    )
+)
 RUNTIME_REFERENCE_NON_TARGET_BACKENDS = frozenset(("opencl",))
 RUNTIME_REFERENCE_RULES = (
     (
@@ -6419,14 +6427,19 @@ def _compiler_source_remap_payload_reasons(payload: Any) -> list[str]:
 
 
 def _is_runtime_reference_candidate(path: Path) -> bool:
+    suffix = path.suffix.lower()
     return (
         path.name in RUNTIME_REFERENCE_FILENAMES
-        or path.suffix.lower() in RUNTIME_REFERENCE_EXTENSIONS
+        or suffix in RUNTIME_REFERENCE_EXTENSIONS
+        or suffix in RUNTIME_REFERENCE_BUILD_EXTENSIONS
     )
 
 
 def _is_runtime_build_reference_candidate(path: Path) -> bool:
-    return path.name in RUNTIME_REFERENCE_FILENAMES or path.suffix.lower() == ".cmake"
+    return (
+        path.name in RUNTIME_REFERENCE_FILENAMES
+        or path.suffix.lower() in RUNTIME_REFERENCE_BUILD_EXTENSIONS
+    )
 
 
 def _iter_runtime_reference_candidates(config: ProjectConfig) -> list[Path]:

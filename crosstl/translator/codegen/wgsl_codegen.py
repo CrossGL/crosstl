@@ -1040,6 +1040,10 @@ class WGSLCodeGen:
                 if expr.operator == "--":
                     return f"{operand} -= 1"
                 return f"{operand}{expr.operator}"
+            if expr.operator == "++":
+                return f"{operand} += 1"
+            if expr.operator == "--":
+                return f"{operand} -= 1"
             return f"{expr.operator}{operand}"
         if isinstance(expr, TernaryOpNode):
             return (

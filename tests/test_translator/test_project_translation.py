@@ -2212,6 +2212,43 @@ def test_scan_report_records_directx_11_runtime_references(tmp_path):
     ]
 
 
+def test_scan_report_records_visual_studio_msbuild_directx_build_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "app.vcxproj").write_text(
+        "<AdditionalDependencies>d3d12.lib</AdditionalDependencies>\n",
+        encoding="utf-8",
+    )
+    (repo / "common.props").write_text(
+        "<AdditionalDependencies>dxgi.lib</AdditionalDependencies>\n",
+        encoding="utf-8",
+    )
+    (repo / "shaders.targets").write_text(
+        "<AdditionalDependencies>dxcompiler.lib</AdditionalDependencies>\n",
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["directx"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 3
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"directx": 3}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"build-system": 3}
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "app.vcxproj": 1,
+        "common.props": 1,
+        "shaders.targets": 1,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("app.vcxproj", "directx", "build-system", "directx-build-system"),
+        ("common.props", "directx", "build-system", "directx-build-system"),
+        ("shaders.targets", "directx", "build-system", "directx-build-system"),
+    ]
+
+
 def test_scan_report_records_directx_dxgi_runtime_references(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

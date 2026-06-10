@@ -13,6 +13,8 @@ DEFAULT_PREPROCESSOR_DEFINES = {"HLSL": "1"}
 DEFAULT_PREPROCESSOR_MACROS = (
     Macro("TEXTURE2D", params=["textureName"], replacement="Texture2D textureName"),
     Macro("SAMPLER", params=["samplerName"], replacement="SamplerState samplerName"),
+    Macro("UNITY_SETUP_INSTANCE_ID", params=["input"], replacement=""),
+    Macro("UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO", params=["output"], replacement=""),
     Macro(
         "SAMPLE_TEXTURE2D",
         params=["textureName", "samplerName", "coord2"],
