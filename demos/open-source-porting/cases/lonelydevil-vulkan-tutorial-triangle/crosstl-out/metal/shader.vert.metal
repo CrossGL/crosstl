@@ -3,7 +3,7 @@
 using namespace metal;
 
 struct VertexOutput {
-    float3 fragColor [[location]];
+    float3 fragColor [[attribute(0)]];
     float4 gl_Position [[position]];
 };
 constant float2 positions[3] = {float2(0.0, -0.5), float2(0.5, 0.5), float2(-0.5, 0.5)};

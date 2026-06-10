@@ -3,8 +3,8 @@
 using namespace metal;
 
 struct FragmentInput {
-    float3 nearPoint [[location]];
-    float3 farPoint [[location]];
+    float3 nearPoint [[attribute(0)]];
+    float3 farPoint [[attribute(1)]];
 };
 float4 grid(float3 pos)  {
     float2 coord = pos.xz;

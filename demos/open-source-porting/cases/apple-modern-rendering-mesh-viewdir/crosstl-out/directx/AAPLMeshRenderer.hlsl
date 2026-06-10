@@ -8,7 +8,8 @@ struct Input {
 struct Output {
     half3 viewDir: TEXCOORD0;
 };
+ConstantBuffer<Camera> camera : register(b0);
 // Vertex Shader
-Output VSMain(Input in_, ConstantBuffer<Camera> camera) {
+Output VSMain(Input in_) {
     return Output(half3(0));
 }

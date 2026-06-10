@@ -3,7 +3,6 @@
 shader main {
     struct VertexOutput {
     vec4 color;
-    vec4 gl_Position @ gl_Position;
     };
 
     cbuffer Material @push_constant {

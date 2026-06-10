@@ -4,7 +4,6 @@ using namespace metal;
 
 struct VertexOutput {
     float4 color;
-    float4 gl_Position [[position]];
 };
 // Constant Buffers
 struct Material {
