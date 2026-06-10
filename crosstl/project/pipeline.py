@@ -1445,6 +1445,28 @@ RUNTIME_REFERENCE_RULES = (
         "directx",
         "runtime-api",
         re.compile(
+            r"\b(?:m_)?(?:d3d11Device|d3dDevice|device|graphicsDevice|"
+            r"rendererDevice|context|deviceContext|immediateContext|"
+            r"deferredContext|d3dContext)\s*(?:->|\.)"
+            r"(Create(?:VertexShader|PixelShader|GeometryShader|HullShader|"
+            r"DomainShader|ComputeShader|InputLayout|Buffer|Texture[123]D|"
+            r"ShaderResourceView|RenderTargetView|DepthStencilView|"
+            r"UnorderedAccessView|SamplerState|BlendState|RasterizerState|"
+            r"DepthStencilState)|"
+            r"(?:VS|PS|GS|HS|DS|CS)Set(?:Shader|ShaderResources|Samplers|"
+            r"ConstantBuffers)|"
+            r"IASet(?:InputLayout|VertexBuffers|IndexBuffer|PrimitiveTopology)|"
+            r"OMSet(?:RenderTargets|BlendState|DepthStencilState)|"
+            r"RSSet(?:State|Viewports|ScissorRects)|"
+            r"UpdateSubresource|Map|Unmap|Draw(?:Indexed)?(?:Instanced)?|"
+            r"Dispatch)(?=\s*\()"
+        ),
+        None,
+    ),
+    (
+        "directx",
+        "runtime-api",
+        re.compile(
             r"\b(?:m_)?(?:d3d12Device|device|graphicsDevice|commandList|"
             r"command_list|cmdList|cmd_list|graphicsCommandList|"
             r"computeCommandList)\s*(?:->|\.)"

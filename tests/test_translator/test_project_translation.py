@@ -2177,6 +2177,23 @@ def test_scan_report_records_directx_11_runtime_references(tmp_path):
               D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
                                 nullptr, 0, D3D11_SDK_VERSION, &device,
                                 nullptr, nullptr);
+              device->CreateVertexShader(vsBytecode, vsSize, nullptr, &vertexShader);
+              device->CreatePixelShader(psBytecode, psSize, nullptr, &pixelShader);
+              context->VSSetShader(vertexShader, nullptr, 0);
+              context->PSSetShaderResources(0, 1, &diffuseSrv);
+              context->OMSetRenderTargets(1, &rtv, dsv);
+              context->DrawIndexed(indexCount, 0, 0);
+              context->Dispatch(groupsX, groupsY, 1);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.cpp").write_text(
+        textwrap.dedent("""
+            void helper() {
+              builder.CreateVertexShaderPermutation(desc);
+              contextFactory.VSSetShaderDefaults(shader);
+              m_context->PSSetShaderResourcesCache(cache);
             }
             """).strip(),
         encoding="utf-8",
@@ -2190,15 +2207,15 @@ def test_scan_report_records_directx_11_runtime_references(tmp_path):
 
     payload = scan_project(repo).to_report(targets=["directx"]).to_json()
 
-    assert payload["migration"]["runtimeReferenceCount"] == 5
-    assert payload["migration"]["runtimeReferencesByBackend"] == {"directx": 5}
+    assert payload["migration"]["runtimeReferenceCount"] == 12
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"directx": 12}
     assert payload["migration"]["runtimeReferencesByKind"] == {
         "build-system": 2,
-        "runtime-api": 3,
+        "runtime-api": 10,
     }
     assert payload["migration"]["runtimeReferencesByPath"] == {
         "CMakeLists.txt": 2,
-        "host.cpp": 3,
+        "host.cpp": 10,
     }
     assert [
         (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
@@ -2209,6 +2226,13 @@ def test_scan_report_records_directx_11_runtime_references(tmp_path):
         ("host.cpp", "directx", "runtime-api", "ID3D11Device"),
         ("host.cpp", "directx", "runtime-api", "D3D11CreateDevice"),
         ("host.cpp", "directx", "runtime-api", "D3D11_SDK_VERSION"),
+        ("host.cpp", "directx", "runtime-api", "CreateVertexShader"),
+        ("host.cpp", "directx", "runtime-api", "CreatePixelShader"),
+        ("host.cpp", "directx", "runtime-api", "VSSetShader"),
+        ("host.cpp", "directx", "runtime-api", "PSSetShaderResources"),
+        ("host.cpp", "directx", "runtime-api", "OMSetRenderTargets"),
+        ("host.cpp", "directx", "runtime-api", "DrawIndexed"),
+        ("host.cpp", "directx", "runtime-api", "Dispatch"),
     ]
 
 
