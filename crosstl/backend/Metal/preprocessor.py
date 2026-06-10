@@ -3,7 +3,7 @@
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
@@ -43,7 +43,7 @@ MLX_HOST_NAME_DECL_RE = re.compile(
 class _MetalTemplateFunction:
     name: str
     template_parameters: List[str]
-    span: tuple[int, int]
+    span: Tuple[int, int]
     body_start: int
     source: str
     materializations: List[str] = field(default_factory=list)
@@ -54,7 +54,7 @@ class _MLXKernelInstantiation:
     host_name: str
     function_name: str
     template_arguments: List[str]
-    span: tuple[int, int]
+    span: Tuple[int, int]
 
 
 class MetalPreprocessor(HLSLPreprocessor):
@@ -122,7 +122,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             )
 
         templates_by_name = {template.name: template for template in templates}
-        replacements: List[tuple[int, int, str]] = [
+        replacements: List[Tuple[int, int, str]] = [
             (inst.span[0], inst.span[1], "") for inst in instantiations
         ]
 
@@ -525,7 +525,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         return None
 
     def _apply_text_replacements(
-        self, code: str, replacements: List[tuple[int, int, str]]
+        self, code: str, replacements: List[Tuple[int, int, str]]
     ) -> str:
         replacements = sorted(replacements, key=lambda item: item[0])
         result = []
