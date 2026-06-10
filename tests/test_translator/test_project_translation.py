@@ -6608,8 +6608,8 @@ def test_translate_project_materializes_mlx_metal_instantiate_kernel_entries(
                 out[gid] = T(gid + Offset);
             }
 
-            instantiate_arange(float32, float, 7);
-            instantiate_arange(float16, half, 3);
+            instantiate_arange(float32, float, 7)
+            instantiate_arange(float16, half, 3)
             """).strip() + "\n",
         encoding="utf-8",
     )
