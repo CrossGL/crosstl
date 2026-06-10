@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/batch.frag.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 332,
+        "file": "crosstl-out/cgl/batch.frag.cgl",
+        "length": 332,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 202,
+        "file": "batch.frag",
+        "length": 202,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

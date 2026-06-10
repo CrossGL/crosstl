@@ -49,6 +49,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `diligent-samples-vrs-cube-vertex` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream VRS cube vertex shader unchanged. The paired fragment-density stage is tracked in issue #826. |
 | `glslang-push-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream push-constant vertex shader unchanged. DirectX validation is tracked in issue #813. |
 | `godot-betsy-alpha-stitch` | `godotengine/godot` at `3df26a02c446710c979daa541b74f87edeca81b0` | MIT | GLSL | CrossGL, OpenGL | Removes the Godot shader-section marker so the compute shader is standalone GLSL. Vulkan sampled unsigned texture lowering is tracked in issue #829. |
+| `libgdx-batch-shader` | `libgdx/libgdx` at `846d63a746e4604a7699133f803ff844fdc8c9fe` | Apache-2.0 | GLSL ES | CrossGL, Metal, DirectX, Vulkan | Uses the upstream batch shader pair unchanged apart from line-ending and trailing-whitespace normalization. OpenGL reserved identifier lowering is tracked in issue #820. |
 | `lonelydevil-vulkan-tutorial-triangle` | `lonelydevil/vulkan-tutorial-C-implementation` at `780ff146a6eccd7064a10e86363f3c2f7323825d` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream triangle shader pair unchanged. |
 | `spirv-cross-round-fragment` | `KhronosGroup/SPIRV-Cross` at `146679ff8255a6068518685599d7fb8761d1b570` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream fragment reference shader unchanged. |
 | `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. |
@@ -96,6 +97,11 @@ shader files so the project translation runner can treat them as ordinary
 translation units. The extraction adds only license/provenance comments and
 does not change shader semantics. OpenGL output is excluded for the same
 reserved `gl_FragColor` lowering issue tracked in issue #820.
+
+The `libgdx/libgdx` batch shader pair keeps the upstream shader statements
+unchanged, with line endings and trailing whitespace normalized by repository
+formatting. OpenGL output is intentionally excluded for the same reserved
+`gl_FragColor` lowering issue tracked in issue #820.
 
 The `godotengine/godot` Betsy alpha-stitch case removes the upstream
 `#[compute]` shader-section marker before `#version`. That marker is part of

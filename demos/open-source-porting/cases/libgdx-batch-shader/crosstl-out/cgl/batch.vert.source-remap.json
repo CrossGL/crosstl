@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/batch.vert.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 544,
+        "file": "crosstl-out/cgl/batch.vert.cgl",
+        "length": 544,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 262,
+        "file": "batch.vert",
+        "length": 262,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

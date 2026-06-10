@@ -89,6 +89,17 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/godotengine/godot/blob/3df26a02c446710c979daa541b74f87edeca81b0/LICENSE.txt
 
+## libgdx/libgdx
+
+- Repository: https://github.com/libgdx/libgdx
+- Commit: `846d63a746e4604a7699133f803ff844fdc8c9fe`
+- Source paths:
+  - `tests/gdx-tests-android/assets/data/shaders/batch.vert`
+  - `tests/gdx-tests-android/assets/data/shaders/batch.frag`
+- License: Apache-2.0
+- License URL:
+  https://github.com/libgdx/libgdx/blob/846d63a746e4604a7699133f803ff844fdc8c9fe/LICENSE
+
 ## donaldwuid/apple_metal_sample_code
 
 - Repository: https://github.com/donaldwuid/apple_metal_sample_code

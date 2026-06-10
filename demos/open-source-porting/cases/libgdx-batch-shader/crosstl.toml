@@ -1,0 +1,6 @@
+[project]
+source_roots = ["."]
+include = ["batch.vert", "batch.frag"]
+targets = ["cgl", "metal", "directx", "vulkan"]
+output_dir = "crosstl-out"
+external_corpus_manifest = "corpus.json"
