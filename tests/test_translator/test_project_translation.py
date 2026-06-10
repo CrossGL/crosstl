@@ -393,6 +393,44 @@ def test_translate_project_accepts_path_like_output_dir(tmp_path):
     assert (repo / "translated" / "cgl" / "simple.cgl").exists()
 
 
+@pytest.mark.parametrize("target_backend", ("opengl", "metal"))
+def test_translate_project_lowers_slang_default_parameter_calls(
+    tmp_path, target_backend
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "default-parameter.slang").write_text(
+        textwrap.dedent("""
+        RWStructuredBuffer<int> result;
+
+        int helper(int val, int a = 16)
+        {
+            return val + a;
+        }
+
+        [shader("compute")]
+        [numthreads(1,1,1)]
+        void computeMain(uint3 threadId : SV_DispatchThreadID)
+        {
+            int val = int(threadId.x);
+            result[threadId.x] = helper(val);
+            result[threadId.x + 1] = helper(val, 4);
+        }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=[target_backend], output_dir="translated")
+    payload = report.to_json()
+    artifact_path = repo / payload["artifacts"][0]["path"]
+    generated = artifact_path.read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert "helper(val, 16)" in generated
+    assert "helper(val);" not in generated
+    assert "int helper(int val, int a = 16)" not in generated
+
+
 def test_project_apis_accept_single_target_strings(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

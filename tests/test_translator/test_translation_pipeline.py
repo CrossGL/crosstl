@@ -1,4 +1,5 @@
 import re
+from pathlib import Path
 
 import pytest
 
@@ -8,6 +9,8 @@ import crosstl.translator.codegen as codegen
 from crosstl.project import translate_project
 from crosstl.translator.ast import ShaderStage
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
+
+ROOT = Path(__file__).resolve().parents[2]
 
 NATIVE_SOURCE_SNIPPETS = {
     "directx": (
@@ -432,6 +435,59 @@ def test_slang_non_main_compute_entry_lowers_dispatch_id_to_opengl(tmp_path):
     assert "result[index] = (buffer0[index] + buffer1[index]);" in generated
     assert "threadId gl_GlobalInvocationID" not in generated
     assert "SV_DispatchThreadID" not in generated
+
+
+@pytest.mark.parametrize(
+    ("target_backend", "expected_call", "rejected_call"),
+    (
+        ("opengl", "helper(val, 16)", "helper(val);"),
+        ("metal", "helper(val, 16)", "helper(val);"),
+        ("directx", "helper(val, 16)", "helper(val);"),
+    ),
+)
+def test_slang_default_parameter_calls_lower_for_target_codegen(
+    tmp_path, target_backend, expected_call, rejected_call
+):
+    source_path = _write_source(
+        tmp_path,
+        "default-parameter.slang",
+        """
+        RWStructuredBuffer<int> result;
+
+        int helper(int val, int a = 16)
+        {
+            return val + a;
+        }
+
+        [shader("compute")]
+        [numthreads(1,1,1)]
+        void computeMain(uint3 threadId : SV_DispatchThreadID)
+        {
+            int val = int(threadId.x);
+            result[threadId.x] = helper(val);
+            result[threadId.x + 1] = helper(val, 4);
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend=target_backend, format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert expected_call in generated
+    assert rejected_call not in generated
+    assert "int helper(int val, int a = 16)" not in generated
+
+
+def test_cgl_perlin_noise_translates_to_rust_after_default_argument_lowering():
+    source_path = ROOT / "examples" / "graphics" / "PerlinNoise.cgl"
+
+    generated = crosstl.translate(str(source_path), backend="rust", format_output=False)
+
+    _assert_generated_output_is_usable(generated)
+    assert "pub fn fragment_main(" in generated
+    assert "pub fn perlinNoise(" in generated
 
 
 def test_glsl_frag_source_path_translates_to_fragment_crossgl(tmp_path):
