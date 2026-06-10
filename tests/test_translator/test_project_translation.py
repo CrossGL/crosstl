@@ -19864,6 +19864,55 @@ def test_translate_project_records_structured_diagnostics_for_failures(tmp_path)
     assert payload["migration"]["actions"][0]["targets"] == ["opengl"]
 
 
+def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "mlx_bf16.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            typedef bfloat bfloat16_t;
+
+            inline uint pack_bfloat16(bfloat16_t value) {
+                return asuint(value);
+            }
+
+            kernel void pack_kernel(device uint* out [[buffer(0)]]) {
+                bfloat16_t value = bfloat16_t(0.0);
+                out[0] = pack_bfloat16(value);
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    assert payload["summary"]["artifactCount"] == 2
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["artifactsBySourceBackend"]["metal"] == {
+        "artifactCount": 1,
+        "translatedCount": 1,
+        "failedCount": 0,
+    }
+    assert payload["diagnosticCounts"]["error"] == 0
+
+    metal_artifact = next(
+        artifact
+        for artifact in payload["artifacts"]
+        if artifact["source"] == "mlx_bf16.metal"
+    )
+    assert metal_artifact["status"] == "translated"
+    generated = (repo / metal_artifact["path"]).read_text(encoding="utf-8")
+    assert "uint pack_bfloat16(float value)" in generated
+    assert "return (floatBitsToUint(value) >> 16u);" in generated
+    assert "bfloat16_t" not in generated
+    assert "asuint(" not in generated
+
+
 def test_project_cli_translate_project_writes_report(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

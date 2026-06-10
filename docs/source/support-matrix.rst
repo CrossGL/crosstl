@@ -23,7 +23,7 @@ implicitly supported.
    :header: "Backend", "Ext", "Target generator", "Source kind", "Native frontend", "Tests", "Test count", "Unsupported markers", "Docs source"
 
    "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "native", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "1074", "291", "Microsoft Learn HLSL reference; HLSL specification project"
-   "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "native", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "1171", "177", "GLSL 4.60 specification; OpenGL registry"
+   "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "native", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "1172", "177", "GLSL 4.60 specification; OpenGL registry"
    "WebGL / GLSL ES", ".webgl.glsl", "crosstl/translator/codegen/webgl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_webgl_codegen.py", "7", "6", "WebGL 2.0 specification; OpenGL ES Shading Language 3.00 specification"
    "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "native", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "964", "495", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", ".spvasm", "crosstl/translator/codegen/SPIRV_codegen.py", "native", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "978", "36", "SPIR-V unified grammar; Khronos SPIR-V headers"
