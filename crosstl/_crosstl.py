@@ -1108,6 +1108,144 @@ def _run_plan_host_bindings(args):
     return 0 if payload["success"] else 1
 
 
+def _format_runtime_adapter_plan(payload):
+    lines = [f"Runtime adapter plan: {payload.get('sourcePackage')}"]
+    for header_line in (
+        _format_payload_schema_version(payload, "Adapter schema version"),
+        _format_payload_kind(payload, "Adapter kind"),
+        _format_payload_generated_at(payload, "Adapter generated at"),
+        _format_payload_hash(payload, "sourcePackageHash", "Source package hash"),
+    ):
+        if header_line:
+            lines.append(header_line)
+    lines.append(f"Status: {'ok' if payload.get('success') else 'failed'}")
+    package_root = payload.get("packageRoot")
+    if isinstance(package_root, str) and package_root:
+        lines.append(f"Package root: {package_root}")
+    scope = payload.get("scope")
+    if isinstance(scope, str) and scope:
+        lines.append(f"Adapter scope: {scope}")
+    non_goals = payload.get("nonGoals")
+    if isinstance(non_goals, list):
+        non_goal_labels = [
+            non_goal for non_goal in non_goals if isinstance(non_goal, str) and non_goal
+        ]
+        if non_goal_labels:
+            lines.append(f"Adapter non-goals: {', '.join(non_goal_labels)}")
+
+    project = payload.get("project")
+    for project_line in (
+        _format_project_root_path(project),
+        _format_project_output_dir(project),
+        _format_project_string_list(project, "Project targets", "targets"),
+    ):
+        if project_line:
+            lines.append(project_line)
+
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        lines.append(
+            "Summary: "
+            f"{summary.get('targetCount', 0)} targets, "
+            f"{summary.get('adapterCount', 0)} adapters, "
+            f"{summary.get('readyBindingCount', 0)} ready bindings, "
+            f"{summary.get('runtimeReferenceCount', 0)} runtime references"
+        )
+
+    targets = payload.get("targets", [])
+    if targets:
+        lines.append("Runtime adapter targets:")
+        for target in targets:
+            if not isinstance(target, Mapping):
+                continue
+            required_tools = target.get("requiredTools")
+            tool_suffix = ""
+            if isinstance(required_tools, list):
+                tools = [tool for tool in required_tools if isinstance(tool, str)]
+                if tools:
+                    tool_suffix = f"; tools: {', '.join(tools)}"
+            lines.append(
+                "- "
+                f"{target.get('target', 'unknown')}: "
+                f"{target.get('adapterKind', 'target-source-adapter')}, "
+                f"{target.get('readyBindingCount', 0)} ready bindings"
+                f"{tool_suffix}"
+            )
+
+    adapters = payload.get("adapters", [])
+    if adapters:
+        lines.append("Runtime adapters:")
+        for adapter in adapters:
+            if not isinstance(adapter, Mapping):
+                continue
+            details = []
+            artifact_format = adapter.get("artifactFormat")
+            if isinstance(artifact_format, str) and artifact_format:
+                details.append(f"format: {artifact_format}")
+            source_remap = adapter.get("sourceRemap")
+            if isinstance(source_remap, Mapping):
+                source_remap_path = source_remap.get("packagePath")
+                if isinstance(source_remap_path, str) and source_remap_path:
+                    details.append(f"source remap: {source_remap_path}")
+            suffix = f" [{'; '.join(details)}]" if details else ""
+            lines.append(
+                "- "
+                f"{adapter.get('target', 'unknown')}: "
+                f"{adapter.get('packagePath') or '<missing package path>'} "
+                f"via {adapter.get('adapterKind', 'target-source-adapter')}"
+                f"{suffix}"
+            )
+
+    actions = payload.get("actions", [])
+    if actions:
+        lines.append("Runtime adapter actions:")
+        for action in actions:
+            if not isinstance(action, Mapping):
+                continue
+            details = []
+            severity = action.get("severity")
+            if isinstance(severity, str) and severity:
+                details.append(f"severity: {severity}")
+            target = action.get("target")
+            if isinstance(target, str) and target:
+                details.append(f"target: {target}")
+            package_path = action.get("packagePath")
+            if isinstance(package_path, str) and package_path:
+                details.append(f"package path: {package_path}")
+            suffix = f" [{'; '.join(details)}]" if details else ""
+            lines.append(
+                "- "
+                f"{action.get('kind', 'unknown')}{suffix}: "
+                f"{action.get('message', '')}"
+            )
+
+    diagnostics = payload.get("diagnostics", [])
+    if diagnostics:
+        lines.append("Diagnostics:")
+        for diagnostic in diagnostics:
+            if isinstance(diagnostic, Mapping):
+                lines.append(_format_project_diagnostic_line(diagnostic))
+    return "\n".join(lines) + "\n"
+
+
+def _run_plan_runtime_adapters(args):
+    from .project import plan_runtime_adapters
+
+    payload = plan_runtime_adapters(args.package_manifest)
+    if args.format == "sarif":
+        _write_json_payload(
+            _format_project_diagnostics_sarif(
+                payload, tool_name="CrossTL runtime adapter planning"
+            ),
+            args.output,
+        )
+    elif args.format == "text":
+        _write_text_payload(_format_runtime_adapter_plan(payload), args.output)
+    else:
+        _write_json_payload(payload, args.output)
+    return 0 if payload["success"] else 1
+
+
 def _format_count_rollup(label, counts, *, include_zero=True):
     if not isinstance(counts, Mapping):
         return None
@@ -4717,6 +4855,24 @@ def _build_parser():
     )
     host_binding_parser.set_defaults(func=_run_plan_host_bindings)
 
+    runtime_adapter_parser = subparsers.add_parser(
+        "plan-runtime-adapters",
+        help="Build a runtime adapter plan from a runtime package manifest",
+    )
+    runtime_adapter_parser.add_argument(
+        "package_manifest", help="Runtime package manifest JSON"
+    )
+    runtime_adapter_parser.add_argument(
+        "--format",
+        choices=("json", "text", "sarif"),
+        default="json",
+        help="Runtime adapter plan output format",
+    )
+    runtime_adapter_parser.add_argument(
+        "--output", "-o", help="Write runtime adapter plan; use '-' for stdout"
+    )
+    runtime_adapter_parser.set_defaults(func=_run_plan_runtime_adapters)
+
     report_parser = subparsers.add_parser(
         "report", help="Emit a scan-only project portability report"
     )
@@ -4748,6 +4904,7 @@ def _use_legacy_cli(argv):
         "package-runtime",
         "inspect-runtime-package",
         "plan-host-bindings",
+        "plan-runtime-adapters",
         "report",
     }
     if not argv or argv[0] in {"-h", "--help"}:
