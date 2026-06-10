@@ -16,6 +16,8 @@ import crosstl.project as project_api
 import crosstl.project.pipeline as project_pipeline
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
+from crosstl.backend.Metal.MetalLexer import MetalLexer
+from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.project import (
     build_runtime_artifact_manifest,
     build_runtime_package,
@@ -26214,6 +26216,65 @@ def test_translate_project_rust_gpu_graphics_entry_io_lowers_for_targets(
     assert re.search(rf"%\d+ = OpLoad %\d+ {vertex_index_id}", spirv)
     assert re.search(rf"OpStore {fragment_output_id} %\d+", spirv)
     assert re.search(r'OpName %\d+ "output"', spirv) is None
+
+
+def test_translate_project_rust_gpu_plain_vertex_input_lowers_to_metal_attribute(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "lib.rs").write_text(
+        textwrap.dedent("""
+            use spirv_std::glam::{vec3, Vec2, Vec3, Vec4};
+            use spirv_std::spirv;
+
+            fn tonemap(color: Vec3) -> Vec3 { color }
+
+            #[spirv(fragment)]
+            pub fn main_fs(output: &mut Vec4) {
+                let color = vec3(1.0, 0.5, 0.25);
+                *output = tonemap(color).extend(1.0);
+            }
+
+            #[spirv(vertex)]
+            pub fn main_vs(pos: Vec2, #[spirv(position)] builtin_pos: &mut Vec4) {
+                *builtin_pos = pos.extend(0.0).extend(1.0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["cgl", "metal"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    outputs = {
+        artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in payload["artifacts"]
+    }
+
+    metal = outputs["metal"]
+    MetalParser(MetalLexer(metal).tokenize()).parse()
+    assert "struct vertex_main_vs_Input {" in metal
+    assert "float2 pos [[attribute(0)]];" in metal
+    assert (
+        "vertex vertex_main_vs_Return vertex_main_vs("
+        "vertex_main_vs_Input _crossglInput [[stage_in]])" in metal
+    )
+    assert "float2 pos = _crossglInput.pos;" in metal
+    assert "float4 builtin_pos [[position]];" in metal
+    assert "float2 pos [[stage_in]]" not in metal
+    assert (
+        re.search(
+            r"\b(?:half|float|double|bool|char|uchar|short|ushort|int|uint|long|"
+            r"ulong)(?:[234])?\s+\w+\s+\[\[stage_in\]\]",
+            metal,
+        )
+        is None
+    )
 
 
 def test_legacy_single_file_cli_still_works(tmp_path):
