@@ -25056,10 +25056,13 @@ def test_translate_project_opencl_targets_do_not_leak_resource_parameter_syntax(
     assert not re.search(r"\b(?:f32|u32)\b", outputs["opengl"])
 
     assert "RWStructuredBuffer<float> out : register(u0);" in outputs["directx"]
+    assert "StructuredBuffer<float> in_ : register(t1);" in outputs["directx"]
+    assert "RWStructuredBuffer<float> in_" not in outputs["directx"]
     assert "cbuffer scale_Args : register(b2)" in outputs["directx"]
     assert "[numthreads(1, 1, 1)]" in outputs["directx"]
 
     assert "device float* out [[buffer(0)]]" in outputs["metal"]
+    assert "const device float* in_ [[buffer(1)]]" in outputs["metal"]
     assert "constant scale_Args& scale_Args [[buffer(2)]]" in outputs["metal"]
     assert "kernel void kernel_scale(" in outputs["metal"]
 
