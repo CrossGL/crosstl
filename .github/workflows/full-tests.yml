@@ -253,12 +253,32 @@ jobs:
           fi
 
       - name: Install CUDA compiler
+        id: install_cuda
+        continue-on-error: true
         uses: Jimver/cuda-toolkit@v0.2.35
         with:
           cuda: ${{ env.CUDA_VERSION }}
           method: network
           sub-packages: '["nvcc", "cudart-dev"]'
           log-file-suffix: compiler-smoke-linux.txt
+
+      - name: Reset CUDA apt metadata before retry
+        if: steps.install_cuda.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/archive_uri-http_developer_download_nvidia_com_compute_cuda_repos_ubuntu2404_x86_64_-noble.list
+          sudo rm -f /etc/apt/sources.list.d/cuda-ubuntu2404-x86_64.list
+          sudo rm -rf /var/lib/apt/lists/*developer.download.nvidia.com*
+          sleep 30
+
+      - name: Retry CUDA compiler install after repository sync
+        if: steps.install_cuda.outcome == 'failure'
+        uses: Jimver/cuda-toolkit@v0.2.35
+        with:
+          cuda: ${{ env.CUDA_VERSION }}
+          method: network
+          sub-packages: '["nvcc", "cudart-dev"]'
+          log-file-suffix: compiler-smoke-linux-retry.txt
 
       - name: Install dependencies
         run: |

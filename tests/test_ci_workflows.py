@@ -155,6 +155,11 @@ def test_full_suite_keeps_required_compiler_smoke_coverage():
         assert tool in full_suite
     assert "Jimver/cuda-toolkit@v0.2.35" in full_suite
     assert 'CUDA_VERSION: "13.2.0"' in full_suite
+    assert "id: install_cuda" in full_suite
+    assert "steps.install_cuda.outcome == 'failure'" in full_suite
+    assert "Reset CUDA apt metadata before retry" in full_suite
+    assert "Retry CUDA compiler install after repository sync" in full_suite
+    assert "compiler-smoke-linux-retry.txt" in full_suite
     assert "SLANG_VERSION: v2026.9.1" in full_suite
     assert "test_external_shader_validators.py" in full_suite
 
