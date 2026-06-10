@@ -20002,6 +20002,32 @@ class TestVulkanSPIRVCodeGen:
         assert re.search(rf"OpConvertUToF {re.escape(float_type_id)} %\d+", spv_code)
         assert "WARNING" not in spv_code
 
+    def test_global_vector_constant_with_negative_component_validates(self, tmp_path):
+        source_code = """
+        shader NegativeVectorConstant {
+            const vec3 GRAVITY_VECTOR = vec3(0.0, -9.81, 0.0);
+
+            compute {
+                void main() {
+                    vec3 force = GRAVITY_VECTOR;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+
+        assert float_type is not None
+        assert re.search(
+            rf"%\d+ = OpConstant {re.escape(float_type.group(1))} -9\.81\b",
+            spv_code,
+        )
+        assert "OpFNegate" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_nested_array_and_struct_member_params_use_spirv_local_copies(self):
         source_code = """
         struct Payload {

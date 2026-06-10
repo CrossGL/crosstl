@@ -18260,11 +18260,8 @@ class VulkanSPIRVCodeGen:
             return None
 
         target_type_name = self.normalize_primitive_name(target_type.type.base_type)
-        if isinstance(expr, LiteralNode):
-            value = expr.value
-        elif isinstance(expr, (bool, int, float)):
-            value = expr
-        else:
+        value = self.constant_scalar_literal_value(expr)
+        if value is None:
             return None
 
         if target_type_name == "bool":
@@ -18278,7 +18275,29 @@ class VulkanSPIRVCodeGen:
         if target_type_name in {"float", "double"}:
             return self.register_constant(float(value), target_type)
         if target_type_name in {"int", "uint"}:
+            if target_type_name == "uint" and value < 0:
+                return None
             return self.register_constant(int(value), target_type)
+        return None
+
+    def constant_scalar_literal_value(self, expr):
+        if isinstance(expr, UnaryOpNode):
+            value = self.constant_scalar_literal_value(expr.operand)
+            if value is None or isinstance(value, bool):
+                return None
+            operator = getattr(expr, "op", getattr(expr, "operator", None))
+            if operator == "-":
+                return -value
+            if operator == "+":
+                return value
+            return None
+
+        if isinstance(expr, LiteralNode):
+            return expr.value
+
+        if isinstance(expr, (bool, int, float)):
+            return expr
+
         return None
 
     def process_constant_expression(
