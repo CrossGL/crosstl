@@ -328,6 +328,23 @@ directory, configured targets, source roots, include/exclude patterns, include
 directories, and selected variants. SARIF locations include line and column
 metadata and positive-length character spans when diagnostics carry source
 offsets.
+
+Build a metadata-only runtime integration plan from a portability report:
+
+.. code-block:: bash
+
+   python -m crosstl plan-runtime crosstl-out/portability-report.json \
+     --format text \
+     --max-runtime-references 20
+
+Runtime planning emits a ``crosstl-runtime-integration-plan`` JSON document
+with source report hash metadata, validation diagnostics from the source
+report, project target summaries, runtime-reference rollups and bounded
+samples, per-target compiler runtime-plan request commands, and manual actions
+for runtime references found in host or build files. The compiler request
+entries point at the metadata-only ``runtime-loader-plan-v1`` contract request
+in the compiler repository. This is planning evidence only: it does not import
+compiler internals, execute device code, or rewrite host application code.
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a
 related location. Remapped diagnostics also expose sanitized
@@ -779,7 +796,7 @@ Project reports are JSON documents with:
   translation. The report records documented non-goals for runtime API
   migration, build-system rewrites, and backend framework integration. Each
   action has a documented kind, severity, message, and target list, plus
-  action count and kind, severity, and target rollups. Scan-only reports
+  action count and kind, severity, target, and runtime-reference rollups. Scan-only reports
   include supported requested targets when translation units are present.
   Translation reports scope ``manual-runtime-integration`` to targets that
   produced translated artifacts, covering host runtime API, resource binding,
