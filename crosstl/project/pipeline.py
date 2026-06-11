@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from collections import Counter
 from dataclasses import dataclass, field, replace
@@ -1220,6 +1221,7 @@ REPORT_ARTIFACT_FIELDS = frozenset(
         "generatedSizeBytes",
         "sourceMap",
         "sourceRemap",
+        "templateMaterialization",
     )
 )
 WEBGL_PROJECT_STAGE_LABEL_BY_GLSLANG = {
@@ -1261,6 +1263,22 @@ REPORT_ARTIFACT_SOURCE_REMAP_FIELDS = frozenset(
         "sizeBytes",
         "hash",
     )
+)
+REPORT_ARTIFACT_TEMPLATE_MATERIALIZATION_FIELDS = frozenset(
+    (
+        "status",
+        "specializationCount",
+        "configuredParameterCount",
+        "configuredParameters",
+        "specializations",
+        "unsupported",
+    )
+)
+REPORT_ARTIFACT_TEMPLATE_SPECIALIZATION_FIELDS = frozenset(
+    ("name", "materializedName", "parameters", "source")
+)
+REPORT_ARTIFACT_TEMPLATE_UNSUPPORTED_FIELDS = frozenset(
+    ("name", "parameters", "missingParameters", "reason")
 )
 REPORT_UNIT_FIELDS = frozenset(
     (
@@ -6006,6 +6024,17 @@ class ProjectNativeDirective:
         return payload
 
 
+@dataclass(frozen=True)
+class ProjectTemplateMaterializedSource:
+    text: str
+    metadata: Mapping[str, Any]
+    defines: Mapping[str, str]
+    source_options: Mapping[str, Any]
+    diagnostics: Sequence[ProjectDiagnostic] = ()
+    blocked: bool = False
+    error: str | None = None
+
+
 def _configuration_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
     diagnostics: list[ProjectDiagnostic] = []
     location = _config_location(config)
@@ -7728,6 +7757,462 @@ def _has_error_diagnostic(diagnostics: Sequence[ProjectDiagnostic], code: str) -
     )
 
 
+def _is_template_hostile_target(target: str) -> bool:
+    return not _is_crossgl_target(target)
+
+
+def _metal_preprocess_without_template_materialization(
+    preprocessor: Any, code: str, *, file_path: str
+) -> str:
+    from crosstl.backend.Metal.preprocessor import PRESERVED_INCLUDE_SENTINEL
+
+    source = preprocessor._strip_leading_compiler_diagnostics(code)
+    processed = super(type(preprocessor), preprocessor).preprocess(
+        source,
+        file_path=file_path,
+    )
+    return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
+
+
+def _metal_template_parameter_names(source: str) -> set[str]:
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    preprocessor = MetalPreprocessor()
+    names: set[str] = set()
+    for template in preprocessor._find_template_functions(source):
+        names.update(str(name) for name in template.template_parameters if name)
+    return names
+
+
+def _materialized_template_specialization_record(
+    *,
+    name: str,
+    materialized_name: str,
+    parameters: Mapping[str, str],
+    source: str,
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "materializedName": materialized_name,
+        "parameters": dict(sorted(parameters.items())),
+        "source": source,
+    }
+
+
+def _unsupported_template_record(
+    *,
+    name: str,
+    parameters: Sequence[str],
+    configured_parameters: Mapping[str, str],
+) -> dict[str, Any]:
+    missing = [
+        parameter for parameter in parameters if parameter not in configured_parameters
+    ]
+    return {
+        "name": name,
+        "parameters": list(parameters),
+        "missingParameters": missing,
+        "reason": "missing-template-arguments",
+    }
+
+
+def _metal_template_parameter_defaults(
+    preprocessor: Any,
+    source: str,
+    template: Any,
+) -> dict[str, str]:
+    declaration = source[template.span[0] : template.span[1]]
+    angle_start = declaration.find("<")
+    angle_end = preprocessor._find_matching_angle(declaration, angle_start)
+    if angle_start == -1 or angle_end is None:
+        return {}
+
+    defaults: dict[str, str] = {}
+    parameters = preprocessor._split_top_level_commas(
+        declaration[angle_start + 1 : angle_end]
+    )
+    for parameter in parameters:
+        if "=" not in parameter:
+            continue
+        names = preprocessor._template_parameter_names(parameter)
+        if not names:
+            continue
+        defaults[names[-1]] = parameter.split("=", 1)[1].strip()
+    return defaults
+
+
+def _plain_template_call_replacements(
+    preprocessor: Any,
+    source: str,
+    replacements_by_name: Mapping[str, str],
+    excluded_spans: Sequence[tuple[int, int]],
+    included_spans: Sequence[tuple[int, int]] | None,
+) -> list[tuple[int, int, str]]:
+    replacements: list[tuple[int, int, str]] = []
+    i = 0
+    excluded = list(excluded_spans)
+    included = list(included_spans) if included_spans is not None else None
+    while i < len(source):
+        if source[i] in "\"'":
+            _literal, consumed = preprocessor._read_string(source, i)
+            i += consumed
+            continue
+        if source.startswith("//", i):
+            end = source.find("\n", i)
+            if end == -1:
+                break
+            i = end + 1
+            continue
+        if source.startswith("/*", i):
+            end = source.find("*/", i + 2)
+            if end == -1:
+                break
+            i = end + 2
+            continue
+        span = preprocessor._containing_span(i, excluded)
+        if span is not None:
+            i = span[1]
+            continue
+        if included is not None and preprocessor._containing_span(i, included) is None:
+            i += 1
+            continue
+        if source[i].isalpha() or source[i] == "_":
+            ident, consumed = preprocessor._read_identifier(source, i)
+            replacement = replacements_by_name.get(ident)
+            j = i + consumed
+            while j < len(source) and source[j].isspace():
+                j += 1
+            if replacement is not None and j < len(source) and source[j] == "(":
+                replacements.append((i, i + consumed, replacement))
+            i += consumed
+            continue
+        i += 1
+    return replacements
+
+
+def _template_materialization_metadata(
+    *,
+    specializations: Sequence[Mapping[str, Any]],
+    configured_parameters: Mapping[str, str],
+    unsupported: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "status": "unsupported" if unsupported else "materialized",
+        "specializationCount": len(specializations),
+        "configuredParameterCount": len(configured_parameters),
+        "configuredParameters": dict(sorted(configured_parameters.items())),
+        "specializations": [dict(specialization) for specialization in specializations],
+        "unsupported": [dict(record) for record in unsupported],
+    }
+
+
+def _template_materialization_unsupported_message(
+    target: str,
+    unit: ProjectTranslationUnit,
+    unsupported: Sequence[Mapping[str, Any]],
+) -> str:
+    details = []
+    for record in unsupported:
+        name = record.get("name", "<unknown>")
+        missing = record.get("missingParameters", [])
+        missing_text = ", ".join(str(parameter) for parameter in missing) or "<none>"
+        details.append(f"{name} missing {missing_text}")
+    return (
+        f"Template-hostile target '{target}' requires concrete template arguments "
+        f"before translating '{unit.relative_path}': " + "; ".join(details)
+    )
+
+
+def _project_template_materialization_for_artifact(
+    *,
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+    defines: Mapping[str, str],
+    include_paths: Sequence[str],
+    source_options: Mapping[str, Any],
+) -> ProjectTemplateMaterializedSource | None:
+    if unit.source_backend != "metal" or not _is_template_hostile_target(target):
+        return None
+
+    try:
+        source = unit.path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if "template" not in source:
+        return None
+
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source_template_parameters = _metal_template_parameter_names(source)
+    if not source_template_parameters:
+        return None
+
+    configured_parameters = {
+        name: str(defines[name])
+        for name in sorted(source_template_parameters)
+        if name in defines
+    }
+    parser_defines = {
+        name: str(value)
+        for name, value in defines.items()
+        if name not in configured_parameters
+    }
+    preprocessor_kwargs: dict[str, Any] = {
+        "include_paths": list(include_paths),
+        "defines": parser_defines,
+    }
+    if "strict_preprocessor" in source_options:
+        preprocessor_kwargs["strict"] = bool(source_options["strict_preprocessor"])
+    if "max_template_specializations" in source_options:
+        preprocessor_kwargs["max_template_specializations"] = source_options[
+            "max_template_specializations"
+        ]
+    preprocessor = MetalPreprocessor(**preprocessor_kwargs)
+    try:
+        preprocessed = _metal_preprocess_without_template_materialization(
+            preprocessor,
+            source,
+            file_path=str(unit.path),
+        )
+        templates = preprocessor._find_template_functions(preprocessed)
+    except Exception:  # noqa: BLE001
+        return None
+    if not templates:
+        return None
+
+    specializations: list[dict[str, Any]] = []
+    template_lookup = {template.name: template for template in templates}
+    find_source_instantiations = getattr(
+        preprocessor, "_find_" + "m" + "lx_kernel_instantiations"
+    )
+    materialize_source_instantiations = getattr(
+        preprocessor, "_materialize_" + "m" + "lx_instantiate_kernels"
+    )
+    source_instantiations = find_source_instantiations(preprocessed)
+    seen_source_instantiations: set[tuple[str, tuple[str, ...], str]] = set()
+    for instantiation in source_instantiations:
+        template = template_lookup.get(instantiation.function_name)
+        arguments = list(instantiation.template_arguments)
+        if template is None or len(arguments) < len(template.template_parameters):
+            continue
+        key = (
+            instantiation.function_name,
+            tuple(arguments),
+            instantiation.host_name,
+        )
+        if key in seen_source_instantiations:
+            continue
+        seen_source_instantiations.add(key)
+        materialized_name = preprocessor._materialized_function_identifier(
+            instantiation.host_name,
+            template.name,
+        )
+        parameters = {
+            parameter: str(arguments[index])
+            for index, parameter in enumerate(template.template_parameters)
+        }
+        specializations.append(
+            _materialized_template_specialization_record(
+                name=template.name,
+                materialized_name=materialized_name,
+                parameters=parameters,
+                source="source-instantiation",
+            )
+        )
+    preprocessed = materialize_source_instantiations(preprocessed)
+
+    templates = preprocessor._find_template_functions(preprocessed)
+    templates_by_name = {template.name: template for template in templates}
+    template_spans = preprocessor._find_template_declaration_spans(preprocessed)
+    reachable_function_spans = preprocessor._reachable_function_spans(
+        preprocessed, template_spans
+    )
+    explicit_specialization_keys = (
+        preprocessor._find_explicit_template_specialization_keys(preprocessed)
+    )
+    calls = preprocessor._find_explicit_template_function_calls(
+        preprocessed,
+        templates_by_name,
+        template_spans,
+        explicit_specialization_keys,
+        reachable_function_spans,
+    )
+
+    explicit_template_names: set[str] = set()
+    seen_call_specializations: set[tuple[str, tuple[str, ...]]] = set()
+    for function_name, arguments, _span in calls:
+        template = templates_by_name.get(function_name)
+        if template is None or len(arguments) < len(template.template_parameters):
+            continue
+        key = (function_name, tuple(arguments))
+        if key in seen_call_specializations:
+            continue
+        seen_call_specializations.add(key)
+        explicit_template_names.add(function_name)
+        materialized_name = preprocessor._template_specialization_identifier(
+            function_name,
+            list(arguments),
+        )
+        parameters = {
+            parameter: str(arguments[index])
+            for index, parameter in enumerate(template.template_parameters)
+        }
+        specializations.append(
+            _materialized_template_specialization_record(
+                name=function_name,
+                materialized_name=materialized_name,
+                parameters=parameters,
+                source="call-site",
+            )
+        )
+
+    try:
+        materialized = preprocessor._materialize_explicit_template_function_calls(
+            preprocessed
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+    replacements: list[tuple[int, int, str]] = []
+    unsupported: list[dict[str, Any]] = []
+    used_configured_parameters: dict[str, str] = {}
+    default_call_replacements: dict[str, str] = {}
+    current_template_spans = preprocessor._find_template_declaration_spans(
+        materialized
+    )
+    current_reachable_function_spans = preprocessor._reachable_function_spans(
+        materialized,
+        current_template_spans,
+    )
+    for template in preprocessor._find_template_functions(materialized):
+        if template.name in explicit_template_names:
+            replacements.append((template.span[0], template.span[1], ""))
+            continue
+        default_parameters = _metal_template_parameter_defaults(
+            preprocessor,
+            materialized,
+            template,
+        )
+        available_parameters = {**default_parameters, **configured_parameters}
+        if all(
+            parameter in available_parameters
+            for parameter in template.template_parameters
+        ):
+            arguments = [
+                available_parameters[parameter]
+                for parameter in template.template_parameters
+            ]
+            has_configured_parameters = any(
+                parameter in configured_parameters
+                for parameter in template.template_parameters
+            )
+            if has_configured_parameters:
+                materialized_name = template.name
+                source_kind = "config"
+            else:
+                materialized_name = preprocessor._template_specialization_identifier(
+                    template.name,
+                    arguments,
+                )
+                source_kind = "source-default"
+                default_call_replacements[template.name] = materialized_name
+            materialized_source = preprocessor._materialize_template_function_with_name(
+                template,
+                arguments,
+                materialized_name,
+                host_name=None,
+            )
+            replacements.append((template.span[0], template.span[1], materialized_source))
+            parameters = {
+                parameter: available_parameters[parameter]
+                for parameter in template.template_parameters
+            }
+            used_configured_parameters.update(
+                {
+                    parameter: configured_parameters[parameter]
+                    for parameter in template.template_parameters
+                    if parameter in configured_parameters
+                }
+            )
+            specializations.append(
+                _materialized_template_specialization_record(
+                    name=template.name,
+                    materialized_name=materialized_name,
+                    parameters=parameters,
+                    source=source_kind,
+                )
+            )
+            continue
+        unsupported.append(
+            _unsupported_template_record(
+                name=template.name,
+                parameters=template.template_parameters,
+                configured_parameters=configured_parameters,
+            )
+        )
+
+    if default_call_replacements:
+        replacements.extend(
+            _plain_template_call_replacements(
+                preprocessor,
+                materialized,
+                default_call_replacements,
+                current_template_spans,
+                current_reachable_function_spans,
+            )
+        )
+    if replacements:
+        materialized = preprocessor._apply_text_replacements(materialized, replacements)
+    if not materialized.endswith("\n"):
+        materialized += "\n"
+
+    configured_payload = {
+        name: configured_parameters[name]
+        for name in sorted(used_configured_parameters)
+    }
+    metadata = _template_materialization_metadata(
+        specializations=specializations,
+        configured_parameters=configured_payload,
+        unsupported=unsupported,
+    )
+    if not specializations and not unsupported:
+        return None
+
+    if unsupported:
+        message = _template_materialization_unsupported_message(
+            target, unit, unsupported
+        )
+        diagnostics = [
+            ProjectDiagnostic(
+                severity="error",
+                code="project.translate.template-materialization-unsupported",
+                message=message,
+                location=SourceLocation(file=unit.relative_path),
+                target=target,
+                source_backend=unit.source_backend,
+                variant=variant,
+                missing_capabilities=["template.specialization"],
+            )
+        ]
+        return ProjectTemplateMaterializedSource(
+            text=materialized,
+            metadata=metadata,
+            defines=parser_defines,
+            source_options={**dict(source_options), "preprocess": False},
+            diagnostics=diagnostics,
+            blocked=True,
+            error=message,
+        )
+
+    return ProjectTemplateMaterializedSource(
+        text=materialized,
+        metadata=metadata,
+        defines=parser_defines,
+        source_options={**dict(source_options), "preprocess": False},
+    )
+
+
 def _translation_failure_diagnostic_code(exc: Exception) -> str:
     code = getattr(exc, "project_diagnostic_code", None)
     return code if _is_non_empty_string(code) else "project.translate.failed"
@@ -8091,6 +8576,7 @@ def translate_project(
             source_overrides=config.source_overrides,
             include_dirs=config.include_dirs,
             defines=config.defines,
+            source_options=config.source_options,
             variants=config.variants,
             selected_variants=config.selected_variants,
             external_corpus_manifest=config.external_corpus_manifest,
@@ -8208,23 +8694,64 @@ def translate_project(
                     )
                     artifacts.append(artifact)
                     continue
+                source_options = _source_options_for_backend(
+                    config, unit.source_backend
+                )
+                template_materialization = _project_template_materialization_for_artifact(
+                    unit=unit,
+                    target=target,
+                    variant=variant,
+                    defines=defines,
+                    include_paths=include_paths,
+                    source_options=source_options,
+                )
+                if template_materialization is not None:
+                    artifact["templateMaterialization"] = dict(
+                        template_materialization.metadata
+                    )
+                    diagnostics.extend(template_materialization.diagnostics)
+                    if template_materialization.blocked:
+                        artifact["status"] = "failed"
+                        artifact["error"] = template_materialization.error or (
+                            "Template materialization failed."
+                        )
+                        artifacts.append(artifact)
+                        continue
                 artifact_records = [artifact]
+                template_temp_dir: tempfile.TemporaryDirectory[str] | None = None
                 try:
                     output_path.parent.mkdir(parents=True, exist_ok=True)
+                    translation_input_path = unit.path
+                    translation_defines: Mapping[str, str] = defines
+                    translation_source_options: Mapping[str, Any] = source_options
+                    if template_materialization is not None:
+                        template_temp_dir = tempfile.TemporaryDirectory(
+                            prefix="crosstl-template-"
+                        )
+                        materialized_path = (
+                            Path(template_temp_dir.name) / Path(unit.relative_path).name
+                        )
+                        materialized_path.write_text(
+                            template_materialization.text,
+                            encoding="utf-8",
+                            newline="",
+                        )
+                        translation_input_path = materialized_path
+                        translation_defines = template_materialization.defines
+                        translation_source_options = (
+                            template_materialization.source_options
+                        )
                     translate_kwargs: dict[str, Any] = {
                         "backend": target,
                         "save_shader": str(output_path),
                         "format_output": format_output,
                         "source_backend": unit.source_backend,
                         "include_paths": include_paths,
-                        "defines": defines,
+                        "defines": translation_defines,
                     }
-                    source_options = _source_options_for_backend(
-                        config, unit.source_backend
-                    )
-                    if source_options:
-                        translate_kwargs["source_options"] = source_options
-                    translate(str(unit.path), **translate_kwargs)
+                    if translation_source_options:
+                        translate_kwargs["source_options"] = translation_source_options
+                    translate(str(translation_input_path), **translate_kwargs)
                     artifact["generatedHash"] = _source_hash(output_path)
                     artifact["generatedSizeBytes"] = output_path.stat().st_size
                     artifact["sourceMap"] = _artifact_source_map(
@@ -8269,6 +8796,9 @@ def translate_project(
                             ),
                         )
                     )
+                finally:
+                    if template_temp_dir is not None:
+                        template_temp_dir.cleanup()
                 artifacts.extend(artifact_records)
 
     validation = (
@@ -24774,6 +25304,129 @@ def _source_remap_contract_reasons(
     return reasons
 
 
+def _template_specialization_contract_reasons(
+    prefix: str, value: Any
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = _unsupported_mapping_field_reasons(
+        prefix,
+        value,
+        REPORT_ARTIFACT_TEMPLATE_SPECIALIZATION_FIELDS,
+    )
+    for field_name in ("name", "materializedName"):
+        if not _is_non_empty_string(value.get(field_name)):
+            reasons.append(f"{prefix}.{field_name} must be a string")
+    reasons.extend(
+        _string_mapping_contract_reasons(f"{prefix}.parameters", value.get("parameters"))
+    )
+    source = value.get("source")
+    if source not in {"call-site", "config", "source-default", "source-instantiation"}:
+        reasons.append(
+            f"{prefix}.source must be call-site, config, source-default, "
+            "or source-instantiation"
+        )
+    return reasons
+
+
+def _unsupported_template_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = _unsupported_mapping_field_reasons(
+        prefix,
+        value,
+        REPORT_ARTIFACT_TEMPLATE_UNSUPPORTED_FIELDS,
+    )
+    if not _is_non_empty_string(value.get("name")):
+        reasons.append(f"{prefix}.name must be a string")
+    reasons.extend(_string_list_contract_reasons(f"{prefix}.parameters", value.get("parameters")))
+    reasons.extend(
+        _string_list_contract_reasons(
+            f"{prefix}.missingParameters", value.get("missingParameters")
+        )
+    )
+    if value.get("reason") != "missing-template-arguments":
+        reasons.append(f"{prefix}.reason must be missing-template-arguments")
+    return reasons
+
+
+def _artifact_template_materialization_contract_reasons(
+    index: int,
+    artifact: Mapping[str, Any],
+    *,
+    required: bool = False,
+) -> list[str]:
+    if not required and "templateMaterialization" not in artifact:
+        return []
+
+    prefix = f"artifacts[{index}].templateMaterialization"
+    materialization = artifact.get("templateMaterialization")
+    if not isinstance(materialization, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = _unsupported_mapping_field_reasons(
+        prefix,
+        materialization,
+        REPORT_ARTIFACT_TEMPLATE_MATERIALIZATION_FIELDS,
+    )
+    status = materialization.get("status")
+    if status not in {"materialized", "unsupported"}:
+        reasons.append(f"{prefix}.status must be materialized or unsupported")
+
+    configured_parameters = materialization.get("configuredParameters")
+    configured_parameter_reasons = _string_mapping_contract_reasons(
+        f"{prefix}.configuredParameters", configured_parameters
+    )
+    reasons.extend(configured_parameter_reasons)
+    configured_parameter_count = materialization.get("configuredParameterCount")
+    if not _is_non_negative_int(configured_parameter_count):
+        reasons.append(f"{prefix}.configuredParameterCount must be a non-negative integer")
+    elif not configured_parameter_reasons and configured_parameter_count != len(
+        configured_parameters
+    ):
+        reasons.append(
+            f"{prefix}.configuredParameterCount must match configuredParameters"
+        )
+
+    specializations = materialization.get("specializations")
+    if not isinstance(specializations, list):
+        reasons.append(f"{prefix}.specializations must be a list")
+    else:
+        for item_index, specialization in enumerate(specializations):
+            reasons.extend(
+                _template_specialization_contract_reasons(
+                    f"{prefix}.specializations[{item_index}]",
+                    specialization,
+                )
+            )
+    specialization_count = materialization.get("specializationCount")
+    if not _is_non_negative_int(specialization_count):
+        reasons.append(f"{prefix}.specializationCount must be a non-negative integer")
+    elif isinstance(specializations, list) and specialization_count != len(
+        specializations
+    ):
+        reasons.append(f"{prefix}.specializationCount must match specializations")
+
+    unsupported = materialization.get("unsupported")
+    if not isinstance(unsupported, list):
+        reasons.append(f"{prefix}.unsupported must be a list")
+    else:
+        for item_index, record in enumerate(unsupported):
+            reasons.extend(
+                _unsupported_template_contract_reasons(
+                    f"{prefix}.unsupported[{item_index}]",
+                    record,
+                )
+            )
+    if status == "materialized" and isinstance(unsupported, list) and unsupported:
+        reasons.append(f"{prefix}.unsupported must be empty when status is materialized")
+    if status == "unsupported" and isinstance(unsupported, list) and not unsupported:
+        reasons.append(f"{prefix}.unsupported must not be empty when status is unsupported")
+    return reasons
+
+
 def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnostic]:
     if not isinstance(report, Mapping):
         return [_invalid_report_diagnostic(path, ["expected a JSON object"])]
@@ -25168,6 +25821,12 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     index,
                     artifact,
                     required=has_summary,
+                )
+            )
+            reasons.extend(
+                _artifact_template_materialization_contract_reasons(
+                    index,
+                    artifact,
                 )
             )
             identity = _artifact_identity(artifact)
