@@ -95,6 +95,7 @@ class WGSLCodeGen:
     }
     BUILTIN_SEMANTICS = {
         "gl_position": "position",
+        "gl_fragcoord": "position",
         "position_builtin": "position",
         "sv_position": "position",
         "frag_depth": "frag_depth",
@@ -121,6 +122,7 @@ class WGSLCodeGen:
     }
     BUILTIN_IDENTIFIER_ALIASES = {
         "gl_Position": "position",
+        "gl_FragCoord": "position",
         "SV_Position": "position",
         "gl_GlobalInvocationID": "global_invocation_id",
         "SV_DispatchThreadID": "global_invocation_id",
@@ -134,6 +136,7 @@ class WGSLCodeGen:
     }
     WORKGROUP_SIZE_IDENTIFIER_ALIASES = {"gl_WorkGroupSize"}
     INPUT_BUILTIN_TYPE_MAP = {
+        "position": "vec4<f32>",
         "vertex_index": "u32",
         "instance_index": "u32",
         "global_invocation_id": "vec3<u32>",
@@ -172,7 +175,7 @@ class WGSLCodeGen:
     }
     STAGE_INPUT_BUILTINS = {
         "vertex": {"instance_index", "vertex_index"},
-        "fragment": set(),
+        "fragment": {"position"},
         "compute": {
             "global_invocation_id",
             "local_invocation_id",

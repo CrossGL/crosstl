@@ -237,6 +237,29 @@ def test_wgsl_codegen_injects_direct_compute_builtin_references():
     assert "var lane: u32 = global_invocation_id.x;" in generated
 
 
+def test_wgsl_codegen_injects_fragment_position_for_gl_fragcoord():
+    shader = """
+    shader WGSLFragmentPositionBuiltin {
+        fragment {
+            vec4 main() @ gl_FragColor {
+                float xVal = gl_FragCoord.x;
+                return vec4(xVal, gl_FragCoord.y, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "fn fragment_main(@builtin(position) position: vec4<f32>) "
+        "-> @location(0) vec4<f32>"
+    ) in generated
+    assert "var xVal: f32 = position.x;" in generated
+    assert "return vec4<f32>(xVal, position.y, 0.0, 1.0);" in generated
+    assert "gl_FragCoord" not in generated
+
+
 def test_wgsl_codegen_casts_unsigned_compute_builtin_component_to_signed_local():
     shader = """
     shader WGSLSignedComputeBuiltin {
