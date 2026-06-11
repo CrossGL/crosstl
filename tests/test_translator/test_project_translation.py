@@ -35049,6 +35049,63 @@ def test_translate_project_metal_matmul_buffers_lower_to_opengl_resources(
     assert_compute_glsl_validates_if_available(output, tmp_path)
 
 
+def test_translate_project_metal_opengl_disambiguates_constant_value_members(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "kernels.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void first(device float* out [[buffer(0)]],
+                              constant float& value [[buffer(1)]]) {
+                out[0] = value;
+            }
+
+            kernel void second(device float* out [[buffer(2)]],
+                               constant float& value [[buffer(3)]]) {
+                out[0] = value + 1.0;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("opengl", "translated")}
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+
+    artifact = payload["artifacts"][0]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+
+    assert artifact["sourceMap"]["source"]["file"] == "kernels.metal"
+    assert artifact["sourceRemap"]["mappingCount"] >= 1
+    assert "Ambiguous cbuffer member" not in output
+    assert (
+        "layout(std140, binding = 1) uniform first_value_Args {\n"
+        "    float value;\n"
+        "};"
+    ) in output
+    assert (
+        "layout(std140, binding = 3) uniform second_value_Args {\n"
+        "    float second_value_Args_value;\n"
+        "};"
+    ) in output
+    assert output.count("float value;") == 1
+    assert "out_[0] = value;" in output
+    assert "second_out[0] = (second_value_Args_value + 1.0);" in output
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
 def test_translate_project_metal_matmul_opengl_buffers_before_params_validate(
     tmp_path,
 ):
