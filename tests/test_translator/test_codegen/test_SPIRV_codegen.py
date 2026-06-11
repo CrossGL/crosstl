@@ -14360,6 +14360,117 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_structured_buffer_overloaded_helpers_skip_static_scratch_args(
+        self, tmp_path
+    ):
+        source_code = """
+        shader StorageBufferOverloadExtraArgs {
+            RWStructuredBuffer<float> values @binding(0);
+            StructuredBuffer<float> weights @binding(1);
+            StructuredBuffer<uint> counters @binding(2);
+
+            void block_sort(
+                StructuredBuffer<float> data,
+                RWStructuredBuffer<float> target,
+                uint index,
+                uvec3 tid,
+                uvec3 lid
+            ) {
+                target.Store(index + tid.x + lid.x, data.Load(index));
+            }
+
+            void block_sort(
+                StructuredBuffer<uint> data,
+                RWStructuredBuffer<float> target,
+                uint index,
+                uvec3 tid,
+                uvec3 lid
+            ) {
+                target.Store(index + tid.x + lid.x, float(data.Load(index)));
+            }
+
+            compute {
+                void main() {
+                    uint staticScratch = 0u;
+                    uint dynamicScratch = 1u;
+                    block_sort(
+                        weights,
+                        values,
+                        0u,
+                        staticScratch,
+                        dynamicScratch,
+                        uvec3(0u, 0u, 0u),
+                        uvec3(1u, 0u, 0u)
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        weights_var = spirv_named_variable(spv_code, "weights", storage_class="Uniform")
+        values_var = spirv_named_variable(spv_code, "values", storage_class="Uniform")
+
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(weights_var)} %\d+ %\d+", spv_code
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(values_var)} %\d+ %\d+", spv_code
+        )
+        assert "storage-buffer-function-overload" not in spv_code
+        assert "block_sort" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_structured_buffer_overload_diagnostic_lists_rejection_reasons(self):
+        source_code = """
+        shader StorageBufferOverloadDiagnostic {
+            RWStructuredBuffer<float> values @binding(0);
+            StructuredBuffer<float> weights @binding(1);
+            StructuredBuffer<uint> counters @binding(2);
+
+            void block_sort(
+                StructuredBuffer<uint> data,
+                RWStructuredBuffer<float> target,
+                uint index
+            ) {
+                target.Store(index, float(data.Load(index)));
+            }
+
+            void block_sort(
+                StructuredBuffer<float> data,
+                RWStructuredBuffer<float> target,
+                uvec3 tid
+            ) {
+                target.Store(tid.x, data.Load(tid.x));
+            }
+
+            compute {
+                void main() {
+                    block_sort(weights, values, float3(1.0, 0.0, 0.0));
+                }
+            }
+        }
+        """
+
+        with pytest.raises(ValueError) as exc_info:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        message = str(exc_info.value)
+        assert "actual call arity/types: 3" in message
+        assert "candidate signatures:" in message
+        assert "candidate rejection reasons:" in message
+        assert (
+            "block_sort(StructuredBuffer<uint>, RWStructuredBuffer<float>, uint)"
+            in message
+        )
+        assert "argument 1 type StructuredBuffer<float> is incompatible" in message
+
     def test_structured_buffer_overloaded_helpers_resolve_by_buffer_type(
         self, tmp_path
     ):

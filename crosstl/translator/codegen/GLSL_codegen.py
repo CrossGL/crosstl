@@ -5809,6 +5809,11 @@ class GLSLCodeGen:
         code += "  " * indent
 
         param_list = getattr(func, "parameters", getattr(func, "params", []))
+        parameter_source_names = {
+            getattr(parameter, "name", None)
+            for parameter in param_list
+            if getattr(parameter, "name", None)
+        }
         params = []
         sampler_parameters = set()
         texture_parameters = {}
@@ -5957,7 +5962,7 @@ class GLSLCodeGen:
             self.semantic_from_node(p)
 
             parameter_name = (
-                self.glsl_parameter_identifier_name(p.name)
+                self.glsl_parameter_identifier_name(p.name, parameter_source_names)
                 if shader_type is None
                 else p.name
             )
@@ -8673,11 +8678,15 @@ class GLSLCodeGen:
             var_type = self.expression_result_type(getattr(stmt, "initial_value", None))
         return self.type_name_string(var_type) or "float"
 
-    def glsl_parameter_identifier_name(self, name):
-        if name not in self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS:
+    def glsl_parameter_identifier_name(self, name, parameter_names=None):
+        if (
+            name not in self.GLSL_RESERVED_IDENTIFIERS
+            and name not in self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS
+        ):
             return name
 
         used_names = set(self.local_variable_types)
+        used_names.update(parameter_names or ())
         used_names.update(self.current_identifier_aliases.values())
         used_names.update(self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS)
 
