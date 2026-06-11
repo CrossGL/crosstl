@@ -611,6 +611,59 @@ def test_translate_project_glslang_spec_constant_vertex_to_directx(tmp_path):
     assert "foo(input.ucol, input, output);" in generated
 
 
+def test_translate_project_glsl_overloaded_vector_helper_to_mojo(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "linear_to_srgb.frag").write_text(
+        textwrap.dedent("""
+        #version 450
+        layout(binding = 0) uniform sampler2D tex;
+        layout(location = 0) in vec2 texcoord;
+        layout(location = 0) out vec4 fragColor;
+
+        float linearToSrgb(float color) {
+            return color;
+        }
+        vec3 linearToSrgb(vec3 color) {
+            return color;
+        }
+        vec4 linearToSrgb(vec4 color) {
+            return color;
+        }
+
+        void main() {
+            vec3 light = vec3(0.5);
+            fragColor = linearToSrgb(light * texture(tex, texcoord.xy));
+        }
+        """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+        [project]
+        source_roots = ["shaders"]
+        include = ["shaders/*.frag"]
+        targets = ["mojo"]
+        output_dir = "translated"
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo), format_output=False)
+    payload = report.to_json()
+    generated = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert not [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if "Invalid aggregate target" in diagnostic.get("message", "")
+    ]
+    assert "fragColor = linearToSrgb((light * sample(tex," in generated
+
+
 @pytest.mark.parametrize("target_backend", ("opengl", "metal"))
 def test_translate_project_lowers_slang_default_parameter_calls(
     tmp_path, target_backend
