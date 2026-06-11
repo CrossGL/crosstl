@@ -4,6 +4,11 @@ import ast as py_ast
 import re
 from hashlib import sha1
 
+from ...backend.common_ast import (
+    AssignmentNode as BackendAssignmentNode,
+    ReturnNode as BackendReturnNode,
+    VariableNode as BackendVariableNode,
+)
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -1431,6 +1436,9 @@ class MetalCodeGen:
             + stage_local_resource_variables,
             "Metal resource",
         )
+        self.metal_spirv_interface_variables = [
+            node for node in global_vars if self.is_spirv_stage_interface_layout(node)
+        ]
         self.glsl_buffer_block_struct_names = (
             self.collect_glsl_buffer_block_struct_names(
                 list(global_vars) + self.collect_function_parameters(all_functions)
@@ -1683,6 +1691,9 @@ class MetalCodeGen:
             source_resource_bindings,
         )
         for i, node in enumerate(global_vars):
+            if self.is_spirv_stage_interface_layout(node):
+                continue
+
             resource_count = 1
             array_size = None
             if hasattr(node, "var_type"):
@@ -3435,6 +3446,9 @@ class MetalCodeGen:
         previous_function_name = self.current_function_name
         previous_function_return_type = self.current_function_return_type
         previous_function_return_wrapper = self.current_function_return_wrapper
+        previous_stage_output_return_active = getattr(
+            self, "current_metal_stage_output_return_active", False
+        )
         previous_local_variable_types = self.local_variable_types
         previous_address_space_variables = self.current_address_space_variables
         previous_generic_function_substitutions = (
@@ -3512,6 +3526,7 @@ class MetalCodeGen:
         )
         self.current_function_name = getattr(func, "name", None)
         self.current_function_return_wrapper = None
+        self.current_metal_stage_output_return_active = False
         self.current_generic_function_substitutions = (
             getattr(func, "_generic_substitutions", {}) or {}
         )
@@ -3550,6 +3565,42 @@ class MetalCodeGen:
         self.current_metal_compute_builtin_parameter_names = {}
         self.local_variable_types = {}
         self.current_address_space_variables = {}
+        if shader_type in {"vertex", "fragment"}:
+            for interface in self.spirv_stage_input_layouts(shader_type):
+                name = getattr(interface, "variable_name", None)
+                raw_type = getattr(interface, "data_type", None)
+                if not name or not raw_type or "[" in str(name):
+                    continue
+                mapped_type = self.map_type(raw_type)
+                if shader_type == "vertex":
+                    vertex_stage_input_parameters.append(
+                        {
+                            "name": name,
+                            "raw_type": raw_type,
+                            "mapped_type": mapped_type,
+                            "attribute": self.spirv_stage_input_attribute(
+                                interface
+                            ),
+                            "semantic": self.spirv_stage_input_semantic(interface),
+                        }
+                    )
+                    self.local_variable_types[name] = self.type_name_string(raw_type)
+
+            for interface in self.spirv_stage_output_layouts(shader_type):
+                name = getattr(interface, "variable_name", None)
+                raw_type = getattr(interface, "data_type", None)
+                if not name or not raw_type or "[" in str(name):
+                    continue
+                stage_output_parameters.append(
+                    {
+                        "name": name,
+                        "raw_type": raw_type,
+                        "mapped_type": self.map_type(raw_type),
+                        "semantic": self.spirv_stage_output_semantic(interface),
+                        "attribute": self.spirv_stage_output_attribute(interface),
+                    }
+                )
+                self.local_variable_types[name] = self.type_name_string(raw_type)
         skipped_parameter_indices = self.skipped_function_parameter_indices(
             self.current_function_name
         )
@@ -4378,6 +4429,7 @@ class MetalCodeGen:
         code += self.generate_metal_stage_output_parameter_locals(
             stage_output_parameters
         )
+        self.current_metal_stage_output_return_active = bool(stage_output_parameters)
         stage_value_variables = [
             local_var
             for local_var in stage_local_variables or []
@@ -4455,6 +4507,9 @@ class MetalCodeGen:
         self.current_function_name = previous_function_name
         self.current_function_return_type = previous_function_return_type
         self.current_function_return_wrapper = previous_function_return_wrapper
+        self.current_metal_stage_output_return_active = (
+            previous_stage_output_return_active
+        )
         self.local_variable_types = previous_local_variable_types
         self.current_address_space_variables = previous_address_space_variables
         self.current_generic_function_substitutions = (
@@ -4502,7 +4557,7 @@ class MetalCodeGen:
             statements = []
         if not statements:
             return True
-        return not isinstance(statements[-1], ReturnNode)
+        return not isinstance(statements[-1], (ReturnNode, BackendReturnNode))
 
     def compute_builtin_parameter_specs(self):
         return [
@@ -4971,6 +5026,73 @@ class MetalCodeGen:
         if not (self.parameter_qualifier_names(parameter) & {"out", "inout"}):
             return False
         return not self.is_resource_parameter_type(self.parameter_raw_type(parameter))
+
+    def is_spirv_stage_interface_layout(self, node):
+        return (
+            getattr(node, "layout_type", None) in {"IN", "OUT"}
+            and getattr(node, "data_type", None) is not None
+            and getattr(node, "variable_name", None) is not None
+        )
+
+    def spirv_stage_input_layouts(self, shader_type):
+        if shader_type not in {"vertex", "fragment"}:
+            return []
+        return [
+            node
+            for node in getattr(self, "metal_spirv_interface_variables", []) or []
+            if getattr(node, "layout_type", None) == "IN"
+        ]
+
+    def spirv_stage_output_layouts(self, shader_type):
+        if shader_type not in {"vertex", "fragment"}:
+            return []
+        return [
+            node
+            for node in getattr(self, "metal_spirv_interface_variables", []) or []
+            if getattr(node, "layout_type", None) == "OUT"
+            and self.spirv_stage_output_semantic(node) is not None
+        ]
+
+    def spirv_stage_layout_qualifier_value(self, node, qualifier_name):
+        for name, value in getattr(node, "qualifiers", []) or []:
+            if str(name).lower() == qualifier_name:
+                return value
+        return None
+
+    def spirv_stage_input_semantic(self, node):
+        location = self.spirv_stage_layout_qualifier_value(node, "location")
+        if location is not None:
+            return f"attribute({location})"
+        builtin = self.spirv_stage_layout_qualifier_value(node, "builtin")
+        return self.spirv_builtin_semantic(builtin)
+
+    def spirv_stage_output_semantic(self, node):
+        builtin = self.spirv_stage_layout_qualifier_value(node, "builtin")
+        if builtin is not None:
+            return self.spirv_builtin_semantic(builtin)
+        location = self.spirv_stage_layout_qualifier_value(node, "location")
+        if location is not None:
+            return f"color({location})"
+        return None
+
+    def spirv_stage_input_attribute(self, node):
+        semantic = self.spirv_stage_input_semantic(node)
+        return self.map_semantic(semantic) if semantic is not None else None
+
+    def spirv_stage_output_attribute(self, node):
+        semantic = self.spirv_stage_output_semantic(node)
+        return self.map_semantic(semantic) if semantic is not None else ""
+
+    def spirv_builtin_semantic(self, builtin):
+        if builtin is None:
+            return None
+        return {
+            "Position": "gl_Position",
+            "PointSize": "gl_PointSize",
+            "ClipDistance": "gl_ClipDistance",
+            "FragCoord": "gl_FragCoord",
+            "FragDepth": "gl_FragDepth",
+        }.get(str(builtin), str(builtin))
 
     def metal_graphics_builtin_parameter_lowering(
         self,
@@ -5907,7 +6029,7 @@ class MetalCodeGen:
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL AST statement as Metal source."""
         indent_str = "    " * indent
-        if isinstance(stmt, VariableNode):
+        if isinstance(stmt, (VariableNode, BackendVariableNode)):
             var_type = self.local_variable_declared_type(stmt)
             texture_alias_type = self.local_variable_texture_alias_resource_type(
                 stmt, var_type
@@ -6078,7 +6200,7 @@ class MetalCodeGen:
                     stmt.name,
                 )
                 return f"{indent_str}{declaration};\n"
-        elif isinstance(stmt, AssignmentNode):
+        elif isinstance(stmt, (AssignmentNode, BackendAssignmentNode)):
             return self.generate_statement_code(self.generate_assignment(stmt), indent)
         elif isinstance(stmt, BlockNode):
             return self.generate_block(stmt, indent)
@@ -6102,8 +6224,10 @@ class MetalCodeGen:
             return self.generate_switch(stmt, indent)
         elif isinstance(stmt, MatchNode):
             return self.generate_match(stmt, indent)
-        elif isinstance(stmt, ReturnNode):
+        elif isinstance(stmt, (ReturnNode, BackendReturnNode)):
             if getattr(stmt, "value", None) is None:
+                if getattr(self, "current_metal_stage_output_return_active", False):
+                    return ""
                 return f"{indent_str}return;\n"
             if isinstance(stmt.value, list):
                 code = ""
@@ -7194,7 +7318,7 @@ class MetalCodeGen:
             return self.local_variable_types.get(
                 expr.name
             ) or self.metal_program_scope_value_global_types.get(expr.name)
-        if isinstance(expr, VariableNode):
+        if isinstance(expr, (VariableNode, BackendVariableNode)):
             name = getattr(expr, "name", None)
             builtin_type = self.metal_graphics_builtin_result_type(name)
             if builtin_type is not None:
@@ -7245,7 +7369,7 @@ class MetalCodeGen:
             if true_type == "float" or false_type == "float":
                 return "float"
             return true_type or false_type
-        if isinstance(expr, AssignmentNode):
+        if isinstance(expr, (AssignmentNode, BackendAssignmentNode)):
             return self.expression_result_type(
                 getattr(expr, "target", getattr(expr, "left", None))
             )
@@ -7675,7 +7799,7 @@ class MetalCodeGen:
             return discard_statement
 
         if hasattr(stmt, "expression"):
-            if isinstance(stmt.expression, AssignmentNode):
+            if isinstance(stmt.expression, (AssignmentNode, BackendAssignmentNode)):
                 return self.generate_assignment(stmt.expression)
             expr = self.generate_expression(stmt.expression)
             return expr
@@ -8336,7 +8460,7 @@ class MetalCodeGen:
             return "true" if expr else "false"
         elif isinstance(expr, int) or isinstance(expr, float):
             return str(expr)
-        elif isinstance(expr, VariableNode):
+        elif isinstance(expr, (VariableNode, BackendVariableNode)):
             # Fix infinite recursion - directly return the name
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
@@ -8387,7 +8511,7 @@ class MetalCodeGen:
                         right, self.expression_result_type(expr.right), expected_type
                     )
             return f"{left} {operator} {right}"
-        elif isinstance(expr, AssignmentNode):
+        elif isinstance(expr, (AssignmentNode, BackendAssignmentNode)):
             return self.generate_assignment(expr)
         elif isinstance(expr, ArrayLiteralNode):
             elements = ", ".join(
@@ -17510,11 +17634,15 @@ class MetalCodeGen:
                 or self.is_metal_address_space_attribute(attr)
                 or self.is_metal_struct_member_abi_attribute(attr)
                 or self.metal_interpolation_attribute_name(attr) is not None
+                or self.is_precision_qualifier_attribute(attr)
             ):
                 continue
             if hasattr(attr, "name"):
                 return attr.name
         return None
+
+    def is_precision_qualifier_attribute(self, attr):
+        return str(getattr(attr, "name", attr)).lower() in {"lowp", "mediump", "highp"}
 
     def is_metal_address_space_attribute(self, attr):
         name = str(getattr(attr, "name", "")).lower()
@@ -17600,6 +17728,7 @@ class MetalCodeGen:
                 or self.is_resource_memory_attribute(attr)
                 or self.is_metal_texture_element_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
+                or self.is_precision_qualifier_attribute(attr)
             ):
                 continue
             if hasattr(attr, "name"):

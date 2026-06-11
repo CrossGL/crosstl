@@ -24,6 +24,7 @@ STAGE_NAME_ALIASES = {
     "fragment_shader": "fragment",
     "fs": "fragment",
     "geometry_shader": "geometry",
+    "glcompute": "compute",
     "gs": "geometry",
     "hull": "tessellation_control",
     "hull_shader": "tessellation_control",
