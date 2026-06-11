@@ -39921,6 +39921,64 @@ def test_translate_project_metal_implicit_type_environment_budget_diagnostic(
     assert "templates=1" in diagnostic["message"]
 
 
+def test_translate_project_metal_type_alias_rewrite_cycle_reports_diagnostic(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "out"
+
+            [project.source_options.metal]
+            max_template_specializations = 4
+            max_template_materialization_work = 32
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "recursive_alias.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            T cast_value(T value) {
+                return value;
+            }
+
+            kernel void launch(device float* out [[buffer(0)]]) {
+                using Recursive = Pair<Recursive>;
+                Recursive value = Recursive();
+                out[0] = cast_value(value);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert "type identifier rewrite limit exceeded" in artifact["error"]
+    assert "Recursive" in artifact["error"]
+    assert "type-alias dependency graph" in artifact["error"]
+    assert not (repo / artifact["path"]).exists()
+
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-template-specialization": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.metal-template-specialization"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "recursive_alias.metal"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert "type identifier rewrite limit exceeded" in diagnostic["message"]
+    assert "Suggested action:" in diagnostic["message"]
+
+
 def test_translate_project_metal_variant_template_materializes_for_opengl(
     tmp_path,
 ):
