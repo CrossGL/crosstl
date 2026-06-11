@@ -950,6 +950,10 @@ def _clear_report_diagnostics(payload):
         payload["summary"]["diagnosticsByVariant"] = {}
         payload["summary"]["diagnosticsByCheckKind"] = {}
         payload["summary"]["missingCapabilityCounts"] = {}
+    if "migration" in payload:
+        payload["migration"]["placeholderCount"] = 0
+        payload["migration"]["placeholdersByTarget"] = {}
+        payload["migration"]["placeholdersBySource"] = {}
 
 
 def _write_count_balanced_artifact_gap_report(repo, *, omit_artifact_matrix=False):
@@ -6730,6 +6734,112 @@ def test_translate_project_glsl_usampler_texel_fetch_lowers_to_uint_spirv(
     assert_spirv_asm_validates_if_available(vulkan, tmp_path)
 
 
+def test_translate_project_glsl_alpha_stitch_storage_image_lowers_to_wgsl(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "alpha_stitch.glsl").write_text(
+        textwrap.dedent("""
+            #version 450
+            layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+            layout(binding = 0) uniform usampler2D srcRGB;
+            layout(binding = 1) uniform usampler2D srcAlpha;
+            layout(binding = 2, rgba32ui) uniform restrict writeonly uimage2D dstTexture;
+
+            void main() {
+                uvec2 rgbBlock = texelFetch(
+                    srcRGB,
+                    ivec2(gl_GlobalInvocationID.xy),
+                    0
+                ).xy;
+                uvec2 alphaBlock = texelFetch(
+                    srcAlpha,
+                    ivec2(gl_GlobalInvocationID.xy),
+                    0
+                ).xy;
+                imageStore(
+                    dstTexture,
+                    ivec2(gl_GlobalInvocationID.xy),
+                    uvec4(rgbBlock.xy, alphaBlock.xy)
+                );
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["wgsl"],
+        output_dir="out",
+        validate=True,
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("wgsl", "translated")}
+
+    wgsl = (repo / "out" / "wgsl" / "alpha_stitch.wgsl").read_text(
+        encoding="utf-8"
+    )
+    assert "@group(0) @binding(0)\nvar srcRGB: texture_2d<u32>;" in wgsl
+    assert "@group(0) @binding(1)\nvar srcAlpha: texture_2d<u32>;" in wgsl
+    assert (
+        "@group(0) @binding(2)\n"
+        "var dstTexture: texture_storage_2d<rgba32uint, write>;"
+    ) in wgsl
+    assert (
+        "textureLoad(srcRGB, vec2<i32>(global_invocation_id.xy), 0).xy" in wgsl
+    )
+    assert (
+        "textureStore(dstTexture, vec2<i32>(global_invocation_id.xy), "
+        "vec4<u32>(rgbBlock.xy, alphaBlock.xy));"
+    ) in wgsl
+    assert "uimage2D" not in wgsl
+    assert "imageStore" not in wgsl
+
+    if shutil.which("naga"):
+        assert payload["validation"]["artifacts"][0]["status"] == "ok"
+        assert payload["validation"]["toolchainRuns"][0]["status"] == "ok"
+
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    runtime_manifest = build_runtime_artifact_manifest(report_path)
+    storage_binding = next(
+        binding
+        for binding in runtime_manifest["artifacts"][0]["resourceBindings"]
+        if binding["name"] == "dstTexture"
+    )
+    assert storage_binding["kind"] == "storage-texture"
+    assert storage_binding["binding"] == 2
+    assert storage_binding["access"] == "write"
+    assert storage_binding["type"] == "uimage2D"
+
+    manifest_path = repo / "out" / "runtime-manifest.json"
+    manifest_path.write_text(json.dumps(runtime_manifest, indent=2), encoding="utf-8")
+    package_dir = repo / "runtime-package"
+    build_runtime_package(manifest_path, package_dir)
+    inspection = inspect_runtime_package(package_dir / "runtime-package.json")
+    storage_resource = next(
+        resource
+        for resource in inspection["bindings"][0]["hostInterface"]["resources"]
+        if resource["name"] == "dstTexture"
+    )
+    assert storage_resource == {
+        "name": "dstTexture",
+        "kind": "storage-texture",
+        "type": "texture_storage_2d<rgba32uint, write>",
+        "set": 0,
+        "binding": 2,
+        "access": "write",
+    }
+
+
 def test_translate_project_preserves_anonymous_glsl_ssbo_shape_for_targets(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
@@ -7438,6 +7548,149 @@ def test_translate_project_applies_include_dirs_and_defines(tmp_path):
         "cgl": {"forwarded": 1}
     }
     assert "project_color" in output.read_text(encoding="utf-8")
+
+
+def _write_placeholder_probe_report(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "main.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["mojo", "rust"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    def write_artifact(file_path, **kwargs):
+        del file_path
+        target = kwargs["backend"]
+        output_path = Path(kwargs["save_shader"])
+        if target == "mojo":
+            source = textwrap.dedent("""
+                # CrossGL resource placeholders
+                let fallback = /* unsupported Mojo texture query: requires native API */ 0
+                """).lstrip()
+        elif target == "rust":
+            source = textwrap.dedent("""
+                // CrossGL Rust limitation: resource colorMap is emitted as a
+                // compile-only placeholder static, not a rust-gpu resource binding
+                """).lstrip()
+        else:
+            source = "// translated\n"
+        output_path.write_text(source, encoding="utf-8")
+        return source
+
+    monkeypatch.setattr(project_pipeline, "translate", write_artifact)
+    report = translate_project(load_project_config(repo))
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    return repo, report_path, report.to_json()
+
+
+def test_translate_project_reports_generated_placeholder_markers(
+    tmp_path, monkeypatch
+):
+    _repo, report_path, payload = _write_placeholder_probe_report(
+        tmp_path, monkeypatch
+    )
+
+    placeholder_diagnostics = [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == project_pipeline.GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE
+    ]
+    validation = validate_project_report(report_path)
+    inspection = inspect_project_report(report_path)
+
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 3, "error": 0}
+    assert len(placeholder_diagnostics) == 3
+    assert [diagnostic["target"] for diagnostic in placeholder_diagnostics] == [
+        "mojo",
+        "mojo",
+        "rust",
+    ]
+    assert {
+        diagnostic["location"]["file"] for diagnostic in placeholder_diagnostics
+    } == {
+        "translated/mojo/shaders/main.mojo",
+        "translated/rust/shaders/main.rs",
+    }
+    assert {
+        diagnostic["originalLocation"]["file"]
+        for diagnostic in placeholder_diagnostics
+    } == {"shaders/main.cgl"}
+    assert all(
+        diagnostic["severity"] == "warning"
+        and diagnostic["location"]["line"] >= 1
+        and diagnostic["location"]["column"] >= 1
+        and diagnostic["missingCapabilities"]
+        for diagnostic in placeholder_diagnostics
+    )
+    assert any(
+        "resource placeholders" in diagnostic["message"]
+        for diagnostic in placeholder_diagnostics
+    )
+    assert any(
+        "unsupported fallback expression" in diagnostic["message"]
+        for diagnostic in placeholder_diagnostics
+    )
+    assert any(
+        "rust-gpu resource binding" in diagnostic["message"]
+        for diagnostic in placeholder_diagnostics
+    )
+    assert payload["migration"]["placeholderCount"] == 3
+    assert payload["migration"]["placeholdersByTarget"] == {"mojo": 2, "rust": 1}
+    assert payload["migration"]["placeholdersBySource"] == {"shaders/main.cgl": 3}
+    assert validation["success"] is True
+    assert validation["diagnosticsByCode"][
+        project_pipeline.GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE
+    ] == 3
+    assert inspection["migration"]["placeholderCount"] == 3
+    assert inspection["migration"]["placeholdersByTarget"] == {
+        "mojo": 2,
+        "rust": 1,
+    }
+    assert inspection["migration"]["placeholdersBySource"] == {
+        "shaders/main.cgl": 3
+    }
+
+
+def test_validate_project_report_fails_placeholder_marker_without_diagnostic(
+    tmp_path, monkeypatch
+):
+    repo, _report_path, payload = _write_placeholder_probe_report(
+        tmp_path, monkeypatch
+    )
+    _clear_report_diagnostics(payload)
+    missing_report_path = repo / "translated" / "missing-placeholder-diagnostics.json"
+    missing_report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(missing_report_path)
+    missing_diagnostics = [
+        diagnostic
+        for diagnostic in validation["diagnostics"]
+        if diagnostic["code"] == project_pipeline.PLACEHOLDER_DIAGNOSTIC_MISSING_CODE
+    ]
+
+    assert validation["success"] is False
+    assert len(missing_diagnostics) == 3
+    assert validation["diagnosticsByCode"][
+        project_pipeline.PLACEHOLDER_DIAGNOSTIC_MISSING_CODE
+    ] == 3
+    assert {diagnostic["target"] for diagnostic in missing_diagnostics} == {
+        "mojo",
+        "rust",
+    }
+    assert {
+        diagnostic["location"]["file"] for diagnostic in missing_diagnostics
+    } == {
+        "translated/mojo/shaders/main.mojo",
+        "translated/rust/shaders/main.rs",
+    }
 
 
 def test_translate_project_filters_invalid_include_dirs_before_frontend(
@@ -9189,6 +9442,68 @@ def test_translate_project_opengl_materializes_mlx_explicit_template_helpers(
     assert "add_offset_float_uint_7(src[gid], uint(gid))" in output
     assert "add_offset<T" not in output
     assert not re.search(r"\b(?:T|IdxT|Offset|AccT|Wtype)\b", output)
+
+
+def test_translate_project_opengl_materializes_mlx_pointer_and_value_bindings(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "elementwise.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_scale(name, type, out_type) \\
+                instantiate_kernel("scale" #name, scale_values, type, out_type)
+
+            template <typename T, typename U>
+            [[kernel]] void scale_values(
+                device const T* src [[buffer(0)]],
+                device U* dst [[buffer(1)]],
+                constant U& factor [[buffer(2)]],
+                uint gid [[thread_position_in_grid]]) {
+                dst[gid] = U(src[gid]) * factor;
+            }
+
+            instantiate_scale(float32, float, float)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    artifact = payload["artifacts"][0]
+    output = (
+        repo / "translated" / "opengl" / "shaders" / "elementwise.glsl"
+    ).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert artifact["templateMaterialization"]["specializations"] == [
+        {
+            "name": "scale_values",
+            "materializedName": "scalefloat32",
+            "parameters": {"T": "float", "U": "float"},
+            "source": "source-instantiation",
+        }
+    ]
+    assert "layout(std430, binding = 0) readonly buffer srcBuffer" in output
+    assert "layout(std430, binding = 1) buffer dstBuffer" in output
+    assert "layout(std140, binding = 2) uniform scalefloat32_factor_Args" in output
+    assert "float factor;" in output
+    assert "dst[gid] = (float(src[gid]) * factor);" in output
+    assert not re.search(r"\b(?:T|U)\b", output)
 
 
 def test_translate_project_opengl_uses_metal_default_template_helper_type(
@@ -25927,6 +26242,9 @@ def test_project_cli_inspect_report_text_marks_invalid_reports(tmp_path):
         "runtimeReferencesByBackend": {},
         "runtimeReferencesByKind": {},
         "runtimeReferencesByPath": {},
+        "placeholderCount": 0,
+        "placeholdersByTarget": {},
+        "placeholdersBySource": {},
         "truncatedRuntimeReferenceCount": 0,
         "runtimeReferences": [],
         "truncatedActionCount": 0,
