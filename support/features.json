@@ -2897,7 +2897,7 @@
           "status": "diagnostic",
           "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_glsl_es_310_texture_gather_intrinsics"
           ]
         },
         "wgsl": {

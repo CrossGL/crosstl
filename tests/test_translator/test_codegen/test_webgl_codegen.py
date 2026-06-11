@@ -870,7 +870,10 @@ def test_webgl_codegen_rejects_storage_image_intrinsics():
     (
         "textureGather(colorTex, uv)",
         "textureGatherOffset(colorTex, uv, ivec2(0, 0))",
+        "textureGatherOffsets(colorTex, uv, ivec2(-1, 0), ivec2(0, -1), ivec2(1, 0), ivec2(0, 1))",
         "textureGatherCompare(colorTex, uv, 0.5)",
+        "textureGatherCompareOffset(colorTex, uv, 0.5, ivec2(0, 0))",
+        "textureGatherCompareOffsets(colorTex, uv, 0.5, ivec2(-1, 0), ivec2(0, -1), ivec2(1, 0), ivec2(0, 1))",
     ),
 )
 def test_webgl_codegen_rejects_glsl_es_310_texture_gather_intrinsics(call):

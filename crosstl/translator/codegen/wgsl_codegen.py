@@ -3290,7 +3290,9 @@ class WGSLCodeGen:
 
     def generate_call_arguments(self, function_name, arguments, function=None):
         metadata_key = (
-            self.function_signature_key(function) if function is not None else function_name
+            self.function_signature_key(function)
+            if function is not None
+            else function_name
         )
         texture_parameter_indices = self._function_texture_parameters.get(
             metadata_key, self._function_texture_parameters.get(function_name, ())
@@ -3312,9 +3314,11 @@ class WGSLCodeGen:
                 for parameter in getattr(function, "parameters", []) or []
             ]
             return ", ".join(
-                self.generate_expression_for_target(arg, parameter_types[index])
-                if index < len(parameter_types)
-                else self.generate_expression(arg)
+                (
+                    self.generate_expression_for_target(arg, parameter_types[index])
+                    if index < len(parameter_types)
+                    else self.generate_expression(arg)
+                )
                 for index, arg in enumerate(arguments)
             )
 
@@ -5414,9 +5418,7 @@ class WGSLCodeGen:
                     overload_name, used_function_names
                 )
                 function_names.append(emitted_name)
-                function_name_keys[self.function_signature_key(function)] = (
-                    emitted_name
-                )
+                function_name_keys[self.function_signature_key(function)] = emitted_name
         module_scope_names = self.wgsl_identifier_map(
             type_names + function_names + module_names
         )
@@ -6037,9 +6039,9 @@ class WGSLCodeGen:
     def function_types_compatible(self, actual_type, expected_type):
         if actual_type is None or expected_type is None:
             return False
-        return self.function_type_match_name(actual_type) == self.function_type_match_name(
-            expected_type
-        )
+        return self.function_type_match_name(
+            actual_type
+        ) == self.function_type_match_name(expected_type)
 
     def function_type_match_name(self, vtype):
         try:
