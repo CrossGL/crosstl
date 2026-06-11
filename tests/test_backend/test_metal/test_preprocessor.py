@@ -153,14 +153,14 @@ def test_preprocessor_materializes_decltype_instantiation_with_joined_host_name(
     assert "out[gid] = uint(gid);" in output
 
 
-def test_preprocessor_materialized_numeric_suffix_preserves_member_names():
+def test_preprocessor_materialized_numeric_specialization_preserves_member_names():
     code = """
     struct PackedScale {
         uint8_t bits;
     };
 
     template <typename T, const int group_size, const int bits>
-    [[kernel]] void generated_quantize(
+    [[kernel]] void nvfp4_quantize(
         const device T* in [[buffer(0)]],
         device uint8_t* out [[buffer(1)]]) {
         PackedScale s;
@@ -170,25 +170,22 @@ def test_preprocessor_materialized_numeric_suffix_preserves_member_names():
         out[0] = output;
     }
 
-    instantiate_kernel(
-        "generated_quantize_float_gs_16_b_4",
-        generated_quantize,
-        float,
-        16,
-        4)
+    template [[host_name("nvfp4_quantize_float_gs_16_b_4")]] [[kernel]]
+    decltype(nvfp4_quantize<float, 16, 4>) nvfp4_quantize<float, 16, 4>;
     """
 
     output = MetalPreprocessor().preprocess(code)
     ast = MetalParser(MetalLexer(output, preprocess=False).tokenize()).parse()
 
-    assert "void generated_quantize_float_gs_16_b_4(" in output
+    assert "decltype(nvfp4_quantize<float, 16, 4>)" not in output
+    assert "void nvfp4_quantize_float_gs_16_b_4(" in output
     assert "const device float* in" in output
     assert "float sample = in[0];" in output
     assert "uint8_t q_scale = s.bits;" in output
     assert "uint8_t q_scale = s.4;" not in output
     assert "uint8_t output = q_scale + 4;" in output
     assert [function.name for function in ast.functions] == [
-        "generated_quantize_float_gs_16_b_4"
+        "nvfp4_quantize_float_gs_16_b_4"
     ]
 
 
@@ -394,6 +391,31 @@ def test_preprocessor_dedupes_equivalent_explicit_template_helper_signatures():
     assert output.count("float load_value_float_uint_4(") == 1
     assert output.count("load_value_float_uint_4(src, gid)") == 3
     assert "load_value<" not in output
+
+
+def test_preprocessor_dedupes_scan_style_repeated_helper_calls_before_budget():
+    calls = "\n".join(
+        f"        acc = scan_step<float, int, 4, true>(acc, {index});"
+        for index in range(24)
+    )
+    code = f"""
+    template <typename T, typename OffsetT, int Width, bool Inclusive>
+    T scan_step(T value, OffsetT offset) {{
+        return value + T(offset) + T(Width);
+    }}
+
+    kernel void scan(device float* dst [[buffer(0)]]) {{
+        float acc = 0.0;
+{calls}
+        dst[0] = acc;
+    }}
+    """
+
+    output = MetalPreprocessor(max_template_specializations=1).preprocess(code)
+
+    assert output.count("float scan_step_float_int_4_true(") == 1
+    assert output.count("scan_step_float_int_4_true(acc,") == 24
+    assert "scan_step<" not in output
 
 
 def test_preprocessor_reports_template_specialization_limit_details():

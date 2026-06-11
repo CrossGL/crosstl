@@ -13,80 +13,20 @@
     "sources": 40,
     "targets": ["directx", "opengl", "vulkan"],
     "artifacts": 120,
-    "translated_artifacts": 67,
-    "failed_artifacts": 53,
+    "translated_artifacts": 79,
+    "failed_artifacts": 41,
     "translated_by_target": {
-      "directx": 33,
-      "opengl": 4,
-      "vulkan": 30
+      "directx": 35,
+      "opengl": 13,
+      "vulkan": 31
     }
   },
   "tracked_issues": [
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1019",
-      "scope": "project-template-materialization-blockers",
-      "status": "open",
-      "summary": "Resolve project template materialization blockers after variant discovery."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1026",
-      "scope": "metal-name-directive-metadata",
-      "status": "open",
-      "summary": "Plan Metal #name directives as project specialization metadata."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1028",
-      "scope": "metal-scan-template-streaming",
-      "status": "open",
-      "summary": "Stream Metal template materialization for scan-style helper explosions."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1029",
-      "scope": "metal-variadic-debug-templates",
-      "status": "open",
-      "summary": "Handle variadic Metal debug helper templates during project materialization."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1030",
-      "scope": "metal-reduction-normalization-template-variants",
-      "status": "open",
-      "summary": "Materialize non-type template parameters for reduction and normalization kernels."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1031",
-      "scope": "metal-convolution-gemv-template-variants",
-      "status": "open",
-      "summary": "Materialize convolution and GEMV threadgroup sizing templates from project variants."
-    },
     {
       "issue": "https://github.com/CrossGL/crosstl/issues/1032",
       "scope": "metal-rotary-embedding-template-variants",
       "status": "open",
       "summary": "Materialize rotary embedding Metal templates across project targets."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1033",
-      "scope": "opengl-elementwise-template-bindings",
-      "status": "open",
-      "summary": "Carry Metal source-instantiation bindings into OpenGL elementwise kernels."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1034",
-      "scope": "opengl-reduction-template-bindings",
-      "status": "open",
-      "summary": "Resolve accumulator and auxiliary template bindings for OpenGL reductions."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1035",
-      "scope": "opengl-nested-steel-template-bindings",
-      "status": "open",
-      "summary": "Propagate nested Steel kernel template bindings into OpenGL project output."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1036",
-      "scope": "spirv-index-helper-storage-provenance",
-      "status": "open",
-      "summary": "Preserve storage-buffer provenance through SPIR-V index helper calls."
     },
     {
       "issue": "https://github.com/CrossGL/crosstl/issues/1037",
@@ -111,6 +51,42 @@
       "scope": "opengl-quantized-fft-template-bindings",
       "status": "open",
       "summary": "Propagate OpenGL template bindings for quantized, FFT, and masked-GEMV Metal kernels."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1104",
+      "scope": "opengl-uniform-block-member-disambiguation",
+      "status": "open",
+      "summary": "Disambiguate OpenGL uniform block members during project translation."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1105",
+      "scope": "opengl-elemental-copy-template-bindings",
+      "status": "open",
+      "summary": "Propagate OpenGL template bindings for elemental and copy-style Metal kernels."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1106",
+      "scope": "metal-convolution-helper-template-variants",
+      "status": "open",
+      "summary": "Materialize Metal convolution helper templates from project variants."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1107",
+      "scope": "metal-shared-reduction-helper-template-variants",
+      "status": "open",
+      "summary": "Materialize shared Metal helper templates used by reductions and normalization."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1110",
+      "scope": "opengl-reduction-ordering-template-bindings",
+      "status": "open",
+      "summary": "Propagate OpenGL template bindings for reduction and ordering kernels."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1111",
+      "scope": "opengl-steel-template-bindings",
+      "status": "open",
+      "summary": "Propagate OpenGL template bindings through Steel convolution and GEMM helpers."
     }
   ],
   "resolved_issues": [
@@ -136,6 +112,16 @@
     "https://github.com/CrossGL/crosstl/issues/1007",
     "https://github.com/CrossGL/crosstl/issues/1012",
     "https://github.com/CrossGL/crosstl/issues/1013",
-    "https://github.com/CrossGL/crosstl/issues/1027"
+    "https://github.com/CrossGL/crosstl/issues/1019",
+    "https://github.com/CrossGL/crosstl/issues/1026",
+    "https://github.com/CrossGL/crosstl/issues/1027",
+    "https://github.com/CrossGL/crosstl/issues/1028",
+    "https://github.com/CrossGL/crosstl/issues/1029",
+    "https://github.com/CrossGL/crosstl/issues/1030",
+    "https://github.com/CrossGL/crosstl/issues/1031",
+    "https://github.com/CrossGL/crosstl/issues/1033",
+    "https://github.com/CrossGL/crosstl/issues/1034",
+    "https://github.com/CrossGL/crosstl/issues/1035",
+    "https://github.com/CrossGL/crosstl/issues/1036"
   ]
 }

@@ -1657,8 +1657,49 @@ class TestHipCodeGen:
         if shutil.which("hipcc") is not None:
             compile_hip_if_hipcc_available(hip_code, tmp_path)
 
-    @pytest.mark.parametrize("vector_type", ["vec3<f16>", "vec4<f16>"])
-    def test_fp16_vec3_vec4_aliases_raise_hip_diagnostic(self, vector_type):
+    def test_fp16_vec3_aliases_lower_to_hip_half3_helper(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec3 tint(f16vec3 input) {
+                    f16 scalar = f16(0.5);
+                    f16vec3 from_scalars = f16vec3(1.0, scalar, input.z);
+                    f16vec3 from_vector = f16vec3(input);
+                    f16vec3 from_swizzle = f16vec3(input.zyx);
+                    f16 component = from_scalars.x;
+                    return f16vec3(from_vector.x, from_swizzle.y, component);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "#include <hip/hip_fp16.h>" in hip_code
+        assert "struct cgl_half3" in hip_code
+        assert "__device__ cgl_half3 tint(cgl_half3 input)" in hip_code
+        assert "half scalar = __float2half(0.5);" in hip_code
+        assert (
+            "cgl_half3 from_scalars = cgl_make_half3(1.0, scalar, input.z);" in hip_code
+        )
+        assert (
+            "cgl_half3 from_vector = cgl_make_half3(input.x, input.y, input.z);"
+            in hip_code
+        )
+        assert (
+            "cgl_half3 from_swizzle = cgl_make_half3(input.z, input.y, input.x);"
+            in hip_code
+        )
+        assert "half component = from_scalars.x;" in hip_code
+        assert (
+            "return cgl_make_half3(from_vector.x, from_swizzle.y, component);"
+            in hip_code
+        )
+        assert "f16vec3" not in hip_code
+
+    @pytest.mark.parametrize("vector_type", ["vec4<f16>"])
+    def test_fp16_vec4_aliases_raise_hip_diagnostic(self, vector_type):
         source_code = f"""
         shader TestShader {{
             compute {{
@@ -1679,7 +1720,7 @@ class TestHipCodeGen:
 
     @pytest.mark.parametrize(
         "vector_type",
-        ["f16vec3", "f16vec4", "float16vec3", "float16vec4", "half3", "half4"],
+        ["f16vec4", "float16vec4", "half4"],
     )
     def test_fp16_wide_vector_alias_maps_raise_hip_diagnostic(self, vector_type):
         with pytest.raises(

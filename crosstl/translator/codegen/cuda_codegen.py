@@ -128,18 +128,21 @@ CUDA_INTEGER_BIT_FUNCTION_ALIASES = {
 }
 
 CUDA_UNSUPPORTED_FP16_VECTOR_TYPES = {
-    "vec3<f16>",
     "vec4<f16>",
-    "vec3<float16>",
     "vec4<float16>",
-    "vec3<half>",
     "vec4<half>",
-    "f16vec3",
     "f16vec4",
-    "float16vec3",
     "float16vec4",
-    "half3",
     "half4",
+}
+
+CUDA_FP16_VEC3_TYPES = {
+    "vec3<f16>",
+    "vec3<float16>",
+    "vec3<half>",
+    "f16vec3",
+    "float16vec3",
+    "half3",
 }
 
 
@@ -5272,6 +5275,19 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         generated_args = []
         for raw_arg, arg_expr in zip(raw_args, args):
+            swizzle_components = self.member_swizzle_components(raw_arg)
+            if swizzle_components is not None:
+                generated_args.extend(
+                    self.vector_argument_lane_expressions(
+                        raw_arg,
+                        arg_expr,
+                        vector_info,
+                    )
+                )
+                if len(generated_args) >= len(vector_info["components"]):
+                    return generated_args[: len(vector_info["components"])]
+                continue
+
             arg_info = self.vector_type_info(self.expression_result_type(raw_arg))
             if arg_info is None:
                 generated_args.append(arg_expr)
@@ -6381,7 +6397,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "uvec3": "uint3",
             "uvec4": "uint4",
             "f16vec2": "half2",
+            "f16vec3": "cgl_half3",
+            "float16vec3": "cgl_half3",
+            "half3": "cgl_half3",
             "half2": "half2",
+            "vec3<f16>": "cgl_half3",
+            "vec3<float16>": "cgl_half3",
+            "vec3<half>": "cgl_half3",
             "bvec2": "uchar2",
             "bvec3": "uchar3",
             "bvec4": "uchar4",
@@ -6507,6 +6529,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def cuda_mapped_type_result(self, mapped_type):
         base_type = str(mapped_type).split("[", 1)[0].strip()
+        if base_type == "cgl_half3":
+            self.require_cuda_half3_helper()
         if base_type in {
             "CglRayTracingAccelerationStructure",
             "CglRayDesc",
@@ -9504,6 +9528,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "float2": "make_float2",
             "float3": "make_float3",
             "float4": "make_float4",
+            "f16vec3": "cgl_make_half3",
+            "float16vec3": "cgl_make_half3",
+            "half3": "cgl_make_half3",
+            "vec3<f16>": "cgl_make_half3",
+            "vec3<float16>": "cgl_make_half3",
+            "vec3<half>": "cgl_make_half3",
             "vec2<f32>": "make_float2",
             "vec3<f32>": "make_float3",
             "vec4<f32>": "make_float4",
@@ -10610,10 +10640,28 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return self.convert_crossgl_type_to_cuda(type_name)
 
     def vector_type_info(self, type_name):
+        half3_info = self.cuda_half3_vector_type_info(type_name)
+        if half3_info is not None:
+            return half3_info
         narrow_info = self.cuda_narrow_integer_vector_type_info(type_name)
         if narrow_info is not None:
             return narrow_info
         return super().vector_type_info(type_name)
+
+    def cuda_half3_vector_type_info(self, type_name):
+        type_text = self.type_name_string(type_name)
+        if type_text is None:
+            return None
+        compact_type = "".join(str(type_text).split())
+        if compact_type not in CUDA_FP16_VEC3_TYPES and compact_type != "cgl_half3":
+            return None
+        self.require_cuda_half3_helper()
+        return {
+            "type": "cgl_half3",
+            "constructor": "cgl_make_half3",
+            "component_type": "half",
+            "components": ("x", "y", "z"),
+        }
 
     def cuda_narrow_integer_vector_type_info(self, type_name):
         type_text = self.type_name_string(type_name)
@@ -10663,7 +10711,52 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         raise ValueError(
             "CUDA does not support FP16 vector type "
             f"{type_name}; supported FP16 CUDA aliases are f16/half "
-            "and vec2<f16>/half2"
+            "and vec2<f16>/half2; vec3<f16>/half3 lowers to cgl_half3"
+        )
+
+    def require_cuda_half3_helper(self):
+        helper_name = "cgl_half3_type"
+        if helper_name in self.helper_functions:
+            return
+        self.helper_functions[helper_name] = (
+            "struct cgl_half3\n"
+            "{\n"
+            "    half x;\n"
+            "    half y;\n"
+            "    half z;\n"
+            "\n"
+            "    __host__ __device__ cgl_half3()\n"
+            "        : x(__float2half(0.0f)), y(__float2half(0.0f)), z(__float2half(0.0f))\n"
+            "    {\n"
+            "    }\n"
+            "\n"
+            "    __host__ __device__ cgl_half3(half x_value, half y_value, half z_value)\n"
+            "        : x(x_value), y(y_value), z(z_value)\n"
+            "    {\n"
+            "    }\n"
+            "};\n"
+            "\n"
+            "__host__ __device__ inline half cgl_to_half(half value)\n"
+            "{\n"
+            "    return value;\n"
+            "}\n"
+            "\n"
+            "template <typename T>\n"
+            "__host__ __device__ inline half cgl_to_half(T value)\n"
+            "{\n"
+            "    return __float2half(static_cast<float>(value));\n"
+            "}\n"
+            "\n"
+            "__host__ __device__ inline cgl_half3 cgl_make_half3()\n"
+            "{\n"
+            "    return cgl_half3();\n"
+            "}\n"
+            "\n"
+            "template <typename X, typename Y, typename Z>\n"
+            "__host__ __device__ inline cgl_half3 cgl_make_half3(X x, Y y, Z z)\n"
+            "{\n"
+            "    return cgl_half3(cgl_to_half(x), cgl_to_half(y), cgl_to_half(z));\n"
+            "}"
         )
 
     def insert_helper_functions(self):

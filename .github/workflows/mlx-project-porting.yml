@@ -3,21 +3,17 @@ name: MLX Project Porting
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   MLX_COMMIT: "968d264f2903d578e699c4452a4dbf48633921aa"
-  PROJECT_TEMPLATE_MATERIALIZATION_BLOCKERS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1019"
-  METAL_NAME_DIRECTIVE_METADATA_ISSUE: "https://github.com/CrossGL/crosstl/issues/1026"
-  METAL_SCAN_TEMPLATE_STREAMING_ISSUE: "https://github.com/CrossGL/crosstl/issues/1028"
-  METAL_VARIADIC_DEBUG_TEMPLATE_ISSUE: "https://github.com/CrossGL/crosstl/issues/1029"
-  METAL_REDUCTION_NORM_TEMPLATE_VARIANTS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1030"
-  METAL_CONV_GEMV_TEMPLATE_VARIANTS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1031"
   METAL_ROPE_TEMPLATE_VARIANTS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1032"
-  OPENGL_ELEMENTWISE_TEMPLATE_BINDINGS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1033"
-  OPENGL_REDUCTION_TEMPLATE_BINDINGS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1034"
-  OPENGL_STEEL_TEMPLATE_BINDINGS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1035"
-  SPIRV_INDEX_HELPER_PROVENANCE_ISSUE: "https://github.com/CrossGL/crosstl/issues/1036"
   SPIRV_SORT_HELPER_INLINE_ISSUE: "https://github.com/CrossGL/crosstl/issues/1037"
   RUNTIME_BINDING_MANIFEST_ISSUE: "https://github.com/CrossGL/crosstl/issues/1038"
   RUNTIME_PARITY_EXECUTOR_ISSUE: "https://github.com/CrossGL/crosstl/issues/1039"
   OPENGL_QUANTIZED_FFT_TEMPLATE_BINDINGS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1068"
+  OPENGL_UNIFORM_BLOCK_DISAMBIGUATION_ISSUE: "https://github.com/CrossGL/crosstl/issues/1104"
+  OPENGL_ELEMENTAL_COPY_TEMPLATE_BINDINGS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1105"
+  METAL_CONVOLUTION_HELPER_TEMPLATE_VARIANTS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1106"
+  METAL_SHARED_REDUCTION_HELPER_TEMPLATE_VARIANTS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1107"
+  OPENGL_REDUCTION_ORDERING_TEMPLATE_BINDINGS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1110"
+  OPENGL_STEEL_TEMPLATE_BINDINGS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1111"
 
 on:
   push:
