@@ -202,6 +202,24 @@ def _artifact_files(output_dir: Path, targets: list[str]) -> dict[Path, Path]:
     return files
 
 
+def _normalize_artifacts(output_dir: Path, targets: list[str]) -> None:
+    for path in _artifact_files(output_dir, targets).values():
+        _normalize_artifact(path)
+
+
+def _normalize_artifact(path: Path) -> None:
+    data = path.read_bytes()
+    if b"\0" in data:
+        return
+    normalized = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    stripped = normalized.rstrip(b" \t\n")
+    if not stripped:
+        return
+    normalized = stripped + b"\n"
+    if normalized != data:
+        path.write_bytes(normalized)
+
+
 def _comparison_bytes(path: Path) -> bytes:
     data = path.read_bytes().replace(b"\r\n", b"\n").rstrip(b"\n")
     if path.suffix == ".json":
@@ -337,6 +355,7 @@ def _run_case(
             reports_dir=reports_dir,
             case_name=case_dir.name,
         )
+        _normalize_artifacts(case_dir / OUTPUT_DIR_NAME, selected_targets)
         shutil.rmtree(report_path.parent, ignore_errors=True)
         print(f"{case_dir.name}: updated {OUTPUT_DIR_NAME}")
         return
@@ -357,6 +376,7 @@ def _run_case(
             reports_dir=reports_dir,
             case_name=case_dir.name,
         )
+        _normalize_artifacts(work_dir / OUTPUT_DIR_NAME, selected_targets)
         _compare_artifacts(case_dir, work_dir, selected_targets)
         print(f"{case_dir.name}: verified {', '.join(selected_targets)}")
 
