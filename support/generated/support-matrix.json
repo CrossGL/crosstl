@@ -275,8 +275,12 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 23,
+        "unsupported_marker_count": 38,
         "unsupported_marker_samples": [
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "UNSUPPORTED_VERTEX_OUTPUT_BUILTINS = {\"gl_ClipDistance\", \"gl_CullDistance\"}"
+          },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "UNSUPPORTED_STAGE_NAMES = ("
@@ -315,47 +319,43 @@
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "\"WebGL target does not support GLSL buffer block resource \""
+            "text": "builtin_names = self.webgl_unsupported_builtin_output_names(ast)"
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "\"WebGL target does not support storage buffer resource \""
+            "text": "unsupported_builtin = self.webgl_referenced_unsupported_builtin("
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "\"WebGL target does not support storage image resource \""
+            "text": "if unsupported_builtin is None:"
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "if sampled_base_type in self.UNSUPPORTED_SAMPLED_RESOURCE_TYPES:"
+            "text": "\"WebGL target does not support vertex built-in output \""
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "\"WebGL target does not support sampled resource \""
+            "text": "f\"'{unsupported_builtin}'\""
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "\"WebGL target does not support storage buffer resource \""
+            "text": "def webgl_unsupported_builtin_output_names(self, ast):"
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "f\"WebGL target does not support GLSL buffer block resource '{name}'\""
+            "text": "builtin: builtin for builtin in self.UNSUPPORTED_VERTEX_OUTPUT_BUILTINS"
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "unsupported = sorted(stages & self.UNSUPPORTED_STAGE_NAMES)"
+            "text": "builtin_name = self.webgl_unsupported_builtin_attribute_name(node)"
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "if unsupported:"
+            "text": "def webgl_unsupported_builtin_attribute_name(self, node):"
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "\"WebGL target does not support shader stage(s): \""
-          },
-          {
-            "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "+ \", \".join(unsupported)"
+            "text": "if attr_name in self.UNSUPPORTED_VERTEX_OUTPUT_BUILTINS:"
           }
         ]
       },
@@ -371,7 +371,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_webgl_codegen.py"
         ],
-        "test_count": 37
+        "test_count": 39
       },
       "translator_codegen": {
         "exists": true,
