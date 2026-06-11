@@ -61,6 +61,7 @@ from .enum_utils import (
     substitute_generic_type_name,
 )
 from .generic_function_utils import (
+    collect_unresolved_generic_function_call_names,
     generic_function_call_name,
     generic_function_emission_list,
     generic_function_parameters,
@@ -12277,6 +12278,8 @@ class VulkanSPIRVCodeGen:
             ) or self.source_variable_type_names.get(name)
             if type_name is None:
                 return None
+            if self.storage_buffer_type_is_inferred_pointer(type_name):
+                return None
             type_name = self.storage_buffer_resource_type_name(type_name)
             if type_name is not None:
                 return type_name
@@ -12685,6 +12688,40 @@ class VulkanSPIRVCodeGen:
 
         pointee = type_str[:-1].strip()
         return pointee or None
+
+    def storage_buffer_type_is_inferred_pointer(self, type_name) -> bool:
+        """Return whether a storage-buffer pointer spelling still needs inference."""
+        type_str = self.type_name_from_value(type_name)
+        if type_str is None:
+            return False
+
+        type_str = self.normalize_reference_type_name(type_str)
+        if type_str is None:
+            return False
+
+        type_str = str(type_str).strip()
+        if not type_str.endswith("*"):
+            return False
+
+        pointee = type_str[:-1].strip()
+        pointee = re.sub(
+            r"\b(?:const|volatile|device|constant|thread|threadgroup|restrict)\b",
+            "",
+            pointee,
+        )
+        pointee = re.sub(r"\s+", "", pointee)
+        for qualifier in (
+            "threadgroup",
+            "constant",
+            "volatile",
+            "restrict",
+            "device",
+            "thread",
+            "const",
+        ):
+            while pointee.startswith(qualifier) and len(pointee) > len(qualifier):
+                pointee = pointee[len(qualifier) :]
+        return pointee in {"auto", "decltype(auto)"}
 
     def normalize_reference_type_name(self, type_name) -> Optional[str]:
         """Return the value type for CrossGL reference spelling such as &T or T&."""
@@ -14912,9 +14949,14 @@ class VulkanSPIRVCodeGen:
         if source_metadata is None and source_storage_buffer_metadata is None:
             return False
 
-        alias_type_name = self.storage_buffer_resource_type_name(
-            var_type_name
-        ) or self.storage_buffer_expression_type_name(initial_value)
+        declared_alias_type_name = self.storage_buffer_resource_type_name(var_type_name)
+        inferred_alias_type_name = self.storage_buffer_expression_type_name(
+            initial_value
+        )
+        if self.storage_buffer_type_is_inferred_pointer(var_type_name):
+            alias_type_name = inferred_alias_type_name or declared_alias_type_name
+        else:
+            alias_type_name = declared_alias_type_name or inferred_alias_type_name
         if var_type_source is not None:
             base_type_name = self.array_base_type_name(var_type_name)
             if not (
@@ -18700,9 +18742,12 @@ class VulkanSPIRVCodeGen:
         type_info = self.storage_buffer_resource_type_info(
             metadata.get("declared_type_name")
         )
-        return (
-            type_info is not None and type_info.get("kind") == "storage_buffer_pointer"
-        )
+        if type_info is not None and type_info.get("kind") == "storage_buffer_pointer":
+            return True
+
+        return metadata.get("kind") == "structured_buffer" and metadata.get(
+            "buffer_kind"
+        ) in {"StructuredBuffer", "RWStructuredBuffer", "StorageBufferPointer"}
 
     def record_storage_buffer_pointer_offset_alias(
         self, source_pointer: SpirvId, alias_pointer: SpirvId, index: SpirvId
@@ -22535,6 +22580,18 @@ class VulkanSPIRVCodeGen:
                 "Input",
                 {"Fragment"},
             ),
+            "gl_FragSizeEXT": (
+                "uvec2",
+                "FragSizeEXT",
+                "Input",
+                {"Fragment"},
+            ),
+            "gl_FragInvocationCountEXT": (
+                "uint",
+                "FragInvocationCountEXT",
+                "Input",
+                {"Fragment"},
+            ),
             "gl_SampleMaskIn": (
                 "int[1]",
                 "SampleMask",
@@ -22853,6 +22910,9 @@ class VulkanSPIRVCodeGen:
         if builtin_name in {"BaryCoordKHR", "BaryCoordNoPerspKHR"}:
             self.require_capability("FragmentBarycentricKHR")
             self.require_extension("SPV_KHR_fragment_shader_barycentric")
+        elif builtin_name in {"FragSizeEXT", "FragInvocationCountEXT"}:
+            self.require_capability("FragmentDensityEXT")
+            self.require_extension("SPV_EXT_fragment_invocation_density")
         elif builtin_name == "FragStencilRefEXT":
             self.require_capability("StencilExportEXT")
             self.require_extension("SPV_EXT_shader_stencil_export")
@@ -23818,41 +23878,15 @@ class VulkanSPIRVCodeGen:
 
     def reject_unsupported_generic_functions(self, ast_node):
         """Reject generic functions that have no concrete SPIR-V specialization."""
-        specialized_source_names = {
-            key[0]
-            for key in self.generic_function_specializations or {}
-            if isinstance(key, tuple) and key
-        }
-        functions = list(iter_function_nodes(ast_node))
-        call_scan_roots = [
-            func for func in functions if not generic_function_parameters(func)
-        ] + list((self.generic_function_specializations or {}).values())
-        called_function_names = set()
-        for function_node in call_scan_roots:
-            called_function_names.update(
-                self.function_call_name(node)
-                for node in self.walk_ast_nodes(getattr(function_node, "body", None))
-                if isinstance(node, FunctionCallNode) and self.function_call_name(node)
-            )
-        top_level_functions = {
-            id(func) for func in getattr(ast_node, "functions", []) or []
-        }
-        for func in functions:
-            generic_params = generic_function_parameters(func)
-            if not generic_params:
-                continue
-            if getattr(func, "name", None) in specialized_source_names:
-                continue
-            if id(func) in top_level_functions and (
-                (
-                    func.name not in called_function_names
-                    and getattr(func, "source_location", None) is None
-                )
-                or self.has_concrete_function_overload(func, functions)
-                or self.function_has_storage_buffer_parameters(func)
-            ):
-                continue
-            raise self.unsupported_generic_function_error(func)
+        functions = list(iter_function_nodes(ast_node)) + list(
+            (self.generic_function_specializations or {}).values()
+        )
+        for func_name in collect_unresolved_generic_function_call_names(
+            self, functions
+        ):
+            candidates = (self.generic_function_definitions or {}).get(func_name) or []
+            if candidates:
+                raise self.unsupported_generic_function_error(candidates[0])
 
     def has_concrete_function_overload(self, function_node, functions):
         function_name = getattr(function_node, "name", None)

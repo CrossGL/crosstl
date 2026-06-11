@@ -1066,7 +1066,7 @@ def test_spirv_assembly_vertex_position_output_lowers_to_wgsl(tmp_path):
     assert "struct VertexOutput" in generated
     assert "@builtin(position) position: vec4<f32>," in generated
     assert "@vertex\nfn vertex_main() -> VertexOutput" in generated
-    assert "output.position = vec4<f32>(0, 0, 0, 1);" in generated
+    assert "output.position = vec4<f32>(f32(0), f32(0), f32(0), f32(1));" in generated
     assert "return output;" in generated
     assert "gl_Position" not in generated
 
@@ -1371,19 +1371,57 @@ def test_hlsl_fx_macro_texture_resource_survives_metal_translation(tmp_path):
     _compile_with_metal_if_available(metal, tmp_path)
 
 
-@pytest.mark.parametrize("target", ["metal", "directx", "vulkan"])
-def test_glsl_fragment_invocation_density_rejects_unsupported_targets_before_output(
-    tmp_path, target
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        (
+            "directx",
+            (
+                "SV_ShadingRate",
+                "CrossGLFragmentSizeFromShadingRate",
+                "uint2 _crossglFragSize",
+            ),
+        ),
+        (
+            "vulkan",
+            (
+                "OpCapability FragmentDensityEXT",
+                'OpExtension "SPV_EXT_fragment_invocation_density"',
+                "BuiltIn FragSizeEXT",
+            ),
+        ),
+    ],
+)
+def test_glsl_fragment_invocation_density_lowers_supported_targets(
+    tmp_path, target, expected
 ):
     source_path = _write_source(
         tmp_path, "CubeFDM_fs.glsl", GLSL_FRAGMENT_INVOCATION_DENSITY_SOURCE
     )
     output_path = tmp_path / f"CubeFDM_fs.{target}.out"
 
+    generated = crosstl.translate(
+        str(source_path),
+        backend=target,
+        save_shader=str(output_path),
+        format_output=False,
+    )
+
+    assert output_path.exists()
+    for snippet in expected:
+        assert snippet in generated
+
+
+def test_glsl_fragment_invocation_density_reports_metal_target_diagnostic(tmp_path):
+    source_path = _write_source(
+        tmp_path, "CubeFDM_fs.glsl", GLSL_FRAGMENT_INVOCATION_DENSITY_SOURCE
+    )
+    output_path = tmp_path / "CubeFDM_fs.metal.out"
+
     with pytest.raises(ValueError, match="GL_EXT_fragment_invocation_density"):
         crosstl.translate(
             str(source_path),
-            backend=target,
+            backend="metal",
             save_shader=str(output_path),
             format_output=False,
         )

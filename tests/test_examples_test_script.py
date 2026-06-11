@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -102,6 +103,58 @@ def test_write_summary_json_writes_stable_machine_readable_report(tmp_path):
     assert text.endswith("\n")
     assert '"schema_version": 1' in text
     assert '"within_regression_budget": true' in text
+
+
+def test_generic_pattern_matching_cli_reports_documented_generic_gaps():
+    source = ROOT / "examples" / "advanced" / "GenericPatternMatching.cgl"
+    expected_diagnostics = {
+        "cuda": "CUDA codegen cannot emit unresolved generic parameter 'T'",
+        "mojo": "generic payload enum specializations must be concrete",
+        "slang": "Slang codegen cannot emit unresolved generic parameter 'T'",
+    }
+
+    for backend, diagnostic in expected_diagnostics.items():
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "crosstl._crosstl",
+                "translate",
+                str(source),
+                "--backend",
+                backend,
+                "--no-format",
+                "--output",
+                "-",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        combined_output = result.stdout + result.stderr
+
+        assert result.returncode != 0
+        assert diagnostic in combined_output
+
+    for backend in ("hip", "vulkan"):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "crosstl._crosstl",
+                "translate",
+                str(source),
+                "--backend",
+                backend,
+                "--no-format",
+                "--output",
+                "-",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (result.stdout + result.stderr)[-4000:]
 
 
 def test_main_is_independent_of_current_working_directory(monkeypatch, tmp_path):

@@ -85,6 +85,7 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
     ("cross_platform/UniversalPBRShader.cgl", "metal"),
     ("cross_platform/UniversalPBRShader.cgl", "opengl"),
     ("cross_platform/UniversalPBRShader.cgl", "webgl"),
+    ("cross_platform/UniversalPBRShader.cgl", "wgsl"),
     ("graphics/ComplexShader.cgl", "directx"),
     ("graphics/ComplexShader.cgl", "metal"),
     ("graphics/ComplexShader.cgl", "opengl"),
@@ -92,35 +93,28 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
     ("graphics/ComplexShader.cgl", "wgsl"),
 )
 
-ADDITIONAL_FIXED_CASES = (("cross_platform/UniversalPBRShader.cgl", "slang"),)
+ADDITIONAL_FIXED_CASES = (
+    ("advanced/GenericPatternMatching.cgl", "hip"),
+    ("cross_platform/UniversalPBRShader.cgl", "slang"),
+)
 
 GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES = (
     (
         "advanced/GenericPatternMatching.cgl",
-        "vulkan",
-        "SPIR-V codegen does not support generic functions: unspecialized "
-        "generic helper 'vector_operation' with generic parameters (T); "
-        "specialize the function before SPIR-V generation",
-    ),
-    (
-        "advanced/GenericPatternMatching.cgl",
         "cuda",
-        "CUDA codegen does not support generic functions",
-    ),
-    (
-        "advanced/GenericPatternMatching.cgl",
-        "hip",
-        "HIP codegen does not support generic functions",
+        "CUDA codegen cannot emit unresolved generic parameter 'T'; "
+        "specialize generic declarations before CUDA generation",
     ),
     (
         "advanced/GenericPatternMatching.cgl",
         "mojo",
-        "Mojo codegen does not support generic functions",
+        "Mojo generic payload enum specializations must be concrete",
     ),
     (
         "advanced/GenericPatternMatching.cgl",
         "slang",
-        "Slang codegen does not support generic functions",
+        "Slang codegen cannot emit unresolved generic parameter 'T'; "
+        "specialize generic declarations before Slang generation",
     ),
 )
 
@@ -131,14 +125,6 @@ KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
         ValueError,
         "WGSL target cannot specialize generic struct Option; "
         "member OptionType uses unsupported EnumNode",
-    ),
-    (
-        "cross_platform/UniversalPBRShader.cgl",
-        "wgsl",
-        ValueError,
-        "WGSL target does not support resource arrays of sampler2D; "
-        "WebGPU/WGSL requires texture, sampler, image, and storage-buffer "
-        "resources to be declared as individual module-scope bindings",
     ),
 )
 

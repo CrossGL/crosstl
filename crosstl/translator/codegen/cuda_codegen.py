@@ -1,5 +1,7 @@
 """CrossGL-to-CUDA code generator."""
 
+import re
+
 from ..ast import (
     ArrayAccessNode,
     AssignmentNode,
@@ -28,7 +30,16 @@ from ..ast import (
 )
 from .array_utils import parse_array_type, split_array_type_suffix
 from .generic_function_utils import (
-    reject_unsupported_generic_functions as reject_generic_functions_for_target,
+    collect_unresolved_generic_function_call_names,
+    generate_numeric_trait_method_call,
+    generate_static_generic_numeric_call,
+    generic_function_call_name,
+    generic_function_emission_list,
+    generic_function_parameters,
+    iter_function_nodes,
+    numeric_trait_method_result_type,
+    prepare_generic_function_specializations,
+    raise_unresolved_generic_function_call,
 )
 from .match_utils import (
     generate_match_expression_assignment,
@@ -304,7 +315,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.output = []
         self.indent_level = 0
         self.validate_supported_stage_types(ast_node)
-        self.reject_unsupported_generic_functions(ast_node)
         self.variable_types = {}
         self.current_function_return_type = None
         self.match_temp_variable_index = 0
@@ -322,6 +332,22 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         ) = self.collect_struct_member_metadata(ast_node)
         self.struct_member_semantics = {}
         self.function_return_types = self.collect_function_return_types(ast_node)
+        self.generic_function_definitions = {}
+        self.generic_function_definition_ordinals = {}
+        self.generic_function_specializations = {}
+        self.generic_function_specialized_names = {}
+        self.current_generic_function_substitutions = {}
+        generic_function_specializations = prepare_generic_function_specializations(
+            self,
+            list(iter_function_nodes(ast_node)),
+        )
+        self.function_return_types.update(
+            {
+                func.name: self.type_name_string(getattr(func, "return_type", "void"))
+                for func in generic_function_specializations.values()
+            }
+        )
+        self.reject_unsupported_generic_functions(ast_node)
         self.helper_functions = {}
         self.query_metadata_aliases = {}
         self.query_return_sources = self.collect_simple_query_return_sources(ast_node)
@@ -355,7 +381,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.reserve_explicit_cuda_resource_bindings(ast_node)
         self.visit(ast_node)
         self.insert_helper_functions()
-        return "\n".join(self.output)
+        result = "\n".join(self.output)
+        self.reject_unresolved_generic_output(result)
+        return result
 
     def fused_multiply_add_result_type(self, raw_args):
         if len(raw_args) != 3:
@@ -375,7 +403,33 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def reject_unsupported_generic_functions(self, ast_node):
         """Reject generic functions before emitting non-compilable CUDA code."""
-        reject_generic_functions_for_target(ast_node, "CUDA")
+        functions = list(iter_function_nodes(ast_node)) + list(
+            (self.generic_function_specializations or {}).values()
+        )
+        unresolved = collect_unresolved_generic_function_call_names(self, functions)
+        if unresolved:
+            raise_unresolved_generic_function_call(self, unresolved[0], "CUDA")
+
+    def reject_unresolved_generic_output(self, result):
+        specialized_source_names = {
+            key[0]
+            for key in self.generic_function_specializations or {}
+            if isinstance(key, tuple) and key
+        }
+        generic_names = {
+            param
+            for funcs in (self.generic_function_definitions or {}).values()
+            for func in funcs
+            if getattr(func, "name", None) not in specialized_source_names
+            for param in generic_function_parameters(func)
+        }
+        for name in sorted(generic_names):
+            if re.search(rf"\b{re.escape(name)}\b", result):
+                raise ValueError(
+                    "CUDA codegen cannot emit unresolved generic parameter "
+                    f"'{name}'; specialize generic declarations before CUDA "
+                    "generation"
+                )
 
     def unsupported_stage_types(self):
         return set()
@@ -909,7 +963,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Collect struct member types and storage-image access before emission."""
         member_types_by_struct = {}
         member_accesses_by_struct = {}
-        for struct in getattr(root, "structs", []) or []:
+        structs = list(getattr(root, "structs", []) or [])
+        for stage in (getattr(root, "stages", {}) or {}).values():
+            structs.extend(getattr(stage, "local_structs", []) or [])
+        for struct in structs:
             struct_name = getattr(struct, "name", None)
             if not struct_name:
                 continue
@@ -939,9 +996,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def collect_structs_by_name(self, root):
         """Return plain struct declarations visible to CUDA expression lowering."""
+        structs = list(getattr(root, "structs", []) or [])
+        for stage in (getattr(root, "stages", {}) or {}).values():
+            structs.extend(getattr(stage, "local_structs", []) or [])
         return {
             struct.name: struct
-            for struct in getattr(root, "structs", []) or []
+            for struct in structs
             if isinstance(struct, StructNode) and getattr(struct, "name", None)
         }
 
@@ -1037,6 +1097,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         functions = getattr(node, "functions", [])
         for func in functions:
+            if generic_function_parameters(func):
+                for specialized_func in generic_function_emission_list(self, func):
+                    self.visit(specialized_func)
+                    self.emit("")
+                continue
             self.visit(func)
             self.emit("")
 
@@ -1075,6 +1140,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                         self.current_stage_name = saved_stage_name
                         for func in getattr(stage, "local_functions", []):
                             if id(func) in emitted_local_functions:
+                                continue
+                            if generic_function_parameters(func):
+                                for specialized_func in generic_function_emission_list(
+                                    self,
+                                    func,
+                                ):
+                                    self.visit(specialized_func)
+                                    self.emit("")
+                                emitted_local_functions.add(id(func))
                                 continue
                             self.visit(func)
                             self.emit("")
@@ -1198,10 +1272,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         saved_stage_builtin_aliases = self.stage_builtin_aliases
         saved_stage_builtin_alias_types = self.stage_builtin_alias_types
         saved_current_function_is_kernel_entry = self.current_function_is_kernel_entry
+        saved_generic_function_substitutions = (
+            self.current_generic_function_substitutions
+        )
         saved_structured_buffer_length_parameters = (
             self.current_structured_buffer_length_parameters
         )
         self.current_function_name = node.name
+        self.current_generic_function_substitutions = (
+            getattr(node, "_generic_substitutions", {}) or {}
+        )
         self.current_structured_buffer_length_parameters = {}
         self.query_metadata_aliases = {}
         self.stage_builtin_aliases = {}
@@ -1388,6 +1468,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.current_function_is_kernel_entry = (
                 saved_current_function_is_kernel_entry
             )
+            self.current_generic_function_substitutions = (
+                saved_generic_function_substitutions
+            )
             self.current_structured_buffer_length_parameters = (
                 saved_structured_buffer_length_parameters
             )
@@ -1439,6 +1522,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.stage_builtin_aliases = saved_stage_builtin_aliases
         self.stage_builtin_alias_types = saved_stage_builtin_alias_types
         self.current_function_is_kernel_entry = saved_current_function_is_kernel_entry
+        self.current_generic_function_substitutions = (
+            saved_generic_function_substitutions
+        )
         self.current_structured_buffer_length_parameters = (
             saved_structured_buffer_length_parameters
         )
@@ -3175,6 +3261,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             raw_args = node.arguments
         elif hasattr(node, "args"):
             raw_args = node.args
+
+        numeric_trait_call = generate_numeric_trait_method_call(
+            self,
+            function_expr,
+            raw_args,
+        )
+        if numeric_trait_call is not None:
+            return numeric_trait_call
+
+        static_generic_call = generate_static_generic_numeric_call(self, func_name)
+        if static_generic_call is not None:
+            return static_generic_call
+
+        specialized_func_name = generic_function_call_name(self, func_name, raw_args)
+        if specialized_func_name is not None:
+            func_name = specialized_func_name
+        else:
+            raise_unresolved_generic_function_call(self, func_name, "CUDA")
 
         args = [self.visit(arg) for arg in raw_args]
 
@@ -7271,6 +7375,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if isinstance(node, FunctionCallNode):
             function_expr = getattr(node, "function", getattr(node, "name", None))
             func_name = getattr(function_expr, "name", function_expr)
+            numeric_result_type = numeric_trait_method_result_type(self, node)
+            if numeric_result_type is not None:
+                return numeric_result_type
+            raw_args = getattr(node, "arguments", getattr(node, "args", [])) or []
+            specialized_func_name = generic_function_call_name(
+                self,
+                func_name,
+                raw_args,
+            )
+            if specialized_func_name in self.function_return_types:
+                return self.function_return_types[specialized_func_name]
             if self.is_user_defined_function(func_name):
                 return self.function_return_types.get(func_name)
             if func_name in CUDA_WAVE_OP_ARITIES:
@@ -7280,7 +7395,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 )
             if func_name == "ReportHit":
                 return "bool"
-            raw_args = getattr(node, "arguments", getattr(node, "args", [])) or []
             if (
                 func_name in {"inverseSqrt", "rsqrt"}
                 and raw_args

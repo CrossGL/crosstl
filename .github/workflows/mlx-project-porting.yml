@@ -3,11 +3,10 @@ name: MLX Project Porting
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   MLX_COMMIT: "968d264f2903d578e699c4452a4dbf48633921aa"
-  HELPER_TEMPLATE_MATERIALIZATION_ISSUE: "https://github.com/CrossGL/crosstl/issues/1203"
-  SOFTMAX_METAL_PARSE_ISSUE: "https://github.com/CrossGL/crosstl/issues/1204"
   OPENGL_TEMPLATE_TYPE_ISSUE: "https://github.com/CrossGL/crosstl/issues/1205"
-  VULKAN_STORAGE_OVERLOAD_ISSUE: "https://github.com/CrossGL/crosstl/issues/1206"
   OPENGL_SIMD_HELPER_ISSUE: "https://github.com/CrossGL/crosstl/issues/1207"
+  STEEL_ATTENTION_NAX_DIAGNOSTIC_ISSUE: "https://github.com/CrossGL/crosstl/issues/1218"
+  STEEL_GEMM_OPENGL_BOUNDING_ISSUE: "https://github.com/CrossGL/crosstl/issues/1222"
 
 on:
   push:

@@ -103,17 +103,17 @@ def compile_matrix_helpers_if_cxx_available(helper_code, tmp_path):
 
 
 class TestCudaCodeGen:
-    def test_generic_trait_methods_are_diagnostic_for_cuda_codegen(self):
+    def test_unresolved_generic_function_call_is_diagnostic_for_cuda_codegen(self):
         source_code = """
-        shader GenericTraitMethodDiagnostic {
-            trait Mapper {
-                fn map<T>(value: T) -> T {
-                    return value;
-                }
+        shader GenericFunctionDiagnostic {
+            generic<T> fn make_zero() -> T {
+                return T::zero();
             }
 
             compute {
-                void main() {}
+                void main() {
+                    float value = make_zero();
+                }
             }
         }
         """
@@ -121,11 +121,42 @@ class TestCudaCodeGen:
         with pytest.raises(
             ValueError,
             match=(
-                r"CUDA codegen does not support generic functions \(T\); "
+                r"CUDA codegen cannot infer concrete template arguments for "
+                r"generic function 'make_zero' \(T\); "
                 r"specialize the function before CUDA generation"
             ),
         ):
             CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    def test_generic_function_call_emits_concrete_specialization_for_cuda_codegen(
+        self,
+    ):
+        source_code = """
+        shader GenericHelperSpecialization {
+            generic<T> fn fallback_zero(value: T, enabled: bool) -> T {
+                if (enabled) {
+                    return value;
+                }
+                return T::zero();
+            }
+
+            float use_helper(float value) {
+                return fallback_zero(value, false);
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "__device__ float fallback_zero_float(float value, bool enabled)"
+            in cuda_code
+        )
+        assert "return 0.0;" in cuda_code
+        assert "return fallback_zero_float(value, false);" in cuda_code
+        assert "T fallback_zero(T value" not in cuda_code
+        assert "return fallback_zero(value, false);" not in cuda_code
+        assert "T::zero" not in cuda_code
 
     def test_simple_function_generation(self):
         source_code = """

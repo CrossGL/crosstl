@@ -1920,12 +1920,14 @@ class TestVulkanSPIRVCodeGen:
     def test_unspecialized_generic_function_reports_helper_context(self):
         source_code = """
         shader GenericFunctionDiagnostic {
-            generic<T, U> fn orphan(left: T, right: U) -> T {
-                return left;
+            generic<T> fn make_zero() -> T {
+                return T::zero();
             }
 
             compute {
-                void main() {}
+                void main() {
+                    float value = make_zero();
+                }
             }
         }
         """
@@ -1935,8 +1937,8 @@ class TestVulkanSPIRVCodeGen:
         with pytest.raises(
             ValueError,
             match=(
-                r"unspecialized generic helper 'orphan' with generic parameters "
-                r"\(T, U\) at line 3, column 13"
+                r"unspecialized generic helper 'make_zero' with generic parameters "
+                r"\(T\) at line 3, column 13"
             ),
         ) as exc_info:
             VulkanSPIRVCodeGen().generate(ast)
@@ -1946,7 +1948,7 @@ class TestVulkanSPIRVCodeGen:
             "column": 13,
         }
 
-    def test_generic_trait_methods_report_deterministic_diagnostic(self):
+    def test_unused_generic_trait_methods_are_not_emitted(self):
         source_code = """
         shader GenericTraitMethodDiagnostic {
             trait Mapper {
@@ -1961,14 +1963,12 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        with pytest.raises(
-            ValueError,
-            match=(
-                r"unspecialized generic helper 'map' with generic parameters \(T\); "
-                r"specialize the function before SPIR-V generation"
-            ),
-        ):
-            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spirv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpCapability Shader" in spirv_code
+        assert '"map"' not in spirv_code
 
     def test_lambda_call_emits_explicit_unsupported_spirv_fallback(self):
         source_code = """

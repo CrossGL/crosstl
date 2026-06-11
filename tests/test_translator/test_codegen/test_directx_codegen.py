@@ -338,6 +338,36 @@ def test_glsl_vertex_input_locations_lower_to_distinct_hlsl_semantics(tmp_path):
     assert ": location" not in generated_code
 
 
+def test_glsl_pervertex_position_output_lowers_to_hlsl_sv_position(tmp_path):
+    shader = """
+    #version 450
+    out gl_PerVertex {
+        vec4 gl_Position;
+    };
+    layout(location = 0) out vec3 outColor;
+
+    void main() {
+        outColor = vec3(1.0, 0.0, 0.0);
+        gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+    }
+    """
+    shader_path = tmp_path / "conservative.vert"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "float4 gl_Position: SV_Position;" in generated_code
+    assert "float4 gl_Position: TEXCOORD" not in generated_code
+    assert "float3 outColor: TEXCOORD0;" in generated_code
+    assert generated_code.count(": TEXCOORD0") == 1
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
 def test_directx_user_defined_synchronization_names_are_not_lowered():
     shader = """
     shader SynchronizationShadowing {
