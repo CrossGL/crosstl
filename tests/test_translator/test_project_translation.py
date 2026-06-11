@@ -8945,7 +8945,9 @@ def test_translate_project_opengl_reports_unresolved_metal_template_kernel(
     }
     assert not (repo / artifact["path"]).exists()
     diagnostic = payload["diagnostics"][0]
-    assert diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    assert (
+        diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    )
     assert diagnostic["target"] == "opengl"
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
@@ -33582,7 +33584,9 @@ def test_translate_project_metal_template_without_arguments_reports_metadata(
     }
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
     diagnostic = payload["diagnostics"][0]
-    assert diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    assert (
+        diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    )
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
     assert diagnostic["target"] == "opengl"
     assert diagnostic["sourceBackend"] == "metal"
@@ -33591,9 +33595,9 @@ def test_translate_project_metal_template_without_arguments_reports_metadata(
     report_path = repo / "out" / "report.json"
     report.write_json(report_path)
     validation = validate_project_report(report_path)
-    assert {
-        diagnostic["code"] for diagnostic in validation["diagnostics"]
-    }.isdisjoint({"project.validate.invalid-report"})
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
 
 
 def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(

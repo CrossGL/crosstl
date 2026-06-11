@@ -8078,9 +8078,7 @@ def _project_template_materialization_for_artifact(
     unsupported: list[dict[str, Any]] = []
     used_configured_parameters: dict[str, str] = {}
     default_call_replacements: dict[str, str] = {}
-    current_template_spans = preprocessor._find_template_declaration_spans(
-        materialized
-    )
+    current_template_spans = preprocessor._find_template_declaration_spans(materialized)
     current_reachable_function_spans = preprocessor._reachable_function_spans(
         materialized,
         current_template_spans,
@@ -8123,7 +8121,9 @@ def _project_template_materialization_for_artifact(
                 materialized_name,
                 host_name=None,
             )
-            replacements.append((template.span[0], template.span[1], materialized_source))
+            replacements.append(
+                (template.span[0], template.span[1], materialized_source)
+            )
             parameters = {
                 parameter: available_parameters[parameter]
                 for parameter in template.template_parameters
@@ -8168,8 +8168,7 @@ def _project_template_materialization_for_artifact(
         materialized += "\n"
 
     configured_payload = {
-        name: configured_parameters[name]
-        for name in sorted(used_configured_parameters)
+        name: configured_parameters[name] for name in sorted(used_configured_parameters)
     }
     metadata = _template_materialization_metadata(
         specializations=specializations,
@@ -8697,13 +8696,15 @@ def translate_project(
                 source_options = _source_options_for_backend(
                     config, unit.source_backend
                 )
-                template_materialization = _project_template_materialization_for_artifact(
-                    unit=unit,
-                    target=target,
-                    variant=variant,
-                    defines=defines,
-                    include_paths=include_paths,
-                    source_options=source_options,
+                template_materialization = (
+                    _project_template_materialization_for_artifact(
+                        unit=unit,
+                        target=target,
+                        variant=variant,
+                        defines=defines,
+                        include_paths=include_paths,
+                        source_options=source_options,
+                    )
                 )
                 if template_materialization is not None:
                     artifact["templateMaterialization"] = dict(
@@ -25304,9 +25305,7 @@ def _source_remap_contract_reasons(
     return reasons
 
 
-def _template_specialization_contract_reasons(
-    prefix: str, value: Any
-) -> list[str]:
+def _template_specialization_contract_reasons(prefix: str, value: Any) -> list[str]:
     if not isinstance(value, Mapping):
         return [f"{prefix} must be an object"]
 
@@ -25319,7 +25318,9 @@ def _template_specialization_contract_reasons(
         if not _is_non_empty_string(value.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
     reasons.extend(
-        _string_mapping_contract_reasons(f"{prefix}.parameters", value.get("parameters"))
+        _string_mapping_contract_reasons(
+            f"{prefix}.parameters", value.get("parameters")
+        )
     )
     source = value.get("source")
     if source not in {"call-site", "config", "source-default", "source-instantiation"}:
@@ -25341,7 +25342,9 @@ def _unsupported_template_contract_reasons(prefix: str, value: Any) -> list[str]
     )
     if not _is_non_empty_string(value.get("name")):
         reasons.append(f"{prefix}.name must be a string")
-    reasons.extend(_string_list_contract_reasons(f"{prefix}.parameters", value.get("parameters")))
+    reasons.extend(
+        _string_list_contract_reasons(f"{prefix}.parameters", value.get("parameters"))
+    )
     reasons.extend(
         _string_list_contract_reasons(
             f"{prefix}.missingParameters", value.get("missingParameters")
@@ -25382,7 +25385,9 @@ def _artifact_template_materialization_contract_reasons(
     reasons.extend(configured_parameter_reasons)
     configured_parameter_count = materialization.get("configuredParameterCount")
     if not _is_non_negative_int(configured_parameter_count):
-        reasons.append(f"{prefix}.configuredParameterCount must be a non-negative integer")
+        reasons.append(
+            f"{prefix}.configuredParameterCount must be a non-negative integer"
+        )
     elif not configured_parameter_reasons and configured_parameter_count != len(
         configured_parameters
     ):
@@ -25421,9 +25426,13 @@ def _artifact_template_materialization_contract_reasons(
                 )
             )
     if status == "materialized" and isinstance(unsupported, list) and unsupported:
-        reasons.append(f"{prefix}.unsupported must be empty when status is materialized")
+        reasons.append(
+            f"{prefix}.unsupported must be empty when status is materialized"
+        )
     if status == "unsupported" and isinstance(unsupported, list) and not unsupported:
-        reasons.append(f"{prefix}.unsupported must not be empty when status is unsupported")
+        reasons.append(
+            f"{prefix}.unsupported must not be empty when status is unsupported"
+        )
     return reasons
 
 
