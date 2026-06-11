@@ -26,23 +26,53 @@
       "vulkan"
     ],
     "artifacts": 120,
-    "blocked_by": "https://github.com/CrossGL/crosstl/issues/1184",
+    "blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1203",
+      "https://github.com/CrossGL/crosstl/issues/1204",
+      "https://github.com/CrossGL/crosstl/issues/1205",
+      "https://github.com/CrossGL/crosstl/issues/1206",
+      "https://github.com/CrossGL/crosstl/issues/1207"
+    ],
     "last_completed": {
-      "translated_artifacts": 47,
-      "failed_artifacts": 73,
+      "translated_artifacts": 56,
+      "failed_artifacts": 64,
       "translated_by_target": {
-        "directx": 19,
-        "opengl": 12,
-        "vulkan": 16
+        "directx": 20,
+        "opengl": 17,
+        "vulkan": 19
       }
     }
   },
   "tracked_issues": [
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1184",
-      "scope": "metal-dependent-template-graph-materialization",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1203",
+      "scope": "metal-helper-template-materialization",
       "status": "open",
-      "summary": "Materialize dependent Metal template graphs for project translation."
+      "summary": "Materialize common Metal helper templates across full project translation."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1204",
+      "scope": "metal-softmax-parser",
+      "status": "open",
+      "summary": "Parse MLX softmax Metal kernel in project translation."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1205",
+      "scope": "opengl-template-type-resolution",
+      "status": "open",
+      "summary": "Reject unresolved Metal template parameters before OpenGL codegen."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1206",
+      "scope": "spirv-storage-buffer-overload-resolution",
+      "status": "open",
+      "summary": "Resolve SPIR-V storage-buffer overloads with inferred pointer arguments."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1207",
+      "scope": "opengl-simd-helper-placeholders",
+      "status": "open",
+      "summary": "Lower OpenGL SIMD helper placeholders to validator-safe code."
     }
   ],
   "resolved_issues": [
@@ -97,6 +127,7 @@
     "https://github.com/CrossGL/crosstl/issues/852",
     "https://github.com/CrossGL/crosstl/issues/1146",
     "https://github.com/CrossGL/crosstl/issues/1155",
-    "https://github.com/CrossGL/crosstl/issues/1160"
+    "https://github.com/CrossGL/crosstl/issues/1160",
+    "https://github.com/CrossGL/crosstl/issues/1184"
   ]
 }

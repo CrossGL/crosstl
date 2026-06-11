@@ -136,9 +136,7 @@ EXAMPLE_BACKEND_SKIPS = {
         "advanced",
         "GenericPatternMatching",
         "wgsl",
-    ): (
-        "WGSL codegen intentionally rejects generic structs until the backend has layout support."
-    ),
+    ): "WGSL codegen intentionally rejects generic structs with nested enum members.",
     (
         "compute",
         "ParticleSimulation",

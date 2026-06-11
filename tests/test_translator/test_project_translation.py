@@ -10564,6 +10564,78 @@ def test_translate_project_opengl_materializes_mlx_pointer_and_value_bindings(
     assert not re.search(r"\b(?:T|U)\b", output)
 
 
+def test_translate_project_ignores_unreachable_metal_template_family(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "copy.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_copy(name, type) \\
+                instantiate_kernel("copy" #name, copy_values, type)
+
+            template <typename T>
+            [[kernel]] void copy_values(
+                device const T* src [[buffer(0)]],
+                device T* dst [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                dst[gid] = src[gid];
+            }
+
+            template <typename Value, typename Missing>
+            Value unused_convert(Value value) {
+                return Missing(value);
+            }
+
+            template <typename Missing>
+            Missing unused_family(Missing value) {
+                return unused_convert<Missing, Missing>(value);
+            }
+
+            instantiate_copy(float32, float)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx", "opengl", "vulkan"]
+            output_dir = "translated"
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+    for artifact in payload["artifacts"]:
+        materialization = artifact["templateMaterialization"]
+        assert materialization["status"] == "materialized"
+        assert materialization["unsupported"] == []
+        assert all(
+            record["name"] not in {"unused_convert", "unused_family"}
+            for record in materialization["specializations"]
+        )
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        assert "unused_convert" not in output
+        assert "unused_family" not in output
+        assert "Missing" not in output
+
+
 def test_translate_project_opengl_validates_implicit_metal_matmul_resources(
     tmp_path, monkeypatch
 ):
@@ -13559,6 +13631,74 @@ def test_translate_project_rust_option_helpers_lower_to_opengl_compute(tmp_path)
     assert "== None" not in opengl_output
     assert "auto value" not in opengl_output
     assert_compute_glsl_validates_if_available(opengl_output, tmp_path)
+
+
+def test_translate_project_rust_option_helpers_lower_to_wgsl_compute(tmp_path):
+    repo = tmp_path / "repo"
+    source_dir = repo / "src"
+    source_dir.mkdir(parents=True)
+    (source_dir / "collatz.rs").write_text(
+        textwrap.dedent("""
+            fn collatz(n: u32) -> Option<u32> {
+                if n == 0u32 {
+                    return None;
+                }
+                return Some(n);
+            }
+
+            fn read_option(item: Option<u32>) -> u32 {
+                match item {
+                    Some(value) => { return value; },
+                    None => { return 0u32; }
+                }
+            }
+
+            #[spirv(compute(threads(1, 1, 1)))]
+            pub fn main() {
+                let value = read_option(collatz(7u32));
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["src"]
+            targets = ["wgsl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path, run_toolchains=True)
+    wgsl_output = (repo / "translated" / "wgsl" / "src" / "collatz.wgsl").read_text(
+        encoding="utf-8"
+    )
+
+    assert validation["success"] is True
+    if shutil.which("naga"):
+        assert validation["validation"]["toolchainRuns"][0]["status"] == "ok"
+    assert payload["summary"]["translatedCount"] == 1
+    assert "struct Option_u32" in wgsl_output
+    assert "fn Option_u32_Some_make(payload0: u32) -> Option_u32" in wgsl_output
+    assert "fn Option_u32_None_make() -> Option_u32" in wgsl_output
+    assert "fn collatz(n: u32) -> Option_u32" in wgsl_output
+    assert "fn read_option(item: Option_u32) -> u32" in wgsl_output
+    assert "return Option_u32_None_make();" in wgsl_output
+    assert "return Option_u32_Some_make(n);" in wgsl_output
+    assert "var value: u32 = item.Some_0;" in wgsl_output
+    assert "(item.variant == Option_None)" in wgsl_output
+    assert "return u32(0);" in wgsl_output
+    assert "Option<" not in wgsl_output
+    assert "Option::" not in wgsl_output
+    assert re.search(r"\bSome\s*\(", wgsl_output) is None
+    assert "return None;" not in wgsl_output
+    assert "== None" not in wgsl_output
+    assert "auto value" not in wgsl_output
 
 
 def test_validate_project_report_rejects_artifacts_with_undeclared_variants(tmp_path):
@@ -37398,7 +37538,8 @@ def test_translate_project_metal_matmul_buffers_lower_to_directx_resources(
     assert "uint2 id = id_dispatchThreadID.xy;" in output
     assert "A.Load(index_A)" in output
     assert "B.Load(index_B)" in output
-    assert "X.Store(index, sum);" in output
+    assert "X[index] = sum;" in output
+    assert "X.Store(" not in output
     assert "float* A" not in output
     assert "float* B" not in output
     assert "float* X" not in output
@@ -37458,7 +37599,11 @@ def test_translate_project_metal_matmul_device_buffers_do_not_emit_directx_param
     assert "ConstantBuffer<MatMulParams> params : register(b3);" in output
     assert "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)" in output
     assert "uint2 id = id_dispatchThreadID.xy;" in output
-    assert "X.Store(((row * col_dim_x) + col)" in output
+    assert (
+        "X[((row * col_dim_x) + col)] = "
+        "(A.Load(((row * inner_dim) + col)) + B.Load(col));" in output
+    )
+    assert "X.Store(" not in output
     assert "A.Load(((row * inner_dim) + col))" in output
     assert "B.Load(col)" in output
     assert "float* A" not in output
@@ -37540,7 +37685,8 @@ def test_translate_project_metal_matmul_unbound_device_buffers_lower_to_directx_
     assert "uint2 id = id_dispatchThreadID.xy;" in output
     assert "A.Load(index_A)" in output
     assert "B.Load(index_B)" in output
-    assert "X.Store(index, sum);" in output
+    assert "X[index] = sum;" in output
+    assert "X.Store(" not in output
     assert "float* A" not in output
     assert "float* B" not in output
     assert "float* X" not in output
@@ -39952,7 +40098,8 @@ def test_translate_project_target_template_variant_manifest_materializes_for_ope
     }
     directx_output = (repo / directx_artifact["path"]).read_text(encoding="utf-8")
     assert "RWStructuredBuffer<uint> out_ : register(u0);" in directx_output
-    assert "out_.Store(gid, uint(0));" in directx_output
+    assert "out_[gid] = uint(0);" in directx_output
+    assert "out_.Store(" not in directx_output
 
     report_path = repo / "out" / "report.json"
     report.write_json(report_path)

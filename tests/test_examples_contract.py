@@ -129,7 +129,8 @@ KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
         "advanced/GenericPatternMatching.cgl",
         "wgsl",
         ValueError,
-        "WGSL target does not support generic structs yet",
+        "WGSL target cannot specialize generic struct Option; "
+        "member OptionType uses unsupported EnumNode",
     ),
     (
         "cross_platform/UniversalPBRShader.cgl",

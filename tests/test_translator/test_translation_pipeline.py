@@ -709,7 +709,7 @@ def test_metal_threadgroup_scratch_lowers_to_directx_groupshared(tmp_path):
     assert "threadgroup float" not in generated
     assert "    groupshared float scratch[256];" not in generated
     assert "mat_mul_scratch[tid] = 1.0;" in generated
-    assert "out_.Store(tid, mat_mul_scratch[tid]);" in generated
+    assert "out_[tid] = mat_mul_scratch[tid];" in generated
     assert "GroupMemoryBarrierWithGroupSync();" in generated
     assert generated.index("groupshared float mat_mul_scratch[256];") < generated.index(
         "void CSMain"
@@ -882,7 +882,7 @@ def test_metal_multi_entry_resource_names_are_scoped_for_directx(tmp_path):
     assert "RWStructuredBuffer<uint> write_kernel_C" in generated
     assert "RWStructuredBuffer<uint> write_kernel_inp" in generated
     assert "float v = (C.Load(index) + inp.Load(index));" in generated
-    assert "write_kernel_C.Store(index, write_kernel_inp.Load(index));" in generated
+    assert "write_kernel_C[index] = write_kernel_inp.Load(index);" in generated
     assert "RWStructuredBuffer<uint> C" not in generated
     assert "Conflicting DirectX resource declaration" not in generated
 
