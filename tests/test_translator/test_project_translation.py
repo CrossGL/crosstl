@@ -32513,6 +32513,67 @@ def test_translate_project_metal_matmul_buffers_lower_to_directx_resources(
     assert "thread_position_in_grid" not in output
 
 
+def test_translate_project_metal_matmul_device_buffers_do_not_emit_directx_parameters(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "mat_mul_simple1.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct MatMulParams {
+                uint row_dim_x;
+                uint col_dim_x;
+                uint inner_dim;
+            };
+
+            kernel void mat_mul_simple1(
+                device float* A [[buffer(0)]],
+                device float* B [[buffer(1)]],
+                device float* X [[buffer(2)]],
+                constant MatMulParams& params [[buffer(3)]],
+                uint2 id [[thread_position_in_grid]]
+            ) {
+                const uint row_dim_x = params.row_dim_x;
+                const uint col_dim_x = params.col_dim_x;
+                const uint inner_dim = params.inner_dim;
+                uint row = id.y;
+                uint col = id.x;
+                X[(row * col_dim_x) + col] = A[(row * inner_dim) + col] + B[col];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "RWStructuredBuffer<float> A : register(u0);" in output
+    assert "RWStructuredBuffer<float> B : register(u1);" in output
+    assert "RWStructuredBuffer<float> X : register(u2);" in output
+    assert "ConstantBuffer<MatMulParams> params : register(b3);" in output
+    assert "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)" in output
+    assert "uint2 id = id_dispatchThreadID.xy;" in output
+    assert "X.Store(((row * col_dim_x) + col)" in output
+    assert "A.Load(((row * inner_dim) + col))" in output
+    assert "B.Load(col)" in output
+    assert "float* A" not in output
+    assert "float* B" not in output
+    assert "float* X" not in output
+    assert "void CSMain(float*" not in output
+
+
 def test_translate_project_metal_matmul_buffers_lower_to_opengl_resources(
     tmp_path,
 ):
