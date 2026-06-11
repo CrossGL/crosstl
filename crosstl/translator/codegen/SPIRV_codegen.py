@@ -4953,9 +4953,7 @@ class VulkanSPIRVCodeGen:
 
         if function_name == "subpassLoad":
             if not args:
-                self.emit(
-                    "; WARNING: subpassLoad requires an input attachment operand"
-                )
+                self.emit("; WARNING: subpassLoad requires an input attachment operand")
                 result_type = self.register_vector_type(
                     self.register_primitive_type("float"), 4
                 )
@@ -4964,9 +4962,7 @@ class VulkanSPIRVCodeGen:
             image_id = args[0]
             metadata = self.resource_metadata_for_value(image_id)
             if not metadata or metadata.get("kind") != "input_attachment":
-                self.emit(
-                    "; WARNING: subpassLoad requires a subpassInput operand"
-                )
+                self.emit("; WARNING: subpassLoad requires a subpassInput operand")
                 result_type = self.register_vector_type(
                     self.register_primitive_type("float"), 4
                 )
@@ -11424,9 +11420,10 @@ class VulkanSPIRVCodeGen:
         }
 
     def is_input_attachment_type_name(self, type_str: str) -> bool:
-        return self.input_attachment_type_info(
-            self.normalize_resource_type_name(type_str)
-        ) is not None
+        return (
+            self.input_attachment_type_info(self.normalize_resource_type_name(type_str))
+            is not None
+        )
 
     def is_resource_type_name(self, type_str: str) -> bool:
         return self.resource_type_info(type_str) is not None
@@ -15439,10 +15436,8 @@ class VulkanSPIRVCodeGen:
                 self.register_declared_resource_metadata(node, var_id, var_type)
                 metadata = self.resource_metadata_for_value(var_id)
                 if metadata and metadata.get("kind") == "input_attachment":
-                    input_attachment_index = (
-                        self.explicit_interface_integer_attribute(
-                            node, "input_attachment_index"
-                        )
+                    input_attachment_index = self.explicit_interface_integer_attribute(
+                        node, "input_attachment_index"
                     )
                     if input_attachment_index is None:
                         input_attachment_index = binding
