@@ -7330,6 +7330,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         func_name_expr, args, sampler_params
                     ):
                         continue
+                    source_type = self.texture_source_type(args[0]) if args else None
+                    if self.shadow_texture_sample_call_uses_compare(
+                        func_name_expr, args, source_type
+                    ):
+                        continue
                     texture_type = self.texture_argument_analysis_type(
                         args[0], global_resource_types
                     )
@@ -7479,9 +7484,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     func_expr = getattr(node, "function", getattr(node, "name", None))
                     func_name = self.expression_name(func_expr)
                     args = getattr(node, "arguments", getattr(node, "args", []))
-                    if (
-                        func_name in texture_funcs
-                        and self.has_explicit_sampler_argument(func_name, args, set())
+                    shadow_compare = self.shadow_texture_sample_call_uses_compare(
+                        func_name,
+                        args,
+                        self.texture_source_type(args[0]) if args else None,
+                    )
+                    direct_texture_call = False
+                    if shadow_compare:
+                        direct_texture_call = (
+                            texture_funcs == self.comparison_texture_function_names()
+                        )
+                    elif func_name in texture_funcs:
+                        direct_texture_call = True
+                    if direct_texture_call and self.has_explicit_sampler_argument(
+                        func_name, args, set()
                     ):
                         texture_type = self.texture_argument_analysis_type(
                             args[0], global_resource_types
@@ -8455,40 +8471,61 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if not sampler_params:
                 continue
 
-            for node in self.walk_ast(getattr(func, "body", [])):
-                if not isinstance(node, FunctionCallNode):
-                    continue
-                func_expr = getattr(node, "function", getattr(node, "name", None))
-                if self.expression_name(func_expr) not in {
-                    *TEXTURE_COMPARE_INTRINSIC_NAMES,
-                    *TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES,
-                }:
-                    continue
-                args = getattr(node, "arguments", getattr(node, "args", []))
-                if len(args) < 4:
-                    continue
-                texture_name = self.expression_name(args[0])
-                texture_type = resource_param_types.get(texture_name)
-                if texture_type is not None:
-                    texture_type = self.map_resource_type_with_format(texture_type)
-                else:
-                    texture_type = self.texture_argument_analysis_type(
-                        args[0], global_resource_types
+            previous_local_variable_types = self.local_variable_types
+            self.local_variable_types = self.function_scope_variable_types(func)
+            try:
+                for node in self.walk_ast(getattr(func, "body", [])):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    func_expr = getattr(node, "function", getattr(node, "name", None))
+                    texture_func = self.expression_name(func_expr)
+                    args = getattr(node, "arguments", getattr(node, "args", []))
+                    texture_name = self.expression_name(args[0]) if args else None
+                    texture_type = resource_param_types.get(texture_name)
+                    if texture_type is not None:
+                        source_type = texture_type
+                        texture_type = self.map_resource_type_with_format(texture_type)
+                    else:
+                        source_type = (
+                            self.texture_source_type(args[0]) if args else None
+                        )
+                        texture_type = self.texture_argument_analysis_type(
+                            args[0], global_resource_types
+                        )
+
+                    shadow_compare = self.shadow_texture_sample_call_uses_compare(
+                        texture_func, args, source_type
                     )
-                texture_func = self.expression_name(func_expr)
-                sampler_name = self.expression_name(args[1])
-                if sampler_name in sampler_params:
-                    diagnostic_compare_params.setdefault(func_name, set()).add(
-                        sampler_name
-                    )
-                if self.texture_call_is_diagnostic_only(
-                    texture_func, texture_type
-                ) and not self.diagnostic_texture_compare_sampler_parameter_is_comparison(
-                    texture_func, texture_type
-                ):
-                    continue
-                if sampler_name in sampler_params:
-                    comparison_params.setdefault(func_name, set()).add(sampler_name)
+                    texture_compare = texture_func in {
+                        *TEXTURE_COMPARE_INTRINSIC_NAMES,
+                        *TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES,
+                    }
+                    if texture_compare:
+                        if len(args) < 4:
+                            continue
+                    elif shadow_compare:
+                        if not self.has_explicit_sampler_argument(
+                            texture_func, args, sampler_params
+                        ):
+                            continue
+                    else:
+                        continue
+
+                    sampler_name = self.expression_name(args[1])
+                    if sampler_name in sampler_params:
+                        diagnostic_compare_params.setdefault(func_name, set()).add(
+                            sampler_name
+                        )
+                    if self.texture_call_is_diagnostic_only(
+                        texture_func, texture_type
+                    ) and not self.diagnostic_texture_compare_sampler_parameter_is_comparison(
+                        texture_func, texture_type
+                    ):
+                        continue
+                    if sampler_name in sampler_params:
+                        comparison_params.setdefault(func_name, set()).add(sampler_name)
+            finally:
+                self.local_variable_types = previous_local_variable_types
 
         changed = True
         while changed:
@@ -15567,6 +15604,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         source_type = (
             vtype if vtype is not None else self.expression_result_type(args[0])
         )
+        source_base_type = self.resource_base_type(source_type)
+        if source_base_type == "samplerCubeArrayShadow":
+            coord_index = 2 if self.texture_call_uses_explicit_sampler(args) else 1
+            return len(args) > coord_index + 1
         required_components = self.shadow_texture_sample_compare_coordinate_components(
             source_type
         )
@@ -17551,12 +17592,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         texture_name, sampler_name, coord, extra_args = parts
         if extra_args:
-            return self.unsupported_texture_compare_call(
-                func_name, "shadow sampler shorthand accepts no extra arguments"
+            if (
+                self.resource_base_type(self.texture_source_type(args[0]))
+                != "samplerCubeArrayShadow"
+                or len(extra_args) != 1
+            ):
+                return self.unsupported_texture_compare_call(
+                    func_name, "shadow sampler shorthand accepts no extra arguments"
+                )
+            compare_args = (coord, self.generate_expression(extra_args[0]))
+        else:
+            compare_args = self.shadow_texture_sample_compare_arguments(
+                args[0], coord, self.texture_source_type(args[0])
             )
-        compare_args = self.shadow_texture_sample_compare_arguments(
-            args[0], coord, self.texture_source_type(args[0])
-        )
         if compare_args is None:
             return None
         sample_coord, compare = compare_args

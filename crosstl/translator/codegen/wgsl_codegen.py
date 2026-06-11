@@ -460,6 +460,16 @@ class WGSLCodeGen:
         "samplercubearrayshadow",
         "samplercubeshadow",
     }
+    SAMPLED_ARRAY_TEXTURE_COORDINATE_COMPONENTS = {
+        "isampler2darray": ("xy", "z"),
+        "sampler2darray": ("xy", "z"),
+        "sampler2darrayshadow": ("xy", "z"),
+        "samplercubearray": ("xyz", "w"),
+        "samplercubearrayshadow": ("xyz", "w"),
+        "texture2darray": ("xy", "z"),
+        "texturecubearray": ("xyz", "w"),
+        "usampler2darray": ("xy", "z"),
+    }
     REGULAR_SAMPLER_TYPE_NAMES = {
         "sampler",
         "samplerstate",
@@ -4054,10 +4064,17 @@ class WGSLCodeGen:
             return [
                 self.generate_expression(texture),
                 self.texture_sampler_expression(texture),
-                *(self.generate_expression(arg) for arg in args[1:]),
+                *self.generate_texture_coordinate_call_args(texture, args[1]),
+                *(self.generate_expression(arg) for arg in args[2:]),
             ]
         if len(args) == explicit:
-            return [self.generate_expression(arg) for arg in args]
+            texture = args[0]
+            return [
+                self.generate_expression(texture),
+                self.generate_expression(args[1]),
+                *self.generate_texture_coordinate_call_args(texture, args[2]),
+                *(self.generate_expression(arg) for arg in args[3:]),
+            ]
         raise ValueError(
             f"WGSL target supports {function_name}() calls with {implicit} or "
             f"{explicit} argument(s); got {len(args)}"
@@ -4090,35 +4107,23 @@ class WGSLCodeGen:
                 return self.generate_sampled_texture_array_sample_call(
                     texture, coords, array_info
                 )
-            sample_function = (
-                "textureSampleLevel"
-                if self._current_stage_name == "compute"
-                else "textureSample"
+        if len(args) not in {2, 3}:
+            raise ValueError(
+                "WGSL target supports texture() calls with texture/coords or "
+                "texture/sampler/coords arguments; got "
+                f"{len(args)} argument(s) for {function_name}"
             )
-            level_argument = ", 0.0" if sample_function == "textureSampleLevel" else ""
-            return (
-                f"{sample_function}({self.generate_expression(texture)}, "
-                f"{self.texture_sampler_expression(texture)}, "
-                f"{self.generate_expression(coords)}{level_argument})"
-            )
-        if len(args) == 3:
-            texture, sampler, coords = args
-            sample_function = (
-                "textureSampleLevel"
-                if self._current_stage_name == "compute"
-                else "textureSample"
-            )
-            level_argument = ", 0.0" if sample_function == "textureSampleLevel" else ""
-            return (
-                f"{sample_function}({self.generate_expression(texture)}, "
-                f"{self.generate_expression(sampler)}, "
-                f"{self.generate_expression(coords)}{level_argument})"
-            )
-        raise ValueError(
-            "WGSL target supports texture() calls with texture/coords or "
-            "texture/sampler/coords arguments; got "
-            f"{len(args)} argument(s) for {function_name}"
+        sample_function = (
+            "textureSampleLevel"
+            if self._current_stage_name == "compute"
+            else "textureSample"
         )
+        call_args = self.generate_texture_call_args(
+            args, function_name=function_name, implicit=2, explicit=3
+        )
+        if sample_function == "textureSampleLevel":
+            call_args.append("0.0")
+        return f"{sample_function}({', '.join(call_args)})"
 
     def generate_sampled_texture_array_sample_call(self, texture, coords, array_info):
         helper_name = self.sampled_texture_array_sample_helper_name(
@@ -4200,32 +4205,23 @@ class WGSLCodeGen:
                 return self.generate_sampled_texture_array_sample_level_call(
                     texture, coords, level, array_info
                 )
-            return (
-                f"textureSampleLevel({self.generate_expression(texture)}, "
-                f"{self.texture_sampler_expression(texture)}, "
-                f"{self.generate_expression(coords)}, "
-                f"{self.generate_expression(level)})"
+        if len(args) not in {3, 4}:
+            raise ValueError(
+                "WGSL target supports textureLod() calls with texture/coords/lod or "
+                "texture/sampler/coords/lod arguments; got "
+                f"{len(args)} argument(s) for {function_name}"
             )
-        if len(args) == 4:
-            texture, sampler, coords, level = args
-            return (
-                f"textureSampleLevel({self.generate_expression(texture)}, "
-                f"{self.generate_expression(sampler)}, "
-                f"{self.generate_expression(coords)}, "
-                f"{self.generate_expression(level)})"
-            )
-        raise ValueError(
-            "WGSL target supports textureLod() calls with texture/coords/lod or "
-            "texture/sampler/coords/lod arguments; got "
-            f"{len(args)} argument(s) for {function_name}"
+        call_args = self.generate_texture_call_args(
+            args, function_name=function_name, implicit=3, explicit=4
         )
+        return f"textureSampleLevel({', '.join(call_args)})"
 
     def generate_texture_compare_call(self, function_name, args):
         if len(args) == 3:
-            texture, coords, depth_ref = args
+            texture = args[0]
             sampler = None
         elif len(args) == 4:
-            texture, sampler, coords, depth_ref = args
+            texture, sampler = args[:2]
         else:
             raise ValueError(
                 "WGSL target supports textureCompare() calls with "
@@ -4239,23 +4235,16 @@ class WGSLCodeGen:
                 f"texture resources; got {self.generate_expression(texture)}"
             )
 
-        sampler_expression = (
-            self.generate_expression(sampler)
-            if sampler is not None
-            else self.texture_sampler_expression(texture)
-        )
         if sampler is not None and not self.is_comparison_sampler_expression(sampler):
             raise ValueError(
                 "WGSL target requires textureCompare() explicit sampler operand "
                 "to use samplerComparisonState"
             )
 
-        return (
-            f"textureSampleCompare({self.generate_expression(texture)}, "
-            f"{sampler_expression}, "
-            f"{self.generate_expression(coords)}, "
-            f"{self.generate_expression(depth_ref)})"
+        call_args = self.generate_texture_call_args(
+            args, function_name=function_name, implicit=3, explicit=4
         )
+        return f"textureSampleCompare({', '.join(call_args)})"
 
     def generate_texture_gather_call(self, function_name, args):
         component = LiteralNode(0, PrimitiveType("int"))
@@ -4284,11 +4273,14 @@ class WGSLCodeGen:
             if sampler is not None
             else self.texture_sampler_expression(texture)
         )
+        call_args = [
+            self.generate_expression(texture),
+            sampler_expression,
+            *self.generate_texture_coordinate_call_args(texture, coords),
+        ]
         return (
             f"textureGather({self.generate_expression(component)}, "
-            f"{self.generate_expression(texture)}, "
-            f"{sampler_expression}, "
-            f"{self.generate_expression(coords)})"
+            f"{', '.join(call_args)})"
         )
 
     def generate_texture_gather_compare_call(self, function_name, args):
@@ -4332,12 +4324,15 @@ class WGSLCodeGen:
             if sampler is not None
             else self.texture_sampler_expression(texture)
         )
+        call_args = [
+            self.generate_expression(texture),
+            sampler_expression,
+            *self.generate_texture_coordinate_call_args(texture, coords),
+            self.generate_expression(offset),
+        ]
         return (
             f"textureGather({self.generate_expression(component)}, "
-            f"{self.generate_expression(texture)}, "
-            f"{sampler_expression}, "
-            f"{self.generate_expression(coords)}, "
-            f"{self.generate_expression(offset)})"
+            f"{', '.join(call_args)})"
         )
 
     def generate_texture_gather_offsets_call(self, function_name, args):
@@ -4389,23 +4384,21 @@ class WGSLCodeGen:
                     "textureSample", function_name, args, implicit=3, explicit=4
                 )
             self.require_texture_offset_operand(args, function_name)
-            texture, coords, offset, bias = (
-                self.generate_expression(arg) for arg in args
+            call_args = self.generate_texture_call_args(
+                args, function_name=function_name, implicit=4, explicit=5
             )
-            return (
-                "textureSampleBias("
-                f"{texture}, {self.texture_sampler_expression(args[0])}, "
-                f"{coords}, {bias}, {offset})"
-            )
+            offset = call_args.pop(-2)
+            bias = call_args.pop()
+            call_args.extend([bias, offset])
+            return f"textureSampleBias({', '.join(call_args)})"
         if len(args) == 5:
             call_args = self.generate_texture_call_args(
                 args, function_name=function_name, implicit=4, explicit=5
             )
-            texture, sampler, coords, offset, bias = call_args
-            return (
-                "textureSampleBias("
-                f"{texture}, {sampler}, {coords}, {bias}, {offset})"
-            )
+            offset = call_args.pop(-2)
+            bias = call_args.pop()
+            call_args.extend([bias, offset])
+            return f"textureSampleBias({', '.join(call_args)})"
         raise ValueError(
             "WGSL target supports textureOffset() calls with texture/coords/offset, "
             "texture/sampler/coords/offset, or texture/sampler/coords/offset/bias "
@@ -4648,9 +4641,9 @@ class WGSLCodeGen:
         )
         self.require_integer_texel_fetch_operand(level, function_name, role)
         return (
-            f"textureLoad({self.generate_expression(texture)}, "
-            f"{self.generate_expression(coords)}, "
-            f"{self.generate_expression(level)})"
+            "textureLoad("
+            + ", ".join(self.generate_texture_load_call_args(texture, coords, level))
+            + ")"
         )
 
     def generate_image_load_call(self, node, function_name):
@@ -4695,6 +4688,43 @@ class WGSLCodeGen:
             "WGSL target cannot infer a companion sampler for texture expression "
             f"{self.generate_expression(texture_expr)}; pass an explicit sampler"
         )
+
+    def generate_texture_load_call_args(self, texture_expr, coords_expr, level_expr):
+        return [
+            self.generate_expression(texture_expr),
+            *self.generate_texture_coordinate_call_args(texture_expr, coords_expr),
+            self.generate_expression(level_expr),
+        ]
+
+    def generate_texture_coordinate_call_args(self, texture_expr, coords_expr):
+        coords = self.generate_expression(coords_expr)
+        components = self.sampled_array_texture_coordinate_components(texture_expr)
+        if components is None:
+            return [coords]
+        coord_components, layer_component = components
+        return [
+            f"({coords}).{coord_components}",
+            self.texture_array_layer_expression(coords_expr, coords, layer_component),
+        ]
+
+    def sampled_array_texture_coordinate_components(self, texture_expr):
+        resource_binding = self.resource_member_binding_for_access(texture_expr)
+        texture_type = (
+            resource_binding["member_type"]
+            if resource_binding is not None
+            else self.expression_type(texture_expr)
+        )
+        type_name = self.resource_type_name(texture_type)
+        return self.SAMPLED_ARRAY_TEXTURE_COORDINATE_COMPONENTS.get(type_name)
+
+    def texture_array_layer_expression(
+        self, coords_expr, coords_expression, layer_component
+    ):
+        layer = f"({coords_expression}).{layer_component}"
+        coords_shape = self.vector_shape(self.expression_type(coords_expr))
+        if coords_shape is not None and coords_shape[0] in {"i32", "u32"}:
+            return layer
+        return f"i32({layer})"
 
     def is_sampler_expression(self, expr):
         if self.is_sampler_type(self.expression_type(expr)):

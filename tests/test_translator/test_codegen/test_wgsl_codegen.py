@@ -2929,6 +2929,51 @@ def test_wgsl_codegen_lowers_sampled_texture_resources_and_calls():
     assert "return textureSample(colorTex, colorTex_sampler, uv);" in generated
 
 
+def test_wgsl_codegen_splits_sampled_array_texture_coordinates(tmp_path):
+    shader = """
+    shader WGSLArrayTextureSampling {
+        sampler2DArray layerMap;
+        samplerCubeArray cubeMap;
+        sampler2DArrayShadow shadowMap;
+        samplerComparisonState compareSampler;
+        fragment {
+            vec4 main(
+                vec3 uvLayer @ TEXCOORD0,
+                vec4 cubeLayer @ TEXCOORD1,
+                float depth @ TEXCOORD2
+            ) @ gl_FragColor {
+                return texture(layerMap, uvLayer)
+                    + textureLod(layerMap, uvLayer, 1.0)
+                    + texture(cubeMap, cubeLayer)
+                    + vec4(textureCompare(shadowMap, compareSampler, uvLayer, depth));
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "textureSample(layerMap, layerMap_sampler, "
+        "(uvLayer).xy, i32((uvLayer).z))" in generated
+    )
+    assert (
+        "textureSampleLevel(layerMap, layerMap_sampler, "
+        "(uvLayer).xy, i32((uvLayer).z), 1.0)" in generated
+    )
+    assert (
+        "textureSample(cubeMap, cubeMap_sampler, "
+        "(cubeLayer).xyz, i32((cubeLayer).w))" in generated
+    )
+    assert (
+        "textureSampleCompare(shadowMap, compareSampler, "
+        "(uvLayer).xy, i32((uvLayer).z), depth)" in generated
+    )
+    assert "textureSample(layerMap, layerMap_sampler, uvLayer)" not in generated
+    assert "textureSample(cubeMap, cubeMap_sampler, cubeLayer)" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_codegen_lowers_texel_fetch_to_texture_load():
     shader = """
     shader WGSLTexelFetch {
@@ -2946,6 +2991,32 @@ def test_wgsl_codegen_lowers_texel_fetch_to_texture_load():
     assert "@group(0) @binding(0)\nvar colorTex: texture_2d<f32>;" in generated
     assert "@group(0) @binding(1)\nvar colorTex_sampler: sampler;" in generated
     assert "return textureLoad(colorTex, pixel, mipLevel);" in generated
+
+
+def test_wgsl_codegen_splits_array_texture_texel_fetch_coordinates(tmp_path):
+    shader = """
+    shader WGSLArrayTextureTexelFetch {
+        sampler2DArray layerMap;
+        compute {
+            void main() {
+                ivec3 pixelLayer = ivec3(1, 2, 3);
+                int mipLevel = 0;
+                vec4 color = texelFetch(layerMap, pixelLayer, mipLevel);
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(0)\nvar layerMap: texture_2d_array<f32>;" in generated
+    assert (
+        "var color: vec4<f32> = "
+        "textureLoad(layerMap, (pixelLayer).xy, (pixelLayer).z, mipLevel);" in generated
+    )
+    assert "textureLoad(layerMap, pixelLayer, mipLevel)" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
 
 
 def test_wgsl_codegen_rejects_texel_fetch_offset():

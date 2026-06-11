@@ -29809,6 +29809,62 @@ def test_directx_mixed_implicit_cube_shadow_regular_sample_and_compare_split_sam
     )
 
 
+def test_directx_cube_array_shadow_texture_shorthand_uses_separate_compare():
+    shader = """
+    shader CubeArrayShadowTextureShorthand {
+        samplerCubeArrayShadow cubeShadowArray;
+        sampler shadowSampler;
+
+        struct FSInput {
+            vec4 cubeLayer @ TEXCOORD0;
+            float depth @ TEXCOORD1;
+        };
+
+        float explicitShadow(
+            samplerCubeArrayShadow tex,
+            sampler compareSampler,
+            vec4 cubeLayer,
+            float depth
+        ) {
+            return texture(tex, compareSampler, cubeLayer, depth);
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return texture(cubeShadowArray, input.cubeLayer, input.depth)
+                    + explicitShadow(
+                        cubeShadowArray,
+                        shadowSampler,
+                        input.cubeLayer,
+                        input.depth
+                    );
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "TextureCubeArray cubeShadowArray : register(t0);" in generated_code
+    assert (
+        "SamplerComparisonState cubeShadowArraySampler : register(s0);"
+        in generated_code
+    )
+    assert "SamplerComparisonState shadowSampler : register(s1);" in generated_code
+    assert (
+        "float explicitShadow(TextureCubeArray tex, SamplerComparisonState compareSampler, float4 cubeLayer, float depth)"
+        in generated_code
+    )
+    assert "return tex.SampleCmp(compareSampler, cubeLayer, depth);" in generated_code
+    assert (
+        "cubeShadowArray.SampleCmp(cubeShadowArraySampler, input.cubeLayer, input.depth)"
+        in generated_code
+    )
+    assert "SampleBias" not in generated_code
+    assert "texture(" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
 def test_directx_mixed_implicit_shadow_query_lod_and_compare_split_samplers():
     shader = """
     shader MixedShadowQueryLodCompare {

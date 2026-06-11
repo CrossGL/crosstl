@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1123
+        "test_count": 1124
       },
       "translator_codegen": {
         "exists": true,
@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 165
+        "test_count": 167
       },
       "translator_codegen": {
         "exists": true,
