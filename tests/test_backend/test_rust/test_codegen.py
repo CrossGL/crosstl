@@ -1003,13 +1003,20 @@ def test_rust_gpu_compute_option_unwrap_or_lowers_for_metal_and_spirv(tmp_path):
     rust_file.write_text(code)
 
     crossgl = crosstl.translate(str(rust_file), backend="cgl", format_output=False)
+    opengl = crosstl.translate(str(rust_file), backend="opengl", format_output=False)
     metal = crosstl.translate(str(rust_file), backend="metal", format_output=False)
     spirv = crosstl.translate(str(rust_file), backend="vulkan", format_output=False)
 
     assert ".unwrap_or" not in crossgl
+    assert ".unwrap_or" not in opengl
     assert ".unwrap_or" not in metal
-    assert "collatz_unwrap_or(prime_indices[index], 4294967295u)" in crossgl
-    assert "collatz_unwrap_or(prime_indices[index], 4294967295u)" in metal
+    assert "RWStructuredBuffer<uint> prime_indices @ set(0) @ binding(0)" in crossgl
+    assert (
+        "layout(std430, binding = 0) buffer prime_indicesBuffer "
+        "{ uint prime_indices[]; };" in opengl
+    )
+    for output in (crossgl, opengl, metal):
+        assert "collatz_unwrap_or(prime_indices[index], 4294967295u)" in output
     assert "uint collatz_unwrap_or(uint n, uint _rust_option_fallback)" in metal
     assert "return _rust_option_fallback;" in crossgl
     assert "return i;" in crossgl
@@ -1164,7 +1171,7 @@ def test_rust_gpu_spirv_attributes_drive_stage_and_parameter_semantics():
     assert "out vec4 out_pos @ gl_Position @ invariant" in result
     assert "compute main_cs {" in result
     assert "uvec3 id @ gl_GlobalInvocationID" in result
-    assert "uint values[] @ set(0) @ binding(0)" in result
+    assert "RWStructuredBuffer<uint> values @ set(0) @ binding(0)" in result
 
 
 def test_rust_gpu_uniform_descriptor_parameter_keeps_storage_class_from_dev_guide():
@@ -1246,7 +1253,7 @@ def test_rust_gpu_cfg_attr_spirv_metadata_codegen():
 
     assert "compute wrapped_main {" in result
     assert "void main(uvec3 id @ gl_GlobalInvocationID" in result
-    assert "uint values[] @ set(0) @ binding(1)" in result
+    assert "RWStructuredBuffer<uint> values @ set(0) @ binding(1)" in result
     assert "@numthreads(64, 1, 1)" in result
     assert "void shader_body(" not in result
 
@@ -2189,8 +2196,8 @@ def test_rust_gpu_reduce_subgroup_builtins_codegen_from_upstream_example():
     assert "uvec3 workgroup_id @ gl_WorkGroupID" in result
     assert "uint subgroup_id @ gl_SubgroupID" in result
     assert "uint num_subgroups @ gl_NumSubgroups" in result
-    assert "uint input[] @ set(0) @ binding(0)" in result
-    assert "uint output[] @ set(0) @ binding(1)" in result
+    assert "StructuredBuffer<uint> input @ set(0) @ binding(0)" in result
+    assert "RWStructuredBuffer<uint> output @ set(0) @ binding(1)" in result
     assert "uint shared_[256] @ groupshared" in result
     assert "@numthreads(256, 1, 1)" in result
     assert "sum = subgroup_add(sum);" in result
@@ -2570,7 +2577,7 @@ def test_rust_gpu_compute_collatz_option_chain_codegen_from_upstream_example():
     assert "return Some(i);" in result
     assert "compute main_cs {" in result
     assert "void main(uvec3 id @ gl_GlobalInvocationID" in result
-    assert "uint prime_indices[] @ set(0) @ binding(0)" in result
+    assert "RWStructuredBuffer<uint> prime_indices @ set(0) @ binding(0)" in result
     assert "@numthreads(64, 1, 1)" in result
     assert "let index = uint(id.x);" in result
     assert (

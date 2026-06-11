@@ -13816,6 +13816,79 @@ def test_translate_project_rust_option_helpers_lower_to_opengl_compute(tmp_path)
     assert_compute_glsl_validates_if_available(opengl_output, tmp_path)
 
 
+def test_translate_project_rust_gpu_storage_buffer_declares_opengl_ssbo(tmp_path):
+    repo = tmp_path / "repo"
+    source_dir = repo / "src"
+    source_dir.mkdir(parents=True)
+    (source_dir / "lib.rs").write_text(
+        textwrap.dedent("""
+            use glam::UVec3;
+            use spirv_std::{glam, spirv};
+
+            pub fn collatz(mut n: u32) -> Option<u32> {
+                let mut i = 0;
+                if n == 0 {
+                    return None;
+                }
+                while n != 1 {
+                    n = if n.is_multiple_of(2) {
+                        n / 2
+                    } else {
+                        if n >= 0x5555_5555 {
+                            return None;
+                        }
+                        3 * n + 1
+                    };
+                    i += 1;
+                }
+                Some(i)
+            }
+
+            #[spirv(compute(threads(64)))]
+            pub fn main_cs(
+                #[spirv(global_invocation_id)] id: UVec3,
+                #[spirv(storage_buffer, descriptor_set = 0, binding = 0)]
+                prime_indices: &mut [u32],
+            ) {
+                let index = id.x as usize;
+                prime_indices[index] =
+                    collatz(prime_indices[index]).unwrap_or(u32::MAX);
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["src"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    opengl_output = (repo / "translated" / "opengl" / "src" / "lib.glsl").read_text(
+        encoding="utf-8"
+    )
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert (
+        "layout(std430, binding = 0) buffer prime_indicesBuffer "
+        "{ uint prime_indices[]; };" in opengl_output
+    )
+    assert "void main()" in opengl_output
+    assert (
+        "prime_indices[index] = "
+        "collatz_unwrap_or(prime_indices[index], 4294967295u);"
+    ) in opengl_output
+    assert "prime_indices[" in opengl_output
+    assert "uint prime_indices[]" not in opengl_output.split("void main()", 1)[1]
+    assert_compute_glsl_validates_if_available(opengl_output, tmp_path)
+
+
 def test_translate_project_rust_option_helpers_lower_to_directx_compute(tmp_path):
     repo = tmp_path / "repo"
     source_dir = repo / "src"
