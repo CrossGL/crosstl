@@ -10022,6 +10022,7 @@ def test_translate_project_opengl_materializes_mlx_accumulator_template_default(
                 "T": "source-instantiation",
             },
             "source": "source-instantiation",
+            "hostName": "softmaxfloat32",
         },
         {
             "name": "reduce_acc",
@@ -36481,6 +36482,119 @@ def test_translate_project_variant_materializes_sizing_helper_calls(tmp_path):
     assert "max_total_threads_per_threadgroup" not in output
     assert not re.search(r"\b(?:T|N)\b", output)
     assert_compute_glsl_validates_if_available(output, tmp_path)
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+
+
+def test_translate_project_signature_instantiation_materializes_convolution_helpers_to_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["directx", "opengl", "vulkan"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "conv.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, int N>
+            T accumulate_window(T value) {
+                return value + T(N);
+            }
+
+            template <typename T, int N>
+            [[kernel]] void naive_unfold_Nd(
+                const device T* in [[buffer(0)]],
+                device T* out [[buffer(N)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = accumulate_window<T, N>(in[gid]);
+            }
+
+            #define instantiate_naive_unfold_nd(name, itype, n) \\
+                template [[host_name("naive_unfold_nd_" #name "_" #n)]] [[kernel]] void \\
+                naive_unfold_Nd( \\
+                    const device itype* in [[buffer(0)]], \\
+                    device itype* out [[buffer(n)]], \\
+                    uint gid [[thread_position_in_grid]]);
+
+            instantiate_naive_unfold_nd(float32, float, 2)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    expected_materialization = {
+        "status": "materialized",
+        "specializationCount": 2,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "configuredParameterSources": {},
+        "specializations": [
+            {
+                "name": "naive_unfold_Nd",
+                "materializedName": "naive_unfold_nd_float32_2",
+                "parameters": {"N": "2", "T": "float"},
+                "parameterSources": {
+                    "N": "source-instantiation",
+                    "T": "source-instantiation",
+                },
+                "source": "source-instantiation",
+                "hostName": "naive_unfold_nd_float32_2",
+            },
+            {
+                "name": "accumulate_window",
+                "materializedName": "accumulate_window_float_2",
+                "parameters": {"N": "2", "T": "float"},
+                "parameterSources": {"N": "call-site", "T": "call-site"},
+                "source": "call-site",
+            },
+        ],
+        "unsupported": [],
+    }
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+    for artifact in payload["artifacts"]:
+        assert artifact["templateMaterialization"] == expected_materialization
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        if artifact["target"] != "vulkan":
+            assert "accumulate_window_float_2" in output
+        assert "naive_unfold_Nd<" not in output
+        assert "accumulate_window<" not in output
+        assert "template <" not in output
+        assert not re.search(r"\b(?:T|N)\b", output)
+
+    opengl_artifact = next(
+        artifact for artifact in payload["artifacts"] if artifact["target"] == "opengl"
+    )
+    opengl_output = (repo / opengl_artifact["path"]).read_text(encoding="utf-8")
+    assert "layout(std430, binding = 2) buffer out_Buffer { float out_[]; };" in (
+        opengl_output
+    )
+    assert_compute_glsl_validates_if_available(opengl_output, tmp_path)
 
     report_path = repo / "translated" / "report.json"
     report.write_json(report_path)
