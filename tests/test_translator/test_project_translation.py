@@ -10437,6 +10437,79 @@ def test_translate_project_metal_softmax_materialized_conversion_operator_fragme
     }
 
 
+def test_translate_project_materialized_metal_functor_header_empty_member_to_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "ops.h").write_text(
+        textwrap.dedent("""
+            struct Add {
+              template <typename T>
+              T operator()(T x, T y) {
+                return x + y;
+              }
+            };
+
+            struct LogAddExp {
+              template <typename T>
+              T operator()(T x, T y) {
+                return x + y;
+              };
+
+              float operator()(float x, float y) {
+                return x + y;
+              }
+            };
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "binary.metal").write_text(
+        textwrap.dedent("""
+            #include "ops.h"
+
+            #define instantiate_binary(name, itype, op) \\
+              instantiate_kernel("binary_" #name, binary_kernel, itype, op)
+
+            template <typename T, typename Op>
+            [[kernel]] void binary_kernel(
+                device const T* in [[buffer(0)]],
+                device T* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+              out[gid] = in[gid] + T(1);
+            }
+
+            instantiate_binary(float32, float, Add)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx", "vulkan"]
+            output_dir = "translated"
+            include_dirs = ["shaders"]
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["summary"]["diagnosticCounts"] == {
+        "note": 0,
+        "warning": 0,
+        "error": 0,
+    }
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("vulkan", "translated"),
+    }
+
+
 def test_translate_project_opengl_remaps_mlx_arange_materialized_entry_bindings(
     tmp_path,
 ):

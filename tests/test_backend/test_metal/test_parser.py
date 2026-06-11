@@ -591,6 +591,22 @@ def test_parse_numeric_template_braced_functor_call_statement():
     assert call.callee.name == "Quantize<4>"
 
 
+def test_parse_struct_empty_member_declaration_left_by_functor_materialization():
+    code = """
+    struct LogAddExp {
+        ;
+
+        float operator()(float x, float y) {
+            return x + y;
+        }
+    };
+    """
+    ast = parse_ok(code)
+
+    assert [struct.name for struct in ast.structs] == ["LogAddExp"]
+    assert ast.structs[0].members == []
+
+
 def test_numeric_template_parse_error_reports_context_and_position():
     code = """
     template <int N>
