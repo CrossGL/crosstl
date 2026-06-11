@@ -36949,6 +36949,7 @@ def test_project_cli_metal_matmul_explicit_opengl_target_declares_resources(
             "--report",
             str(report_path),
             "--validate",
+            "--run-toolchains",
             "--no-format",
             "--target",
             "opengl",
