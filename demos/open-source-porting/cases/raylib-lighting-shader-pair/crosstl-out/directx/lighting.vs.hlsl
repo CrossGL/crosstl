@@ -21,10 +21,10 @@ cbuffer Uniforms : register(b0) {
 // Vertex Shader
 VertexOutput VSMain(VertexInput input) {
     VertexOutput output;
-    output.fragPosition = float3(mul(matModel, float4(input.vertexPosition, 1.0)));
+    output.fragPosition = float3(mul(matModel, float4(input.vertexPosition, 1.0)).xyz);
     output.fragTexCoord = input.vertexTexCoord;
     output.fragColor = input.vertexColor;
-    output.fragNormal = normalize(float3(mul(matNormal, float4(input.vertexNormal, 1.0))));
+    output.fragNormal = normalize(float3(mul(matNormal, float4(input.vertexNormal, 1.0)).xyz));
     output.gl_Position = mul(mvp, float4(input.vertexPosition, 1.0));
     return output;
 }

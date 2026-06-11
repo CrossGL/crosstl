@@ -11,7 +11,8 @@
         "cgl",
         "opengl",
         "metal",
-        "directx"
+        "directx",
+        "vulkan"
       ],
       "repository": "https://github.com/bkvogel/metal_performance_testing",
       "commit": "b467b4b1dee0f7d9d43bda13856306ca3f1baea5",
@@ -25,7 +26,8 @@
         "cgl",
         "opengl",
         "metal",
-        "directx"
+        "directx",
+        "vulkan"
       ],
       "repository": "https://github.com/bkvogel/metal_performance_testing",
       "commit": "b467b4b1dee0f7d9d43bda13856306ca3f1baea5",

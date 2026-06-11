@@ -116,9 +116,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 25,
-        "endOffset": 661,
+        "endOffset": 665,
         "file": "crosstl-out/directx/lighting.vs.hlsl",
-        "length": 84,
+        "length": 88,
         "line": 24,
         "offset": 577
       },
@@ -138,11 +138,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 26,
-        "endOffset": 709,
+        "endOffset": 713,
         "file": "crosstl-out/directx/lighting.vs.hlsl",
         "length": 48,
         "line": 25,
-        "offset": 661
+        "offset": 665
       },
       "original": {
         "column": 1,
@@ -160,11 +160,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 27,
-        "endOffset": 751,
+        "endOffset": 755,
         "file": "crosstl-out/directx/lighting.vs.hlsl",
         "length": 42,
         "line": 26,
-        "offset": 709
+        "offset": 713
       },
       "original": {
         "column": 1,
@@ -182,11 +182,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 28,
-        "endOffset": 843,
+        "endOffset": 851,
         "file": "crosstl-out/directx/lighting.vs.hlsl",
-        "length": 92,
+        "length": 96,
         "line": 27,
-        "offset": 751
+        "offset": 755
       },
       "original": {
         "column": 1,
@@ -204,11 +204,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 29,
-        "endOffset": 913,
+        "endOffset": 921,
         "file": "crosstl-out/directx/lighting.vs.hlsl",
         "length": 70,
         "line": 28,
-        "offset": 843
+        "offset": 851
       },
       "original": {
         "column": 1,
