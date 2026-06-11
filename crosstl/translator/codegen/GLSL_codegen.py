@@ -2187,6 +2187,11 @@ class GLSLCodeGen:
             visit(type_text)
         return ordered
 
+    def is_struct_declaration_node(self, node):
+        return isinstance(node, StructNode) or (
+            getattr(node, "name", None) and hasattr(node, "members")
+        )
+
     def mapped_type_dependency_name(self, type_value):
         mapped_type = self.map_type(type_value)
         base_type, _array_suffix = split_array_type_suffix(str(mapped_type or ""))
@@ -2490,7 +2495,9 @@ class GLSLCodeGen:
             "struct",
         )
         self.structs_by_name = {
-            node.name: node for node in structs if isinstance(node, StructNode)
+            node.name: node
+            for node in structs
+            if self.is_struct_declaration_node(node)
         }
         self.struct_member_types = collect_struct_member_types(
             structs, self.type_name_string
@@ -5858,19 +5865,31 @@ class GLSLCodeGen:
                 raw_param_type = p.vtype
             else:
                 raw_param_type = "float"
-            self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
+            parameter_expression_type = (
+                self.stage_entry_parameter_expression_type(p, raw_param_type)
+                if shader_type is not None
+                else self.type_name_string(raw_param_type)
+            )
+            metadata_param_type = (
+                self.stage_entry_resource_parameter_type(p)
+                if shader_type is not None
+                else None
+            )
+            if metadata_param_type is None:
+                metadata_param_type = raw_param_type
+            self.local_variable_types[p.name] = parameter_expression_type
             stage_resource_alias = stage_entry_resource_aliases.get(p.name)
             if stage_resource_alias:
-                self.local_variable_types[stage_resource_alias] = self.type_name_string(
-                    raw_param_type
+                self.local_variable_types[stage_resource_alias] = (
+                    parameter_expression_type
                 )
             self.validate_resource_access_metadata_operands(p)
             self.record_structured_buffer_access_metadata(
-                p.name, raw_param_type, p, parameter=True
+                p.name, metadata_param_type, p, parameter=True
             )
             if stage_resource_alias:
                 self.record_structured_buffer_access_metadata(
-                    stage_resource_alias, raw_param_type, p, parameter=True
+                    stage_resource_alias, metadata_param_type, p, parameter=True
                 )
 
             if index in unsupported_buffer_array_indices:
@@ -6475,9 +6494,12 @@ class GLSLCodeGen:
                 qualifiers=["uniform"],
             )
 
+        resource_type = self.stage_entry_resource_parameter_type(parameter)
         node = VariableNode(
             name=getattr(parameter, "name", None),
-            var_type=self.resource_node_type(parameter),
+            var_type=resource_type
+            if resource_type is not None
+            else self.resource_node_type(parameter),
             attributes=list(getattr(parameter, "attributes", []) or []),
             qualifiers=list(getattr(parameter, "qualifiers", []) or []),
         )
@@ -6655,20 +6677,85 @@ class GLSLCodeGen:
         if isinstance(raw_type, ReferenceType):
             referenced_type = raw_type.referenced_type
             type_name = self.type_name_string(referenced_type)
+        elif isinstance(raw_type, PointerType):
+            type_name = self.type_name_string(raw_type.pointee_type)
         else:
             type_name = self.type_name_string(raw_type)
-            if type_name and type_name.endswith("&"):
-                type_name = type_name[:-1].strip()
+            type_name = self.strip_metal_parameter_indirection(type_name)
 
         if type_name in self.structs_by_name:
             return type_name
         return None
+
+    def strip_metal_parameter_indirection(self, type_name):
+        type_name = str(type_name or "").strip()
+        while type_name.endswith(("*", "&")):
+            type_name = type_name[:-1].strip()
+        while True:
+            stripped = re.sub(
+                r"^(?:const|constant|device|thread|threadgroup)\s+",
+                "",
+                type_name,
+                count=1,
+            ).strip()
+            if stripped == type_name:
+                return stripped
+            type_name = stripped
+
+    def stage_entry_metal_pointer_element_type(self, param):
+        if self.explicit_resource_binding_index(param) is None:
+            return None
+
+        qualifiers = {str(q).lower() for q in getattr(param, "qualifiers", []) or []}
+        if not qualifiers.intersection({"constant", "device"}):
+            return None
+
+        raw_type = self.resource_node_type(param)
+        if isinstance(raw_type, PointerType):
+            return self.type_name_string(raw_type.pointee_type)
+
+        type_name = self.type_name_string(raw_type)
+        if not type_name:
+            return None
+        if not str(type_name).strip().endswith("*"):
+            return None
+        return self.strip_metal_parameter_indirection(type_name)
+
+    def stage_entry_metal_pointer_structured_buffer_type(self, param):
+        element_type = self.stage_entry_metal_pointer_element_type(param)
+        if element_type is None:
+            return None
+        if element_type in self.structs_by_name:
+            return None
+
+        qualifiers = {str(q).lower() for q in getattr(param, "qualifiers", []) or []}
+        buffer_type = (
+            "StructuredBuffer" if "constant" in qualifiers else "RWStructuredBuffer"
+        )
+        return f"{buffer_type}<{element_type}>"
+
+    def stage_entry_resource_parameter_type(self, param):
+        constant_struct_type = self.stage_entry_constant_struct_parameter_type(param)
+        if constant_struct_type is not None:
+            return constant_struct_type
+        return self.stage_entry_metal_pointer_structured_buffer_type(param)
+
+    def stage_entry_parameter_expression_type(self, param, raw_type):
+        resource_type = self.stage_entry_resource_parameter_type(param)
+        if resource_type is None:
+            return self.type_name_string(raw_type)
+        if self.is_structured_buffer_type(resource_type):
+            return f"{self.structured_buffer_element_type(resource_type)}[]"
+        return self.type_name_string(resource_type)
 
     def is_stage_entry_resource_parameter(self, param):
         raw_type = self.resource_node_type(param)
         if self.is_sampler_type(raw_type):
             return False
         if self.stage_entry_constant_struct_parameter_type(param) is not None:
+            return True
+        resource_type = self.stage_entry_resource_parameter_type(param)
+        if resource_type is not None:
             return True
         if self.is_glsl_buffer_block_variable(param, raw_type):
             return True

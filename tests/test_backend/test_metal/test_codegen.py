@@ -1899,6 +1899,44 @@ def test_directx_codegen_lowers_native_metal_entry_buffer_parameters_to_resource
     assert "thread_position_in_grid" not in hlsl
 
 
+def test_glsl_codegen_lowers_native_metal_entry_buffer_parameters_to_resources():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Params {
+        uint row_dim_x;
+        uint col_dim_x;
+        uint inner_dim;
+    };
+
+    kernel void matmul(constant Params* params [[buffer(0)]],
+                       constant float* A [[buffer(1)]],
+                       constant float* B [[buffer(2)]],
+                       device float* X [[buffer(3)]]) {
+        X[0] = A[0] + B[0];
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    glsl = GLSLCodeGen().generate(ast)
+
+    assert "layout(std140, binding = 0) uniform Params" in glsl
+    assert "uint row_dim_x;" in glsl
+    assert "} params;" in glsl
+    assert "layout(std430, binding = 1) readonly buffer ABuffer" in glsl
+    assert "float A[];" in glsl
+    assert "layout(std430, binding = 2) readonly buffer BBuffer" in glsl
+    assert "float B[];" in glsl
+    assert "layout(std430, binding = 3) buffer XBuffer" in glsl
+    assert "float X[];" in glsl
+    assert "void main()" in glsl
+    assert "constant Params* params" not in glsl
+    assert "constant float* A" not in glsl
+    assert "constant float* B" not in glsl
+    assert "device float* X" not in glsl
+
+
 def test_codegen_mlx_multi_entry_opengl_resource_bindings_do_not_overlap():
     # Reduced from MLX-generated multi-entry Metal kernels where unrelated entry
     # parameters reuse names and Metal buffer indices across kernels.
