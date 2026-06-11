@@ -259,7 +259,9 @@ def test_verify_runtime_fixtures_runs_executable_adapter_contract_fixture():
         name = "fake-mlx-runtime"
 
         def is_available(self, request):
-            assert isinstance(request.adapter_contract, project_api.RuntimeAdapterContract)
+            assert isinstance(
+                request.adapter_contract, project_api.RuntimeAdapterContract
+            )
             assert request.adapter_contract.validation_hooks[0].name == (
                 "adapter-contract"
             )
@@ -286,9 +288,7 @@ def test_verify_runtime_fixtures_runs_executable_adapter_contract_fixture():
                 "post-run",
             ]
             inputs = {value.name: value.values for value in request.fixture.inputs}
-            output = [
-                lhs + rhs for lhs, rhs in zip(inputs["lhs"], inputs["rhs"])
-            ]
+            output = [lhs + rhs for lhs, rhs in zip(inputs["lhs"], inputs["rhs"])]
             return RuntimeExecutorResult(
                 outputs={
                     "out": {

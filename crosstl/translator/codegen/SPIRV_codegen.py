@@ -11969,7 +11969,7 @@ class VulkanSPIRVCodeGen:
 
         qualifiers = [
             str(qualifier)
-            for qualifier in (getattr(source_node, "qualifiers", None) or [])
+            for qualifier in getattr(source_node, "qualifiers", None) or []
             if qualifier
         ]
         parts = [*qualifiers]
@@ -11994,9 +11994,7 @@ class VulkanSPIRVCodeGen:
 
         direction = storage_class.lower()
         variable_name = f" '{name}'" if name else ""
-        declaration = self.interface_source_declaration_text(
-            source_node, name, type_id
-        )
+        declaration = self.interface_source_declaration_text(source_node, name, type_id)
         declaration_suffix = (
             f" from source declaration '{declaration}'" if declaration else ""
         )

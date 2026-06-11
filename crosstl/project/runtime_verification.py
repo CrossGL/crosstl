@@ -255,8 +255,8 @@ class RuntimeAdapterContract:
     contract_id: str | None = None
     entry_points: tuple[RuntimeEntryPoint, ...] = field(default_factory=tuple)
     resource_bindings: tuple[RuntimeResourceBinding, ...] = field(default_factory=tuple)
-    specialization_constants: tuple[RuntimeSpecializationConstant, ...] = (
-        field(default_factory=tuple)
+    specialization_constants: tuple[RuntimeSpecializationConstant, ...] = field(
+        default_factory=tuple
     )
     dispatch: RuntimeDispatchGeometry | None = None
     validation_hooks: tuple[RuntimeValidationHook, ...] = field(default_factory=tuple)
@@ -363,11 +363,9 @@ class RuntimeAdapter(Protocol):
 
     def is_available(
         self, request: RuntimeExecutionRequest
-    ) -> RuntimeExecutorAvailability:
-        ...
+    ) -> RuntimeExecutorAvailability: ...
 
-    def run(self, request: RuntimeExecutionRequest) -> RuntimeExecutorResult:
-        ...
+    def run(self, request: RuntimeExecutionRequest) -> RuntimeExecutorResult: ...
 
 
 class RuntimeExecutor:
@@ -721,7 +719,9 @@ def _parse_runtime_entry_point(value: Any, *, field_name: str) -> RuntimeEntryPo
     if execution_config is None:
         execution_config = {}
     if not isinstance(execution_config, Mapping):
-        raise RuntimeVerificationError(f"{field_name}.executionConfig must be an object.")
+        raise RuntimeVerificationError(
+            f"{field_name}.executionConfig must be an object."
+        )
     return RuntimeEntryPoint(
         name=_required_string(value.get("name"), field_name=f"{field_name}.name"),
         stage=_optional_string(value.get("stage"), field_name=f"{field_name}.stage"),
@@ -1537,7 +1537,9 @@ def _runtime_dispatch_geometry_from_artifact(
     dispatch = artifact.get("dispatch")
     if not isinstance(dispatch, Mapping):
         return None
-    for index, workgroup in enumerate(_runtime_record_sequence(dispatch.get("workgroups"))):
+    for index, workgroup in enumerate(
+        _runtime_record_sequence(dispatch.get("workgroups"))
+    ):
         if not isinstance(workgroup, Mapping):
             continue
         metadata = {}
