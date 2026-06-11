@@ -12984,7 +12984,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         used_ranges = self.hlsl_declared_struct_semantic_ranges(struct_node)
 
         defaults = {}
-        position_names = {"position", "clipposition", "clip_position"}
+        position_names = {
+            "position",
+            "clipposition",
+            "clip_position",
+            "glposition",
+            "gl_position",
+        }
         if not self.hlsl_semantic_range_is_used(used_ranges, "SV_Position"):
             for member in getattr(struct_node, "members", []) or []:
                 member_name = getattr(member, "name", None)
