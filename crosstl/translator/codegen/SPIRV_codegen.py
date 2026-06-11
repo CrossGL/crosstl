@@ -262,6 +262,7 @@ class VulkanSPIRVCodeGen:
         self.stage_local_function_mesh_output_parameter_indices = {}
         self.function_interface_variables = {}
         self.function_interface_variables_by_name = {}
+        self.interface_original_value_types = {}
         self.builtin_interface_variable_ids = set()
         self.builtin_names_by_variable_id = {}
         self.readonly_builtin_pointer_names = {}
@@ -11820,8 +11821,9 @@ class VulkanSPIRVCodeGen:
         interface_node = node
         if interface_node is None:
             interface_node = VariableNode(name, type_id.type.base_type)
+        interface_type = self.lowered_user_defined_interface_type(type_id)
         self.validate_user_defined_interface_type(
-            type_id, storage_class, name, interface_node
+            interface_type, storage_class, name, interface_node
         )
         preferred_location = self.entry_point_interface_location(
             semantic, storage_class, node, member_index
@@ -11829,12 +11831,14 @@ class VulkanSPIRVCodeGen:
         location = self.global_interface_location(
             interface_node, storage_class, preferred_location=preferred_location
         )
-        variable = self.create_variable(type_id, storage_class, name)
+        variable = self.create_variable(interface_type, storage_class, name)
+        if interface_type.id != type_id.id:
+            self.interface_original_value_types[variable.id] = type_id
         self.decorations.append(f"OpDecorate %{variable.id} Location {location}")
         if (
             storage_class == "Input"
             and execution_model == "Fragment"
-            and self.interface_type_requires_flat(type_id)
+            and self.interface_type_requires_flat(interface_type)
         ):
             self.decorations.append(f"OpDecorate %{variable.id} Flat")
         self.decorate_global_interface_variable(interface_node, variable)
@@ -11914,6 +11918,23 @@ class VulkanSPIRVCodeGen:
     def interface_type_requires_flat(self, type_id: SpirvId) -> bool:
         component_type = self.scalar_or_vector_component_type(type_id.type)
         return self.normalize_primitive_name(component_type) in {"int", "uint", "bool"}
+
+    def lowered_user_defined_interface_type(self, type_id: SpirvId) -> SpirvId:
+        type_id = self.ensure_registered_type(type_id)
+        type_name = type_id.type.base_type
+        if self.normalize_primitive_name(type_name) == "bool":
+            return self.register_primitive_type("uint")
+
+        vector_info = self.vector_component_type_and_count(type_name)
+        if vector_info is None:
+            return type_id
+
+        component_type, component_count = vector_info
+        if self.normalize_primitive_name(component_type) != "bool":
+            return type_id
+
+        uint_type = self.register_primitive_type("uint")
+        return self.register_vector_type(uint_type, component_count)
 
     def interface_type_contains_bool(
         self, type_id: Optional[SpirvId], seen=None
