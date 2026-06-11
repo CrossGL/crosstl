@@ -72,7 +72,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `raylib-base-vertex` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream base vertex shader unchanged. |
 | `raylib-lighting-shader-pair` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream lighting vertex and fragment shaders unchanged. DirectX validation is tracked in issue #1271. |
 | `renderdoc-vktext-fragment` | `baldurk/renderdoc` at `6660344c3d8024dc5107afa2115c5035ceb85533` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Vulkan text fragment shader unchanged. |
-| `rust-gpu-compute-collatz` | `Rust-GPU/rust-gpu` at `36e3348cdc2f824afec64b3b5af5d369d98a4c0d` | Apache-2.0 OR MIT | Rust-GPU | CrossGL, Metal, DirectX, Vulkan | Uses the upstream compute shader unchanged. |
+| `rust-gpu-compute-collatz` | `Rust-GPU/rust-gpu` at `36e3348cdc2f824afec64b3b5af5d369d98a4c0d` | Apache-2.0 OR MIT | Rust-GPU | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream compute shader unchanged. |
 | `rust-gpu-graphics-stage-inputs` | `Rust-GPU/rust-gpu` at `36e3348cdc2f824afec64b3b5af5d369d98a4c0d` | Apache-2.0 OR MIT | Rust-GPU | CrossGL, OpenGL, Metal, Vulkan | Uses a reduced graphics shader slice that keeps the plain vertex input and fragment color path. DirectX validation is tracked in issue #1278. |
 | `rust-gpu-vulkan-examples-triangle-overlay` | `Rust-GPU/VulkanShaderExamples` at `b29a37eb46802b5ea6882af4808d6887fc184581` | MIT | Rust-GPU | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream conservative raster triangle-overlay shader unchanged. |
 | `sascha-willems-vulkan-conservative-triangle` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream conservative raster triangle vertex shader without semantic edits. Host conservative-rasterizer pipeline state remains outside the demo scope. |
@@ -256,10 +256,12 @@ was retested after issue #776 closed and is now checked for OpenGL, Metal,
 DirectX, and Vulkan output. The `Rust-GPU/rust-gpu` compute Collatz shader was
 retested after issue #809, issue #1232, and issue #1230 closed and is now
 checked for CrossGL, Metal, DirectX, and Vulkan output. The `Rust-GPU/rust-gpu`
-graphics stage-input slice is checked for CrossGL, OpenGL, Metal, and Vulkan
-output. DirectX validation remains excluded until issue #1278 is resolved.
-Full Rust-GPU crate builds, host-side dispatch, and runtime validation remain
-outside this source-focused demo scope.
+compute Collatz shader is also checked for OpenGL output after issue #1071 and
+issue #1221 closed. The `Rust-GPU/rust-gpu` graphics stage-input slice is
+checked for CrossGL, OpenGL, Metal, and Vulkan output. DirectX validation
+remains excluded until issue #1278 is resolved. Full Rust-GPU crate builds,
+host-side dispatch, and runtime validation remain outside this source-focused
+demo scope.
 
 The `ROCm/rocm-examples` add-kernel case uses only the upstream
 `[sphinx-kernel-start]` to `[sphinx-kernel-end]` source section and is checked

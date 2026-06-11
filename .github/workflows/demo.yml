@@ -114,6 +114,7 @@ jobs:
             --case raylib-lighting-shader-pair \
             --case renderdoc-vktext-fragment \
             --case rocm-examples-add-kernel \
+            --case rust-gpu-compute-collatz \
             --case rust-gpu-graphics-stage-inputs \
             --case rust-gpu-vulkan-examples-triangle-overlay \
             --case sascha-willems-vulkan-conservative-triangle \
