@@ -1261,7 +1261,9 @@ class WGSLCodeGen:
             resource.name
         ):
             return f"(*{resource.name})[{self.generate_expression(index)}]"
-        return f"{self.generate_expression(resource)}[{self.generate_expression(index)}]"
+        return (
+            f"{self.generate_expression(resource)}[{self.generate_expression(index)}]"
+        )
 
     def require_structured_buffer_resource(self, resource, helper_name):
         resource_type = self.expression_type(resource)

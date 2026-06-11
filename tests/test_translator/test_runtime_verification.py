@@ -443,7 +443,9 @@ def test_verify_runtime_fixtures_runs_execution_adapter_pipeline(tmp_path):
         "expectedOutput"
     )
     assert result["runtimeExecution"]["dispatch"]["workgroupCount"] == [1, 1, 1]
-    assert [step["phase"] for step in result["executor"]["details"]["adapterSteps"]] == [
+    assert [
+        step["phase"] for step in result["executor"]["details"]["adapterSteps"]
+    ] == [
         "compile",
         "load",
         "bind",

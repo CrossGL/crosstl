@@ -442,9 +442,7 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_compute_bool_vector_input_lowers_to_uint_vector_interface(
-        self, tmp_path
-    ):
+    def test_compute_bool_vector_input_lowers_to_uint_vector_interface(self, tmp_path):
         source_code = """
         shader BoolVectorInputLowering {
             compute {

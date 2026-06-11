@@ -548,9 +548,7 @@ class RuntimeExecutionAdapter(RuntimeExecutor):
     def run(self, request: RuntimeExecutionRequest) -> RuntimeExecutorResult:
         plan = request.execution_plan or prepare_runtime_execution(request)
         if _runtime_diagnostics_have_errors(plan.diagnostics):
-            raise RuntimeExecutionError(
-                "Runtime execution plan contains setup errors."
-            )
+            raise RuntimeExecutionError("Runtime execution plan contains setup errors.")
 
         state = RuntimeExecutionState(request=request, plan=plan)
         state.compiled_artifact = self.compile_artifact(state)
@@ -565,9 +563,7 @@ class RuntimeExecutionAdapter(RuntimeExecutor):
             outputs=outputs,
             details={
                 "runtimeExecution": plan.to_json(),
-                "adapterSteps": [
-                    step.to_json() for step in state.adapter_steps
-                ],
+                "adapterSteps": [step.to_json() for step in state.adapter_steps],
                 "adapterDiagnostics": [
                     dict(diagnostic) for diagnostic in state.diagnostics
                 ],
@@ -599,9 +595,7 @@ class RuntimeExecutionAdapter(RuntimeExecutor):
             binding = resource.binding
             key = binding.name or binding.binding_id or str(binding.binding)
             values[key] = (
-                None
-                if resource.source == "expectedOutput"
-                else resource.value.values
+                None if resource.source == "expectedOutput" else resource.value.values
             )
         state.record_step(
             "bind",
@@ -2058,7 +2052,9 @@ def _runtime_execution_step_from_record(
     )
     command = record.get("command")
     command_items: tuple[str, ...] = ()
-    if isinstance(command, Sequence) and not isinstance(command, (str, bytes, bytearray)):
+    if isinstance(command, Sequence) and not isinstance(
+        command, (str, bytes, bytearray)
+    ):
         command_items = tuple(str(item) for item in command)
     elif command is not None:
         command_items = (str(command),)
@@ -2068,10 +2064,7 @@ def _runtime_execution_step_from_record(
         if key not in {"action", "kind", "tool", "command", "status", "diagnostics"}
     }
     details.setdefault("index", index)
-    status = (
-        _optional_runtime_step_text(record.get("status"))
-        or "planned"
-    )
+    status = _optional_runtime_step_text(record.get("status")) or "planned"
     diagnostics = tuple(
         dict(diagnostic)
         for diagnostic in _runtime_record_sequence(record.get("diagnostics"))

@@ -32810,9 +32810,7 @@ def test_translate_project_vulkan_compute_bool_parameter_uses_uint_interface(
     uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", output)
     assert bool_type is not None
     assert uint_type is not None
-    assert re.search(
-        rf"OpTypePointer Input {re.escape(uint_type.group(1))}\b", output
-    )
+    assert re.search(rf"OpTypePointer Input {re.escape(uint_type.group(1))}\b", output)
     assert not re.search(
         rf"OpTypePointer Input {re.escape(bool_type.group(1))}\b", output
     )
