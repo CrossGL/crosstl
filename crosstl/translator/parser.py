@@ -3205,6 +3205,31 @@ class Parser:
 
     def parse_for_loop_variable_declaration(self):
         """Parse variable declarations in for loops (without consuming semicolon)."""
+        if (
+            self.current_token[0] == "VAR"
+            and self.peek()[0] != "LESS_THAN"
+            and self.peek(2)[0] == "COLON"
+        ):
+            self.eat("VAR")
+            name = self.parse_binding_identifier()
+            self.eat("COLON")
+            var_type = self.parse_type()
+            var_type = self.parse_array_suffixes(var_type)
+            attributes = self.parse_post_declaration_attributes()
+            var_type = self.parse_array_suffixes(var_type)
+
+            initial_value = None
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                initial_value = self.parse_expression()
+
+            return VariableNode(
+                name=name,
+                var_type=var_type,
+                initial_value=initial_value,
+                attributes=attributes,
+            )
+
         qualifiers = self.parse_variable_qualifiers()
         var_type = self.parse_type()
         declarations = []
