@@ -1683,11 +1683,12 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "WARNING" not in spv_code
 
-    def test_generic_functions_report_deterministic_diagnostic(self):
+    def test_generic_functions_specialize_concrete_calls(self):
         source_code = """
         shader GenericFunctionDiagnostic {
             generic<T> fn identity(value: T) -> T {
-                return value;
+                T local = value;
+                return local;
             }
 
             compute {
@@ -1698,10 +1699,42 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpFunctionCall" in spv_code
+        assert "SPIR-V codegen does not support generic functions" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_unspecialized_generic_function_reports_helper_context(self):
+        source_code = """
+        shader GenericFunctionDiagnostic {
+            generic<T, U> fn orphan(left: T, right: U) -> T {
+                return left;
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+        ast = Parser(Lexer(source_code).tokens).parse()
+        ast.functions[0].source_location = {"line": 3, "column": 13}
+
         with pytest.raises(
-            ValueError, match="SPIR-V codegen does not support generic functions"
-        ):
-            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+            ValueError,
+            match=(
+                r"unspecialized generic helper 'orphan' with generic parameters "
+                r"\(T, U\) at line 3, column 13"
+            ),
+        ) as exc_info:
+            VulkanSPIRVCodeGen().generate(ast)
+
+        assert getattr(exc_info.value, "source_location", None) == {
+            "line": 3,
+            "column": 13,
+        }
 
     def test_generic_trait_methods_report_deterministic_diagnostic(self):
         source_code = """
@@ -1721,7 +1754,7 @@ class TestVulkanSPIRVCodeGen:
         with pytest.raises(
             ValueError,
             match=(
-                r"SPIR-V codegen does not support generic functions \(T\); "
+                r"unspecialized generic helper 'map' with generic parameters \(T\); "
                 r"specialize the function before SPIR-V generation"
             ),
         ):

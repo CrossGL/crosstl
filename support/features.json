@@ -3963,12 +3963,14 @@
         },
         "vulkan": {
           "status": "diagnostic",
-          "notes": "SPIR-V lowers non-generic helper functions, entry functions, function parameters, return-value conversion, argument conversion, user calls, and structured return statements to OpFunction/OpFunctionParameter/OpFunctionCall with spirv-as/spirv-val coverage. Generic functions emit deterministic diagnostics until SPIR-V monomorphization support is implemented.",
+          "notes": "SPIR-V lowers non-generic helper functions, entry functions, function parameters, return-value conversion, argument conversion, user calls, structured return statements, and concrete generic helper specializations to OpFunction/OpFunctionParameter/OpFunctionCall with spirv-as/spirv-val coverage. Generic helpers that cannot be specialized still emit deterministic diagnostics.",
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_user_function_generates_opfunction_and_opfunctioncall",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_function_parameters_generate_opfunctionparameter",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_return_values_convert_to_declared_function_type",
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_generic_functions_report_deterministic_diagnostic",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_generic_functions_specialize_concrete_calls",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unspecialized_generic_function_reports_helper_context",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_specializes_generic_helper_for_spirv",
             "tests/test_examples_contract.py::def test_generic_function_examples_report_backend_diagnostics",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_language_features_compute_validates_with_spirv_tools"
           ]
