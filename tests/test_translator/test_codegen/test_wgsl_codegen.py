@@ -2001,10 +2001,104 @@ def test_wgsl_codegen_lowers_explicit_sampler_texture_calls():
     assert "return textureSample(colorTex, linearSampler, uv);" in generated
 
 
+def test_wgsl_codegen_lowers_sampled_texture_arrays_to_element_bindings():
+    shader = """
+    shader WGSLTextureResourceArray {
+        sampler2D textures[2] @binding(3);
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(textures[1], uv);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(3)\nvar textures_0: texture_2d<f32>;" in generated
+    assert "@group(0) @binding(4)\nvar textures_0_sampler: sampler;" in generated
+    assert "@group(0) @binding(5)\nvar textures_1: texture_2d<f32>;" in generated
+    assert "@group(0) @binding(6)\nvar textures_1_sampler: sampler;" in generated
+    assert "return textureSample(textures_1, textures_1_sampler, uv);" in generated
+
+
+def test_wgsl_codegen_lowers_dynamic_sampled_texture_array_sampling():
+    shader = """
+    shader WGSLTextureResourceArray {
+        const int TEXTURE_COUNT = 2;
+        sampler2D textures[TEXTURE_COUNT];
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0, int index @ TEXCOORD1) @ gl_FragColor {
+                return texture(textures[index], uv);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(0)\nvar textures_0: texture_2d<f32>;" in generated
+    assert "@group(0) @binding(1)\nvar textures_0_sampler: sampler;" in generated
+    assert "@group(0) @binding(2)\nvar textures_1: texture_2d<f32>;" in generated
+    assert "@group(0) @binding(3)\nvar textures_1_sampler: sampler;" in generated
+    assert "return textures_sample(i32(index), uv);" in generated
+    assert "fn textures_sample(textures_index: i32, coords: vec2<f32>) -> vec4<f32>" in generated
+    assert "case 0:" in generated
+    assert "return textureSample(textures_0, textures_0_sampler, coords);" in generated
+    assert "case 1:" in generated
+    assert "return textureSample(textures_1, textures_1_sampler, coords);" in generated
+
+
+def test_wgsl_codegen_dispatches_dynamic_sampled_texture_array_function_arguments():
+    shader = """
+    shader WGSLTextureResourceArrayFunction {
+        sampler2D shadowMaps[2];
+
+        float sampleShadow(sampler2D shadowMap, vec2 uv) {
+            return texture(shadowMap, uv).r;
+        }
+
+        fragment {
+            float main(vec2 uv @ TEXCOORD0, int index @ TEXCOORD1) @ gl_FragDepth {
+                return sampleShadow(shadowMaps[index], uv);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "return sampleShadow_shadowMaps(i32(index), uv);" in generated
+    assert "fn sampleShadow_shadowMaps(shadowMaps_index: i32, uv: vec2<f32>) -> f32" in generated
+    assert "return sampleShadow(shadowMaps_0, shadowMaps_0_sampler, uv);" in generated
+    assert "return sampleShadow(shadowMaps_1, shadowMaps_1_sampler, uv);" in generated
+
+
+def test_wgsl_codegen_covers_universal_pbr_fragment_shadow_map_array():
+    shader_path = project_root() / "examples/cross_platform/UniversalPBRShader.cgl"
+    ast = parse_shader(shader_path.read_text(encoding="utf-8"))
+
+    generated = WGSLCodeGen().generate_program(ast, target_stage="fragment")
+
+    for index in range(4):
+        assert (
+            f"var shadow_maps_{index}: texture_2d<f32>;" in generated
+        )
+        assert f"var shadow_maps_{index}_sampler: sampler;" in generated
+        assert (
+            "return calculateShadow("
+            f"shadow_maps_{index}, shadow_maps_{index}_sampler, "
+            "frag_pos_light_space, bias);"
+        ) in generated
+    assert (
+        "shadow = calculateShadow_shadow_maps(i32(i), input.shadow_coords[i], "
+        "settings.shadow_bias);"
+    ) in generated
+
+
 @pytest.mark.parametrize(
     ("declaration", "resource_type"),
     (
-        ("sampler2D textures[4];", "sampler2D"),
         ("sampler samplers[2];", "sampler"),
         ("image2D images[2];", "image2D"),
         ("StructuredBuffer<float> values[4];", "StructuredBuffer"),
@@ -2028,9 +2122,10 @@ def test_wgsl_codegen_rejects_resource_array_declarations(
     with pytest.raises(
         ValueError,
         match=(
-            rf"WGSL target does not support resource arrays of {resource_type}; "
-            r"WebGPU/WGSL requires texture, sampler, image, and storage-buffer "
-            r"resources to be declared as individual module-scope bindings"
+            rf"WGSL target cannot lower resource array .* of type {resource_type}; "
+            r"WebGPU/WGSL requires each texture, sampler, image, and "
+            r"storage-buffer element to be expanded to individual module-scope "
+            r"bindings"
         ),
     ):
         WGSLCodeGen().generate(parse_shader(shader))
@@ -2053,9 +2148,10 @@ def test_wgsl_codegen_rejects_resource_array_parameters():
     with pytest.raises(
         ValueError,
         match=(
-            r"WGSL target does not support resource arrays of sampler2D; "
-            r"WebGPU/WGSL requires texture, sampler, image, and storage-buffer "
-            r"resources to be declared as individual module-scope bindings"
+            r"WGSL target cannot lower sampled texture resource array parameter "
+            r"textures of type sampler2D; WebGPU/WGSL requires project-level "
+            r"binding expansion to pass individual module-scope texture and "
+            r"sampler bindings"
         ),
     ):
         WGSLCodeGen().generate(parse_shader(shader))

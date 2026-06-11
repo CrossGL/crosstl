@@ -617,6 +617,9 @@ class WGSLCodeGen:
         self._module_storage_texture_access_modes = {}
         self._inferred_storage_texture_access_modes = {}
         self._module_resource_bindings = {}
+        self._sampled_texture_array_bindings = {}
+        self._sampled_texture_array_dispatch_helpers = {}
+        self._constant_values = {}
         self._function_resource_member_parameters = {}
         self._reserved_bindings_by_group = {}
         self._allocated_bindings_by_group = {}
@@ -667,6 +670,9 @@ class WGSLCodeGen:
         self._module_storage_texture_access_modes = {}
         self._inferred_storage_texture_access_modes = {}
         self._module_resource_bindings = {}
+        self._sampled_texture_array_bindings = {}
+        self._sampled_texture_array_dispatch_helpers = {}
+        self._constant_values = {}
         self._function_resource_member_parameters = {}
         self._reserved_bindings_by_group = {}
         self._allocated_bindings_by_group = {}
@@ -703,6 +709,7 @@ class WGSLCodeGen:
         )
         cbuffers = self._collect_cbuffers(ast, target_stage)
         constants = list(getattr(ast, "constants", []) or [])
+        self._constant_values = self.constant_literal_values(constants)
         global_variable_nodes = self._collect_global_variables(ast, target_stage)
         stage_resource_parameters = self._collect_stage_resource_parameters(
             ast, target_stage
@@ -855,6 +862,10 @@ class WGSLCodeGen:
             stage_functions.append(self.generate_stage(stage_node, entry_name))
         if stage_functions:
             emitted_sections.append("\n\n".join(stage_functions))
+
+        dispatch_helpers = self.generate_sampled_texture_array_dispatch_helpers()
+        if dispatch_helpers:
+            emitted_sections.append(dispatch_helpers)
 
         if emitted_sections:
             lines.append("")
@@ -1394,6 +1405,17 @@ class WGSLCodeGen:
             raise ValueError(
                 "WGSL target does not support StructuredBuffer parameters yet; "
                 "declare them as module-scope storage resources"
+            )
+        sampled_texture_array = self.sampled_texture_array_info(node.param_type)
+        if sampled_texture_array is not None:
+            resource_type = self.type_display_name(
+                sampled_texture_array["element_type"]
+            )
+            raise ValueError(
+                "WGSL target cannot lower sampled texture resource array "
+                f"parameter {node.name} of type {resource_type}; WebGPU/WGSL "
+                "requires project-level binding expansion to pass individual "
+                "module-scope texture and sampler bindings"
             )
         sampled_texture_type = self.sampled_texture_type(node.param_type)
         if sampled_texture_type is not None:
@@ -1957,6 +1979,19 @@ class WGSLCodeGen:
         )
 
     def generate_global_variable(self, node):
+        sampled_texture_array = self.sampled_texture_array_info(node.var_type)
+        if sampled_texture_array is not None:
+            return self.generate_sampled_texture_array_global_variable(
+                node, sampled_texture_array
+            )
+        resource_array_type = self.resource_array_element_type_name(node.var_type)
+        if resource_array_type is not None:
+            raise ValueError(
+                "WGSL target cannot lower resource array "
+                f"{node.name} of type {resource_array_type}; WebGPU/WGSL requires "
+                "each texture, sampler, image, and storage-buffer element to be "
+                "expanded to individual module-scope bindings"
+            )
         sampled_texture_type = self.sampled_texture_type(node.var_type)
         if sampled_texture_type is not None:
             return self.generate_sampled_texture_global_variable(
@@ -2078,6 +2113,70 @@ class WGSLCodeGen:
             f"{sampler_attributes}\nvar {sampler_name}: "
             f"{self.companion_sampler_type(node.var_type)};"
         )
+
+    def generate_sampled_texture_array_global_variable(self, node, array_info):
+        if node.initial_value is not None:
+            raise ValueError(
+                "WGSL target does not support initializers for sampled texture "
+                f"resource array {node.name}"
+            )
+        array_size = self.resolve_array_size(node.var_type.size, node.name)
+        if array_size is None:
+            raise ValueError(
+                "WGSL target cannot lower sampled texture resource array "
+                f"{node.name}; WebGPU/WGSL requires project-level binding "
+                "expansion to declare each texture and sampler element as an "
+                "individual module-scope binding"
+            )
+        if array_size < 1:
+            raise ValueError(
+                "WGSL target cannot lower sampled texture resource array "
+                f"{node.name} with size {array_size}; declare at least one "
+                "texture/sampler binding element"
+            )
+
+        texture_type = array_info["texture_type"]
+        element_type = array_info["element_type"]
+        companion_sampler_type = self.companion_sampler_type(element_type)
+        root_name = self.module_identifier_name(node.name)
+        bindings = []
+        declarations = []
+        for index in range(array_size):
+            texture_name = self.safe_wgsl_identifier(f"{root_name}_{index}")
+            texture_attributes = (
+                self.explicit_binding_attributes(node)
+                if index == 0
+                else self.next_binding_attributes(
+                    group=self.binding_group_for_resource_array(node)
+                )
+            )
+            if not texture_attributes:
+                texture_attributes = self.next_binding_attributes(
+                    group=self.binding_group_for_resource_array(node)
+                )
+            sampler_attributes = self.sampler_binding_attributes_for_texture(
+                texture_attributes
+            )
+            sampler_name = self.texture_sampler_name(texture_name)
+            bindings.append(
+                {
+                    "texture_name": texture_name,
+                    "sampler_name": sampler_name,
+                    "index": index,
+                }
+            )
+            declarations.append(
+                f"{texture_attributes}\nvar {texture_name}: {texture_type};\n"
+                f"{sampler_attributes}\nvar {sampler_name}: {companion_sampler_type};"
+            )
+        self._sampled_texture_array_bindings[node.name] = {
+            "source_name": node.name,
+            "root_name": root_name,
+            "element_type": element_type,
+            "texture_type": texture_type,
+            "bindings": tuple(bindings),
+        }
+        return "\n".join(declarations)
 
     def generate_sampler_global_variable(self, node):
         if node.initial_value is not None:
@@ -2500,6 +2599,9 @@ class WGSLCodeGen:
         if isinstance(expr, SwizzleNode):
             return f"{self.generate_expression(expr.vector_expr)}." f"{expr.components}"
         if isinstance(expr, ArrayAccessNode):
+            array_binding = self.sampled_texture_array_element_binding(expr)
+            if array_binding is not None:
+                return array_binding["texture_name"]
             if isinstance(
                 expr.array_expr, IdentifierNode
             ) and self.is_pointer_identifier(expr.array_expr.name):
@@ -2625,6 +2727,11 @@ class WGSLCodeGen:
             resolved_function = self.resolve_function_overload(
                 function_name, node.arguments, expected_type=expected_type
             )
+            dispatch_call = self.generate_sampled_texture_array_dispatch_call(
+                node, resolved_function
+            )
+            if dispatch_call is not None:
+                return dispatch_call
         args = self.generate_call_arguments(
             function_name, node.arguments, function=resolved_function
         )
@@ -2792,6 +2899,168 @@ class WGSLCodeGen:
                 )
         return ", ".join(rendered)
 
+    def generate_sampled_texture_array_dispatch_call(self, node, resolved_function):
+        if resolved_function is None:
+            return None
+        parameters = list(getattr(resolved_function, "parameters", []) or [])
+        dynamic_texture_args = []
+        for index, (argument, parameter) in enumerate(zip(node.arguments, parameters)):
+            if self.sampled_texture_type(getattr(parameter, "param_type", None)) is None:
+                continue
+            array_info = self.sampled_texture_array_access(argument)
+            if array_info is None:
+                continue
+            if self.sampled_texture_array_element_binding(argument) is not None:
+                continue
+            dynamic_texture_args.append((index, argument, parameter, array_info))
+        if not dynamic_texture_args:
+            return None
+        if len(dynamic_texture_args) > 1:
+            names = ", ".join(
+                arg.array_expr.name for _idx, arg, _param, _info in dynamic_texture_args
+            )
+            raise ValueError(
+                "WGSL target cannot lower a call with multiple dynamic sampled "
+                f"texture resource arrays ({names}); split the call into one "
+                "array-dispatched texture parameter"
+            )
+
+        texture_index, argument, _parameter, array_info = dynamic_texture_args[0]
+        helper_name = self.sampled_texture_array_dispatch_helper_name(
+            resolved_function, array_info["source_name"]
+        )
+        self._sampled_texture_array_dispatch_helpers[helper_name] = {
+            "helper_name": helper_name,
+            "function": resolved_function,
+            "array_info": array_info,
+            "texture_parameter_index": texture_index,
+        }
+        rendered_args = [f"i32({self.generate_expression(argument.index_expr)})"]
+        parameter_types = [
+            getattr(parameter, "param_type", None) for parameter in parameters
+        ]
+        for index, argument in enumerate(node.arguments):
+            if index == texture_index:
+                continue
+            rendered_args.append(
+                self.generate_expression_for_target(argument, parameter_types[index])
+                if index < len(parameter_types)
+                else self.generate_expression(argument)
+            )
+        return f"{helper_name}({', '.join(rendered_args)})"
+
+    def sampled_texture_array_dispatch_helper_name(self, function, array_name):
+        function_name = self.function_declaration_identifier_name(function)
+        return self.safe_wgsl_identifier(f"{function_name}_{array_name}")
+
+    def generate_sampled_texture_array_dispatch_helpers(self):
+        if not self._sampled_texture_array_dispatch_helpers:
+            return ""
+        helpers = []
+        for info in self._sampled_texture_array_dispatch_helpers.values():
+            if info.get("kind") == "texture_sample":
+                helpers.append(self.generate_sampled_texture_array_sample_helper(info))
+            else:
+                helpers.append(self.generate_sampled_texture_array_dispatch_helper(info))
+        return "\n\n".join(helpers)
+
+    def generate_sampled_texture_array_sample_helper(self, info):
+        array_info = info["array_info"]
+        helper_name = info["helper_name"]
+        coord_type = self.sampled_texture_coordinate_type(array_info["element_type"])
+        lines = [
+            f"fn {helper_name}({array_info['root_name']}_index: i32, "
+            f"coords: {coord_type}) -> vec4<f32> {{",
+            f"    switch ({array_info['root_name']}_index) {{",
+        ]
+        for binding in array_info["bindings"]:
+            lines.extend(
+                [
+                    f"        case {binding['index']}: {{",
+                    "            return textureSample("
+                    f"{binding['texture_name']}, {binding['sampler_name']}, coords);",
+                    "        }",
+                ]
+            )
+        first = array_info["bindings"][0]
+        lines.extend(
+            [
+                "        default: {",
+                "            return textureSample("
+                f"{first['texture_name']}, {first['sampler_name']}, coords);",
+                "        }",
+                "    }",
+                "}",
+            ]
+        )
+        return "\n".join(lines)
+
+    def sampled_texture_coordinate_type(self, element_type):
+        type_name = self.resource_type_name(element_type)
+        if type_name in {"sampler3d", "samplercube", "samplercubearray"}:
+            return "vec3<f32>"
+        return "vec2<f32>"
+
+    def generate_sampled_texture_array_dispatch_helper(self, info):
+        function = info["function"]
+        array_info = info["array_info"]
+        texture_parameter_index = info["texture_parameter_index"]
+        helper_name = info["helper_name"]
+        parameters = list(getattr(function, "parameters", []) or [])
+        helper_parameters = [
+            f"{array_info['root_name']}_index: i32",
+            *(
+                f"{self.identifier_name(parameter.name)}: "
+                f"{self.type_name_string(parameter.param_type)}"
+                for index, parameter in enumerate(parameters)
+                if index != texture_parameter_index
+            ),
+        ]
+        return_type = self.type_name_string(getattr(function, "return_type", None))
+        signature = f"fn {helper_name}({', '.join(helper_parameters)})"
+        if return_type != "void":
+            signature += f" -> {return_type}"
+        lines = [signature + " {", f"    switch ({array_info['root_name']}_index) {{"]
+        for binding in array_info["bindings"]:
+            lines.extend(
+                self.sampled_texture_array_dispatch_case(
+                    function, array_info, texture_parameter_index, binding
+                )
+            )
+        lines.extend(
+            self.sampled_texture_array_dispatch_case(
+                function,
+                array_info,
+                texture_parameter_index,
+                array_info["bindings"][0],
+                label="default",
+            )
+        )
+        lines.append("    }")
+        lines.append("}")
+        return "\n".join(lines)
+
+    def sampled_texture_array_dispatch_case(
+        self, function, array_info, texture_parameter_index, binding, label=None
+    ):
+        case_label = label if label is not None else f"case {binding['index']}"
+        call_args = []
+        for index, parameter in enumerate(getattr(function, "parameters", []) or []):
+            if index == texture_parameter_index:
+                call_args.append(binding["texture_name"])
+                call_args.append(binding["sampler_name"])
+            else:
+                call_args.append(self.identifier_name(parameter.name))
+        call = (
+            f"{self.function_declaration_identifier_name(function)}("
+            f"{', '.join(call_args)})"
+        )
+        return [
+            f"        {case_label}: {{",
+            f"            return {call};",
+            "        }",
+        ]
+
     def generate_texture_function_call(self, node, function_name):
         normalized_name = self.semantic_key(function_name)
         args = list(node.arguments)
@@ -2860,6 +3129,14 @@ class WGSLCodeGen:
     def generate_texture_sample_call(self, function_name, args):
         if len(args) == 2:
             texture, coords = args
+            array_info = self.sampled_texture_array_access(texture)
+            if (
+                array_info is not None
+                and self.sampled_texture_array_element_binding(texture) is None
+            ):
+                return self.generate_sampled_texture_array_sample_call(
+                    texture, coords, array_info
+                )
             return (
                 f"textureSample({self.generate_expression(texture)}, "
                 f"{self.texture_sampler_expression(texture)}, "
@@ -2877,6 +3154,23 @@ class WGSLCodeGen:
             "texture/sampler/coords arguments; got "
             f"{len(args)} argument(s) for {function_name}"
         )
+
+    def generate_sampled_texture_array_sample_call(self, texture, coords, array_info):
+        helper_name = self.sampled_texture_array_sample_helper_name(
+            array_info["source_name"]
+        )
+        self._sampled_texture_array_dispatch_helpers[helper_name] = {
+            "helper_name": helper_name,
+            "array_info": array_info,
+            "kind": "texture_sample",
+        }
+        return (
+            f"{helper_name}(i32({self.generate_expression(texture.index_expr)}), "
+            f"{self.generate_expression(coords)})"
+        )
+
+    def sampled_texture_array_sample_helper_name(self, array_name):
+        return self.safe_wgsl_identifier(f"{array_name}_sample")
 
     def generate_texture_sample_level_call(self, function_name, args):
         if len(args) == 3:
@@ -3038,6 +3332,9 @@ class WGSLCodeGen:
         )
 
     def texture_sampler_expression(self, texture_expr):
+        array_binding = self.sampled_texture_array_element_binding(texture_expr)
+        if array_binding is not None:
+            return array_binding["sampler_name"]
         resource_binding = self.resource_member_binding_for_access(texture_expr)
         if resource_binding is not None:
             return self.texture_sampler_name(resource_binding["binding_name"])
@@ -4027,6 +4324,81 @@ class WGSLCodeGen:
             return None
         return self.SAMPLED_TEXTURE_TYPE_MAP.get(type_name)
 
+    def sampled_texture_array_info(self, vtype):
+        if not isinstance(vtype, ArrayType):
+            return None
+        element_type = self.array_element_type(vtype)
+        texture_type = self.sampled_texture_type(element_type)
+        if texture_type is None:
+            return None
+        return {"element_type": element_type, "texture_type": texture_type}
+
+    def sampled_texture_array_element_binding(self, expr):
+        if not isinstance(expr, ArrayAccessNode):
+            return None
+        if not isinstance(expr.array_expr, IdentifierNode):
+            return None
+        array_info = self._sampled_texture_array_bindings.get(expr.array_expr.name)
+        if array_info is None:
+            return None
+        index = self.resolve_integer_expression(expr.index_expr)
+        if index is None:
+            return None
+        bindings = array_info["bindings"]
+        if index < 0 or index >= len(bindings):
+            raise ValueError(
+                "WGSL target sampled texture resource array "
+                f"{expr.array_expr.name} index {index} is outside the lowered "
+                f"binding range 0..{len(bindings) - 1}"
+            )
+        return bindings[index]
+
+    def sampled_texture_array_access(self, expr):
+        if not isinstance(expr, ArrayAccessNode):
+            return None
+        if not isinstance(expr.array_expr, IdentifierNode):
+            return None
+        array_info = self._sampled_texture_array_bindings.get(expr.array_expr.name)
+        if array_info is None:
+            return None
+        return array_info
+
+    def resolve_array_size(self, size, resource_name):
+        resolved = self.resolve_integer_expression(size)
+        if resolved is not None:
+            return resolved
+        if size is None:
+            return None
+        raise ValueError(
+            "WGSL target cannot lower sampled texture resource array "
+            f"{resource_name} with non-constant size {self.generate_expression(size)}; "
+            "WebGPU/WGSL requires project-level binding expansion with a known "
+            "element count"
+        )
+
+    def resolve_integer_expression(self, expr):
+        if expr is None:
+            return None
+        if isinstance(expr, int):
+            return expr
+        if isinstance(expr, str):
+            try:
+                return int(expr, 0)
+            except ValueError:
+                return self._constant_values.get(expr)
+        if isinstance(expr, LiteralNode):
+            try:
+                return int(expr.value)
+            except (TypeError, ValueError):
+                return None
+        if isinstance(expr, IdentifierNode):
+            return self._constant_values.get(expr.name)
+        return None
+
+    def binding_group_for_resource_array(self, node):
+        group, _binding = self.resolved_explicit_binding_components(node)
+        return str(group)
+
     def storage_texture_type(self, vtype, node):
         type_name = self.resource_type_name(vtype)
         dimension = self.STORAGE_TEXTURE_DIMENSION_MAP.get(type_name or "")
@@ -4237,6 +4609,19 @@ class WGSLCodeGen:
         self._struct_member_identifier_names = {}
         for struct in structs:
             self.register_struct_member_identifier_metadata(struct)
+
+    def constant_literal_values(self, constants):
+        values = {}
+        for constant in constants:
+            name = getattr(constant, "name", "")
+            value = getattr(getattr(constant, "value", None), "value", None)
+            if not name:
+                continue
+            try:
+                values[name] = int(value)
+            except (TypeError, ValueError):
+                continue
+        return values
 
     def collect_cbuffer_member_identifier_metadata(self, cbuffers):
         for cbuffer in cbuffers:
