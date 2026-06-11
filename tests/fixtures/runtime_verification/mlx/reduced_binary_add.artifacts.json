@@ -1,0 +1,90 @@
+{
+  "kind": "crosstl-runtime-artifact-manifest",
+  "project": {
+    "root": ".",
+    "targets": [
+      "metal"
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "metal|mlx/backend/metal/kernels/binary.metal|reduced-add",
+      "source": "mlx/backend/metal/kernels/binary.metal",
+      "path": "tests/fixtures/runtime_verification/mlx/reduced_binary_add.metal",
+      "target": "metal",
+      "sourceBackend": "metal",
+      "stage": "compute",
+      "variant": "reduced-add",
+      "status": "translated",
+      "entryPoints": [
+        {
+          "name": "mlx_binary_add_f32",
+          "stage": "compute",
+          "executionConfig": {
+            "numthreads": [
+              4,
+              1,
+              1
+            ]
+          },
+          "workgroupSize": [
+            4,
+            1,
+            1
+          ]
+        }
+      ],
+      "resourceBindings": [
+        {
+          "id": "buffer|0|lhs",
+          "name": "lhs",
+          "kind": "buffer",
+          "type": "float32",
+          "binding": 0,
+          "access": "read"
+        },
+        {
+          "id": "buffer|1|rhs",
+          "name": "rhs",
+          "kind": "buffer",
+          "type": "float32",
+          "binding": 1,
+          "access": "read"
+        },
+        {
+          "id": "buffer|2|out",
+          "name": "out",
+          "kind": "buffer",
+          "type": "float32",
+          "binding": 2,
+          "access": "write"
+        }
+      ],
+      "functionConstants": [
+        {
+          "name": "element_count",
+          "id": 0,
+          "dtype": "uint32",
+          "value": 4,
+          "required": true
+        }
+      ],
+      "dispatch": {
+        "status": "available",
+        "workgroups": [
+          {
+            "entryPoint": "mlx_binary_add_f32",
+            "stage": "compute",
+            "workgroupSize": [
+              4,
+              1,
+              1
+            ],
+            "source": "fixture"
+          }
+        ],
+        "diagnostics": []
+      }
+    }
+  ]
+}
