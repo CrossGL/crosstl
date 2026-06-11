@@ -7075,7 +7075,9 @@ class GLSLCodeGen:
 
         qualifiers = {str(q).lower() for q in getattr(param, "qualifiers", []) or []}
         buffer_type = (
-            "StructuredBuffer" if "constant" in qualifiers else "RWStructuredBuffer"
+            "StructuredBuffer"
+            if qualifiers.intersection({"constant", "const"})
+            else "RWStructuredBuffer"
         )
         return f"{buffer_type}<{element_type}>"
 

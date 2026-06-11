@@ -84,6 +84,16 @@ jobs:
       - name: Install optional shader validators
         if: runner.os == 'Linux'
         run: |
+          mapfile -t runner_apt_sources < <(
+            grep -rl "packages.microsoft.com" /etc/apt/sources.list.d 2>/dev/null || true
+          )
+
+          if ((${#runner_apt_sources[@]})); then
+            printf 'Removing optional hosted-runner apt sources before apt update:\n'
+            printf '  %s\n' "${runner_apt_sources[@]}"
+            sudo rm -f "${runner_apt_sources[@]}"
+          fi
+
           sudo apt-get update
           sudo apt-get install -y glslang-tools spirv-tools
 
@@ -248,6 +258,18 @@ jobs:
         env:
           INSTALL_COMMAND: ${{ matrix.install_command }}
         run: |
+          if [ "${RUNNER_OS:-}" = "Linux" ] && [ -n "$INSTALL_COMMAND" ]; then
+            mapfile -t runner_apt_sources < <(
+              grep -rl "packages.microsoft.com" /etc/apt/sources.list.d 2>/dev/null || true
+            )
+
+            if ((${#runner_apt_sources[@]})); then
+              printf 'Removing optional hosted-runner apt sources before apt update:\n'
+              printf '  %s\n' "${runner_apt_sources[@]}"
+              sudo rm -f "${runner_apt_sources[@]}"
+            fi
+          fi
+
           if [ -n "$INSTALL_COMMAND" ]; then
             eval "$INSTALL_COMMAND"
           fi
@@ -330,6 +352,16 @@ jobs:
 
       - name: Install GLSL and SPIR-V tools
         run: |
+          mapfile -t runner_apt_sources < <(
+            grep -rl "packages.microsoft.com" /etc/apt/sources.list.d 2>/dev/null || true
+          )
+
+          if ((${#runner_apt_sources[@]})); then
+            printf 'Removing optional hosted-runner apt sources before apt update:\n'
+            printf '  %s\n' "${runner_apt_sources[@]}"
+            sudo rm -f "${runner_apt_sources[@]}"
+          fi
+
           sudo apt-get update
           sudo apt-get install -y glslang-tools spirv-tools
 
