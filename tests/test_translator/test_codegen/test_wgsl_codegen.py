@@ -242,6 +242,74 @@ def test_wgsl_codegen_injects_direct_compute_builtin_references():
     assert "var lane: u32 = global_invocation_id.x;" in generated
 
 
+def test_wgsl_codegen_infers_untyped_compute_builtin_alias_locals():
+    shader = """
+    shader WGSLComputeBuiltinAliases {
+        compute {
+            void main() {
+                let thread_id = gl_GlobalInvocationID;
+                let block_id = gl_WorkGroupID;
+                let thread_local_id = gl_LocalInvocationID;
+                let block_dim = gl_WorkGroupSize;
+                uint lane = thread_id.x + block_id.y + thread_local_id.z + block_dim.x;
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var thread_id: vec3<u32> = global_invocation_id;" in generated
+    assert "var block_id: vec3<u32> = workgroup_id;" in generated
+    assert "var thread_local_id: vec3<u32> = local_invocation_id;" in generated
+    assert "var block_dim: vec3<u32> = vec3<u32>(1u, 1u, 1u);" in generated
+    assert ": void" not in generated
+
+
+def test_wgsl_codegen_infers_void_placeholder_compute_builtin_alias_locals():
+    shader = """
+    shader WGSLComputeVoidAlias {
+        compute {
+            void main() {
+                void thread_id = gl_GlobalInvocationID;
+                uint lane = thread_id.x;
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var thread_id: vec3<u32> = global_invocation_id;" in generated
+    assert "var lane: u32 = thread_id.x;" in generated
+    assert ": void" not in generated
+
+
+def test_wgsl_codegen_infers_untyped_constructor_local_expression():
+    shader = """
+    shader WGSLUntypedConstructorLocal {
+        fragment {
+            vec4 main() @ gl_FragColor {
+                let color = vec3(1.0, 0.5, 0.25);
+                let alpha = 1.0;
+                let boosted = alpha + 1.0;
+                return vec4(color, boosted);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var color: vec3<f32> = vec3<f32>(1.0, 0.5, 0.25);" in generated
+    assert "var alpha: f32 = 1.0;" in generated
+    assert "var boosted: f32 = (alpha + 1.0);" in generated
+    assert "return vec4<f32>(color, boosted);" in generated
+    assert ": void" not in generated
+
+
 def test_wgsl_codegen_injects_fragment_position_for_gl_fragcoord():
     shader = """
     shader WGSLFragmentPositionBuiltin {
