@@ -2,7 +2,10 @@ import pytest
 
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
-from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+from crosstl.backend.Metal.preprocessor import (
+    MetalPreprocessor,
+    MetalTemplateSpecializationError,
+)
 
 
 def token_values(code, **lexer_options):
@@ -150,6 +153,30 @@ def test_preprocessor_materializes_decltype_instantiation_with_joined_host_name(
     assert "out[gid] = uint(gid);" in output
 
 
+def test_preprocessor_materializes_explicit_template_helper_calls():
+    code = """
+    template <typename T, typename IdxT, int Offset>
+    T load_with_offset(device const T* src, IdxT index) {
+        return src[index] + T(Offset);
+    }
+
+    kernel void copy(device const float* src [[buffer(0)]],
+                     device float* dst [[buffer(1)]],
+                     uint gid [[thread_position_in_grid]]) {
+        dst[gid] = load_with_offset<float, uint, 7>(src, gid);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "load_with_offset<float, uint, 7>" not in output
+    assert "load_with_offset_float_uint_7(src, gid)" in output
+    assert "float load_with_offset_float_uint_7(" in output
+    assert "device const float* src" in output
+    assert "uint index" in output
+    assert "return src[index] + float(7);" in output
+
+
 def test_preprocessor_leaves_large_decltype_instantiation_families_bounded():
     declarations = "\n".join(
         f'template [[host_name("kernel" "{index}")]] [[kernel]] '
@@ -167,13 +194,116 @@ def test_preprocessor_leaves_large_decltype_instantiation_families_bounded():
     {declarations}
     """
 
-    output = MetalPreprocessor(max_materialized_template_instantiations=3).preprocess(
-        code
-    )
+    output = MetalPreprocessor(max_template_specializations=3).preprocess(code)
 
     assert "decltype(arange<uint>)" in output
     assert "void kernel0(" not in output
     assert "template <typename T>" in output
+
+
+def test_preprocessor_materializes_nested_explicit_template_helper_calls():
+    code = """
+    template <typename T>
+    T cast_value(float value) {
+        return T(value);
+    }
+
+    template <typename T>
+    T twice(float value) {
+        return cast_value<T>(value) + cast_value<T>(value);
+    }
+
+    kernel void copy(device float* dst [[buffer(0)]]) {
+        dst[0] = twice<float>(1.0);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "twice<float>" not in output
+    assert "cast_value<float>" not in output
+    assert "twice_float(1.0)" in output
+    assert "float twice_float(float value)" in output
+    assert "cast_value_float(value) + cast_value_float(value)" in output
+    assert "float cast_value_float(float value)" in output
+
+
+def test_preprocessor_preserves_operator_comparison_overloads():
+    code = """
+    struct complex64_t {
+        float real;
+        float imag;
+    };
+
+    template <typename T>
+    T operator+(T lhs, T rhs) {
+        return lhs + rhs;
+    }
+
+    constexpr bool operator>(complex64_t a, complex64_t b) {
+        return a.real > b.real;
+    }
+
+    constexpr bool operator<=(complex64_t a, complex64_t b) {
+        return operator>(b, a);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "operator<=(complex64_t a, complex64_t b)" in output
+    assert "return operator>(b, a);" in output
+    assert "operator_complex64_t_a_complex64_t_b" not in output
+
+
+def test_preprocessor_preserves_explicit_template_specialization_calls():
+    code = """
+    template <typename T>
+    T convert_type(float value) {
+        return T(value);
+    }
+
+    template <> uint convert_type<uint>(float value) {
+        return uint(value + 1.0);
+    }
+
+    kernel void copy(device uint* dst [[buffer(0)]]) {
+        dst[0] = convert_type<uint>(1.0);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "convert_type<uint>(1.0)" in output
+    assert "convert_type_uint(1.0)" not in output
+    assert "uint convert_type<uint>(float value)" in output
+    assert "uint convert_type_uint(float value)" not in output
+
+
+def test_preprocessor_reports_explicit_template_specialization_limit():
+    code = """
+    template <typename T>
+    T cast_value(float value) {
+        return T(value);
+    }
+
+    kernel void copy(device float* dst [[buffer(0)]]) {
+        dst[0] = cast_value<float>(1.0);
+        dst[1] = cast_value<half>(2.0);
+    }
+    """
+
+    with pytest.raises(MetalTemplateSpecializationError) as exc_info:
+        MetalPreprocessor(max_template_specializations=1).preprocess(code)
+
+    assert "template specialization limit exceeded" in str(exc_info.value)
+    assert (
+        getattr(exc_info.value, "project_diagnostic_code", None)
+        == "project.translate.metal-template-specialization"
+    )
+    assert getattr(exc_info.value, "missing_capabilities", None) == (
+        "template.specialization",
+    )
 
 
 def test_preprocessor_preserves_incomplete_multiline_function_macro_invocation():

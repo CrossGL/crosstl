@@ -444,6 +444,55 @@ runtime API references. The plan is a target-scoped integration contract; it
 does not rewrite host application code, execute device code, generate runtime
 framework code, or install target SDKs.
 
+Runtime Adapter Execution Contracts
+-----------------------------------
+
+Runtime fixture execution uses a backend-agnostic adapter contract carried on
+each ``RuntimeExecutionRequest`` as ``adapter_contract``. The contract can be
+loaded from a fixture's ``runtimeAdapter`` object and merged with manifest
+metadata already recorded on a translated artifact. This keeps execution
+fixtures stable across downstream runtimes while letting package inspection
+provide reflected entry points, resource bindings, and dispatch workgroup
+sizes when they are available.
+
+The contract fields are intentionally limited to kernel execution metadata:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Field
+     - Purpose
+   * - ``entryPoints``
+     - Names, stages, execution config, optional parameter records, and
+       workgroup-size metadata for callable translated kernels or shaders.
+   * - ``resourceBindings``
+     - Backend-neutral resource names, kinds, types, set/binding numbers,
+       access modes, and optional fixture value names that an adapter maps to
+       runtime buffers, textures, samplers, or parameter blocks.
+   * - ``specializationConstants`` / ``functionConstants``
+     - Specialization or function constant identifiers, dtypes, values,
+       defaults, and required flags needed before launching the entry point.
+   * - ``dispatch``
+     - Entry point, workgroup size, workgroup count, global size, or grid size
+       for compute-style launches. Fixture dispatch counts can augment
+       artifact-manifest workgroup sizes.
+   * - ``validationHooks``
+     - Expected pre-run, runtime, post-run, or comparison checks that a
+       downstream executor should perform or report as skipped/unavailable.
+
+Downstream runtimes implement the ``RuntimeAdapter`` protocol or subclass
+``RuntimeExecutor`` and receive the merged contract in ``run(request)``. For
+example, an MLX validation adapter can consume translated Metal artifacts and
+map neutral fixture buffers and function constants to MLX runtime objects, but
+the fixture contract remains expressed in terms of entry points, bindings,
+constants, dispatch geometry, and validation hooks rather than MLX APIs.
+
+The translator stops at this contract boundary. Full framework rewrites,
+non-kernel host API ports, application command scheduling, target SDK
+installation, build-system migration, memory lifetime policy, and production
+runtime framework generation remain downstream integration work.
+
 Build a runtime loader manifest from a runtime package manifest:
 
 .. code-block:: bash

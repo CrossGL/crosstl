@@ -370,7 +370,7 @@ def test_native_source_extension_aliases_translate_to_parseable_crossgl(
     crosstl.translator.parse(generated)
 
 
-def test_metal_xhalf_vectors_do_not_leak_to_opengl(tmp_path):
+def test_metal_vertex_struct_return_preserves_view_dir_outputs(tmp_path):
     source_path = _write_source(
         tmp_path,
         "xhalf-view-dir.metal",
@@ -390,14 +390,36 @@ def test_metal_xhalf_vectors_do_not_leak_to_opengl(tmp_path):
         """,
     )
 
-    generated = crosstl.translate(
-        str(source_path), backend="opengl", format_output=False
+    opengl = crosstl.translate(str(source_path), backend="opengl", format_output=False)
+    directx = crosstl.translate(
+        str(source_path), backend="directx", format_output=False
     )
+    spirv = crosstl.translate(str(source_path), backend="vulkan", format_output=False)
 
-    _assert_generated_output_is_usable(generated)
-    assert "out vec3 viewDir;" in generated
-    assert "xhalf" not in generated
-    assert "f16vec3" not in generated
+    _assert_generated_output_is_usable(opengl)
+    assert "out vec3 viewDir;" in opengl
+    assert "viewDir = vec3(normalize" in opengl
+    assert "xhalf" not in opengl
+    assert "f16vec3" not in opengl
+
+    _assert_generated_output_is_usable(directx)
+    assert "half3 viewDir: TEXCOORD0;" in directx
+    assert "out_.viewDir = half3(normalize" in directx
+    assert "return out_;" in directx
+    assert "return Output(half3(0));" not in directx
+
+    _assert_generated_output_is_usable(spirv)
+    output_match = re.search(
+        r'OpName %(\d+) "CrossGL_vertex_output_main_vertex_viewDir"', spirv
+    )
+    assert output_match is not None
+    output_id = output_match.group(1)
+    stored_values = re.findall(rf"OpStore %{output_id} %(\d+)", spirv)
+    assert stored_values
+    assert re.search(rf"%{stored_values[-1]} = OpCompositeExtract %\d+ %\d+ 0", spirv)
+    assert "Normalize" in spirv
+    assert "Unknown type f16vec3" not in spirv
+    assert "cannot lower unknown function 'f16vec3'" not in spirv
 
 
 def test_metal_template_helper_specializes_to_concrete_opengl(tmp_path):
@@ -429,6 +451,37 @@ def test_metal_template_helper_specializes_to_concrete_opengl(tmp_path):
     assert "uint local = N;" in generated
     assert "ceildiv_uint_uint(4u, 2u)" in generated
     assert not re.search(r"\b(?:T|U|IdxT)\b", generated)
+
+
+def test_metal_explicit_template_helper_specializes_to_concrete_opengl(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "explicit-template-helper.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template <typename T, typename IdxT, int Offset>
+        METAL_FUNC T add_offset(T value, IdxT index) {
+            return value + T(index + Offset);
+        }
+
+        kernel void k(device float* out [[buffer(0)]],
+                      uint gid [[thread_position_in_grid]]) {
+            out[gid] = add_offset<float, uint, 7>(1.0, gid);
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="opengl", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "float add_offset_float_uint_7(float value, uint index)" in generated
+    assert "return (value + float((index + 7)));" in generated
+    assert "add_offset_float_uint_7(1.0, gid)" in generated
+    assert not re.search(r"\b(?:T|IdxT|Offset)\b", generated)
 
 
 def test_metal_uint2_dispatch_id_promotes_to_directx_uint3(tmp_path):

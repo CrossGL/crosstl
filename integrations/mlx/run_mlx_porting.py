@@ -29,13 +29,24 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/unary.metal",
 )
 EXPECTED_METAL_KERNEL_COUNT = 40
-ISSUE_OPENGL_TEMPLATE_SPECIALIZATION = "https://github.com/CrossGL/crosstl/issues/939"
-ISSUE_SPIRV_GENERIC_HELPERS = "https://github.com/CrossGL/crosstl/issues/940"
-ISSUE_METAL_NUMERIC_TEMPLATES = "https://github.com/CrossGL/crosstl/issues/941"
-ISSUE_DIRECTX_SOURCE_TYPE_METADATA = "https://github.com/CrossGL/crosstl/issues/943"
-ISSUE_SPIRV_STORAGE_BUFFER_OVERLOADS = "https://github.com/CrossGL/crosstl/issues/944"
-ISSUE_SPIRV_BOOL_FUNCTION_CONSTANTS = "https://github.com/CrossGL/crosstl/issues/945"
-ISSUE_RUNTIME_ADAPTERS = "https://github.com/CrossGL/crosstl/issues/946"
+FULL_CORPUS_TRACKED_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/979",
+    "https://github.com/CrossGL/crosstl/issues/980",
+    "https://github.com/CrossGL/crosstl/issues/981",
+    "https://github.com/CrossGL/crosstl/issues/982",
+    "https://github.com/CrossGL/crosstl/issues/983",
+    "https://github.com/CrossGL/crosstl/issues/984",
+    "https://github.com/CrossGL/crosstl/issues/985",
+)
+RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/939",
+    "https://github.com/CrossGL/crosstl/issues/940",
+    "https://github.com/CrossGL/crosstl/issues/941",
+    "https://github.com/CrossGL/crosstl/issues/943",
+    "https://github.com/CrossGL/crosstl/issues/944",
+    "https://github.com/CrossGL/crosstl/issues/945",
+    "https://github.com/CrossGL/crosstl/issues/946",
+)
 
 
 class PortingCheckError(RuntimeError):
@@ -492,15 +503,8 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "shaderArtifactsOnly": True,
             "runtimeIntegrationIncluded": False,
         },
-        "trackedIssues": [
-            ISSUE_OPENGL_TEMPLATE_SPECIALIZATION,
-            ISSUE_SPIRV_GENERIC_HELPERS,
-            ISSUE_METAL_NUMERIC_TEMPLATES,
-            ISSUE_DIRECTX_SOURCE_TYPE_METADATA,
-            ISSUE_SPIRV_STORAGE_BUFFER_OVERLOADS,
-            ISSUE_SPIRV_BOOL_FUNCTION_CONSTANTS,
-            ISSUE_RUNTIME_ADAPTERS,
-        ],
+        "trackedIssues": list(FULL_CORPUS_TRACKED_ISSUES),
+        "resolvedFrontierIssues": list(RESOLVED_FRONTIER_ISSUES),
         "checks": checks,
         "status": "passed",
     }

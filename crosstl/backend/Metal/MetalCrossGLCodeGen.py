@@ -2192,11 +2192,12 @@ class MetalToCrossGLConverter:
         elif isinstance(expr, CastNode):
             mapped_type = self.map_type(expr.target_type)
             value = self.generate_expression(expr.expression, is_main)
-            if mapped_type == expr.target_type and "::" not in str(mapped_type):
-                return f"{self.sanitize_identifier(mapped_type)}({value})"
-            return (
-                f"({mapped_type}){self.generate_cast_operand(expr.expression, value)}"
-            )
+            if not self.cast_uses_constructor_syntax(mapped_type):
+                return (
+                    f"({mapped_type})"
+                    f"{self.generate_cast_operand(expr.expression, value)}"
+                )
+            return f"{self.sanitize_identifier(mapped_type)}({value})"
         elif isinstance(expr, VectorConstructorNode):
             size_query = self.texture_size_constructor_expression(expr, is_main)
             if size_query is not None:
@@ -2413,6 +2414,25 @@ class MetalToCrossGLConverter:
         ):
             return f"({rendered_operand})"
         return rendered_operand
+
+    def cast_uses_constructor_syntax(self, mapped_type):
+        mapped_text = str(mapped_type).strip()
+        if "*" in mapped_text or "&" in mapped_text:
+            return False
+        if mapped_text in {"float", "double", "int", "uint", "bool"}:
+            return True
+        if (
+            self.crossgl_identifier_pattern.fullmatch(mapped_text)
+            and mapped_text[0].isupper()
+        ):
+            return True
+        return bool(
+            re.fullmatch(
+                r"(?:f16vec[234]|[biu]?vec[234]|dvec[234]|"
+                r"mat[234](?:x[234])?|dmat[234](?:x[234])?)",
+                mapped_text,
+            )
+        )
 
     def map_type(self, metal_type):
         """Map a Metal type name to the closest CrossGL type name."""

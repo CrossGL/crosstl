@@ -1519,10 +1519,12 @@ def stale_extracted_preserve_reason(
     close_extracted_issues: bool,
     close_pytest_failure_issues: bool,
 ) -> str | None:
+    if is_pytest_failure_issue_key(key):
+        if not close_pytest_failure_issues:
+            return "stale_pytest_failure_preserved"
+        return None
     if key.startswith("extracted:") and not close_extracted_issues:
         return "stale_extracted_preserved"
-    if is_pytest_failure_issue_key(key) and not close_pytest_failure_issues:
-        return "stale_pytest_failure_preserved"
     return None
 
 

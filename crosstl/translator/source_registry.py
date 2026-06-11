@@ -107,6 +107,8 @@ class SourceSpec:
             shader_type = self.shader_type_from_path(file_path)
             if shader_type:
                 parser_kwargs["shader_type"] = shader_type
+        if file_path is not None and _accepts_keyword(parser_cls, "file_path"):
+            parser_kwargs["file_path"] = file_path
         parser = parser_cls(tokens, **parser_kwargs)
         return parser.parse()
 

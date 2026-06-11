@@ -2,48 +2,76 @@
   "schema_version": 1,
   "repository": "https://github.com/ml-explore/mlx",
   "commit": "968d264f2903d578e699c4452a4dbf48633921aa",
+  "frontier_status": {
+    "status": "passing",
+    "sources": 10,
+    "targets": ["directx", "vulkan"],
+    "artifacts": 20
+  },
+  "full_corpus_scout": {
+    "status": "partial",
+    "sources": 40,
+    "targets": ["directx", "opengl", "vulkan"],
+    "artifacts": 120,
+    "translated_artifacts": 73,
+    "failed_artifacts": 47,
+    "translated_by_target": {
+      "directx": 38,
+      "opengl": 2,
+      "vulkan": 33
+    }
+  },
   "tracked_issues": [
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/939",
-      "scope": "opengl-template-specialization",
+      "issue": "https://github.com/CrossGL/crosstl/issues/979",
+      "scope": "metal-template-instantiation-glsl",
       "status": "open",
-      "summary": "Scale Metal template specialization for project OpenGL translation."
+      "summary": "Scale Metal template instantiation for GLSL project translation."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/940",
-      "scope": "spirv-generic-helper-specialization",
+      "issue": "https://github.com/CrossGL/crosstl/issues/980",
+      "scope": "metal-numeric-template-specializations",
       "status": "open",
-      "summary": "Specialize generic helper functions for SPIR-V project translation."
+      "summary": "Parse numeric-heavy Metal template specializations in project kernels."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/941",
-      "scope": "metal-numeric-template-parsing",
-      "status": "open",
-      "summary": "Parse dependent numeric template arguments in Metal project kernels."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/943",
-      "scope": "directx-source-type-metadata",
-      "status": "open",
-      "summary": "Resolve project source-type metadata failures in DirectX codegen."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/944",
+      "issue": "https://github.com/CrossGL/crosstl/issues/981",
       "scope": "spirv-storage-buffer-overloads",
       "status": "open",
-      "summary": "Resolve overloaded storage-buffer helper calls in SPIR-V project translation."
+      "summary": "Resolve project-scale SPIR-V storage-buffer helper overloads."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/945",
-      "scope": "spirv-bool-function-constants",
+      "issue": "https://github.com/CrossGL/crosstl/issues/982",
+      "scope": "runtime-execution-adapters",
       "status": "open",
-      "summary": "Lower Metal function constants and boolean inputs for SPIR-V compute translation."
+      "summary": "Add backend-agnostic runtime execution adapters for translated project artifacts."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/946",
-      "scope": "runtime-adapter-contracts",
+      "issue": "https://github.com/CrossGL/crosstl/issues/983",
+      "scope": "spirv-boolean-interface-lowering",
       "status": "open",
-      "summary": "Define runtime adapter contracts for executing translated project kernels."
+      "summary": "Lower boolean compute interface values for SPIR-V project artifacts."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/984",
+      "scope": "metal-helper-specialization-scale",
+      "status": "open",
+      "summary": "Scale explicit Metal helper specialization for large project kernels."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/985",
+      "scope": "project-native-macro-forms",
+      "status": "open",
+      "summary": "Classify and expand native macro forms during project preprocessing."
     }
+  ],
+  "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/939",
+    "https://github.com/CrossGL/crosstl/issues/940",
+    "https://github.com/CrossGL/crosstl/issues/941",
+    "https://github.com/CrossGL/crosstl/issues/943",
+    "https://github.com/CrossGL/crosstl/issues/944",
+    "https://github.com/CrossGL/crosstl/issues/945",
+    "https://github.com/CrossGL/crosstl/issues/946"
   ]
 }

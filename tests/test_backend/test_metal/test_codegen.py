@@ -347,9 +347,10 @@ def test_codegen_xhalf_vectors_lower_before_opengl_generation():
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
 
     assert "f16vec3 viewDir;" in crossgl
-    assert "(f16vec3)normalize" in crossgl
+    assert "f16vec3(normalize" in crossgl
     assert "xhalf" not in crossgl
     assert "out vec3 viewDir;" in glsl
+    assert "viewDir = vec3(normalize" in glsl
     assert "xhalf" not in glsl
     assert "f16vec3" not in glsl
 
@@ -2271,7 +2272,7 @@ def test_codegen_lowers_static_cast_from_apple_compute_sample():
     """
     crossgl = convert(code)
 
-    assert "vec2 p0 = (vec2)gid;" in crossgl
+    assert "vec2 p0 = vec2(gid);" in crossgl
     assert "static_cast" not in crossgl
     assert parse_crossgl(crossgl) is not None
 
@@ -3724,7 +3725,7 @@ def test_codegen_sizeof_and_cast():
     result = convert(code)
     assert "sizeof(int)" in result
     assert "alignof(float4)" in result
-    assert "(vec3)" in result or "(float3)" in result
+    assert "vec3(1.0)" in result
 
 
 def test_codegen_sizeof_dependent_typename_from_tinygrad_tile_copy():

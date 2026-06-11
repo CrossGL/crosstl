@@ -19,10 +19,11 @@ The current harness verifies:
 - OpenGL artifact generation for `arange.metal`.
 
 A separate full-corpus scout against the same pinned MLX revision currently
-translates 72 of 120 target artifacts across DirectX, OpenGL, and Vulkan before
-the tracked gaps below. OpenGL now rejects unresolved template placeholders
-instead of emitting generic artifacts, so its full-corpus count reflects concrete
-specialization work that still needs to be completed.
+translates 73 of 120 target artifacts across DirectX, OpenGL, and Vulkan:
+DirectX translates 38 of 40 artifacts, OpenGL translates 2 of 40 artifacts, and
+Vulkan translates 33 of 40 artifacts. OpenGL rejects unresolved template
+placeholders instead of emitting generic artifacts, so its full-corpus count
+reflects concrete specialization work that still needs to be completed.
 
 This is shader/kernel artifact coverage. It does not claim that the MLX host
 runtime has been ported to Direct3D, OpenGL, or Vulkan. Running the upstream MLX
@@ -59,18 +60,18 @@ The harness writes reports, generated artifacts, and command logs under
 
 ## Current Translator Gaps
 
-- CrossGL/crosstl#939: scale Metal template specialization for project OpenGL
+- CrossGL/crosstl#979: scale Metal template instantiation for GLSL project
   translation.
-- CrossGL/crosstl#940: specialize generic helper functions for SPIR-V project
-  translation.
-- CrossGL/crosstl#941: parse dependent numeric template arguments in Metal
+- CrossGL/crosstl#980: parse numeric-heavy Metal template specializations in
   project kernels.
-- CrossGL/crosstl#943: resolve project source-type metadata failures in DirectX
-  codegen.
-- CrossGL/crosstl#944: resolve overloaded storage-buffer helper calls in SPIR-V
-  project translation.
-- CrossGL/crosstl#945: lower Metal function constants and boolean inputs for
-  SPIR-V compute translation.
+- CrossGL/crosstl#981: resolve project-scale SPIR-V storage-buffer helper
+  overloads.
+- CrossGL/crosstl#983: lower boolean compute interface values for SPIR-V project
+  artifacts.
+- CrossGL/crosstl#984: scale explicit Metal helper specialization for large
+  project kernels.
+- CrossGL/crosstl#985: classify and expand native macro forms during project
+  preprocessing.
 
 These gaps are translator work. Host runtime integration gaps should be handled
 in MLX-specific integration code or downstream runtime adapters, not hidden as
@@ -78,5 +79,12 @@ shader translation successes.
 
 ## Runtime Integration Gaps
 
-- CrossGL/crosstl#946: define runtime adapter contracts for executing translated
-  project kernels.
+- CrossGL/crosstl#982: add backend-agnostic runtime execution adapters for
+  translated project artifacts.
+
+## Resolved Frontier Issues
+
+The current reduced frontier no longer depends on the previously tracked issues:
+CrossGL/crosstl#939, CrossGL/crosstl#940, CrossGL/crosstl#941,
+CrossGL/crosstl#943, CrossGL/crosstl#944, CrossGL/crosstl#945, and
+CrossGL/crosstl#946.

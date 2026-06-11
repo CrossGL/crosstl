@@ -38,6 +38,12 @@ MLX_HOST_NAME_DECL_RE = re.compile(
     r"[A-Za-z_][A-Za-z0-9_:]*)\s*<",
     re.DOTALL,
 )
+DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT = 512
+
+
+class MetalTemplateSpecializationError(ValueError):
+    project_diagnostic_code = "project.translate.metal-template-specialization"
+    missing_capabilities = ("template.specialization",)
 
 
 @dataclass
@@ -67,7 +73,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         defines: Optional[Dict[str, str]] = None,
         strict: bool = False,
         max_expansion_depth: int = 64,
-        max_materialized_template_instantiations: int = 512,
+        max_template_specializations: int = (
+            DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
+        ),
     ):
         super().__init__(
             include_paths=include_paths,
@@ -75,9 +83,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             strict=strict,
             max_expansion_depth=max_expansion_depth,
         )
-        self.max_materialized_template_instantiations = (
-            max_materialized_template_instantiations
-        )
+        self.max_template_specializations = max_template_specializations
         self.macros.setdefault(
             "TARGET_OS_SIMULATOR",
             Macro(name="TARGET_OS_SIMULATOR", replacement="0"),
@@ -89,6 +95,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         code = self._strip_leading_compiler_diagnostics(code)
         processed = super().preprocess(code, file_path=file_path)
         processed = self._materialize_mlx_instantiate_kernels(processed)
+        processed = self._materialize_explicit_template_function_calls(processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
     def _strip_leading_compiler_diagnostics(self, code: str) -> str:
@@ -119,7 +126,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         instantiations = self._find_mlx_kernel_instantiations(code)
         if not instantiations:
             return code
-        if len(instantiations) > self.max_materialized_template_instantiations:
+        if len(instantiations) > self.max_template_specializations:
             return code
 
         templates = self._find_template_functions(code)
@@ -147,6 +154,69 @@ class MetalPreprocessor(HLSLPreprocessor):
                 replacements.append((template.span[0], template.span[1], replacement))
 
         return self._apply_text_replacements(code, replacements)
+
+    def _materialize_explicit_template_function_calls(self, code: str) -> str:
+        seen_specializations: Set[Tuple[str, Tuple[str, ...]]] = set()
+        working = code
+
+        while True:
+            templates = self._find_template_functions(working)
+            if not templates:
+                return working
+
+            templates_by_name = {template.name: template for template in templates}
+            template_spans = self._find_template_declaration_spans(working)
+            explicit_specialization_keys = (
+                self._find_explicit_template_specialization_keys(working)
+            )
+            calls = self._find_explicit_template_function_calls(
+                working,
+                templates_by_name,
+                template_spans,
+                explicit_specialization_keys,
+            )
+            if not calls:
+                return working
+
+            replacements: List[Tuple[int, int, str]] = []
+            new_materializations: List[str] = []
+            for function_name, template_arguments, span in calls:
+                key = (function_name, tuple(template_arguments))
+                template = templates_by_name[function_name]
+                if len(template_arguments) < len(template.template_parameters):
+                    continue
+                specialized_name = self._template_specialization_identifier(
+                    function_name, template_arguments
+                )
+                if key in seen_specializations:
+                    replacements.append((span[0], span[1], specialized_name))
+                    continue
+                if len(seen_specializations) >= self.max_template_specializations:
+                    raise MetalTemplateSpecializationError(
+                        "Metal template specialization limit exceeded while "
+                        f"materializing '{function_name}' with arguments "
+                        f"{', '.join(template_arguments)}; increase the limit or "
+                        "reduce the set of explicit template instantiations"
+                    )
+                materialized = self._materialize_template_function_with_name(
+                    template,
+                    template_arguments,
+                    specialized_name,
+                    host_name=None,
+                )
+                if materialized:
+                    replacements.append((span[0], span[1], specialized_name))
+                    seen_specializations.add(key)
+                    new_materializations.append(materialized)
+
+            if not replacements and not new_materializations:
+                return working
+
+            working = self._apply_text_replacements(working, replacements)
+            if new_materializations:
+                working = working.rstrip() + "\n\n" + "\n\n".join(new_materializations)
+                if not working.endswith("\n"):
+                    working += "\n"
 
     def _find_mlx_kernel_instantiations(
         self, code: str
@@ -266,29 +336,224 @@ class MetalPreprocessor(HLSLPreprocessor):
         template: _MetalTemplateFunction,
         instantiation: _MLXKernelInstantiation,
     ) -> str:
+        function_identifier = self._materialized_function_identifier(
+            instantiation.host_name, template.name
+        )
+        return self._materialize_template_function_with_name(
+            template,
+            instantiation.template_arguments,
+            function_identifier,
+            host_name=instantiation.host_name,
+        )
+
+    def _materialize_template_function_with_name(
+        self,
+        template: _MetalTemplateFunction,
+        template_arguments: List[str],
+        function_identifier: str,
+        host_name: Optional[str],
+    ) -> str:
+        if len(template_arguments) < len(template.template_parameters):
+            return ""
         substitutions = {
-            name: instantiation.template_arguments[index]
+            name: template_arguments[index]
             for index, name in enumerate(template.template_parameters)
-            if index < len(instantiation.template_arguments)
         }
         if not substitutions:
             return ""
 
         materialized = self._replace_identifiers(template.source, substitutions)
-        function_identifier = self._materialized_function_identifier(
-            instantiation.host_name, template.name
-        )
         materialized = self._rename_function_definition(
             materialized,
             template.name,
             function_identifier,
         )
 
-        insertion = f'[[host_name("{instantiation.host_name}")]]\n'
-        materialized = insertion + materialized.lstrip()
+        if host_name is not None:
+            insertion = f'[[host_name("{host_name}")]]\n'
+            materialized = insertion + materialized.lstrip()
         if not materialized.endswith("\n"):
             materialized += "\n"
         return materialized
+
+    def _find_explicit_template_function_calls(
+        self,
+        code: str,
+        templates_by_name: Dict[str, _MetalTemplateFunction],
+        excluded_spans: List[Tuple[int, int]],
+        explicit_specialization_keys: Set[Tuple[str, Tuple[str, ...]]],
+    ) -> List[Tuple[str, List[str], Tuple[int, int]]]:
+        calls: List[Tuple[str, List[str], Tuple[int, int]]] = []
+        i = 0
+        while i < len(code):
+            if code[i] in "\"'":
+                _literal, consumed = self._read_string(code, i)
+                i += consumed
+                continue
+            if code.startswith("//", i):
+                end = code.find("\n", i)
+                if end == -1:
+                    break
+                i = end + 1
+                continue
+            if code.startswith("/*", i):
+                end = code.find("*/", i + 2)
+                if end == -1:
+                    break
+                i = end + 2
+                continue
+            span = self._containing_span(i, excluded_spans)
+            if span is not None:
+                i = span[1]
+                continue
+            if code[i].isalpha() or code[i] == "_":
+                ident, consumed = self._read_identifier(code, i)
+                if ident == "operator":
+                    i += consumed
+                    continue
+                if ident not in templates_by_name:
+                    i += consumed
+                    continue
+                j = i + consumed
+                while j < len(code) and code[j].isspace():
+                    j += 1
+                if j >= len(code) or code[j] != "<":
+                    i += consumed
+                    continue
+                angle_end = self._find_matching_angle(code, j)
+                if angle_end is None:
+                    i += consumed
+                    continue
+                k = angle_end + 1
+                while k < len(code) and code[k].isspace():
+                    k += 1
+                if k >= len(code) or code[k] != "(":
+                    i += consumed
+                    continue
+                template_arguments = self._split_top_level_commas(
+                    code[j + 1 : angle_end]
+                )
+                key = (ident, tuple(template_arguments))
+                if key in explicit_specialization_keys:
+                    i = angle_end + 1
+                    continue
+                span_start = self._scoped_identifier_start(code, i)
+                calls.append((ident, template_arguments, (span_start, angle_end + 1)))
+                i = angle_end + 1
+                continue
+            i += 1
+        return calls
+
+    def _find_template_declaration_spans(self, code: str) -> List[Tuple[int, int]]:
+        spans: List[Tuple[int, int]] = []
+        pos = 0
+        while True:
+            match = re.search(r"\btemplate\s*<", code[pos:])
+            if match is None:
+                break
+            start = pos + match.start()
+            angle_start = code.find("<", start)
+            angle_end = self._find_matching_angle(code, angle_start)
+            if angle_end is None:
+                pos = start + len("template")
+                continue
+
+            declaration_start = angle_end + 1
+            body_start = self._find_next_top_level_char(code, declaration_start, "{")
+            semicolon = self._find_next_top_level_char(code, declaration_start, ";")
+            if body_start is not None and (semicolon is None or body_start < semicolon):
+                body_end = self._find_matching_brace(code, body_start)
+                if body_end is None:
+                    pos = body_start + 1
+                    continue
+                spans.append((start, body_end))
+                pos = body_end
+                continue
+            if semicolon is not None:
+                spans.append((start, semicolon + 1))
+                pos = semicolon + 1
+                continue
+            pos = declaration_start
+        return spans
+
+    def _find_explicit_template_specialization_keys(
+        self, code: str
+    ) -> Set[Tuple[str, Tuple[str, ...]]]:
+        keys: Set[Tuple[str, Tuple[str, ...]]] = set()
+        for match in re.finditer(r"\btemplate\s*<\s*>\s*", code):
+            declaration_start = match.end()
+            body_start = self._find_next_top_level_char(code, declaration_start, "{")
+            semicolon = self._find_next_top_level_char(code, declaration_start, ";")
+            declaration_end = body_start
+            if declaration_end is None or (
+                semicolon is not None and semicolon < declaration_end
+            ):
+                declaration_end = semicolon
+            if declaration_end is None:
+                continue
+            header = code[declaration_start:declaration_end]
+            paren_index = header.find("(")
+            if paren_index == -1:
+                continue
+            before_params = header[:paren_index].rstrip()
+            angle_end = before_params.rfind(">")
+            if angle_end == -1:
+                continue
+            angle_start = before_params.rfind("<", 0, angle_end)
+            if angle_start == -1:
+                continue
+            name_match = re.search(
+                r"([A-Za-z_][A-Za-z0-9_:]*)\s*$",
+                before_params[:angle_start],
+            )
+            if name_match is None:
+                continue
+            function_name = name_match.group(1).split("::")[-1]
+            args = self._split_top_level_commas(
+                before_params[angle_start + 1 : angle_end]
+            )
+            keys.add((function_name, tuple(args)))
+        return keys
+
+    def _containing_span(
+        self, position: int, spans: List[Tuple[int, int]]
+    ) -> Optional[Tuple[int, int]]:
+        for start, end in spans:
+            if start <= position < end:
+                return start, end
+        return None
+
+    def _scoped_identifier_start(self, code: str, identifier_start: int) -> int:
+        start = identifier_start
+        while start >= 2 and code[start - 2 : start] == "::":
+            name_end = start - 2
+            name_start = name_end
+            while name_start > 0 and (
+                code[name_start - 1].isalnum() or code[name_start - 1] == "_"
+            ):
+                name_start -= 1
+            if name_start == name_end:
+                start -= 2
+                break
+            start = name_start
+        return start
+
+    def _template_specialization_identifier(
+        self, function_name: str, template_arguments: List[str]
+    ) -> str:
+        parts = [function_name, *template_arguments]
+        identifier = "_".join(
+            part
+            for part in (
+                re.sub(r"[^A-Za-z0-9_]+", "_", str(value)).strip("_") for value in parts
+            )
+            if part
+        )
+        if not identifier:
+            identifier = function_name
+        if identifier[0].isdigit():
+            identifier = f"{function_name}_{identifier}"
+        return identifier
 
     def _template_parameter_names(self, template_parameters: str) -> List[str]:
         names: List[str] = []
