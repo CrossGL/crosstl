@@ -62,6 +62,18 @@ def spirv_result_ids_for_opcode(spv_code, opcode):
     return re.findall(rf"(%\d+) = {re.escape(opcode)}\b", spv_code)
 
 
+def assert_spirv_access_chain_indexes_are_integer(spv_code):
+    int_types = set(re.findall(r"(%\d+) = OpTypeInt \d+ [01]\b", spv_code))
+    result_types = {
+        result_id: result_type
+        for result_id, result_type in re.findall(r"(%\d+) = Op\w+ (%\d+)\b", spv_code)
+    }
+
+    for access_chain in re.findall(r"%\d+ = OpAccessChain %\d+ %\d+([^\n]*)", spv_code):
+        for index_id in access_chain.split():
+            assert result_types.get(index_id) in int_types
+
+
 def spirv_uint_constant_values(spv_code):
     uint_types = set(re.findall(r"(%\d+) = OpTypeInt 32 0\b", spv_code))
     return {
@@ -431,7 +443,58 @@ class TestVulkanSPIRVCodeGen:
         assert "Could not find member xyz" not in spv_code
         assert "WARNING" not in spv_code
         assert len(re.findall(r"%\d+ = OpAccessChain %\d+ %\d+ %\d+", spv_code)) >= 2
+        assert_spirv_access_chain_indexes_are_integer(spv_code)
         assert re.search(r"%\d+ = OpVectorShuffle %\d+ %\d+ %\d+ 0 1 2", spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_vertex_index_array_access_uses_integer_access_chain_index(self, tmp_path):
+        source_code = """
+        shader VertexIndexArrayAccess {
+            vertex {
+                void main() {
+                    vec2 positions[3] = {
+                        vec2(0.0, -0.5),
+                        vec2(0.5, 0.5),
+                        vec2(-0.5, 0.5)
+                    };
+                    vec2 position = positions[gl_VertexIndex];
+                    gl_Position = vec4(position, 0.0, 1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        vertex_index = spirv_named_variable(
+            spv_code, "gl_VertexIndex", storage_class="Input"
+        )
+        assert f"OpDecorate {vertex_index} BuiltIn VertexIndex" in spv_code
+        assert "Unknown variable gl_VertexIndex" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_access_chain_indexes_are_integer(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_fallback_array_access_uses_integer_access_chain_index(self, tmp_path):
+        source_code = """
+        shader FallbackArrayIndex {
+            compute {
+                void main() {
+                    float values[2] = { 1.0, 2.0 };
+                    float value = values[missingIndex];
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "; WARNING: Unknown variable missingIndex" in spv_code
+        assert_spirv_access_chain_indexes_are_integer(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_compute_bool_input_lowers_to_uint_interface(self, tmp_path):
