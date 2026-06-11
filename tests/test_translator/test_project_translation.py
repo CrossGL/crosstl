@@ -9486,6 +9486,10 @@ def test_translate_project_opengl_materializes_mlx_pointer_and_value_bindings(
             "name": "scale_values",
             "materializedName": "scalefloat32",
             "parameters": {"T": "float", "U": "float"},
+            "parameterSources": {
+                "T": "source-instantiation",
+                "U": "source-instantiation",
+            },
             "source": "source-instantiation",
         }
     ]
@@ -9587,6 +9591,7 @@ def test_translate_project_opengl_reports_unresolved_metal_template_kernel(
     assert materialization["specializationCount"] == 0
     assert materialization["configuredParameterCount"] == 0
     assert materialization["configuredParameters"] == {}
+    assert materialization["configuredParameterSources"] == {}
     assert materialization["specializations"] == []
     assert materialization["unsupported"] == [
         {
@@ -34055,6 +34060,82 @@ def test_translate_project_metal_matmul_device_buffers_do_not_emit_directx_param
     assert "void CSMain(float*" not in output
 
 
+def test_translate_project_metal_matmul_buffers_lower_to_wgsl_resources(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "matmul.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct MatMulParams {
+                uint row_dim_x;
+                uint col_dim_x;
+                uint inner_dim;
+            };
+
+            kernel void mat_mul_simple1(
+                constant MatMulParams& params [[buffer(0)]],
+                device const float* A [[buffer(1)]],
+                device const float* B [[buffer(2)]],
+                device float* X [[buffer(3)]],
+                uint3 gid [[thread_position_in_grid]]
+            ) {
+                uint row = gid.y;
+                uint col = gid.x;
+                float sum = 0.0;
+
+                if (row < params.row_dim_x && col < params.col_dim_x) {
+                    for (uint inner = 0; inner < params.inner_dim; inner++) {
+                        uint index_A = (row * params.inner_dim) + inner;
+                        uint index_B = (inner * params.col_dim_x) + col;
+                        sum += A[index_A] * B[index_B];
+                    }
+
+                    uint index = (row * params.col_dim_x) + col;
+                    X[index] = sum;
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["wgsl"],
+        output_dir="out",
+        validate=True,
+    ).to_json()
+
+    assert payload["summary"]["diagnosticCounts"]["error"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("wgsl", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "@group(0) @binding(0)\nvar<uniform> params: MatMulParams;" in output
+    assert "@group(0) @binding(1)\nvar<storage, read> A: array<f32>;" in output
+    assert "@group(0) @binding(2)\nvar<storage, read> B: array<f32>;" in output
+    assert "@group(0) @binding(3)\nvar<storage, read_write> X: array<f32>;" in output
+    assert "fn compute_main(@builtin(global_invocation_id) gid: vec3<u32>)" in output
+    assert "A[index_A]" in output
+    assert "B[index_B]" in output
+    assert "X[index] = sum;" in output
+    assert "params.row_dim_x" in output
+    assert "params.col_dim_x" in output
+    assert "params.inner_dim" in output
+    assert "StructuredBuffer<float> A" not in output
+    assert "StructuredBuffer<float> B" not in output
+    assert "RWStructuredBuffer<float> X" not in output
+    assert "constant MatMulParams" not in output
+    assert "float* A" not in output
+    assert "float* B" not in output
+    assert "float* X" not in output
+
+
 def test_translate_project_metal_matmul_buffers_lower_to_opengl_resources(
     tmp_path,
 ):
@@ -34347,11 +34428,13 @@ def test_translate_project_metal_call_site_template_materializes_for_opengl(
         "specializationCount": 1,
         "configuredParameterCount": 0,
         "configuredParameters": {},
+        "configuredParameterSources": {},
         "specializations": [
             {
                 "name": "scale_value",
                 "materializedName": "scale_value_float",
                 "parameters": {"T": "float"},
+                "parameterSources": {"T": "call-site"},
                 "source": "call-site",
             }
         ],
@@ -34425,6 +34508,7 @@ def test_translate_project_metal_repeated_call_site_templates_share_budget_for_o
         "specializationCount": 1,
         "configuredParameterCount": 0,
         "configuredParameters": {},
+        "configuredParameterSources": {},
         "specializations": [
             {
                 "name": "scan_step",
@@ -34434,6 +34518,12 @@ def test_translate_project_metal_repeated_call_site_templates_share_budget_for_o
                     "OffsetT": "int",
                     "T": "float",
                     "Width": "4",
+                },
+                "parameterSources": {
+                    "Inclusive": "call-site",
+                    "OffsetT": "call-site",
+                    "T": "call-site",
+                    "Width": "call-site",
                 },
                 "source": "call-site",
             }
@@ -34548,12 +34638,14 @@ def test_translate_project_metal_variant_template_materializes_for_opengl(
         "specializationCount": 1,
         "configuredParameterCount": 1,
         "configuredParameters": {"T": "float"},
+        "configuredParameterSources": {"T": "project-variant"},
         "specializations": [
             {
                 "name": "write_value",
                 "materializedName": "write_value",
                 "parameters": {"T": "float"},
-                "source": "config",
+                "parameterSources": {"T": "project-variant"},
+                "source": "project-variant",
             }
         ],
         "unsupported": [],
@@ -34635,6 +34727,7 @@ def test_translate_project_source_instantiation_materializes_sizing_templates(
         materialization = artifact["templateMaterialization"]
         assert materialization["status"] == "materialized"
         assert materialization["unsupported"] == []
+        assert materialization["configuredParameterSources"] == {}
         assert {
             specialization["source"]
             for specialization in materialization["specializations"]
@@ -34698,18 +34791,30 @@ def test_translate_project_variant_materializes_sizing_helper_calls(tmp_path):
         "specializationCount": 2,
         "configuredParameterCount": 2,
         "configuredParameters": {"N": "2", "T": "float"},
+        "configuredParameterSources": {
+            "N": "project-variant",
+            "T": "project-variant",
+        },
         "specializations": [
             {
                 "name": "accumulate_window",
                 "materializedName": "accumulate_window",
                 "parameters": {"N": "2", "T": "float"},
-                "source": "config",
+                "parameterSources": {
+                    "N": "project-variant",
+                    "T": "project-variant",
+                },
+                "source": "project-variant",
             },
             {
                 "name": "naive_unfold_Nd",
                 "materializedName": "naive_unfold_Nd",
                 "parameters": {"N": "2", "T": "float"},
-                "source": "config",
+                "parameterSources": {
+                    "N": "project-variant",
+                    "T": "project-variant",
+                },
+                "source": "project-variant",
             },
         ],
         "unsupported": [],
@@ -34723,6 +34828,159 @@ def test_translate_project_variant_materializes_sizing_helper_calls(tmp_path):
     assert_compute_glsl_validates_if_available(output, tmp_path)
 
     report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+
+
+def test_translate_project_metal_reduction_source_instantiation_records_nontype_sources(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "arg_reduce.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct AddOp {};
+
+            template <typename T, typename Op, int N_READS>
+            kernel void arg_reduce_general(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                T acc = T(N_READS);
+                out[gid] = acc;
+            }
+
+            instantiate_kernel("arg_reduce_add_f32_4", arg_reduce_general, float, AddOp, 4);
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl", "directx", "vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    expected_materialization = {
+        "status": "materialized",
+        "specializationCount": 1,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "configuredParameterSources": {},
+        "specializations": [
+            {
+                "name": "arg_reduce_general",
+                "materializedName": "arg_reduce_add_f32_4",
+                "parameters": {
+                    "N_READS": "4",
+                    "Op": "AddOp",
+                    "T": "float",
+                },
+                "parameterSources": {
+                    "N_READS": "source-instantiation",
+                    "Op": "source-instantiation",
+                    "T": "source-instantiation",
+                },
+                "source": "source-instantiation",
+            }
+        ],
+        "unsupported": [],
+    }
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+    for artifact in payload["artifacts"]:
+        assert artifact["templateMaterialization"] == expected_materialization
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        assert re.search(r"\\b(?:T|Op|N_READS)\\b", output) is None
+
+
+def test_translate_project_metal_norm_variant_records_config_and_nontype_sources(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "out"
+
+            [project.defines]
+            T = "float"
+
+            [project.variants.row4]
+            N_READS = "4"
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "layer_norm.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, int N_READS>
+            kernel void layer_norm_single_row(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                T scale = T(N_READS);
+                out[gid] = scale;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["variant"] == "row4"
+    assert artifact["status"] == "translated"
+    assert artifact["defines"] == {"N_READS": "4", "T": "float"}
+    assert artifact["templateMaterialization"] == {
+        "status": "materialized",
+        "specializationCount": 1,
+        "configuredParameterCount": 2,
+        "configuredParameters": {"N_READS": "4", "T": "float"},
+        "configuredParameterSources": {
+            "N_READS": "project-variant",
+            "T": "config",
+        },
+        "specializations": [
+            {
+                "name": "layer_norm_single_row",
+                "materializedName": "layer_norm_single_row",
+                "parameters": {"N_READS": "4", "T": "float"},
+                "parameterSources": {
+                    "N_READS": "project-variant",
+                    "T": "config",
+                },
+                "source": "project-variant",
+            }
+        ],
+        "unsupported": [],
+    }
+
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "float scale = float(4);" in output
+    assert re.search(r"\\b(?:T|N_READS)\\b", output) is None
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+    report_path = repo / "out" / "report.json"
     report.write_json(report_path)
     validation = validate_project_report(report_path)
     assert validation["success"] is True
@@ -34760,6 +35018,7 @@ def test_translate_project_metal_template_without_arguments_reports_metadata(
     assert materialization["specializationCount"] == 0
     assert materialization["configuredParameterCount"] == 0
     assert materialization["configuredParameters"] == {}
+    assert materialization["configuredParameterSources"] == {}
     assert materialization["specializations"] == []
     assert materialization["unsupported"] == [
         {
@@ -34793,6 +35052,111 @@ def test_translate_project_metal_template_without_arguments_reports_metadata(
     assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
         {"project.validate.invalid-report"}
     )
+
+
+def test_translate_project_metal_variadic_debug_helper_noops_for_opengl(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "debug_helper.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename... Args>
+            inline void log_debug(Args... args) {
+            }
+
+            void debug_path(uint gid) {
+                log_debug<uint>(gid);
+                log_debug(gid);
+            }
+
+            kernel void launch(
+                device float* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                log_debug<uint>(gid);
+                out[gid] = float(gid);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"] == {
+        "status": "materialized",
+        "specializationCount": 0,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "configuredParameterSources": {},
+        "specializations": [],
+        "unsupported": [],
+    }
+
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "log_debug" not in output
+    assert "Args" not in output
+    assert "out_[gid] = float(gid);" in output
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_metal_required_variadic_entry_reports_metadata(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "required_variadic.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename... Args>
+            kernel void launch(
+                device float* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = 0.0;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    unsupported = artifact["templateMaterialization"]["unsupported"]
+    assert unsupported == [
+        {
+            "name": "launch",
+            "parameters": ["Args"],
+            "missingParameters": ["Args"],
+            "reason": "missing-template-arguments",
+            "sourceDeclaration": {
+                "file": "required_variadic.metal",
+                "line": 4,
+                "column": 1,
+                "name": "launch",
+            },
+            "target": "opengl",
+            "requiredSignature": "launch<Args>",
+        }
+    ]
+    diagnostic = payload["diagnostics"][0]
+    assert (
+        diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    )
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert "launch missing Args" in diagnostic["message"]
 
 
 def test_translate_project_groups_unresolved_template_bindings_by_signature(
@@ -34890,6 +35254,7 @@ def test_translate_project_variadic_template_helper_materializes_for_opengl(
         "name": "pick_first",
         "materializedName": "pick_first_float_int_uint",
         "parameters": {"Args": "int, uint", "T": "float"},
+        "parameterSources": {"Args": "call-site", "T": "call-site"},
         "source": "call-site",
     }
     output = (repo / artifact["path"]).read_text(encoding="utf-8")
@@ -34941,6 +35306,7 @@ def test_translate_project_explicit_template_instantiation_materializes_for_open
             "name": "write_value",
             "materializedName": "write_value",
             "parameters": {"T": "float"},
+            "parameterSources": {"T": "source-instantiation"},
             "source": "source-instantiation",
         }
     ]
@@ -34992,6 +35358,7 @@ def test_translate_project_explicit_utility_template_instantiation_materializes_
             "name": "offset_value",
             "materializedName": "offset_value",
             "parameters": {"T": "float"},
+            "parameterSources": {"T": "source-instantiation"},
             "source": "source-instantiation",
         }
     ]
@@ -35077,11 +35444,13 @@ def test_translate_project_target_template_variant_manifest_materializes_for_ope
         "specializationCount": 1,
         "configuredParameterCount": 1,
         "configuredParameters": {"U": "float"},
+        "configuredParameterSources": {"U": "variant-manifest"},
         "specializations": [
             {
                 "name": "write_value",
                 "materializedName": "write_value",
                 "parameters": {"U": "float"},
+                "parameterSources": {"U": "variant-manifest"},
                 "source": "variant-manifest",
             }
         ],
@@ -35101,11 +35470,13 @@ def test_translate_project_target_template_variant_manifest_materializes_for_ope
         "specializationCount": 1,
         "configuredParameterCount": 1,
         "configuredParameters": {"U": "uint"},
+        "configuredParameterSources": {"U": "variant-manifest"},
         "specializations": [
             {
                 "name": "write_value",
                 "materializedName": "write_value",
                 "parameters": {"U": "uint"},
+                "parameterSources": {"U": "variant-manifest"},
                 "source": "variant-manifest",
             }
         ],
