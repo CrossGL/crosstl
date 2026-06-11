@@ -1030,6 +1030,7 @@ class GLSLCodeGen:
         self.stage_entry_resource_parameter_aliases = {}
         self.stage_entry_constant_value_parameter_aliases = {}
         self.stage_entry_resource_declaration_names = set()
+        self.stage_entry_constant_value_cbuffer_names = set()
         self.current_identifier_aliases = {}
         self.current_mesh_output_parameters = {}
         self.current_mesh_output_topology = None
@@ -2528,6 +2529,7 @@ class GLSLCodeGen:
         self.stage_entry_resource_parameter_aliases = {}
         self.stage_entry_constant_value_parameter_aliases = {}
         self.stage_entry_resource_declaration_names = set()
+        self.stage_entry_constant_value_cbuffer_names = set()
         self.current_identifier_aliases = {}
         self.current_target_stage = target_stage
         self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
@@ -4218,6 +4220,7 @@ class GLSLCodeGen:
             self.glsl_existing_cbuffer_global_member_names(ast, target_stage)
         )
         self.stage_entry_constant_value_parameter_aliases = {}
+        self.stage_entry_constant_value_cbuffer_names = set()
         stage_entry_types = self.combined_stage_entry_types()
         for _entry_id, stage_name, func in collect_stage_entry_records(
             ast, target_stage, stage_entry_types
@@ -4265,6 +4268,8 @@ class GLSLCodeGen:
                     attributes=attributes,
                 )
                 cbuffer.is_cbuffer = True
+                cbuffer.is_stage_entry_constant_value_cbuffer = True
+                self.stage_entry_constant_value_cbuffer_names.add(block_name)
                 cbuffers.append(cbuffer)
         return cbuffers
 
@@ -4404,6 +4409,12 @@ class GLSLCodeGen:
             explicit_binding = self.explicit_resource_binding_index(node)
             if explicit_binding is None:
                 continue
+            if self.should_remap_stage_entry_cbuffer_binding_conflict(
+                used_cbuffer_bindings,
+                explicit_binding,
+                node.name,
+            ):
+                continue
             self.reserve_resource_binding_range(
                 used_cbuffer_bindings,
                 "OpenGL",
@@ -4414,16 +4425,27 @@ class GLSLCodeGen:
             )
         for node in cbuffers:
             explicit_binding = self.explicit_resource_binding_index(node)
-            resource_binding = (
-                explicit_binding
-                if explicit_binding is not None
-                else self.next_available_resource_binding(
+            if explicit_binding is not None:
+                if self.should_remap_stage_entry_cbuffer_binding_conflict(
+                    used_cbuffer_bindings,
+                    explicit_binding,
+                    node.name,
+                ):
+                    resource_binding = self.next_available_resource_binding_from(
+                        used_cbuffer_bindings,
+                        "uniform buffer binding",
+                        explicit_binding,
+                        1,
+                    )
+                else:
+                    resource_binding = explicit_binding
+            else:
+                resource_binding = self.next_available_resource_binding(
                     used_cbuffer_bindings,
                     cbuffer_binding_cursors,
                     "uniform buffer binding",
                     1,
                 )
-            )
             self.reserve_resource_binding_range(
                 used_cbuffer_bindings,
                 "OpenGL",
@@ -6977,9 +6999,9 @@ class GLSLCodeGen:
                 return None
             if self.is_sampler_type(type_name):
                 return None
-            if self.is_structured_buffer_type(type_name) or self.is_constant_buffer_type(
+            if self.is_structured_buffer_type(
                 type_name
-            ):
+            ) or self.is_constant_buffer_type(type_name):
                 return None
             mapped_type = self.map_resource_type_with_format(
                 self.resource_base_type(type_name), param
@@ -7113,7 +7135,9 @@ class GLSLCodeGen:
         constant_struct_type = self.stage_entry_constant_struct_parameter_type(param)
         if constant_struct_type is not None:
             return constant_struct_type
-        storage_array_type = self.stage_entry_storage_array_structured_buffer_type(param)
+        storage_array_type = self.stage_entry_storage_array_structured_buffer_type(
+            param
+        )
         if storage_array_type is not None:
             return storage_array_type
         return self.stage_entry_metal_pointer_structured_buffer_type(param)
@@ -16565,6 +16589,26 @@ class GLSLCodeGen:
         )
         return bool(conflicts) and all(
             used_name in self.stage_entry_resource_declaration_names
+            for used_name in conflicts
+        )
+
+    def should_remap_stage_entry_cbuffer_binding_conflict(
+        self,
+        used_bindings,
+        binding,
+        name,
+    ):
+        if name not in self.stage_entry_constant_value_cbuffer_names:
+            return False
+        conflicts = self.resource_binding_range_conflict_names(
+            used_bindings,
+            "uniform buffer binding",
+            binding,
+            1,
+            name,
+        )
+        return bool(conflicts) and all(
+            used_name in self.stage_entry_constant_value_cbuffer_names
             for used_name in conflicts
         )
 

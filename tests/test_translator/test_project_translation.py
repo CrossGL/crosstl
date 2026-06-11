@@ -10233,6 +10233,67 @@ def test_translate_project_materializes_mlx_metal_instantiate_kernel_entries(
     assert "void arange(" not in output
 
 
+def test_translate_project_opengl_remaps_mlx_arange_materialized_entry_bindings(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "arange.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_arange(tname, type) \\
+                instantiate_kernel("arange" #tname, arange, type)
+
+            template <typename T>
+            [[kernel]] void arange(
+                constant const T& start [[buffer(0)]],
+                constant const T& step [[buffer(1)]],
+                device T* out [[buffer(2)]],
+                uint index [[thread_position_in_grid]]) {
+                out[index] = start + index * step;
+            }
+
+            instantiate_arange(uint8, uint8_t)
+            instantiate_arange(uint16, uint16_t)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("opengl", "translated")}
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    arg_bindings = {
+        block_name: int(binding)
+        for binding, block_name in re.findall(
+            r"layout\(std140, binding = (\d+)\) uniform "
+            r"(arange(?:uint8|uint16)_(?:start|step)_Args)",
+            output,
+        )
+    }
+
+    assert set(arg_bindings) == {
+        "arangeuint8_start_Args",
+        "arangeuint8_step_Args",
+        "arangeuint16_start_Args",
+        "arangeuint16_step_Args",
+    }
+    assert len(set(arg_bindings.values())) == len(arg_bindings)
+    assert "Conflicting OpenGL resource binding" not in output
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
 def test_translate_project_materialized_metal_quantized_specialization_to_targets(
     tmp_path,
 ):
