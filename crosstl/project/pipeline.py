@@ -8842,6 +8842,14 @@ class _InheritedTemplateMaterialization:
     template_names: set[str]
 
 
+@dataclass(frozen=True)
+class _MetalTemplateTypeDeclaration:
+    name: str
+    parameters: tuple[str, ...]
+    span: tuple[int, int]
+    location: SourceLocation
+
+
 def _materialize_inherited_source_template_helpers(
     *,
     preprocessor: Any,
@@ -9857,12 +9865,14 @@ def _read_metal_string_for_project(source: str, start: int) -> tuple[str, int]:
 def _metal_split_assignment(statement: str) -> tuple[str, str | None]:
     depth = 0
     for index, ch in enumerate(statement):
+        if ch == "=" and depth == 0:
+            return statement[:index], statement[index + 1 :]
+        if ch in "({" and depth == 0:
+            return statement[:index], statement[index:]
         if ch in "(<[{":
             depth += 1
         elif ch in ")>]}":
             depth = max(0, depth - 1)
-        elif ch == "=" and depth == 0:
-            return statement[:index], statement[index + 1 :]
     return statement, None
 
 
@@ -10454,8 +10464,8 @@ def _plain_template_helper_call_sites(
     templates_by_name: Mapping[str, Any],
     excluded_spans: Sequence[tuple[int, int]],
     included_spans: Sequence[tuple[int, int]],
-) -> list[tuple[str, list[str], tuple[int, int]]]:
-    calls: list[tuple[str, list[str], tuple[int, int]]] = []
+) -> list[tuple[str, list[str], tuple[int, int], list[str]]]:
+    calls: list[tuple[str, list[str], tuple[int, int], list[str]]] = []
     excluded = _SpanLookup(excluded_spans)
     for span_start, span_end in _SpanLookup(included_spans)._spans:
         i = span_start
@@ -10495,6 +10505,20 @@ def _plain_template_helper_call_sites(
                 j = i + consumed
                 while j < scan_end and source[j].isspace():
                     j += 1
+                explicit_template_arguments: list[str] = []
+                replacement_end = i + consumed
+                if j < scan_end and source[j] == "<":
+                    angle_end = preprocessor._find_matching_angle(source, j)
+                    if angle_end is None or angle_end >= scan_end:
+                        i += consumed
+                        continue
+                    explicit_template_arguments = preprocessor._split_top_level_commas(
+                        source[j + 1 : angle_end]
+                    )
+                    replacement_end = angle_end + 1
+                    j = angle_end + 1
+                    while j < scan_end and source[j].isspace():
+                        j += 1
                 if j >= scan_end or source[j] != "(":
                     i += consumed
                     continue
@@ -10511,8 +10535,9 @@ def _plain_template_helper_call_sites(
                         arguments,
                         (
                             preprocessor._scoped_identifier_start(source, i),
-                            i + consumed,
+                            replacement_end,
                         ),
+                        explicit_template_arguments,
                     )
                 )
                 i = paren_end + 1
@@ -10527,6 +10552,7 @@ def _infer_plain_template_helper_arguments(
     call_arguments: Sequence[str],
     type_environment: Mapping[str, str],
     return_types: Mapping[str, str],
+    explicit_template_arguments: Sequence[str] = (),
 ) -> list[str] | None:
     header = _metal_template_header(template)
     parameter_declarations = _metal_function_parameter_declarations(
@@ -10545,8 +10571,26 @@ def _infer_plain_template_helper_arguments(
     variadic_parameters = set(
         getattr(template, "variadic_template_parameters", set()) or set()
     )
-    bindings: dict[str, str] = {}
-    variadic_bindings: dict[str, list[str]] = {}
+    explicit_bindings, explicit_variadic_bindings = (
+        preprocessor._template_argument_bindings(
+            template,
+            list(explicit_template_arguments),
+        )
+        if explicit_template_arguments
+        else ({}, {})
+    )
+    bindings: dict[str, str] = {
+        parameter: _strip_metal_type_qualifiers(value)
+        for parameter, value in explicit_bindings.items()
+    }
+    variadic_bindings: dict[str, list[str]] = {
+        parameter: [
+            _strip_metal_type_qualifiers(str(value))
+            for value in values
+            if str(value).strip()
+        ]
+        for parameter, values in explicit_variadic_bindings.items()
+    }
     argument_index = 0
     for parameter_index, (expected_type, _name, variadic) in enumerate(
         parameter_declarations
@@ -10820,7 +10864,12 @@ def _materialize_plain_template_helper_calls(
                         materialized_template_spans,
                         [function.body_span],
                     )
-                    for child_name, child_arguments, child_span in child_calls:
+                    for (
+                        child_name,
+                        child_arguments,
+                        child_span,
+                        child_template_arguments,
+                    ) in child_calls:
                         inferred_matches: list[
                             tuple[Any, list[str], list[tuple[str, str, bool]]]
                         ] = []
@@ -10831,6 +10880,7 @@ def _materialize_plain_template_helper_calls(
                                 child_arguments,
                                 type_environment,
                                 materialized_return_types,
+                                child_template_arguments,
                             )
                             if (
                                 not inferred_arguments
@@ -10899,7 +10949,7 @@ def _materialize_plain_template_helper_calls(
                 template_spans,
                 [function.body_span],
             )
-            for function_name, call_arguments, span in calls:
+            for function_name, call_arguments, span, template_arguments in calls:
                 candidate_templates = templates_by_name.get(function_name, [])
                 inferred_matches: list[
                     tuple[Any, list[str], list[tuple[str, str, bool]]]
@@ -10911,6 +10961,7 @@ def _materialize_plain_template_helper_calls(
                         call_arguments,
                         type_environment,
                         return_types,
+                        template_arguments,
                     )
                     if (
                         not arguments
@@ -11476,6 +11527,223 @@ def _template_materialization_unsupported_message(
     )
 
 
+def _masked_metal_non_code_text(source: str) -> str:
+    chars = list(source)
+    i = 0
+    while i < len(chars):
+        if source.startswith("//", i):
+            end = source.find("\n", i)
+            if end == -1:
+                end = len(chars)
+            for index in range(i, end):
+                chars[index] = " "
+            i = end
+            continue
+        if source.startswith("/*", i):
+            end = source.find("*/", i + 2)
+            if end == -1:
+                end = len(chars) - 2
+            for index in range(i, min(end + 2, len(chars))):
+                if chars[index] != "\n":
+                    chars[index] = " "
+            i = end + 2
+            continue
+        if chars[i] in {"'", '"'}:
+            quote = chars[i]
+            chars[i] = " "
+            i += 1
+            while i < len(chars):
+                current = chars[i]
+                if current != "\n":
+                    chars[i] = " "
+                if current == "\\":
+                    i += 2
+                    continue
+                i += 1
+                if current == quote:
+                    break
+            continue
+        i += 1
+    return "".join(chars)
+
+
+def _metal_template_type_declarations(
+    preprocessor: Any,
+    unit: ProjectTranslationUnit,
+    source: str,
+) -> list[_MetalTemplateTypeDeclaration]:
+    declarations: list[_MetalTemplateTypeDeclaration] = []
+    pos = 0
+    while True:
+        match = re.search(r"\btemplate\s*<", source[pos:])
+        if match is None:
+            break
+        start = pos + match.start()
+        angle_start = source.find("<", start)
+        angle_end = preprocessor._find_matching_angle(source, angle_start)
+        if angle_end is None:
+            pos = start + len("template")
+            continue
+
+        parameters = tuple(
+            preprocessor._template_parameter_names(
+                source[angle_start + 1 : angle_end]
+            )
+        )
+        declaration_start = angle_end + 1
+        header = source[declaration_start : declaration_start + 512]
+        declaration_match = re.match(
+            r"\s*(?:\[\[[^\]]*\]\]\s*)*"
+            r"(?P<kind>struct|class)\s+"
+            r"(?P<name>[A-Za-z_][A-Za-z0-9_:]*)\b",
+            header,
+            re.DOTALL,
+        )
+        if declaration_match is None or not parameters:
+            pos = declaration_start
+            continue
+
+        body_start = preprocessor._find_next_top_level_char(
+            source,
+            declaration_start,
+            "{",
+        )
+        semicolon = preprocessor._find_next_top_level_char(
+            source,
+            declaration_start,
+            ";",
+        )
+        if body_start is not None and (semicolon is None or body_start < semicolon):
+            body_end = preprocessor._find_matching_brace(source, body_start)
+            if body_end is None:
+                pos = body_start + 1
+                continue
+            end = body_end
+            if end < len(source) and source[end] == ";":
+                end += 1
+        elif semicolon is not None:
+            end = semicolon + 1
+        else:
+            end = declaration_start + declaration_match.end()
+
+        location = _source_location_at_offset(unit, source, start, max(end - start, 0))
+        declarations.append(
+            _MetalTemplateTypeDeclaration(
+                name=declaration_match.group("name").split("::")[-1],
+                parameters=parameters,
+                span=(start, end),
+                location=location,
+            )
+        )
+        pos = max(end, declaration_start + 1)
+    return declarations
+
+
+def _source_offset_in_spans(offset: int, spans: Sequence[tuple[int, int]]) -> bool:
+    return any(start <= offset < end for start, end in spans)
+
+
+def _template_argument_missing_parameters(
+    argument: str,
+    template_parameter_names: set[str],
+) -> list[str]:
+    missing: list[str] = []
+    for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", argument):
+        if token in template_parameter_names and token not in missing:
+            missing.append(token)
+    return missing
+
+
+def _unresolved_metal_template_type_records(
+    *,
+    preprocessor: Any,
+    unit: ProjectTranslationUnit,
+    source: str,
+    target: str,
+) -> list[dict[str, Any]]:
+    declarations = _metal_template_type_declarations(preprocessor, unit, source)
+    if not declarations:
+        return []
+
+    declarations_by_name = {
+        declaration.name: declaration for declaration in declarations
+    }
+    template_parameter_names = {
+        parameter
+        for declaration in declarations
+        for parameter in declaration.parameters
+    }
+    if not template_parameter_names:
+        return []
+
+    declaration_spans = preprocessor._find_template_declaration_spans(source)
+    masked_source = _masked_metal_non_code_text(source)
+    names_pattern = "|".join(
+        re.escape(name) for name in sorted(declarations_by_name, key=len, reverse=True)
+    )
+    if not names_pattern:
+        return []
+
+    records: list[dict[str, Any]] = []
+    seen_records: set[tuple[str, tuple[str, ...], str]] = set()
+    for match in re.finditer(rf"\b(?P<name>{names_pattern})\s*<", masked_source):
+        if _source_offset_in_spans(match.start(), declaration_spans):
+            continue
+        declaration = declarations_by_name[match.group("name")]
+        angle_start = masked_source.find("<", match.start())
+        angle_end = preprocessor._find_matching_angle(source, angle_start)
+        if angle_end is None:
+            continue
+
+        arguments = [
+            argument.strip()
+            for argument in preprocessor._split_top_level_commas(
+                source[angle_start + 1 : angle_end]
+            )
+        ]
+        missing: list[str] = []
+        for argument in arguments:
+            for parameter in _template_argument_missing_parameters(
+                argument,
+                template_parameter_names,
+            ):
+                if parameter not in missing:
+                    missing.append(parameter)
+        if len(arguments) < len(declaration.parameters):
+            for parameter in declaration.parameters[len(arguments) :]:
+                if parameter not in missing:
+                    missing.append(parameter)
+        if not missing:
+            continue
+
+        required_signature = (
+            f"{declaration.name}<"
+            f"{', '.join(arguments) if arguments else ', '.join(declaration.parameters)}"
+            ">"
+        )
+        key = (declaration.name, tuple(missing), required_signature)
+        if key in seen_records:
+            continue
+        seen_records.add(key)
+        records.append(
+            {
+                "name": declaration.name,
+                "parameters": list(declaration.parameters),
+                "missingParameters": missing,
+                "reason": "missing-template-arguments",
+                "sourceDeclaration": {
+                    "file": declaration.location.file,
+                    "line": declaration.location.line,
+                    "column": declaration.location.column,
+                    "name": declaration.name,
+                },
+                "target": target,
+                "requiredSignature": required_signature,
+            }
+        )
+    return records
+
+
 def _project_template_materialization_for_artifact(
     *,
     unit: ProjectTranslationUnit,
@@ -11529,7 +11797,13 @@ def _project_template_materialization_for_artifact(
         return None
 
     source_template_parameters = _metal_template_parameter_names(discovery_source)
-    if not source_template_parameters:
+    unresolved_type_records = _unresolved_metal_template_type_records(
+        preprocessor=discovery_preprocessor,
+        unit=unit,
+        source=discovery_source,
+        target=target,
+    )
+    if not source_template_parameters and not unresolved_type_records:
         return None
 
     configured_parameters = {
@@ -11550,6 +11824,42 @@ def _project_template_materialization_for_artifact(
         for name, value in defines.items()
         if name not in configured_parameters
     }
+    if unresolved_type_records:
+        metadata = _template_materialization_metadata(
+            specializations=[],
+            configured_parameters={},
+            configured_parameter_sources={},
+            unsupported=unresolved_type_records,
+        )
+        message = _template_materialization_unsupported_message(
+            target,
+            unit,
+            unresolved_type_records,
+        )
+        return ProjectTemplateMaterializedSource(
+            text=discovery_source,
+            metadata=metadata,
+            defines=parser_defines,
+            source_options={
+                **_frontend_source_options(source_options),
+                "preprocess": False,
+            },
+            diagnostics=[
+                ProjectDiagnostic(
+                    severity="error",
+                    code="project.translate.template-materialization-unsupported",
+                    message=message,
+                    location=SourceLocation(file=unit.relative_path),
+                    target=target,
+                    source_backend=unit.source_backend,
+                    variant=variant,
+                    missing_capabilities=["template.specialization"],
+                )
+            ],
+            blocked=True,
+            error=message,
+        )
+
     preprocessor = MetalPreprocessor(
         **base_preprocessor_kwargs,
         defines=parser_defines,

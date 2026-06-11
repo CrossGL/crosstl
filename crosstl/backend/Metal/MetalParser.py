@@ -534,6 +534,8 @@ class MetalParser:
                     typedefs.append(typedef)
             elif self.current_token[0] == "STATIC_ASSERT":
                 global_variables.append(self.parse_static_assert())
+            elif self.is_conversion_operator_fragment():
+                self.skip_struct_method()
             elif self.is_operator_function_definition():
                 self.skip_operator_function_definition()
             elif self.is_decltype_template_instantiation_declaration():
@@ -1088,6 +1090,70 @@ class MetalParser:
             return
         if self.current_token[0] == "LBRACE":
             self.skip_balanced_block()
+
+    def is_conversion_operator_fragment(self):
+        idx = self.skip_leading_attribute_tokens_at(self.pos)
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+            idx += 1
+            idx = self.skip_leading_attribute_tokens_at(idx)
+
+        while idx < len(self.tokens) and self.tokens[idx] == (
+            "IDENTIFIER",
+            "explicit",
+        ):
+            idx += 1
+            idx = self.skip_leading_attribute_tokens_at(idx)
+
+        if idx >= len(self.tokens) or self.tokens[idx] != ("IDENTIFIER", "operator"):
+            return False
+
+        idx = self.skip_conversion_operator_type_at(idx + 1)
+        if idx >= len(self.tokens) or self.tokens[idx][0] != "LPAREN":
+            return False
+
+        idx = self.skip_balanced_tokens_at(idx, "LPAREN", "RPAREN")
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type in {"CONST", "VOLATILE", "BITWISE_AND", "AND"}:
+                idx += 1
+                continue
+            if self.is_qualifier_token_at(idx) or self.is_gnu_attribute_start_at(idx):
+                idx += 1
+                continue
+            break
+
+        return idx < len(self.tokens) and self.tokens[idx][0] in {
+            "LBRACE",
+            "SEMICOLON",
+        }
+
+    def skip_conversion_operator_type_at(self, idx):
+        idx = self.skip_leading_attribute_tokens_at(idx)
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+            idx += 1
+            idx = self.skip_leading_attribute_tokens_at(idx)
+
+        if idx >= len(self.tokens):
+            return idx
+        if self.tokens[idx][0] in {"STRUCT", "ENUM"}:
+            idx += 1
+            if idx < len(self.tokens) and self.is_name_token_at(idx):
+                idx += 1
+        elif self.tokens[idx][0] in SCOPED_IDENTIFIER_PART_TOKENS:
+            idx += 1
+        else:
+            return idx
+
+        idx = self.skip_type_reference_suffix_at(idx)
+        while idx < len(self.tokens):
+            if self.is_qualifier_token_at(idx):
+                idx += 1
+                continue
+            if self.tokens[idx][0] in {"MULTIPLY", "BITWISE_AND"}:
+                idx += 1
+                continue
+            break
+        return idx
 
     def is_decltype_template_instantiation_declaration(self):
         idx = self.skip_leading_attribute_tokens_at(self.pos)
