@@ -11462,6 +11462,77 @@ def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins():
     assert "QuadRead" not in generated
 
 
+def test_glsl_lowers_metal_simd_group_helpers_to_khr_subgroup_builtins():
+    code = """
+    shader GLSLMetalSimdGroupHelpers {
+        compute {
+            void main() {
+                uint lane = 1u;
+                uint sumValue = __metal_simd_sum(lane);
+                uint productValue = __metal_simd_product(lane + 1u);
+                uint minValue = __metal_simd_min(sumValue);
+                uint maxValue = __metal_simd_max(productValue);
+                uint xorValue = __metal_simd_xor(maxValue);
+                uint prefixExclusive = __metal_simd_prefix_exclusive_sum(xorValue);
+                uint prefixInclusive = __metal_simd_prefix_inclusive_sum(prefixExclusive);
+                uint inclusiveProduct = __metal_simd_prefix_inclusive_product(lane + 1u);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "#extension GL_KHR_shader_subgroup_basic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_arithmetic : require" in generated
+    for expected in [
+        "uint sumValue = subgroupAdd(lane);",
+        "uint productValue = subgroupMul((lane + 1u));",
+        "uint minValue = subgroupMin(sumValue);",
+        "uint maxValue = subgroupMax(productValue);",
+        "uint xorValue = subgroupXor(maxValue);",
+        "uint prefixExclusive = subgroupExclusiveAdd(xorValue);",
+        "uint prefixInclusive = subgroupInclusiveAdd(prefixExclusive);",
+        "uint inclusiveProduct = subgroupInclusiveMul((lane + 1u));",
+    ]:
+        assert expected in generated
+
+    assert "__metal_simd" not in generated
+
+
+def test_glsl_metal_simd_group_helper_diagnostics_replace_unresolved_calls():
+    code = """
+    shader GLSLMetalSimdGroupHelperDiagnostics {
+        compute {
+            void main() {
+                uint lane = 1u;
+                bool flag = true;
+                float badSum = __metal_simd_sum(flag);
+                uint badArity = __metal_simd_max(lane, lane);
+                uint unsupported = __metal_simd_shuffle_down(lane, 1u);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert (
+        "__metal_simd_sum requires a numeric scalar or vector value argument: "
+        "flag has type bool"
+    ) in generated
+    assert "__metal_simd_max expects 1 arguments, got 2" in generated
+    assert (
+        "/* GLSL wave intrinsic diagnostic: __metal_simd_shuffle_down "
+        "has no OpenGL subgroup equivalent */ 0u"
+    ) in generated
+    assert "subgroupAdd(flag)" not in generated
+    assert "subgroupMax(lane, lane)" not in generated
+    assert "__metal_simd_shuffle_down(" not in generated
+
+
 def test_glsl_wave_intrinsic_invalid_arities_and_wave_match_lowering():
     code = """
     shader GLSLWaveDiagnostics {
