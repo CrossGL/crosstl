@@ -17716,6 +17716,39 @@ def test_directx_toolchain_smoke_commands_compile_all_detected_entries(tmp_path)
     ]
 
 
+def test_directx_toolchain_smoke_command_uses_vrs_capable_profile(tmp_path):
+    shader = tmp_path / "vrs_fragment.hlsl"
+    shader.write_text(
+        textwrap.dedent("""
+            struct FragmentInput {
+                float4 position : SV_Position;
+            };
+
+            float4 PSMain(
+                FragmentInput input,
+                uint shadingRate : SV_ShadingRate
+            ) : SV_Target0 {
+                return float4(shadingRate.xxx / 4.0, 1.0);
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_command("directx", ["dxc"], shader) == (
+        [
+            "dxc",
+            "-T",
+            "ps_6_4",
+            "-E",
+            "PSMain",
+            str(shader),
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+        "artifact",
+    )
+
+
 def test_directx_toolchain_smoke_command_compiles_library_targets(tmp_path):
     shader = tmp_path / "ray_library.hlsl"
     shader.write_text(
