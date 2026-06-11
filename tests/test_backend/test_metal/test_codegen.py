@@ -1866,7 +1866,8 @@ def test_codegen_device_buffer_parameters_use_structured_buffer_contract():
     assert "RWStructuredBuffer<float> data" in hlsl
     assert "StructuredBuffer<float> input" in hlsl
     assert "float value = input.Load(tid.x);" in hlsl
-    assert "data.Store(tid.x, (value * 2.0));" in hlsl
+    assert "data[tid.x] = (value * 2.0);" in hlsl
+    assert "data.Store(" not in hlsl
 
     metal = MetalCodeGen().generate(ast)
     assert "kernel void compute_main(device float* data" in metal
