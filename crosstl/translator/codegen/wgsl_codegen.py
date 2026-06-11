@@ -3101,11 +3101,7 @@ class WGSLCodeGen:
                 return f"{operand} -= 1"
             return f"{expr.operator}{operand}"
         if isinstance(expr, TernaryOpNode):
-            return (
-                f"select({self.generate_expression(expr.false_expr)}, "
-                f"{self.generate_expression(expr.true_expr)}, "
-                f"{self.generate_expression(expr.condition)})"
-            )
+            return self.generate_ternary_expression(expr)
         if isinstance(expr, FunctionCallNode):
             return self.generate_function_call(expr)
         if isinstance(expr, ConstructorNode):
@@ -3194,6 +3190,58 @@ class WGSLCodeGen:
             f"operand(s) are not valid for operator {expr.operator}"
         )
 
+    def generate_ternary_expression(self, expr):
+        self.validate_ternary_select_operands(expr)
+        return (
+            f"select({self.generate_expression(expr.false_expr)}, "
+            f"{self.generate_expression(expr.true_expr)}, "
+            f"{self.generate_expression(expr.condition)})"
+        )
+
+    def validate_ternary_select_operands(self, expr):
+        condition_type = self.expression_type(expr.condition)
+        condition_scalar = self.scalar_type_name(condition_type)
+        condition_shape = self.vector_shape(condition_type)
+        if (
+            condition_type is not None
+            and condition_scalar != "bool"
+            and not (condition_shape is not None and condition_shape[0] == "bool")
+        ):
+            raise ValueError(
+                "WGSL target requires a bool or bool vector ternary condition; "
+                f"got {self.select_type_diagnostic_name(condition_type)}"
+            )
+
+        true_type = self.expression_type(expr.true_expr)
+        false_type = self.expression_type(expr.false_expr)
+        if true_type is None or false_type is None:
+            return
+
+        true_name = self.select_type_diagnostic_name(true_type)
+        false_name = self.select_type_diagnostic_name(false_type)
+        if true_name != false_name:
+            raise ValueError(
+                "WGSL target requires matching true/false expression types for "
+                f"ternary select; got {true_name} and {false_name}"
+            )
+
+        if condition_shape is None:
+            return
+        true_shape = self.vector_shape(true_type)
+        if true_shape is None or true_shape[1] != condition_shape[1]:
+            raise ValueError(
+                "WGSL target requires a vector bool ternary condition to match "
+                "the vector branch width; got condition "
+                f"{self.select_type_diagnostic_name(condition_type)} and branch "
+                f"{true_name}"
+            )
+
+    def select_type_diagnostic_name(self, vtype):
+        try:
+            return self.type_name_string(vtype)
+        except ValueError:
+            return self.function_type_signature(vtype)
+
     def is_bool_vector_expression(self, expr):
         shape = self.vector_shape(self.expression_type(expr))
         return shape is not None and shape[0] == "bool"
@@ -3256,6 +3304,12 @@ class WGSLCodeGen:
             return self.generate_image_load_call(node, function_name)
         if normalized_name == "imagestore":
             return self.generate_image_store_call(node, function_name)
+        if normalized_name.startswith("imageatomic"):
+            raise ValueError(
+                "WGSL target does not support storage image atomic operation "
+                f"{function_name}; WebGPU storage textures do not expose image "
+                "atomic operations"
+            )
         if (
             normalized_name in self.BARRIER_FUNCTION_NAMES
             and not self.is_user_defined_function_call(
@@ -6170,6 +6224,8 @@ class WGSLCodeGen:
             return self._struct_member_types.get((struct_name, expr.member))
         if isinstance(expr, BinaryOpNode):
             return self.binary_expression_type(expr)
+        if isinstance(expr, TernaryOpNode):
+            return self.ternary_expression_type(expr)
         if isinstance(expr, FunctionCallNode):
             function_name = self.expression_name(expr.function)
             option_call_type = self.builtin_option_call_type(expr, function_name)
@@ -6264,6 +6320,15 @@ class WGSLCodeGen:
             return left_scalar
         if left_type == right_type:
             return left_type
+        return None
+
+    def ternary_expression_type(self, expr):
+        true_type = self.expression_type(expr.true_expr)
+        false_type = self.expression_type(expr.false_expr)
+        if true_type is None or false_type is None:
+            return None
+        if self.function_types_compatible(true_type, false_type):
+            return true_type
         return None
 
     def scalar_type_name(self, vtype):

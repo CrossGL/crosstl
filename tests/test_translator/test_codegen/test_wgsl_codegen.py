@@ -269,6 +269,96 @@ def test_wgsl_codegen_rejects_vector_bool_logical_operators(expression):
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+def test_wgsl_codegen_lowers_scalar_condition_vector_ternary_to_select():
+    shader = """
+    shader WGSLScalarConditionVectorTernary {
+        fragment {
+            vec4 main(bool choose @ TEXCOORD0, vec3 a @ TEXCOORD1, vec3 b @ TEXCOORD2) @ gl_FragColor {
+                vec3 selected = choose ? a : b;
+                return vec4<f32>(selected, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var selected: vec3<f32> = select(b, a, choose);" in generated
+
+
+def test_wgsl_codegen_lowers_vector_condition_ternary_to_select():
+    shader = """
+    shader WGSLVectorConditionTernary {
+        fragment {
+            vec4 main(vec3 color @ TEXCOORD0) @ gl_FragColor {
+                bvec3 mask = color < vec3(0.5);
+                vec3 selected = mask ? vec3(1.0) : vec3(0.0);
+                return vec4<f32>(selected, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "var selected: vec3<f32> = select(vec3<f32>(0.0), vec3<f32>(1.0), mask);"
+        in generated
+    )
+
+
+@pytest.mark.parametrize(
+    ("condition_declaration", "condition", "true_expr", "false_expr", "message"),
+    [
+        (
+            "bvec3 mask = color < vec3(0.5);",
+            "mask",
+            "1.0",
+            "0.0",
+            "vector bool ternary condition to match the vector branch width",
+        ),
+        (
+            "bvec3 mask = color < vec3(0.5);",
+            "mask",
+            "vec2(1.0)",
+            "vec2(0.0)",
+            "vector bool ternary condition to match the vector branch width",
+        ),
+        (
+            "bool choose = true;",
+            "choose",
+            "vec3(1.0)",
+            "vec2(0.0)",
+            "matching true/false expression types",
+        ),
+        (
+            "int lane = 1;",
+            "lane",
+            "vec3(1.0)",
+            "vec3(0.0)",
+            "bool or bool vector ternary condition",
+        ),
+    ],
+)
+def test_wgsl_codegen_rejects_invalid_ternary_select_operands(
+    condition_declaration, condition, true_expr, false_expr, message
+):
+    shader = f"""
+    shader WGSLInvalidTernarySelect {{
+        fragment {{
+            vec4 main(vec3 color @ TEXCOORD0) @ gl_FragColor {{
+                {condition_declaration}
+                vec3 selected = {condition} ? {true_expr} : {false_expr};
+                return vec4<f32>(selected, 1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_casts_integer_vector_constructor_arguments():
     shader = """
     shader WGSLIntegerVectorConstructorArgs {
@@ -984,6 +1074,28 @@ def test_wgsl_codegen_infers_image2d_read_access_from_image_load():
         "var color: vec4<f32> = textureLoad(inputImage, vec2<i32>(1, 2));" in generated
     )
     assert "imageLoad" not in generated
+
+
+def test_wgsl_codegen_rejects_storage_image_atomics():
+    shader = """
+    shader WGSLStorageImageAtomic {
+        uimage2D counters @binding(2) @rgba32ui @readwrite;
+        compute {
+            void main() {
+                uint original = imageAtomicAdd(counters, ivec2(1, 2), 1u);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WGSL target does not support storage image atomic operation "
+            "imageAtomicAdd"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
 
 
 def test_wgsl_codegen_lowers_imagecube_to_storage_texture_array():

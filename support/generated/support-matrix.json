@@ -399,7 +399,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 90,
+        "unsupported_marker_count": 91,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 146
+        "test_count": 150
       },
       "translator_codegen": {
         "exists": true,
@@ -5161,9 +5161,9 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_storage_image_atomics"
           ],
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "notes": "WGSL storage textures do not expose image atomic operations, so imageAtomic* calls emit deterministic diagnostics instead of leaking invalid WGSL.",
           "status": "diagnostic"
         }
       }
@@ -5264,9 +5264,9 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsupported_resource_texture_constructs"
           ],
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "notes": "WGSL/WebGPU exposes sampled multisample textures separately from storage textures; multisample storage image declarations are rejected with deterministic diagnostics.",
           "status": "diagnostic"
         }
       }
