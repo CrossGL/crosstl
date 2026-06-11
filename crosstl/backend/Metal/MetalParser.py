@@ -2486,6 +2486,9 @@ class MetalParser:
     def parse_struct_members(self):
         members = []
         while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+                continue
             if self.is_access_specifier_label():
                 self.parse_access_specifier_label()
                 continue

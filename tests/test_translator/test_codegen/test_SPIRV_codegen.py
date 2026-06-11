@@ -1995,6 +1995,62 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_complex_helper_call_converts_materialized_struct_alias_argument(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ComplexHelperAliasCall {
+            struct complex64_t {
+                float real;
+                float imag;
+            }
+
+            struct MaterializedComplex {
+                float x;
+                float y;
+            }
+
+            compute {
+                complex64_t passComplex(complex64_t value) {
+                    return value;
+                }
+
+                MaterializedComplex chooseAlias(bool flag) {
+                    MaterializedComplex first;
+                    MaterializedComplex second;
+                    return flag ? first : second;
+                }
+
+                void main() {
+                    MaterializedComplex values[2];
+                    complex64_t fromArray = passComplex(values[0]);
+                    complex64_t fromHelper = passComplex(chooseAlias(true));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        complex_type = spirv_named_id(spv_code, "complex64_t")
+        alias_type = spirv_named_id(spv_code, "MaterializedComplex")
+
+        assert complex_type is not None
+        assert alias_type is not None
+        assert re.search(
+            rf"%\d+ = OpLoad {re.escape(alias_type)} %\d+\n"
+            rf"(?:%\d+ = OpCompositeExtract %\d+ %\d+ \d+\n)+"
+            rf"(?P<converted>%\d+) = OpCompositeConstruct "
+            rf"{re.escape(complex_type)} %\d+ %\d+\n"
+            rf"%\d+ = OpFunctionCall {re.escape(complex_type)} %\d+ "
+            rf"(?P=converted)",
+            spv_code,
+        )
+        assert_spirv_function_calls_use_declared_parameter_types(spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_generic_functions_specialize_concrete_calls(self):
         source_code = """
         shader GenericFunctionDiagnostic {
@@ -27370,6 +27426,42 @@ class TestSpirvShaderValidation:
         assert "OpFunctionParameter" not in spv_code
         assert f"OpDecorate {global_id} BuiltIn GlobalInvocationId" in spv_code
         assert re.search(rf"OpEntryPoint GLCompute %\d+ \"main\" {global_id}", spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_scalar_compute_builtin_materialization_extracts_matching_store_value(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ScalarBuiltinMaterialization {
+            compute {
+                @ stage_entry
+                void input_coherent(
+                    RWStructuredBuffer<uint> input @buffer(0),
+                    uint index @gl_GlobalInvocationID
+                ) {
+                    buffer_store(input, index, buffer_load(input, index));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        assert uint_type is not None
+        index = spirv_named_variable(spv_code, "index", storage_class="Function")
+
+        store_value = re.search(
+            rf"(?P<extract>%\d+) = OpCompositeExtract "
+            rf"{re.escape(uint_type.group(1))} %\d+ 0\n"
+            rf"OpStore {re.escape(index)} (?P=extract)",
+            spv_code,
+        )
+        assert store_value is not None
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
