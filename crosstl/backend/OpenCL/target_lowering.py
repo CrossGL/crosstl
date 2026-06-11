@@ -1,6 +1,7 @@
 """OpenCL-specific CrossGL AST lowering for target backend code generation."""
 
 from dataclasses import dataclass
+from typing import Tuple
 
 from crosstl.translator.ast import (
     ArrayType,
@@ -65,7 +66,7 @@ class OpenCLTargetUnsupportedContract:
     signature: str
     reason: str
     action: str
-    missing_capabilities: tuple[str, ...]
+    missing_capabilities: Tuple[str, ...]
 
     def format_project_message(self, target_backend=None):
         target = _target_backend_label(target_backend)
