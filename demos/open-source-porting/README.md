@@ -46,6 +46,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `directx-graphics-samples-hello-texture` | `microsoft/DirectX-Graphics-Samples` at `31ae3c91160d8634264004cdaf4e41a99c41243e` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Hello Texture shader file without source edits. Host texture setup remains outside the demo scope. |
 | `directx-shader-compiler-neg1` | `microsoft/DirectXShaderCompiler` at `d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652` | University of Illinois/NCSA | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream negated swizzle pixel shader unchanged. |
 | `directx-sdk-samples-tutorial02` | `walbourn/directx-sdk-samples-reworked` at `1ad8f0f6a3e4d9be7e54ca52640ac12b6565ab0c` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Direct3D 11 Tutorial02 effect include unchanged. |
+| `diligent-samples-tutorial02-cube` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Tutorial02 cube vertex and pixel shader pair with repository whitespace normalization. |
 | `diligent-samples-vrs-cube-vertex` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream VRS cube vertex shader unchanged. The paired fragment-density stage remains outside the checked set because the translator now diagnoses it as unsupported. |
 | `glslang-push-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream push-constant vertex shader unchanged. |
 | `glslang-spec-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream specialization-constant vertex shader unchanged. Source-target output records fallback literals where native specialization IDs cannot be preserved. DirectX output is tracked in issue #1154. |
@@ -80,14 +81,14 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 
 ## Source adjustments
 
-The ARM OpenGL ES SDK, DiligentSamples VRS vertex, DirectX, DirectX SDK
-Samples, DirectXShaderCompiler, glslang, Metal performance, NVIDIA CUDA
-Samples, MonoGame, nvpro-samples, ogl-samples, OpenCL-SDK, openFrameworks,
-RenderDoc, Rust-GPU VulkanShaderExamples, SPIRV-Cross, SPIRV-Tools,
-Vulkan-Tools, raylib, SaschaWillems triangle, and Slang cases keep upstream
-source files unchanged apart from repository formatting checks. The DirectX
-Hello Texture shader was retested after issue #783 closed and is now checked
-for OpenGL, Metal, DirectX, and Vulkan output.
+The ARM OpenGL ES SDK, DiligentSamples Tutorial02 cube, DiligentSamples VRS
+vertex, DirectX, DirectX SDK Samples, DirectXShaderCompiler, glslang, Metal
+performance, NVIDIA CUDA Samples, MonoGame, nvpro-samples, ogl-samples,
+OpenCL-SDK, openFrameworks, RenderDoc, Rust-GPU VulkanShaderExamples,
+SPIRV-Cross, SPIRV-Tools, Vulkan-Tools, raylib, SaschaWillems triangle, and
+Slang cases keep upstream source files unchanged apart from repository
+formatting checks. The DirectX Hello Texture shader was retested after issue
+#783 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan output.
 The SaschaWillems headless compute shader was retested after issue #756 and
 issue #780 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan
 output. The Vulkan Samples, Apple, ROCm add-kernel, and Rust-GPU/rust-gpu
@@ -130,11 +131,10 @@ Metal output was retested after issue #887 closed and is now checked.
 
 The `glfw/glfw` OpenGL triangle shader strings were tested as a candidate and
 originally exposed the CrossGL intermediate keyword collision tracked in issue
-#766. Retesting after issue #1140 closed showed the remaining blocker is Metal
-output: the fragment shader uses `fragment` as a user output variable, and
-Metal codegen still emits `fragment` as a local identifier even though it is a
-Metal stage keyword. That follow-up is tracked in issue #1159, and the case is
-intentionally not checked in until generated Metal artifacts compile directly.
+#766. Retesting after issue #1159 closed shows the generated Metal fragment
+shader now escapes the `fragment` stage keyword collision and compiles
+directly. The case remains a future expansion candidate because it is not yet
+stored with the checked demo corpus and third-party notices.
 
 The checked `KhronosGroup/glslang` push-constant vertex shader was retested
 after issue #813 and issue #856 closed and is now checked for DirectX and
@@ -157,15 +157,12 @@ preservation was retested after issue #951 closed, OpenGL and Vulkan output
 were restored after issues #971 and #972 closed, and Metal resource attributes
 were retested after issue #988 closed.
 
-The `DiligentGraphics/DiligentSamples` Tutorial02 Cube shaders from
-`Tutorials/Tutorial02_Cube/assets/cube.vsh` and
-`Tutorials/Tutorial02_Cube/assets/cube.psh` at
-`30b94f26e7d10cde0be48c75a2c252185f564b69` were tested as a candidate. They
-were retested after issue #814 closed, but still expose invalid generated
-OpenGL for HLSL `in`/`out` parameter shaders and invalid Metal stage entry
-points. The current follow-up is tracked in issue #1147, and the case is
-intentionally not checked in until generated OpenGL and Metal artifacts compile
-directly or report unsupported lowering explicitly.
+The `DiligentGraphics/DiligentSamples` Tutorial02 Cube shaders keep the
+upstream shader statements and entry points unchanged, with trailing whitespace
+normalized by repository formatting. The project config maps the nonstandard
+`.vsh` and `.psh` file extensions to the DirectX backend, and the case is
+checked for CrossGL, OpenGL, Metal, DirectX, and Vulkan output after issue
+#1147 closed.
 
 The checked `DiligentGraphics/DiligentSamples` VRS cube vertex shader is
 included for CrossGL, OpenGL, and Vulkan output. The paired fragment shader
@@ -259,7 +256,7 @@ The `bkvogel/metal_performance_testing` matmul kernel is checked for CrossGL,
 Metal, and Vulkan output. OpenGL remains excluded because generated compute
 input parameters still lack valid GLSL resource declarations, tracked in issue
 #1158. DirectX remains excluded because Metal buffer parameters still lower to
-raw HLSL pointer parameters, tracked in issue #1156.
+raw HLSL pointer parameters, tracked in issue #1168.
 
 The `SaschaWillems/Vulkan` headless compute shader was retested after issue
 #780 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan output.

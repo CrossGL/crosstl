@@ -1,0 +1,10 @@
+[project]
+source_roots = ["."]
+include = ["cube.vsh", "cube.psh"]
+targets = ["cgl", "opengl", "metal", "directx", "vulkan"]
+output_dir = "crosstl-out"
+external_corpus_manifest = "corpus.json"
+
+[project.sources]
+"cube.vsh" = "directx"
+"cube.psh" = "directx"

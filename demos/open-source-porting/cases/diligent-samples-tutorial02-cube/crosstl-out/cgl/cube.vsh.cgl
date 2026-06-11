@@ -1,0 +1,15 @@
+shader main {
+    // Constant Buffers
+    cbuffer Constants {
+        mat4 g_WorldViewProj;
+    }
+    // vertex Shader
+    vertex {
+    void main(in vec3 VSIn_Pos @ ATTRIB0, in vec4 VSIn_Color @ ATTRIB1, out vec4 PSIn_Pos @ gl_Position, out vec4 PSIn_Color @ Color0) {
+        PSIn_Pos = (vec4(VSIn_Pos, 1.0) * g_WorldViewProj);
+        PSIn_Color = VSIn_Color;
+    }
+
+    }
+
+}
