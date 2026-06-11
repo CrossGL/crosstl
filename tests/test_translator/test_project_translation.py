@@ -33482,6 +33482,53 @@ def test_translate_project_metal_directx_relocates_stage_entry_buffer_bindings(
     assert output.count(": register(b2)") == 1
 
 
+def test_translate_project_metal_half3_viewdir_lowers_to_cuda_and_hip(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "apple_mesh_viewdir.metal").write_text(
+        textwrap.dedent("""
+            struct Camera { float4x4 invViewMatrix; };
+            struct Input { float3 position; };
+            struct Output { xhalf3 viewDir; };
+
+            vertex Output main_vertex(Input in [[stage_in]],
+                                      constant Camera& camera [[buffer(0)]]) {
+                Output out;
+                out.viewDir =
+                    (xhalf3)normalize(camera.invViewMatrix[3].xyz - in.position);
+                return out;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["cuda", "hip"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("cuda", "translated"), ("hip", "translated")}
+    assert not [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.failed"
+    ]
+
+    outputs = {
+        artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in payload["artifacts"]
+    }
+    for target, output in outputs.items():
+        assert "struct cgl_half3" in output
+        assert "cgl_half3 viewDir;" in output
+        assert "cgl_make_half3" in output
+        assert "f16vec3" not in output
+        assert f"{target.upper()} does not support FP16 vector type" not in output
+
+
 def test_translate_project_metal_matmul_buffers_lower_to_directx_resources(
     tmp_path,
 ):
