@@ -159,18 +159,20 @@ The `DiligentGraphics/DiligentSamples` Tutorial02 Cube shaders from
 `Tutorials/Tutorial02_Cube/assets/cube.vsh` and
 `Tutorials/Tutorial02_Cube/assets/cube.psh` at
 `30b94f26e7d10cde0be48c75a2c252185f564b69` were tested as a candidate. They
-currently expose invalid generated GLSL for HLSL `in`/`out` parameter shaders
-and invalid Metal stage entry points. That translator issue is tracked in issue
-#814, and the case is intentionally not checked in until generated OpenGL and
-Metal artifacts compile directly.
+were retested after issue #814 closed, but still expose invalid generated
+OpenGL for HLSL `in`/`out` parameter shaders and invalid Metal stage entry
+points. The current follow-up is tracked in issue #1147, and the case is
+intentionally not checked in until generated OpenGL and Metal artifacts compile
+directly or report unsupported lowering explicitly.
 
 The checked `DiligentGraphics/DiligentSamples` VRS cube vertex shader is
 included for CrossGL, OpenGL, and Vulkan output. The paired fragment shader
 uses `GL_EXT_fragment_invocation_density` and `gl_FragSizeEXT`; generated
-Metal and HLSL currently keep that GLSL built-in as an undeclared identifier,
-and generated SPIR-V loses the built-in value. That translator issue is tracked
-in issue #826, so the fragment stage is intentionally excluded until unsupported
-fragment-density semantics are diagnosed or lowered correctly.
+Metal and HLSL previously kept that GLSL built-in as an undeclared identifier,
+and generated SPIR-V lost the built-in value. Retesting after issue #826 closed
+shows the fragment stage now fails with structured unsupported-feature
+diagnostics, so it remains excluded until fragment-density semantics are
+lowered for target backends.
 
 The `g-truc/ogl-samples` flat-color shader pair is checked for CrossGL,
 Metal, OpenGL, and Vulkan output.
@@ -188,35 +190,35 @@ CrossGL, OpenGL, Metal, DirectX, and Vulkan output after issue #820 restored
 legacy `gl_FragColor` lowering.
 
 The `KhronosGroup/OpenCL-SDK` reduce kernel from `samples/core/reduce/reduce.cl`
-at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` was tested as a candidate. It
-currently generates SPIR-V assembly, but Metal output still contains unresolved
-OpenCL scalar aliases and local pointer syntax, and OpenGL output drops helper
-function return values. That translator issue is tracked in issue #811, and the
-case is intentionally not checked in until target artifacts compile directly.
+at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` was tested as a candidate and
+retested after issue #811 closed. The project pipeline now reports structured
+unsupported-lowering diagnostics for unresolved reduction helpers, local
+pointer helper parameters, and event/local-memory builtins instead of checking
+in invalid target artifacts. The case remains excluded until those OpenCL
+semantics are lowered or the source is reduced to a supported kernel shape.
 
 The `microsoft/DirectX-Graphics-Samples` HelloConstBuffers shader from
 `Samples/Desktop/D3D12HelloWorld/src/HelloConstBuffers/shaders.hlsl` at
-`31ae3c91160d8634264004cdaf4e41a99c41243e` was tested as a candidate. It
-currently generates OpenGL and SPIR-V artifacts that validate, but direct Metal
-compilation fails because HLSL user vertex semantics such as `COLOR` are emitted
-as raw Metal attributes instead of valid `[[attribute(n)]]` bindings. That
-translator issue is tracked in issue #812. The existing HelloTriangle Metal
-artifact has the same direct-compile limitation, so macOS compile-reference CI
-intentionally covers only the DirectX-derived Metal files that compile today.
+`31ae3c91160d8634264004cdaf4e41a99c41243e` was tested as a candidate. It was
+retested after issue #812 closed and now emits directly compilable Metal
+attribute bindings for the candidate shader. It remains documented here as a
+candidate for a future demo expansion rather than a current checked case.
 
 The `shader-slang/slang` default-parameter compute shader from
 `tests/compute/default-parameter.slang` at
 `adc996670ec281aa8a4ee131f30b324648cbbe60` was tested as a candidate and
 exposed target lowering gaps for default function parameters in OpenGL and
-Metal output. That translator issue is tracked in issue #781, and the case is
-intentionally not checked in until generated source targets preserve the
-default-argument call semantics.
+Metal output. Retesting after issue #781 closed shows OpenGL, Metal, and
+SPIR-V output now validate, so the source is a candidate for a future demo
+expansion.
 
 The `microsoft/DirectXShaderCompiler` scalar-splat compute test was tested as
 a candidate and exposed target semantic gaps for HLSL scalar swizzles and
-`groupshared` storage. That translator issue is tracked in issue #767, and the
-case is intentionally not checked in until target output preserves the compute
-semantics rather than emitting placeholder comments.
+`groupshared` storage. Retesting after issue #767 closed shows scalar splats
+are preserved in SPIR-V, but Metal still uses placeholder output for
+program-scope `groupshared` storage. That remaining gap is tracked in issue
+#1149, and the case is intentionally not checked in until target output
+preserves the compute semantics or reports unsupported lowering explicitly.
 
 The `NVIDIA/cuda-samples` vector-add NVRTC kernel was retested after issue #772
 closed and is now checked for Metal and Vulkan output. The upstream host
@@ -236,17 +238,17 @@ The `ROCm/rocm-examples` add-kernel case uses only the upstream
 `[sphinx-kernel-start]` to `[sphinx-kernel-end]` source section. The full sample
 host `main()`, HIP runtime calls, and launch configuration are runtime
 integration work outside this shader translation demo. The earlier
-`ROCm/rocm-examples` bit-extract HIP kernel was retested after issue #778
-closed. The generated artifacts now preserve a compute entry point, but Metal
-still needs scalar kernel-parameter lowering and host `main` filtering, and
-SPIR-V still needs host-entry filtering; that follow-up is tracked in issue
-#795.
+`ROCm/rocm-examples` bit-extract HIP kernel was retested after issue #795
+closed; generated Metal now compiles and generated SPIR-V contains only the
+translated compute entry point. It remains a candidate for a future demo
+expansion.
 
 The `modular/modular` Mojo GPU vector-add example was tested as a candidate.
-It translates to CrossGL, but Metal and SPIR-V artifact generation still fails
-when Mojo identifier AST nodes cross the target-generation path; that
-translator issue is tracked in issue #798. The candidate is intentionally not
-checked in until platform target artifacts can be generated and validated.
+It now generates Metal and SPIR-V artifacts after issue #798 closed, but those
+artifacts still contain unresolved Mojo host/runtime constructs and fail direct
+target validation. The current follow-up is tracked in issue #1148. The
+candidate is intentionally not checked in until platform target artifacts can be
+generated and validated.
 
 The `KhronosGroup/OpenCL-SDK` SAXPY kernel was retested after issue #751 and
 issue #768 closed and is now checked for OpenGL, Metal, and Vulkan output.
