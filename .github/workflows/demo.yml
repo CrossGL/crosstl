@@ -96,7 +96,7 @@ jobs:
             --case directx-shader-compiler-neg1 \
             --case directx-sdk-samples-tutorial02 \
             --case diligent-samples-tutorial02-cube \
-            --case diligent-samples-vrs-cube-vertex \
+            --case diligent-samples-vrs-cube \
             --case glslang-push-constant-vertex \
             --case glslang-spec-constant-vertex \
             --case godot-betsy-alpha-stitch \
@@ -263,6 +263,7 @@ jobs:
             --case angle-simple-texture-2d \
             --case apple-modern-rendering-mesh-viewdir \
             --case arm-opengl-es-sdk-cube \
+            --case sascha-willems-vulkan-conservative-triangle \
             --case sascha-willems-vulkan-headless-compute \
             --case slang-hello-world-compute \
             --case vulkan-tools-cube \
@@ -312,6 +313,7 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/apple-modern-rendering-mesh-viewdir/crosstl-out/directx/AAPLMeshRenderer.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.vert.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.frag.hlsl PSMain ps_6_0
+          compile_hlsl demos/open-source-porting/cases/sascha-willems-vulkan-conservative-triangle/crosstl-out/directx/triangle.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/directx/headless.hlsl CSMain cs_6_0
           compile_hlsl demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/directx/hello-world.hlsl CSMain cs_6_0
           compile_hlsl demos/open-source-porting/cases/vulkan-tools-cube/crosstl-out/directx/cube.vert.hlsl VSMain vs_6_0

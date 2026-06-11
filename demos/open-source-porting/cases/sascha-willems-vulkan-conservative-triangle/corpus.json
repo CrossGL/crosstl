@@ -7,7 +7,7 @@
       "id": "sascha-willems-vulkan-conservative-triangle-vertex",
       "path": "triangle.vert",
       "sourceBackend": "opengl",
-      "targets": ["cgl", "opengl", "metal", "vulkan"],
+      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
       "repository": "https://github.com/SaschaWillems/Vulkan",
       "commit": "2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade",
       "sourceUrl": "https://github.com/SaschaWillems/Vulkan/blob/2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade/shaders/glsl/conservativeraster/triangle.vert"

@@ -49,7 +49,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `directx-shader-compiler-neg1` | `microsoft/DirectXShaderCompiler` at `d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652` | University of Illinois/NCSA | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream negated swizzle pixel shader unchanged. |
 | `directx-sdk-samples-tutorial02` | `walbourn/directx-sdk-samples-reworked` at `1ad8f0f6a3e4d9be7e54ca52640ac12b6565ab0c` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Direct3D 11 Tutorial02 effect include unchanged. |
 | `diligent-samples-tutorial02-cube` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Tutorial02 cube vertex and pixel shader pair with repository whitespace normalization. |
-| `diligent-samples-vrs-cube-vertex` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream VRS cube vertex shader unchanged. The paired fragment-density stage remains outside the checked set because the translator now diagnoses it as unsupported. |
+| `diligent-samples-vrs-cube` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream VRS cube vertex and fragment-density shader pair unchanged. Metal and DirectX fragment-density lowering is tracked in issue #1208. |
 | `glslang-push-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream push-constant vertex shader unchanged. |
 | `glslang-spec-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream specialization-constant vertex shader unchanged. Source-target output records fallback literals where native specialization IDs cannot be preserved. |
 | `godot-betsy-alpha-stitch` | `godotengine/godot` at `3df26a02c446710c979daa541b74f87edeca81b0` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Removes the Godot shader-section marker so the compute shader is standalone GLSL. |
@@ -75,7 +75,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `rust-gpu-compute-collatz` | `Rust-GPU/rust-gpu` at `36e3348cdc2f824afec64b3b5af5d369d98a4c0d` | Apache-2.0 OR MIT | Rust-GPU | CrossGL, Metal, Vulkan | Uses the upstream compute shader unchanged. |
 | `rust-gpu-graphics-stage-inputs` | `Rust-GPU/rust-gpu` at `36e3348cdc2f824afec64b3b5af5d369d98a4c0d` | Apache-2.0 OR MIT | Rust-GPU | CrossGL, OpenGL, Metal, Vulkan | Uses a reduced graphics shader slice that keeps the plain vertex input and fragment color path. |
 | `rust-gpu-vulkan-examples-triangle-overlay` | `Rust-GPU/VulkanShaderExamples` at `b29a37eb46802b5ea6882af4808d6887fc184581` | MIT | Rust-GPU | CrossGL, Metal, Vulkan | Uses the upstream conservative raster triangle-overlay shader unchanged. |
-| `sascha-willems-vulkan-conservative-triangle` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream conservative raster triangle vertex shader without semantic edits. DirectX `SV_Position` lowering is tracked in issue #1196. |
+| `sascha-willems-vulkan-conservative-triangle` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream conservative raster triangle vertex shader without semantic edits. Host conservative-rasterizer pipeline state remains outside the demo scope. |
 | `sascha-willems-vulkan-headless-compute` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream headless compute shader unchanged. |
 | `slang-hello-world-compute` | `shader-slang/slang` at `29e69b0bf626f87500be73a7fb3764db25658c66` | Apache-2.0 WITH LLVM-exception | Slang | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream compute shader unchanged. |
 | `spirv-tools-basic-src` | `KhronosGroup/SPIRV-Tools` at `199cb207b911501ddd76dcddf100a6e21c15ef23` | Apache-2.0 | SPIR-V assembly | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream SPIR-V assembly fixture unchanged. |
@@ -167,14 +167,12 @@ normalized by repository formatting. The project config maps the nonstandard
 checked for CrossGL, OpenGL, Metal, DirectX, and Vulkan output after issue
 #1147 closed.
 
-The checked `DiligentGraphics/DiligentSamples` VRS cube vertex shader is
-included for CrossGL, OpenGL, and Vulkan output. The paired fragment shader
-uses `GL_EXT_fragment_invocation_density` and `gl_FragSizeEXT`; generated
-Metal and HLSL previously kept that GLSL built-in as an undeclared identifier,
-and generated SPIR-V lost the built-in value. Retesting after issue #826 closed
-shows the fragment stage now fails with structured unsupported-feature
-diagnostics, so it remains excluded until fragment-density semantics are
-lowered for target backends.
+The `DiligentGraphics/DiligentSamples` VRS cube vertex and fragment-density
+shaders are checked for CrossGL, OpenGL, and Vulkan output after issue #1190
+added Vulkan `FragSizeEXT` modeling for `GL_EXT_fragment_invocation_density`.
+Metal and DirectX still emit unresolved `gl_FragSizeEXT` in the fragment shader
+and remain excluded under issue #1208. The demo keeps host VRS render-pass
+attachment and pipeline-state integration out of scope.
 
 The `g-truc/ogl-samples` flat-color shader pair is checked for CrossGL,
 Metal, OpenGL, and Vulkan output.
