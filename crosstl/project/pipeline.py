@@ -1036,6 +1036,9 @@ METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION = "max_template_specializations"
 METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION = (
     "template_specialization_limit_source"
 )
+METAL_DIAGNOSTIC_TEMPLATE_HELPER_RE = re.compile(
+    r"(^|_)(?:debug|dbg|log|trace|diagnostic|diag|assert)($|_)"
+)
 REPORT_NATIVE_DIRECTIVE_FIELDS = frozenset(
     (
         "source",
@@ -8399,6 +8402,40 @@ def _template_variant_parameter_bindings(
     return bindings
 
 
+def _is_metal_variadic_template(template: Any) -> bool:
+    return bool(getattr(template, "variadic_template_parameters", ()))
+
+
+def _metal_template_header(template: Any) -> str:
+    body_start = template.source.find("{")
+    return template.source if body_start == -1 else template.source[:body_start]
+
+
+def _metal_template_returns_void(template: Any) -> bool:
+    header = _metal_template_header(template)
+    paren_index = header.find("(")
+    if paren_index == -1:
+        return False
+    before_params = header[:paren_index].rstrip()
+    return (
+        re.search(
+            rf"\bvoid\s+(?:[A-Za-z_][A-Za-z0-9_:]*\s+)*"
+            rf"{re.escape(template.name)}\s*$",
+            before_params,
+        )
+        is not None
+    )
+
+
+def _is_metal_diagnostic_template_helper(template: Any) -> bool:
+    return (
+        _is_metal_variadic_template(template)
+        and _metal_template_returns_void(template)
+        and METAL_DIAGNOSTIC_TEMPLATE_HELPER_RE.search(template.name.lower())
+        is not None
+    )
+
+
 def _metal_template_parameter_defaults(
     preprocessor: Any,
     source: str,
@@ -8538,6 +8575,106 @@ def _explicit_template_call_replacements(
     return replacements
 
 
+def _metal_diagnostic_template_call_noop_replacements(
+    preprocessor: Any,
+    source: str,
+    helper_names: set[str],
+    excluded_spans: Sequence[tuple[int, int]],
+) -> list[tuple[int, int, str]]:
+    replacements: list[tuple[int, int, str]] = []
+    i = 0
+    excluded = list(excluded_spans)
+    while i < len(source):
+        if source[i] in "\"'":
+            _literal, consumed = preprocessor._read_string(source, i)
+            i += consumed
+            continue
+        if source.startswith("//", i):
+            end = source.find("\n", i)
+            if end == -1:
+                break
+            i = end + 1
+            continue
+        if source.startswith("/*", i):
+            end = source.find("*/", i + 2)
+            if end == -1:
+                break
+            i = end + 2
+            continue
+        span = preprocessor._containing_span(i, excluded)
+        if span is not None:
+            i = span[1]
+            continue
+        if source[i].isalpha() or source[i] == "_":
+            ident, consumed = preprocessor._read_identifier(source, i)
+            if ident not in helper_names or preprocessor._is_member_identifier_context(
+                source, i
+            ):
+                i += consumed
+                continue
+            call_start = preprocessor._scoped_identifier_start(source, i)
+            j = i + consumed
+            while j < len(source) and source[j].isspace():
+                j += 1
+            if j < len(source) and source[j] == "<":
+                angle_end = preprocessor._find_matching_angle(source, j)
+                if angle_end is None:
+                    i += consumed
+                    continue
+                j = angle_end + 1
+                while j < len(source) and source[j].isspace():
+                    j += 1
+            if j >= len(source) or source[j] != "(":
+                i += consumed
+                continue
+            paren_end = preprocessor._find_matching_delimiter(source, j, "(", ")")
+            if paren_end is None:
+                i += consumed
+                continue
+            statement_end = paren_end + 1
+            while statement_end < len(source) and source[statement_end].isspace():
+                statement_end += 1
+            if statement_end < len(source) and source[statement_end] == ";":
+                replacements.append((call_start, statement_end + 1, ";"))
+                i = statement_end + 1
+                continue
+            i += consumed
+            continue
+        i += 1
+    return replacements
+
+
+def _strip_metal_diagnostic_template_helpers(
+    preprocessor: Any,
+    source: str,
+    templates: Sequence[Any],
+) -> tuple[str, bool]:
+    diagnostic_helpers = [
+        template
+        for template in templates
+        if _is_metal_diagnostic_template_helper(template)
+    ]
+    if not diagnostic_helpers:
+        return source, False
+
+    helper_names = {template.name for template in diagnostic_helpers}
+    template_spans = preprocessor._find_template_declaration_spans(source)
+    replacements: list[tuple[int, int, str]] = [
+        (template.span[0], template.span[1], "") for template in diagnostic_helpers
+    ]
+    replacements.extend(
+        _metal_diagnostic_template_call_noop_replacements(
+            preprocessor,
+            source,
+            helper_names,
+            template_spans,
+        )
+    )
+    if not replacements:
+        return source, False
+    return preprocessor._apply_text_replacements(source, replacements), True
+
+
 def _template_materialization_metadata(
     *,
     specializations: Sequence[Mapping[str, Any]],
@@ -8653,6 +8790,15 @@ def _project_template_materialization_for_artifact(
         return None
     if not templates:
         return None
+    preprocessed, stripped_diagnostic_helpers = (
+        _strip_metal_diagnostic_template_helpers(
+            preprocessor,
+            preprocessed,
+            templates,
+        )
+    )
+    if stripped_diagnostic_helpers:
+        templates = preprocessor._find_template_functions(preprocessed)
 
     specializations: list[dict[str, Any]] = []
     template_lookup = {template.name: template for template in templates}
@@ -8927,7 +9073,7 @@ def _project_template_materialization_for_artifact(
         configured_parameters=configured_payload,
         unsupported=unsupported,
     )
-    if not specializations and not unsupported:
+    if not specializations and not unsupported and not stripped_diagnostic_helpers:
         return None
 
     if unsupported:
