@@ -1030,6 +1030,11 @@ REPORT_SOURCE_ROOT_STATUS_FIELDS = frozenset(
 REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
     ("path", "resolvedPath", "status", "frontendVisible")
 )
+SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
+METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION = "max_template_specializations"
+METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION = (
+    "template_specialization_limit_source"
+)
 REPORT_NATIVE_DIRECTIVE_FIELDS = frozenset(
     (
         "source",
@@ -2401,6 +2406,54 @@ def _as_source_options(value: Any, *, field_name: str) -> dict[str, dict[str, An
         for name, option_value in options.items():
             if not isinstance(name, str) or not name.strip():
                 raise ValueError(f"{option_path} keys must be non-empty strings")
+            if name == SOURCE_OPTION_PATTERNS_KEY:
+                if not isinstance(option_value, Mapping):
+                    raise ValueError(
+                        f"{_mapping_key_path(option_path, name)} must be a table"
+                    )
+                pattern_options: dict[str, dict[str, Any]] = {}
+                pattern_path = _mapping_key_path(option_path, name)
+                for pattern, per_source_options in option_value.items():
+                    if not isinstance(pattern, str) or not pattern.strip():
+                        raise ValueError(
+                            f"{pattern_path} keys must be non-empty strings"
+                        )
+                    source_path = _mapping_key_path(pattern_path, pattern)
+                    if not isinstance(per_source_options, Mapping):
+                        raise ValueError(f"{source_path} must be a table")
+                    normalized_pattern_options: dict[str, Any] = {}
+                    for per_source_name, per_source_value in (
+                        per_source_options.items()
+                    ):
+                        if (
+                            not isinstance(per_source_name, str)
+                            or not per_source_name.strip()
+                        ):
+                            raise ValueError(
+                                f"{source_path} keys must be non-empty strings"
+                            )
+                        if isinstance(per_source_value, bool):
+                            normalized_pattern_options[per_source_name] = (
+                                per_source_value
+                            )
+                        elif isinstance(per_source_value, int):
+                            normalized_pattern_options[per_source_name] = (
+                                per_source_value
+                            )
+                        elif isinstance(per_source_value, str):
+                            normalized_pattern_options[per_source_name] = (
+                                per_source_value
+                            )
+                        else:
+                            raise ValueError(
+                                f"{source_path} entries must map option names to "
+                                "strings, integers, or booleans"
+                            )
+                    pattern_options[_normalize_project_relative_path(pattern)] = (
+                        normalized_pattern_options
+                    )
+                normalized_options[name] = pattern_options
+                continue
             if isinstance(option_value, bool):
                 normalized_options[name] = option_value
             elif isinstance(option_value, int):
@@ -4476,7 +4529,64 @@ def _source_options_for_backend(
 ) -> dict[str, Any]:
     register_default_sources()
     key = SOURCE_REGISTRY.resolve_name(source_backend) or source_backend.strip().lower()
-    return dict(config.source_options.get(key, {}))
+    source_options = config.source_options.get(key, {})
+    return {
+        name: value
+        for name, value in source_options.items()
+        if name != SOURCE_OPTION_PATTERNS_KEY
+    }
+
+
+def _source_options_for_unit(
+    config: ProjectConfig, source_backend: str, relative_path: str
+) -> dict[str, Any]:
+    register_default_sources()
+    key = SOURCE_REGISTRY.resolve_name(source_backend) or source_backend.strip().lower()
+    configured_options = config.source_options.get(key, {})
+    source_options = {
+        name: value
+        for name, value in configured_options.items()
+        if name != SOURCE_OPTION_PATTERNS_KEY
+    }
+    limit_source = None
+    if METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in source_options:
+        limit_source = (
+            f"project.source_options.{key}."
+            f"{METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION}"
+        )
+
+    source_patterns = configured_options.get(SOURCE_OPTION_PATTERNS_KEY)
+    if isinstance(source_patterns, Mapping):
+        normalized_path = _normalize_project_relative_path(relative_path)
+        for pattern, pattern_options in source_patterns.items():
+            if not isinstance(pattern, str) or not isinstance(
+                pattern_options, Mapping
+            ):
+                continue
+            normalized_pattern = _normalize_project_relative_path(pattern)
+            if not fnmatch.fnmatch(normalized_path, normalized_pattern):
+                continue
+            source_options.update(pattern_options)
+            if METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in pattern_options:
+                pattern_path = _mapping_key_path(
+                    f"project.source_options.{key}.{SOURCE_OPTION_PATTERNS_KEY}",
+                    normalized_pattern,
+                )
+                limit_source = (
+                    f"{pattern_path}."
+                    f"{METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION}"
+                )
+
+    source_options.pop(SOURCE_OPTION_PATTERNS_KEY, None)
+    if (
+        source_backend == "metal"
+        and METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in source_options
+        and limit_source is not None
+    ):
+        source_options[METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION] = (
+            limit_source
+        )
+    return source_options
 
 
 def _strip_include_line_comment(value: str) -> str:
@@ -8694,8 +8804,8 @@ def translate_project(
                     )
                     artifacts.append(artifact)
                     continue
-                source_options = _source_options_for_backend(
-                    config, unit.source_backend
+                source_options = _source_options_for_unit(
+                    config, unit.source_backend, unit.relative_path
                 )
                 template_materialization = _project_template_materialization_for_artifact(
                     unit=unit,
@@ -22219,15 +22329,46 @@ def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[st
         if not isinstance(options, Mapping):
             reasons.append(f"{option_prefix} must be an object")
             continue
-        if any(not _is_non_empty_string(name) for name in options):
-            reasons.append(f"{option_prefix} keys must be non-empty strings")
-        if any(
-            not isinstance(option_value, (str, int, bool))
-            for option_value in options.values()
-        ):
-            reasons.append(
-                f"{option_prefix} values must be strings, integers, or booleans"
-            )
+        for name, option_value in options.items():
+            if not _is_non_empty_string(name):
+                reasons.append(f"{option_prefix} keys must be non-empty strings")
+                continue
+            name_prefix = _mapping_key_path(option_prefix, name)
+            if name == SOURCE_OPTION_PATTERNS_KEY:
+                if not isinstance(option_value, Mapping):
+                    reasons.append(f"{name_prefix} must be an object")
+                    continue
+                for pattern, pattern_options in option_value.items():
+                    if not _is_non_empty_string(pattern):
+                        reasons.append(
+                            f"{name_prefix} keys must be non-empty strings"
+                        )
+                        continue
+                    pattern_prefix = _mapping_key_path(name_prefix, pattern)
+                    if not isinstance(pattern_options, Mapping):
+                        reasons.append(f"{pattern_prefix} must be an object")
+                        continue
+                    if any(
+                        not _is_non_empty_string(pattern_option)
+                        for pattern_option in pattern_options
+                    ):
+                        reasons.append(
+                            f"{pattern_prefix} keys must be non-empty strings"
+                        )
+                    if any(
+                        not isinstance(pattern_value, (str, int, bool))
+                        for pattern_value in pattern_options.values()
+                    ):
+                        reasons.append(
+                            f"{pattern_prefix} values must be strings, "
+                            "integers, or booleans"
+                        )
+                continue
+            if not isinstance(option_value, (str, int, bool)):
+                reasons.append(
+                    f"{option_prefix} values must be strings, integers, "
+                    "booleans, or source_patterns objects"
+                )
     return reasons
 
 
