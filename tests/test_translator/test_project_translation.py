@@ -34676,6 +34676,105 @@ def test_translate_project_metal_variant_template_materializes_for_opengl(
     assert validation["success"] is True
 
 
+def test_translate_project_nested_metal_include_variant_template_materializes_for_opengl(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    kernel_dir = repo / "gpu" / "kernels"
+    module_dir = repo / "gpu" / "modules"
+    kernel_dir.mkdir(parents=True)
+    module_dir.mkdir(parents=True)
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu/kernels"]
+            include_dirs = ["gpu/modules"]
+            targets = ["opengl"]
+            output_dir = "translated"
+
+            [project.variants.f32]
+            T = "float"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (module_dir / "templated_kernel.h").write_text(
+        textwrap.dedent("""
+            template <typename T>
+            kernel void nested_write(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = T(1.0);
+            }
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (kernel_dir / "launch.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename U = float>
+            U default_identity(U value) {
+                return value;
+            }
+
+            #include "templated_kernel.h"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["source"] == "gpu/kernels/launch.metal"
+    assert artifact["path"] == "translated/opengl/f32/gpu/kernels/launch.glsl"
+    assert artifact["status"] == "translated"
+    assert artifact["defines"] == {"T": "float"}
+    assert artifact["templateMaterialization"] == {
+        "status": "materialized",
+        "specializationCount": 2,
+        "configuredParameterCount": 1,
+        "configuredParameters": {"T": "float"},
+        "configuredParameterSources": {"T": "project-variant"},
+        "specializations": [
+            {
+                "name": "default_identity",
+                "materializedName": "default_identity_float",
+                "parameters": {"U": "float"},
+                "parameterSources": {"U": "source-default"},
+                "source": "source-default",
+            },
+            {
+                "name": "nested_write",
+                "materializedName": "nested_write",
+                "parameters": {"T": "float"},
+                "parameterSources": {"T": "project-variant"},
+                "source": "project-variant",
+            },
+        ],
+        "unsupported": [],
+    }
+
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "layout(std430, binding = 0) buffer out_Buffer { float out_[]; };" in output
+    assert "float default_identity_float(float value)" in output
+    assert "out_[gid] = float(1.0);" in output
+    assert "template <" not in output
+    assert re.search(r"\\bT\\b", output) is None
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+
+
 def test_translate_project_source_instantiation_materializes_sizing_templates(
     tmp_path,
 ):
