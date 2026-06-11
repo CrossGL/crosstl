@@ -34900,6 +34900,82 @@ def test_build_runtime_host_loader_scaffolds_from_loader_manifest(tmp_path):
     assert "does not rewrite host application code" in guide.read_text(encoding="utf-8")
 
 
+def _loader_manifest_with_unresolved_host_interface(loader_manifest):
+    manifest = copy.deepcopy(loader_manifest)
+    blockers = []
+    for load_unit in manifest.get("loadUnits", []):
+        blocker = {
+            "kind": "resolve-host-interface-metadata",
+            "severity": "warning",
+            "message": "Resolve host interface metadata.",
+            "target": load_unit.get("target"),
+            "adapter": load_unit.get("id"),
+            "binding": None,
+            "packagePath": load_unit.get("packagePath"),
+        }
+        load_unit["hostInterface"] = project_pipeline._runtime_host_interface_empty(
+            "not-inspected",
+            diagnostics=(
+                "project.runtime-package-inspection.host-interface-not-recorded",
+            ),
+        )
+        validation = (
+            load_unit["validation"]
+            if isinstance(load_unit.get("validation"), dict)
+            else {}
+        )
+        validation["hostInterface"] = "not-inspected"
+        validation["loadReady"] = False
+        load_unit["validation"] = validation
+        load_unit["blockers"] = [blocker]
+        load_unit["loadSteps"] = [
+            step
+            for step in load_unit.get("loadSteps", [])
+            if not (
+                isinstance(step, dict) and step.get("kind") == "bind-host-interface"
+            )
+        ]
+        for step in load_unit["loadSteps"]:
+            if isinstance(step, dict) and step.get("hostInterfaceStatus") == "ready":
+                step["hostInterfaceStatus"] = "not-inspected"
+        blockers.append(blocker)
+
+    actions = [
+        action
+        for action in manifest.get("actions", [])
+        if action.get("kind") != "resolve-host-interface-metadata"
+    ]
+    insert_at = sum(
+        1 for action in actions if action.get("kind") == "wire-runtime-adapter"
+    )
+    manifest["actions"] = actions[:insert_at] + blockers + actions[insert_at:]
+
+    for target in manifest.get("targets", []):
+        target_units = [
+            load_unit
+            for load_unit in manifest.get("loadUnits", [])
+            if load_unit.get("target") == target.get("target")
+        ]
+        blocked_count = sum(
+            1
+            for load_unit in target_units
+            if load_unit.get("validation", {}).get("loadReady") is False
+        )
+        target["readyLoadUnitCount"] = len(target_units) - blocked_count
+        target["blockedLoadUnitCount"] = blocked_count
+
+    load_units = manifest.get("loadUnits", [])
+    summary = manifest.get("summary", {})
+    summary["readyLoadUnitCount"] = sum(
+        1
+        for load_unit in load_units
+        if load_unit.get("validation", {}).get("loadReady") is True
+    )
+    summary["blockedLoadUnitCount"] = len(load_units) - summary["readyLoadUnitCount"]
+    summary["actionCount"] = len(manifest["actions"])
+    return manifest
+
+
 def test_runtime_host_loader_scaffolds_preserve_loader_step_metadata(tmp_path):
     repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("wgsl",))
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
@@ -34937,7 +35013,9 @@ def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files(
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
     loader_manifest_path.write_text(
         json.dumps(
-            build_runtime_loader_manifest(package_dir / "runtime-package.json"),
+            _loader_manifest_with_unresolved_host_interface(
+                build_runtime_loader_manifest(package_dir / "runtime-package.json")
+            ),
             indent=2,
         ),
         encoding="utf-8",
@@ -35031,7 +35109,9 @@ def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds(tmp_path):
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
     loader_manifest_path.write_text(
         json.dumps(
-            build_runtime_loader_manifest(package_dir / "runtime-package.json"),
+            _loader_manifest_with_unresolved_host_interface(
+                build_runtime_loader_manifest(package_dir / "runtime-package.json")
+            ),
             indent=2,
         ),
         encoding="utf-8",
@@ -35109,14 +35189,20 @@ def test_project_cli_scaffold_host_loaders_json_writes_output(tmp_path):
     assert (scaffold_dir / "host-loader-scaffolds.json").is_file()
 
 
-def _build_runtime_host_loader_scaffold_fixture(tmp_path, targets=("cgl",)):
+def _build_runtime_host_loader_scaffold_fixture(
+    tmp_path, targets=("cgl",), unresolved_host_interface=False
+):
     repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=targets)
+    loader_manifest = build_runtime_loader_manifest(
+        package_dir / "runtime-package.json"
+    )
+    if unresolved_host_interface:
+        loader_manifest = _loader_manifest_with_unresolved_host_interface(
+            loader_manifest
+        )
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
     loader_manifest_path.write_text(
-        json.dumps(
-            build_runtime_loader_manifest(package_dir / "runtime-package.json"),
-            indent=2,
-        ),
+        json.dumps(loader_manifest, indent=2),
         encoding="utf-8",
     )
     scaffold_dir = repo / "host-loader-scaffolds"
@@ -35217,7 +35303,7 @@ def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file(
 
 def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units(tmp_path):
     _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("vulkan",), unresolved_host_interface=True
     )
 
     payload = inspect_runtime_host_loader_scaffolds(
@@ -35400,7 +35486,7 @@ def test_plan_runtime_host_loader_consumption_reports_ready_units(tmp_path):
 
 def test_plan_runtime_host_loader_consumption_carries_blocked_units(tmp_path):
     _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("vulkan",), unresolved_host_interface=True
     )
 
     payload = plan_runtime_host_loader_consumption(
@@ -35503,9 +35589,13 @@ def test_project_cli_plan_host_loader_consumption_json_writes_output(tmp_path):
     assert payload["actions"][0]["kind"] == "consume-host-loader-unit"
 
 
-def _write_host_loader_consumption_plan_fixture(tmp_path, targets=("cgl",)):
+def _write_host_loader_consumption_plan_fixture(
+    tmp_path, targets=("cgl",), unresolved_host_interface=False
+):
     repo, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=targets
+        tmp_path,
+        targets=targets,
+        unresolved_host_interface=unresolved_host_interface,
     )
     plan_payload = plan_runtime_host_loader_consumption(
         scaffold_dir / "host-loader-scaffolds.json"
@@ -35565,7 +35655,7 @@ def test_build_runtime_host_integration_handoff_writes_ready_bundle(tmp_path):
 
 def test_build_runtime_host_integration_handoff_writes_blocked_bundle(tmp_path):
     repo, plan_path, _ = _write_host_loader_consumption_plan_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("vulkan",), unresolved_host_interface=True
     )
     handoff_dir = repo / "host-integration"
 
@@ -35669,9 +35759,13 @@ def test_project_cli_host_integration_handoff_json_writes_output(tmp_path):
     assert (handoff_dir / "HOST_INTEGRATION.md").is_file()
 
 
-def _build_runtime_host_integration_handoff_fixture(tmp_path, targets=("cgl",)):
+def _build_runtime_host_integration_handoff_fixture(
+    tmp_path, targets=("cgl",), unresolved_host_interface=False
+):
     repo, plan_path, _ = _write_host_loader_consumption_plan_fixture(
-        tmp_path, targets=targets
+        tmp_path,
+        targets=targets,
+        unresolved_host_interface=unresolved_host_interface,
     )
     handoff_dir = repo / "host-integration"
     handoff_payload = build_runtime_host_integration_handoff(plan_path, handoff_dir)
@@ -35820,7 +35914,7 @@ def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch(
 
 def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle(tmp_path):
     _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("vulkan",), unresolved_host_interface=True
     )
 
     payload = inspect_runtime_host_integration_handoff(
@@ -36022,7 +36116,7 @@ def test_plan_runtime_host_integration_execution_reports_ready_steps(tmp_path):
 
 def test_plan_runtime_host_integration_execution_carries_blocked_steps(tmp_path):
     _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("vulkan",), unresolved_host_interface=True
     )
 
     payload = plan_runtime_host_integration_execution(
@@ -36162,9 +36256,13 @@ def test_project_cli_plan_host_integration_execution_json_writes_output(tmp_path
     assert payload["steps"][0]["kind"] == "consume-host-loader-unit"
 
 
-def _write_runtime_host_integration_execution_plan_fixture(tmp_path, targets=("cgl",)):
+def _write_runtime_host_integration_execution_plan_fixture(
+    tmp_path, targets=("cgl",), unresolved_host_interface=False
+):
     repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=targets
+        tmp_path,
+        targets=targets,
+        unresolved_host_interface=unresolved_host_interface,
     )
     plan_payload = plan_runtime_host_integration_execution(
         handoff_dir / "host-integration.json",
@@ -36273,7 +36371,7 @@ def test_execute_runtime_host_integration_reports_blocked_steps_without_failure(
     tmp_path,
 ):
     _, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("vulkan",), unresolved_host_interface=True
     )
 
     payload = execute_runtime_host_integration(plan_path)
