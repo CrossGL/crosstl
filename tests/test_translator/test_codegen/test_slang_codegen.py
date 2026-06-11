@@ -56,17 +56,17 @@ def generate_crossgl_from_slang(code: str) -> str:
     return SlangToCrossGLConverter().generate(parser.parse())
 
 
-def test_generic_trait_methods_are_diagnostic_for_slang_codegen():
+def test_unresolved_generic_function_call_is_diagnostic_for_slang_codegen():
     code = """
-    shader GenericTraitMethodDiagnostic {
-        trait Mapper {
-            fn map<T>(value: T) -> T {
-                return value;
-            }
+    shader GenericFunctionDiagnostic {
+        generic<T> fn make_zero() -> T {
+            return T::zero();
         }
 
         compute {
-            void main() {}
+            void main() {
+                float value = make_zero();
+            }
         }
     }
     """
@@ -74,7 +74,8 @@ def test_generic_trait_methods_are_diagnostic_for_slang_codegen():
     with pytest.raises(
         ValueError,
         match=(
-            r"Slang codegen does not support generic functions \(T\); "
+            r"Slang codegen cannot infer concrete template arguments for "
+            r"generic function 'make_zero' \(T\); "
             r"specialize the function before Slang generation"
         ),
     ):

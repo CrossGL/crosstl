@@ -96,49 +96,16 @@ EXAMPLE_BACKEND_SKIPS = {
     (
         "advanced",
         "GenericPatternMatching",
-        "vulkan",
-    ): (
-        "SPIR-V codegen intentionally rejects generic functions until the backend "
-        "has monomorphization support."
-    ),
-    (
-        "advanced",
-        "GenericPatternMatching",
         "mojo",
     ): (
-        "Mojo codegen intentionally rejects generic functions until the backend has a generic ABI."
-    ),
-    (
-        "advanced",
-        "GenericPatternMatching",
-        "cuda",
-    ): (
-        "CUDA codegen intentionally rejects generic functions until the backend "
-        "has monomorphization support."
-    ),
-    (
-        "advanced",
-        "GenericPatternMatching",
-        "hip",
-    ): (
-        "HIP codegen intentionally rejects generic functions until the backend "
-        "has monomorphization support."
-    ),
-    (
-        "advanced",
-        "GenericPatternMatching",
-        "slang",
-    ): (
-        "Slang codegen intentionally rejects generic functions until the backend "
-        "has monomorphization support."
+        "Mojo codegen intentionally rejects generic payload enum specializations "
+        "until they can be lowered to concrete payload layouts."
     ),
     (
         "advanced",
         "GenericPatternMatching",
         "wgsl",
-    ): (
-        "WGSL codegen intentionally rejects generic structs with nested enum members."
-    ),
+    ): "WGSL codegen intentionally rejects generic structs with nested enum members.",
     (
         "compute",
         "ParticleSimulation",

@@ -73,6 +73,8 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+)
+from .generic_function_utils import (
     reject_unsupported_generic_functions as reject_generic_functions_for_target,
 )
 from .generic_struct_utils import (
@@ -833,11 +835,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             ast_node,
             "HIP",
             self.generic_function_specializations,
+            referenced_generic_names=set(),
         )
 
     def setup_enum_and_generic_metadata(self, ast_node):
         """Collect enum and concrete generic type metadata used by HIP lowering."""
         structs = list(getattr(ast_node, "structs", []) or [])
+        for stage in (getattr(ast_node, "stages", {}) or {}).values():
+            structs.extend(getattr(stage, "local_structs", []) or [])
         self.structs_by_name = {
             node.name: node
             for node in structs

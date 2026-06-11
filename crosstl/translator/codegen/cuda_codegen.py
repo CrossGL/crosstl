@@ -37,6 +37,8 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+)
+from .generic_function_utils import (
     reject_unsupported_generic_functions as reject_generic_functions_for_target,
 )
 from .match_utils import (
@@ -403,6 +405,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             ast_node,
             "CUDA",
             self.generic_function_specializations,
+            referenced_generic_names=set(),
         )
 
     def unsupported_stage_types(self):
@@ -937,7 +940,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Collect struct member types and storage-image access before emission."""
         member_types_by_struct = {}
         member_accesses_by_struct = {}
-        for struct in getattr(root, "structs", []) or []:
+        structs = list(getattr(root, "structs", []) or [])
+        for stage in (getattr(root, "stages", {}) or {}).values():
+            structs.extend(getattr(stage, "local_structs", []) or [])
+        for struct in structs:
             struct_name = getattr(struct, "name", None)
             if not struct_name:
                 continue
@@ -967,9 +973,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def collect_structs_by_name(self, root):
         """Return plain struct declarations visible to CUDA expression lowering."""
+        structs = list(getattr(root, "structs", []) or [])
+        for stage in (getattr(root, "stages", {}) or {}).values():
+            structs.extend(getattr(stage, "local_structs", []) or [])
         return {
             struct.name: struct
-            for struct in getattr(root, "structs", []) or []
+            for struct in structs
             if isinstance(struct, StructNode) and getattr(struct, "name", None)
         }
 

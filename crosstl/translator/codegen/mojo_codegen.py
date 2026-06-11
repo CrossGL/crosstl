@@ -79,6 +79,8 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+)
+from .generic_function_utils import (
     reject_unsupported_generic_functions as reject_generic_functions_for_target,
 )
 from .image_access_contracts import (
@@ -1683,10 +1685,7 @@ class MojoCodeGen:
                     init_value = self.resource_binding_initial_value(
                         node.name, mapped_type, vtype
                     )
-                    code += (
-                        f"var {var_name}: {mapped_type} = "
-                        f"{init_value}\n"
-                    )
+                    code += f"var {var_name}: {mapped_type} = " f"{init_value}\n"
                 else:
                     code += (
                         f"var {var_name}: {self.map_type(vtype)} = "
@@ -3574,6 +3573,7 @@ class MojoCodeGen:
             ast,
             "Mojo",
             self.generic_function_specializations,
+            referenced_generic_names=set(),
         )
 
     def maybe_register_generic_enum_type(self, type_value, specializations):
@@ -6072,10 +6072,8 @@ class MojoCodeGen:
                 getattr(param, "name", None) for param, _ in param_infos
             }
             existing_param_names.update(name for name, _ in extra_param_infos)
-            synthetic_compute_builtin_params = (
-                self.compute_gpu_builtin_parameter_infos(
-                    getattr(func, "body", []), existing_param_names
-                )
+            synthetic_compute_builtin_params = self.compute_gpu_builtin_parameter_infos(
+                getattr(func, "body", []), existing_param_names
             )
             for name, type_name in synthetic_compute_builtin_params:
                 self.register_variable_type(name, type_name)
@@ -6407,9 +6405,7 @@ class MojoCodeGen:
         if mapped_type in {"UInt", "UInt32"}:
             alias_value = f"{native_name}[0]"
         else:
-            alias_value = (
-                f"SIMD[DType.uint32, 2]({native_name}[0], {native_name}[1])"
-            )
+            alias_value = f"SIMD[DType.uint32, 2]({native_name}[0], {native_name}[1])"
         return native_name, "uint3", f"var {local_name}: {mapped_type} = {alias_value}"
 
     def mojo_unique_local_identifier(self, candidate, used_names):
@@ -12707,7 +12703,9 @@ class MojoCodeGen:
                 code += "# CrossGL resource bindings\n"
                 for resource_type in sorted(resource_types):
                     code += self.generate_concrete_resource_type(resource_type)
-                for resource_type in sorted(self.required_resource_sample_sampler_types):
+                for resource_type in sorted(
+                    self.required_resource_sample_sampler_types
+                ):
                     code += self.generate_concrete_resource_sample_sampler_helper(
                         resource_type
                     )
@@ -12719,7 +12717,9 @@ class MojoCodeGen:
                     code += self.generate_buffer_resource_type(buffer_type)
                 for resource_type in sorted(self.required_resource_sample_types):
                     code += self.generate_resource_sample_helper(resource_type)
-                for resource_type in sorted(self.required_resource_sample_sampler_types):
+                for resource_type in sorted(
+                    self.required_resource_sample_sampler_types
+                ):
                     code += self.generate_resource_sample_sampler_helper(resource_type)
                 for resource_type in sorted(self.required_resource_lod_types):
                     code += self.generate_resource_lod_helper(resource_type)
@@ -12731,13 +12731,17 @@ class MojoCodeGen:
                     code += self.generate_resource_grad_sampler_helper(resource_type)
                 if any(
                     helper_name == "texture_size"
-                    for helper_name, _resource_type in self.required_resource_size_helpers
+                    for helper_name, _resource_type in (
+                        self.required_resource_size_helpers
+                    )
                 ):
                     code += self.generate_mip_dimension_helper()
                 for helper_name, resource_type in sorted(
                     self.required_resource_size_helpers
                 ):
-                    code += self.generate_resource_size_helper(helper_name, resource_type)
+                    code += self.generate_resource_size_helper(
+                        helper_name, resource_type
+                    )
                 for resource_type in sorted(self.required_resource_query_level_types):
                     code += self.generate_resource_query_levels_helper(resource_type)
                 for helper_name, resource_type in sorted(
@@ -13173,8 +13177,7 @@ class MojoCodeGen:
             code += "    var set: Int32\n"
             code += "    var binding: Int32\n"
             code += (
-                "    fn __init__(inout self, set: Int32 = 0, "
-                "binding: Int32 = 0):\n"
+                "    fn __init__(inout self, set: Int32 = 0, " "binding: Int32 = 0):\n"
             )
             code += "        self.set = set\n"
             code += "        self.binding = binding\n\n"
@@ -14794,9 +14797,7 @@ class MojoCodeGen:
         if isinstance(expr, BinaryOpNode):
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
-            return self.binary_expression_result_type(
-                expr.op, left_type, right_type
-            )
+            return self.binary_expression_result_type(expr.op, left_type, right_type)
         if isinstance(expr, TernaryOpNode):
             true_type = self.expression_result_type(expr.true_expr)
             false_type = self.expression_result_type(expr.false_expr)
@@ -15136,9 +15137,7 @@ class MojoCodeGen:
 
         indexed = list(enumerate(overloads))
         matching_arity = [
-            item
-            for item in indexed
-            if len(item[1]["parameter_types"]) == len(args)
+            item for item in indexed if len(item[1]["parameter_types"]) == len(args)
         ]
         candidates = matching_arity or indexed
         arg_types = [self.expression_result_type(arg) for arg in args]

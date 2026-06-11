@@ -106,17 +106,17 @@ def compile_matrix_helpers_if_cxx_available(helper_code, tmp_path):
 
 
 class TestHipCodeGen:
-    def test_generic_trait_methods_are_diagnostic_for_hip_codegen(self):
+    def test_unresolved_generic_function_call_is_diagnostic_for_hip_codegen(self):
         source_code = """
-        shader GenericTraitMethodDiagnostic {
-            trait Mapper {
-                fn map<T>(value: T) -> T {
-                    return value;
-                }
+        shader GenericFunctionDiagnostic {
+            generic<T> fn make_zero() -> T {
+                return T::zero();
             }
 
             compute {
-                void main() {}
+                void main() {
+                    float value = make_zero();
+                }
             }
         }
         """
@@ -124,7 +124,8 @@ class TestHipCodeGen:
         with pytest.raises(
             ValueError,
             match=(
-                r"HIP codegen does not support generic functions \(T\); "
+                r"HIP codegen cannot infer concrete template arguments for "
+                r"generic function 'make_zero' \(T\); "
                 r"specialize the function before HIP generation"
             ),
         ):
@@ -148,7 +149,10 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
-        assert "__device__ float fallback_zero_float(float value, bool enabled)" in hip_code
+        assert (
+            "__device__ float fallback_zero_float(float value, bool enabled)"
+            in hip_code
+        )
         assert "return 0.0;" in hip_code
         assert "return fallback_zero_float(value, false);" in hip_code
         assert "T fallback_zero(T value" not in hip_code
@@ -1706,8 +1710,7 @@ class TestHipCodeGen:
         assert "__device__ cgl_half3 tint(cgl_half3 input)" in hip_code
         assert "half scalar = __float2half(0.5);" in hip_code
         assert (
-            "cgl_half3 from_scalars = cgl_make_half3(1.0, scalar, input.z);"
-            in hip_code
+            "cgl_half3 from_scalars = cgl_make_half3(1.0, scalar, input.z);" in hip_code
         )
         assert (
             "cgl_half3 from_vector = cgl_make_half3(input.x, input.y, input.z);"

@@ -91,6 +91,8 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+)
+from .generic_function_utils import (
     reject_unsupported_generic_functions as reject_generic_functions_for_target,
 )
 from .glsl_buffer_layout import (
@@ -373,41 +375,6 @@ class SlangCodeGen:
             self.generic_function_specializations = {}
             self.generic_function_specialized_names = {}
             self.current_generic_function_substitutions = {}
-            generic_function_specializations = prepare_generic_function_specializations(
-                self,
-                list(iter_function_nodes(ast)),
-            )
-            if generic_function_specializations:
-                specialized_functions = list(generic_function_specializations.values())
-                self.user_function_names.update(
-                    func.name
-                    for func in specialized_functions
-                    if getattr(func, "name", None)
-                )
-                self.user_functions_by_name.update(
-                    {
-                        func.name: func
-                        for func in specialized_functions
-                        if getattr(func, "name", None)
-                    }
-                )
-                self.user_function_return_types.update(
-                    {
-                        func.name: self.type_name_string(
-                            getattr(func, "return_type", "void")
-                        )
-                        for func in specialized_functions
-                        if getattr(func, "name", None)
-                    }
-                )
-                self.user_function_parameter_types.update(
-                    {
-                        func.name: self.function_parameter_type_names(func)
-                        for func in specialized_functions
-                        if getattr(func, "name", None)
-                    }
-                )
-            self.reject_unsupported_generic_functions(ast)
             user_structs = self.collect_user_structs(ast)
             self.user_struct_names = {
                 struct.name for struct in user_structs if getattr(struct, "name", None)
@@ -483,6 +450,41 @@ class SlangCodeGen:
                     self, self.generic_enum_specializations
                 )
             )
+            generic_function_specializations = prepare_generic_function_specializations(
+                self,
+                list(iter_function_nodes(ast)),
+            )
+            if generic_function_specializations:
+                specialized_functions = list(generic_function_specializations.values())
+                self.user_function_names.update(
+                    func.name
+                    for func in specialized_functions
+                    if getattr(func, "name", None)
+                )
+                self.user_functions_by_name.update(
+                    {
+                        func.name: func
+                        for func in specialized_functions
+                        if getattr(func, "name", None)
+                    }
+                )
+                self.user_function_return_types.update(
+                    {
+                        func.name: self.type_name_string(
+                            getattr(func, "return_type", "void")
+                        )
+                        for func in specialized_functions
+                        if getattr(func, "name", None)
+                    }
+                )
+                self.user_function_parameter_types.update(
+                    {
+                        func.name: self.function_parameter_type_names(func)
+                        for func in specialized_functions
+                        if getattr(func, "name", None)
+                    }
+                )
+            self.reject_unsupported_generic_functions(ast)
             self.literal_int_constants = collect_literal_int_constants(
                 getattr(ast, "constants", [])
             )
@@ -618,6 +620,7 @@ class SlangCodeGen:
             ast_node,
             "Slang",
             self.generic_function_specializations,
+            referenced_generic_names=set(),
         )
 
     def emit_helper_functions(self):
@@ -936,6 +939,8 @@ class SlangCodeGen:
                     seen.add(node_id)
                     structs.append(current)
             for struct in getattr(current, "structs", []) or []:
+                collect(struct)
+            for struct in getattr(current, "local_structs", []) or []:
                 collect(struct)
             for function in getattr(current, "functions", []) or []:
                 collect(function)
@@ -5926,10 +5931,7 @@ class SlangCodeGen:
                         declaration, param, param_type_name
                     )
                     params.append(
-                        declaration
-                        + self.semantic_suffix(
-                            semantic, shader_type
-                        )
+                        declaration + self.semantic_suffix(semantic, shader_type)
                     )
                     emitted_param_names.add(param.name)
             else:
@@ -6021,9 +6023,7 @@ class SlangCodeGen:
             local_name = hull_output_rewrite["local_name"]
             result += f"{self.indent()}{local_type} {local_name};\n"
         if fragment_output_rewrite is not None:
-            local_type = self.convert_type(
-                fragment_output_rewrite["return_type_name"]
-            )
+            local_type = self.convert_type(fragment_output_rewrite["return_type_name"])
             local_name = fragment_output_rewrite["local_name"]
             self.register_variable_type(
                 local_name,
@@ -6049,13 +6049,11 @@ class SlangCodeGen:
             result += f"{self.indent()}return {builtin_return_rewrite['local_name']};\n"
         if hull_output_rewrite is not None:
             result += f"{self.indent()}return {hull_output_rewrite['local_name']};\n"
-        if (
-            fragment_output_rewrite is not None
-            and not self.statement_body_terminates(body_statements)
+        if fragment_output_rewrite is not None and not self.statement_body_terminates(
+            body_statements
         ):
             result += (
-                f"{self.indent()}return "
-                f"{fragment_output_rewrite['local_name']};\n"
+                f"{self.indent()}return " f"{fragment_output_rewrite['local_name']};\n"
             )
 
         self.indent_level -= 1

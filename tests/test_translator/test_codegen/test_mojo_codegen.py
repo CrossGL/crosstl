@@ -8354,21 +8354,24 @@ def test_generic_payload_enum_parameterized_specializations_are_diagnostic_for_m
     }
     """
 
-    with pytest.raises(ValueError, match="generic functions"):
+    with pytest.raises(
+        ValueError,
+        match="generic payload enum specializations must be concrete",
+    ):
         generate_code(parse_code(tokenize_code(code)))
 
 
-def test_generic_trait_methods_are_diagnostic_for_mojo_codegen():
+def test_unresolved_generic_function_call_is_diagnostic_for_mojo_codegen():
     code = """
-    shader GenericTraitMethodDiagnostic {
-        trait Mapper {
-            fn map<T>(value: T) -> T {
-                return value;
-            }
+    shader GenericFunctionDiagnostic {
+        generic<T> fn make_zero() -> T {
+            return T::zero();
         }
 
         compute {
-            void main() {}
+            void main() {
+                float value = make_zero();
+            }
         }
     }
     """
@@ -8376,7 +8379,8 @@ def test_generic_trait_methods_are_diagnostic_for_mojo_codegen():
     with pytest.raises(
         ValueError,
         match=(
-            r"Mojo codegen does not support generic functions \(T\); "
+            r"Mojo codegen cannot infer concrete template arguments for "
+            r"generic function 'make_zero' \(T\); "
             r"specialize the function before Mojo generation"
         ),
     ):
@@ -8401,7 +8405,9 @@ def test_generic_function_call_emits_concrete_specialization_for_mojo_codegen():
 
     generated = generate_code(parse_code(tokenize_code(code)))
 
-    assert "fn fallback_zero_float(value: Float32, enabled: Bool) -> Float32:" in generated
+    assert (
+        "fn fallback_zero_float(value: Float32, enabled: Bool) -> Float32:" in generated
+    )
     assert "return 0.0" in generated
     assert "return fallback_zero_float(value, False)" in generated
     assert "fn fallback_zero(value: T" not in generated
