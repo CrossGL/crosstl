@@ -38708,6 +38708,89 @@ def test_translate_project_metal_reduction_materializes_shared_helper_templates(
         assert not re.search(r"\\b(?:T|U|Op|N_READS)\\b", output)
 
 
+def test_translate_project_metal_multi_entry_instantiations_scope_vulkan_bindings(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "rope.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, typename IdxT, int N = 4>
+            T rope_impl(device const T* src, IdxT index) {
+                return src[index] + T(N);
+            }
+
+            template <typename T, typename IdxT, int N = 4>
+            [[kernel]] void rope(
+                device const T* src [[buffer(0)]],
+                device T* out [[buffer(1)]]
+            ) {
+                out[0] = rope_impl<T, IdxT, N>(src, IdxT(0));
+            }
+
+            template <typename T, typename IdxT, int N = 4>
+            [[kernel]] void rope_freqs(
+                device const T* src [[buffer(0)]],
+                device T* out [[buffer(1)]]
+            ) {
+                out[0] = rope_impl<T, IdxT, N>(src, IdxT(0)) + T(1);
+            }
+
+            instantiate_kernel("rope_float32", rope, float, uint)
+            instantiate_kernel("rope_freqs_float32", rope_freqs, float, uint)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl", "directx", "vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+
+    for artifact in payload["artifacts"]:
+        materialization = artifact["templateMaterialization"]
+        assert materialization["status"] == "materialized"
+        assert materialization["unsupported"] == []
+        assert {
+            specialization["materializedName"]
+            for specialization in materialization["specializations"]
+        } == {
+            "rope_float32",
+            "rope_freqs_float32",
+            "rope_impl_float_uint_4",
+        }
+
+    vulkan_artifact = next(
+        artifact for artifact in payload["artifacts"] if artifact["target"] == "vulkan"
+    )
+    output = (repo / vulkan_artifact["path"]).read_text(encoding="utf-8")
+    assert sorted(
+        re.findall(r'OpEntryPoint GLCompute %\d+ "([^"]+)"', output)
+    ) == [
+        "rope_float32",
+        "rope_freqs_float32",
+    ]
+    assert len(re.findall(r"OpDecorate %\d+ Binding 0\b", output)) == 2
+    assert len(re.findall(r"OpDecorate %\d+ Binding 1\b", output)) == 2
+    assert "Duplicate SPIR-V resource binding" not in output
+    assert_spirv_asm_validates_if_available(output, tmp_path)
+
+
 def test_translate_project_skips_standalone_metal_template_utility_artifacts(
     tmp_path,
 ):
