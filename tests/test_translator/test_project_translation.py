@@ -231,6 +231,50 @@ GLSL_FRAGMENT_INVOCATION_DENSITY_SOURCE = textwrap.dedent("""
     }
     """).strip()
 
+GLSLANG_SPEC_CONSTANT_VERTEX_SOURCE = textwrap.dedent("""
+    #version 400
+    layout(constant_id = 16) const int arraySize = 5;
+    in vec4 ucol[arraySize];
+    layout(constant_id = 17) const bool spBool = true;
+    layout(constant_id = 18) const float spFloat = 3.14;
+    layout(constant_id = 19) const double spDouble = 3.1415926535897932384626433832795;
+    layout(constant_id = 22) const uint scale = 2;
+    layout(constant_id = 24) gl_MaxImageUnits;
+    out vec4 color;
+    out int size;
+
+    void foo(vec4 p[arraySize]);
+
+    void main() {
+        color = ucol[2];
+        size = arraySize;
+        if (spBool)
+            color *= scale;
+        color += float(spDouble / spFloat);
+        foo(ucol);
+    }
+
+    layout(constant_id = 116) const int dupArraySize = 12;
+    in vec4 dupUcol[dupArraySize];
+    layout(constant_id = 117) const bool spDupBool = true;
+    layout(constant_id = 118) const float spDupFloat = 3.14;
+    layout(constant_id = 119) const double spDupDouble = 3.1415926535897932384626433832795;
+    layout(constant_id = 122) const uint dupScale = 2;
+
+    void foo(vec4 p[arraySize]) {
+        color += dupUcol[2];
+        size += dupArraySize;
+        if (spDupBool)
+            color *= dupScale;
+        color += float(spDupDouble / spDupFloat);
+    }
+
+    int builtin_spec_constant() {
+        int result = gl_MaxImageUnits;
+        return result;
+    }
+    """).strip()
+
 
 class ProjectPathLike:
     def __init__(self, path):
@@ -535,6 +579,32 @@ def test_translate_project_accepts_path_like_output_dir(tmp_path):
     assert payload["project"]["outputDir"] == str((repo / "translated").resolve())
     assert payload["summary"]["translatedCount"] == 1
     assert (repo / "translated" / "cgl" / "simple.cgl").exists()
+
+
+def test_translate_project_glslang_spec_constant_vertex_to_directx(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "spv.specConstant.vert").write_text(
+        GLSLANG_SPEC_CONSTANT_VERTEX_SOURCE, encoding="utf-8"
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="translated",
+        format_output=False,
+    )
+    payload = report.to_json()
+    artifact_path = repo / payload["artifacts"][0]["path"]
+    generated = artifact_path.read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert "static const int gl_MaxImageUnits = 8;" in generated
+    assert (
+        "void foo(float4 p[arraySize], VertexInput input, "
+        "inout VertexOutput output)"
+    ) in generated
+    assert "foo(input.ucol, input, output);" in generated
 
 
 @pytest.mark.parametrize("target_backend", ("opengl", "metal"))

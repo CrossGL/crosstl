@@ -33324,6 +33324,44 @@ def test_hlsl_local_helpers_capture_stage_input_parameters():
     assert "shadow(input.worldPosition.xy, input)" in generated_code
 
 
+def test_hlsl_local_helpers_capture_stage_output_parameters():
+    shader = """
+    shader LocalHelperStageOutputCapture {
+        struct VertexInput {
+            vec4 color;
+        };
+
+        struct VertexOutput {
+            vec4 color;
+            float size;
+        };
+
+        vertex {
+            void accumulate(VertexInput input) {
+                output.color += input.color;
+                output.size += 1.0;
+            }
+
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                output.color = vec4(0.0);
+                output.size = 0.0;
+                accumulate(input);
+                return output;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "void accumulate(VertexInput input, inout VertexOutput output) {"
+        in generated_code
+    )
+    assert "accumulate(input, output);" in generated_code
+
+
 def test_hlsl_compute_builtins_are_auto_parameters_when_referenced_by_name():
     shader = """
     shader ComputeBuiltinAutoParameters {
