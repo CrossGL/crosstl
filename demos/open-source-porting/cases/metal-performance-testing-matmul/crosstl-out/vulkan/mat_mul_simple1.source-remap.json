@@ -4,23 +4,67 @@
     {
       "generated": {
         "column": 1,
-        "endColumn": 14,
-        "endLine": 168,
-        "endOffset": 4208,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 612,
         "file": "crosstl-out/vulkan/mat_mul_simple1.spvasm",
-        "length": 4208,
-        "line": 1,
-        "offset": 0
+        "length": 54,
+        "line": 20,
+        "offset": 558
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 41,
-        "endOffset": 1289,
+        "endLine": 20,
+        "endOffset": 580,
         "file": "mat_mul_simple1.metal",
-        "length": 1289,
-        "line": 1,
-        "offset": 0
+        "length": 45,
+        "line": 19,
+        "offset": 535
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 666,
+        "file": "crosstl-out/vulkan/mat_mul_simple1.spvasm",
+        "length": 54,
+        "line": 21,
+        "offset": 612
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 625,
+        "file": "mat_mul_simple1.metal",
+        "length": 45,
+        "line": 20,
+        "offset": 580
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 720,
+        "file": "crosstl-out/vulkan/mat_mul_simple1.spvasm",
+        "length": 54,
+        "line": 22,
+        "offset": 666
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 670,
+        "file": "mat_mul_simple1.metal",
+        "length": 45,
+        "line": 21,
+        "offset": 625
       }
     }
   ],
