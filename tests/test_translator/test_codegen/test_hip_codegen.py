@@ -1304,6 +1304,54 @@ class TestHipCodeGen:
         assert "firstbitlow(" not in hip_code
         assert "firstbithigh(" not in hip_code
 
+    def test_integer_bit_builtins_use_64_bit_hip_intrinsics_for_i64_u64(self):
+        source_code = """
+        shader HipIntegerBit64Builtins {
+            compute {
+                void main(u64 unsignedValue, i64 signedValue) {
+                    uint unsignedCount = bitCount(unsignedValue);
+                    uint signedCount = bitCount(signedValue);
+                    u64 unsignedReverse = bitfieldReverse(unsignedValue);
+                    i64 signedReverse = bitfieldReverse(signedValue);
+                    uint unsignedLow = findLSB(unsignedValue);
+                    int signedLow = findLSB(signedValue);
+                    uint unsignedHigh = findMSB(unsignedValue);
+                    int signedHigh = findMSB(signedValue);
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "unsigned int unsignedCount = __popcll(unsignedValue);" in hip_code
+        assert (
+            "unsigned int signedCount = __popcll(static_cast<unsigned long long>"
+            "(signedValue));" in hip_code
+        )
+        assert "unsigned long long unsignedReverse = __brevll(unsignedValue);" in (
+            hip_code
+        )
+        assert (
+            "long long signedReverse = static_cast<long long>(__brevll"
+            "(static_cast<unsigned long long>(signedValue)));" in hip_code
+        )
+        assert "unsigned int unsignedLow = (__ffsll(unsignedValue) - 1);" in hip_code
+        assert "int signedLow = (__ffsll(signedValue) - 1);" in hip_code
+        assert (
+            "unsigned int unsignedHigh = ((unsignedValue) == 0 ? -1 : "
+            "(63 - __clzll(unsignedValue)));" in hip_code
+        )
+        assert (
+            "int signedHigh = ((signedValue) < 0 ? (63 - __clzll"
+            "(static_cast<unsigned long long>(~(signedValue)))) : "
+            "((signedValue) == 0 ? -1 : (63 - __clzll"
+            "(static_cast<unsigned long long>(signedValue)))));" in hip_code
+        )
+        assert "__popc(unsignedValue)" not in hip_code
+        assert "__ffs(unsignedValue)" not in hip_code
+        assert "31 - __clzll" not in hip_code
+
     def test_user_defined_integer_bit_builtin_names_are_preserved(self):
         source_code = """
         shader HipUserIntegerBitNames {

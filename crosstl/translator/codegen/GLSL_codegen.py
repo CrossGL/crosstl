@@ -7690,8 +7690,9 @@ class GLSLCodeGen:
         if builtin in scalar_int_builtins:
             if mapped_type == "int":
                 return None
+            source = "gl_SampleMaskIn[0]" if builtin == "gl_SampleMaskIn" else builtin
             if mapped_type == "uint":
-                return f"uint({builtin})"
+                return f"uint({source})"
             return None
 
         return None

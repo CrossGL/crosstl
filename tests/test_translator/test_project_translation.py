@@ -2180,6 +2180,85 @@ def test_scan_report_records_opengl_context_loader_runtime_references(tmp_path):
     ]
 
 
+def test_scan_report_records_android_opengl_es_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "Renderer.java").write_text(
+        textwrap.dedent("""
+            import android.opengl.GLES20;
+            import android.opengl.GLSurfaceView;
+
+            final class Renderer implements GLSurfaceView.Renderer {
+              void compile(String source) {
+                int shader = GLES20.glCreateShader(GLES20.GL_VERTEX_SHADER);
+                GLES20.glShaderSource(shader, source);
+                GLES20.glCompileShader(shader);
+                int program = GLES20.glCreateProgram();
+                GLES20.glAttachShader(program, shader);
+                GLES20.glLinkProgram(program);
+                GLES20.glUseProgram(program);
+                GLES20.glDrawElements(GLES20.GL_TRIANGLES, 3, GLES20.GL_UNSIGNED_SHORT, null);
+              }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "Renderer.kt").write_text(
+        textwrap.dedent("""
+            import android.opengl.GLES30
+
+            fun draw(vao: IntArray) {
+              GLES30.glGenVertexArrays(1, vao, 0)
+              GLES30.glBindVertexArray(vao[0])
+              GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, 0, 0)
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "NearMiss.java").write_text(
+        textwrap.dedent("""
+            class NearMiss {
+              void helper() {
+                helper.GLES20.glCreateShader(GLES20.GL_VERTEX_SHADER);
+                GLES20.glCreateShaderLater();
+                int GLES20Shader = 0;
+              }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 14
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"opengl": 14}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 14}
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "Renderer.java": 10,
+        "Renderer.kt": 4,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("Renderer.java", "opengl", "runtime-api", "GLES20"),
+        ("Renderer.java", "opengl", "runtime-api", "GLSurfaceView"),
+        ("Renderer.java", "opengl", "runtime-api", "glCreateShader"),
+        ("Renderer.java", "opengl", "runtime-api", "glShaderSource"),
+        ("Renderer.java", "opengl", "runtime-api", "glCompileShader"),
+        ("Renderer.java", "opengl", "runtime-api", "glCreateProgram"),
+        ("Renderer.java", "opengl", "runtime-api", "glAttachShader"),
+        ("Renderer.java", "opengl", "runtime-api", "glLinkProgram"),
+        ("Renderer.java", "opengl", "runtime-api", "glUseProgram"),
+        ("Renderer.java", "opengl", "runtime-api", "glDrawElements"),
+        ("Renderer.kt", "opengl", "runtime-api", "GLES30"),
+        ("Renderer.kt", "opengl", "runtime-api", "glGenVertexArrays"),
+        ("Renderer.kt", "opengl", "runtime-api", "glBindVertexArray"),
+        ("Renderer.kt", "opengl", "runtime-api", "glVertexAttribPointer"),
+    ]
+
+
 def test_scan_report_records_web_runtime_references_in_module_extensions(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
