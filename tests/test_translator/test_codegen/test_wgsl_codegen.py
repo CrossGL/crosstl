@@ -4184,6 +4184,23 @@ def test_wgsl_codegen_lowers_prefix_increment_and_decrement_statements():
     assert "i -= 1;" in generated
 
 
+def test_wgsl_codegen_preserves_unbraced_if_statement_body():
+    shader = """
+    shader WGSLUnbracedIf {
+        compute {
+            void main() {
+                if (true) return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "if (true) {\n        return;\n    }" in generated
+    assert "if (true) {}" not in generated
+
+
 @pytest.mark.parametrize(
     "body",
     [

@@ -2713,9 +2713,10 @@ class WGSLCodeGen:
         if isinstance(stmt, ForNode):
             return self.generate_for(stmt, indent)
         if isinstance(stmt, WhileNode):
-            return f"{pad}while ({self.generate_expression(stmt.condition)}) {self.generate_block(stmt.body, indent)}"
+            body = self.generate_inline_block(stmt.body, indent)
+            return f"{pad}while ({self.generate_expression(stmt.condition)}) {body}"
         if isinstance(stmt, LoopNode):
-            return f"{pad}loop {self.generate_block(stmt.body, indent)}"
+            return f"{pad}loop {self.generate_inline_block(stmt.body, indent)}"
         if isinstance(stmt, BreakNode):
             return f"{pad}break;"
         if isinstance(stmt, ContinueNode):
@@ -2735,7 +2736,7 @@ class WGSLCodeGen:
     def generate_block(self, block, indent=0):
         if block is None:
             return "{}"
-        statements = getattr(block, "statements", [])
+        statements = self.statement_list(block)
         if not statements:
             return "{}"
         pad = "    " * indent
@@ -2749,14 +2750,21 @@ class WGSLCodeGen:
         lines.append(f"{pad}}}")
         return "\n".join(lines)
 
+    def generate_inline_block(self, block, indent=0):
+        block_text = self.generate_block(block, indent)
+        pad = "    " * indent
+        if pad and block_text.startswith(pad):
+            return block_text[len(pad) :]
+        return block_text
+
     def generate_if(self, node, indent):
         pad = "    " * indent
         code = (
             f"{pad}if ({self.generate_expression(node.condition)}) "
-            f"{self.generate_block(node.then_branch, indent)}"
+            f"{self.generate_inline_block(node.then_branch, indent)}"
         )
         if node.else_branch is not None:
-            code += f" else {self.generate_block(node.else_branch, indent)}"
+            code += f" else {self.generate_inline_block(node.else_branch, indent)}"
         return code
 
     def generate_for(self, node, indent):
@@ -2775,7 +2783,7 @@ class WGSLCodeGen:
                 self._for_update_expression_node = previous_for_update_expression
             return (
                 f"{pad}for ({init}; {condition}; {update}) "
-                f"{self.generate_block(node.body, indent)}"
+                f"{self.generate_inline_block(node.body, indent)}"
             )
         finally:
             self.pop_identifier_scope()
