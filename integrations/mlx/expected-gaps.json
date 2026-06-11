@@ -4,71 +4,39 @@
   "commit": "968d264f2903d578e699c4452a4dbf48633921aa",
   "frontier_status": {
     "status": "passing",
-    "sources": 5,
-    "targets": ["directx", "vulkan"],
-    "artifacts": 10
+    "sources": 3,
+    "targets": [
+      "directx",
+      "vulkan"
+    ],
+    "artifacts": 6
   },
   "full_corpus_scout": {
-    "status": "partial",
+    "status": "blocked",
     "sources": 40,
-    "targets": ["directx", "opengl", "vulkan"],
+    "targets": [
+      "directx",
+      "opengl",
+      "vulkan"
+    ],
     "artifacts": 120,
-    "translated_artifacts": 47,
-    "failed_artifacts": 73,
-    "translated_by_target": {
-      "directx": 19,
-      "opengl": 12,
-      "vulkan": 16
+    "blocked_by": "https://github.com/CrossGL/crosstl/issues/1146",
+    "last_completed": {
+      "translated_artifacts": 47,
+      "failed_artifacts": 73,
+      "translated_by_target": {
+        "directx": 19,
+        "opengl": 12,
+        "vulkan": 16
+      }
     }
   },
   "tracked_issues": [
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1106",
-      "scope": "metal-convolution-helper-template-variants",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1146",
+      "scope": "metal-plain-template-helper-call-site-scan-budget",
       "status": "open",
-      "summary": "Materialize Metal convolution helper templates from project variants."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1107",
-      "scope": "metal-shared-reduction-helper-template-variants",
-      "status": "open",
-      "summary": "Materialize shared Metal helper templates used by reductions and normalization."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1110",
-      "scope": "opengl-reduction-ordering-template-bindings",
-      "status": "open",
-      "summary": "Propagate OpenGL template bindings for reduction and ordering kernels."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1111",
-      "scope": "opengl-steel-template-bindings",
-      "status": "open",
-      "summary": "Propagate OpenGL template bindings through Steel convolution and GEMM helpers."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1122",
-      "scope": "metal-common-utility-template-variants",
-      "status": "open",
-      "summary": "Materialize common Metal utility templates across project targets."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1124",
-      "scope": "metal-steel-attention-template-variants",
-      "status": "open",
-      "summary": "Materialize Steel attention helper templates for project translation."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1126",
-      "scope": "spirv-storage-buffer-overload-resolution",
-      "status": "open",
-      "summary": "Resolve remaining SPIR-V storage-buffer overloads in project translation."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1127",
-      "scope": "opengl-cbuffer-member-disambiguation",
-      "status": "open",
-      "summary": "Disambiguate remaining OpenGL cbuffer members in project output."
+      "summary": "Bound plain Metal template helper call-site scanning for large helper graphs."
     }
   ],
   "resolved_issues": [
@@ -101,16 +69,24 @@
     "https://github.com/CrossGL/crosstl/issues/1029",
     "https://github.com/CrossGL/crosstl/issues/1030",
     "https://github.com/CrossGL/crosstl/issues/1031",
+    "https://github.com/CrossGL/crosstl/issues/1032",
     "https://github.com/CrossGL/crosstl/issues/1033",
     "https://github.com/CrossGL/crosstl/issues/1034",
     "https://github.com/CrossGL/crosstl/issues/1035",
     "https://github.com/CrossGL/crosstl/issues/1036",
-    "https://github.com/CrossGL/crosstl/issues/1032",
     "https://github.com/CrossGL/crosstl/issues/1037",
     "https://github.com/CrossGL/crosstl/issues/1038",
     "https://github.com/CrossGL/crosstl/issues/1039",
     "https://github.com/CrossGL/crosstl/issues/1068",
     "https://github.com/CrossGL/crosstl/issues/1104",
-    "https://github.com/CrossGL/crosstl/issues/1105"
+    "https://github.com/CrossGL/crosstl/issues/1105",
+    "https://github.com/CrossGL/crosstl/issues/1106",
+    "https://github.com/CrossGL/crosstl/issues/1107",
+    "https://github.com/CrossGL/crosstl/issues/1110",
+    "https://github.com/CrossGL/crosstl/issues/1111",
+    "https://github.com/CrossGL/crosstl/issues/1122",
+    "https://github.com/CrossGL/crosstl/issues/1124",
+    "https://github.com/CrossGL/crosstl/issues/1126",
+    "https://github.com/CrossGL/crosstl/issues/1127"
   ]
 }

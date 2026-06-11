@@ -24,6 +24,7 @@ from crosstl.project.runtime_verification import (
     RuntimeExecutorAvailability,
     RuntimeExecutorResult,
     RuntimeExecutorSkipped,
+    RuntimeParityAdapter,
     RuntimeResourceBinding,
     RuntimeSpecializationConstant,
     RuntimeVerificationError,
@@ -861,6 +862,162 @@ def test_verify_runtime_test_manifest_runs_executor_and_links_failed_check(tmp_p
         "glslangValidator"
     )
     assert diagnostic["output"] == "out"
+
+
+def test_verify_runtime_test_manifest_runs_runtime_parity_adapter_pipeline(tmp_path):
+    artifact_path = tmp_path / "out" / "opengl" / "debug" / "add.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("// translated shader", encoding="utf-8")
+    artifact = _translated_artifact(
+        path="out/opengl/debug/add.glsl",
+        entryPoints=[
+            {
+                "name": "main",
+                "stage": "compute",
+                "workgroupSize": [2, 1, 1],
+            }
+        ],
+        resourceBindings=[
+            {"name": "lhs", "kind": "buffer", "binding": 0},
+            {"name": "rhs", "kind": "buffer", "binding": 1},
+            {"name": "out", "kind": "buffer", "binding": 2},
+        ],
+        dispatch={
+            "entryPoint": "main",
+            "globalSize": [2, 1, 1],
+        },
+    )
+
+    class VectorAddParityAdapter(RuntimeParityAdapter):
+        name = "vector-add-runtime"
+        target = "opengl"
+
+        def prepare_buffers(self, state):
+            assert state.plan.artifact_path == artifact_path.resolve()
+            assert state.plan.dispatch.workgroup_count == (1, 1, 1)
+            return dict(state.resource_values)
+
+        def dispatch(self, state, prepared_buffers):
+            assert state.plan.dispatch.entry_point == "main"
+            assert prepared_buffers["out"] is None
+            return [
+                lhs + rhs
+                for lhs, rhs in zip(
+                    prepared_buffers["lhs"],
+                    prepared_buffers["rhs"],
+                )
+            ]
+
+        def collect_outputs(self, state, dispatch_result):
+            return {
+                "out": {
+                    "dtype": "float32",
+                    "shape": [2],
+                    "values": dispatch_result,
+                }
+            }
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(tmp_path, [artifact]),
+        {
+            "kind": RUNTIME_TEST_MANIFEST_KIND,
+            "adapters": [
+                {
+                    "id": "runtime-check",
+                    "executor": "opengl",
+                    "adapterKind": "opengl-runtime-parity",
+                    "platformRequirements": {"requiredTools": []},
+                }
+            ],
+            "tests": [
+                _runtime_fixture(
+                    id="add-runtime",
+                    adapter="runtime-check",
+                    inputs=[
+                        {
+                            "name": "lhs",
+                            "kind": "buffer",
+                            "dtype": "float32",
+                            "shape": [2],
+                            "values": [1.0, 2.0],
+                        },
+                        {
+                            "name": "rhs",
+                            "kind": "buffer",
+                            "dtype": "float32",
+                            "shape": [2],
+                            "values": [10.0, 20.0],
+                        },
+                    ],
+                    expectedOutputs=[
+                        {
+                            "name": "out",
+                            "kind": "buffer",
+                            "dtype": "float32",
+                            "shape": [2],
+                            "values": [11.0, 22.0],
+                        }
+                    ],
+                ),
+            ],
+        },
+        executors={"opengl": VectorAddParityAdapter()},
+    )
+
+    result = report["results"][0]
+    assert report["success"] is True
+    assert result["status"] == PASSED
+    assert result["executor"]["name"] == "opengl-runtime-parity"
+    assert result["executor"]["details"]["runtimeParityAdapter"][
+        "runtimeAdapter"
+    ] == "vector-add-runtime"
+    assert [
+        step["phase"] for step in result["executor"]["details"]["adapterSteps"]
+    ] == [
+        "compile",
+        "load",
+        "bind",
+        "bind",
+        "prepare",
+        "dispatch",
+        "collect",
+    ]
+    assert result["comparisons"][0]["status"] == PASSED
+
+
+def test_verify_runtime_test_manifest_reports_runtime_adapter_gap_as_unavailable(
+    tmp_path,
+):
+    report = verify_runtime_test_manifest(
+        _artifact_report(tmp_path, [_translated_artifact()]),
+        {
+            "kind": RUNTIME_TEST_MANIFEST_KIND,
+            "adapters": [
+                {
+                    "id": "runtime-check",
+                    "executor": "opengl",
+                    "adapterKind": "opengl-runtime-parity",
+                    "platformRequirements": {"requiredTools": []},
+                }
+            ],
+            "tests": [
+                _runtime_fixture(id="add-runtime", adapter="runtime-check"),
+            ],
+        },
+    )
+
+    result = report["results"][0]
+    assert report["success"] is True
+    assert report["summary"]["unavailableCount"] == 1
+    assert report["summary"]["failedCount"] == 0
+    assert result["status"] == UNAVAILABLE
+    assert result["failurePhase"] == "runtime"
+    assert result["executor"]["name"] == "opengl-runtime-parity"
+    assert "Runtime parity adapter is not implemented" in result["executor"]["message"]
+    assert result["executor"]["details"]["adapter"] == "runtime-check"
+    assert result["diagnostics"][0]["code"] == (
+        "project.runtime-verification.executor-unavailable"
+    )
 
 
 def test_default_runtime_test_adapters_cover_native_platform_classes():

@@ -1119,7 +1119,8 @@ def test_append_consume_structured_buffers_use_sidecar_counters():
         in generated
     )
     assert (
-        "appendValues[atomicAdd(appendValuesCounter[0], 1u)] = int(value);" in generated
+        "appendValues[atomicAdd(appendValuesCounter[0], 1u)] = "
+        "int(main_value_Args_value);" in generated
     )
     assert (
         "int consumed = consumeValues[(atomicAdd(consumeValuesCounter[0], uint(-1)) - 1u)];"
@@ -1163,7 +1164,10 @@ def test_append_consume_structured_buffer_helpers_thread_sidecar_counters():
     assert "values[atomicAdd(valuesCounter[0], 1u)] = int(value);" in generated
     assert "int popValue(int values[], uint valuesCounter[]) {" in generated
     assert "return values[(atomicAdd(valuesCounter[0], uint(-1)) - 1u)];" in generated
-    assert "pushValue(appendValues, appendValuesCounter, value);" in generated
+    assert (
+        "pushValue(appendValues, appendValuesCounter, main_value_Args_value);"
+        in generated
+    )
     assert "int consumed = popValue(consumeValues, consumeValuesCounter);" in generated
     assert "buffer_append" not in generated
     assert "buffer_consume" not in generated
@@ -1194,7 +1198,9 @@ def test_append_structured_buffer_arrays_use_sidecar_counter_arrays():
         in generated
     )
     assert (
-        "appendValues[index].data[atomicAdd(appendValuesCounters[index].counter[0], 1u)] = int(value);"
+        "appendValues[main_index_Args_index].data[atomicAdd("
+        "appendValuesCounters[main_index_Args_index].counter[0], 1u)] = "
+        "int(main_value_Args_value);"
         in generated
     )
     assert "buffer_append" not in generated
@@ -1223,9 +1229,15 @@ def test_structured_buffer_arrays_lower_to_ssbo_instance_arrays():
         "layout(std430, binding = 3) buffer buffersBuffer { int data[]; } buffers[2];"
         in generated
     )
-    assert "int v = buffers[index].data[gl_GlobalInvocationID.x];" in generated
-    assert "len = buffers[index].data.length();" in generated
-    assert "buffers[index].data[gl_GlobalInvocationID.x] = (v + 1);" in generated
+    assert (
+        "int v = buffers[main_index_Args_index].data[gl_GlobalInvocationID.x];"
+        in generated
+    )
+    assert "len = buffers[main_index_Args_index].data.length();" in generated
+    assert (
+        "buffers[main_index_Args_index].data[gl_GlobalInvocationID.x] = (v + 1);"
+        in generated
+    )
     assert "buffers[index][gl_GlobalInvocationID.x]" not in generated
 
 

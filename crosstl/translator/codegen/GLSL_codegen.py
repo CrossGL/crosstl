@@ -288,6 +288,7 @@ from .stage_utils import (
     collect_stage_local_variables,
     compute_local_size,
     deduplicate_named_declarations,
+    function_stage_name,
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
@@ -315,7 +316,13 @@ class GLSLCodeGen:
         }
     )
     MESH_STAGE_NAMES = {"mesh", "task", "amplification", "object"}
-    UNSIGNED_VECTOR_COMPUTE_BUILTINS = {"gl_GlobalInvocationID"}
+    UNSIGNED_VECTOR_COMPUTE_BUILTINS = {
+        "gl_GlobalInvocationID",
+        "gl_LocalInvocationID",
+        "gl_WorkGroupID",
+        "gl_NumWorkGroups",
+        "gl_WorkGroupSize",
+    }
     GLSL_STAGE_GUARD_MACROS = {
         "vertex": "GL_VERTEX_SHADER",
         "fragment": "GL_FRAGMENT_SHADER",
@@ -1021,6 +1028,7 @@ class GLSLCodeGen:
         self.stage_parameter_output_aliases = {}
         self.stage_entry_functions_by_stage = {}
         self.stage_entry_resource_parameter_aliases = {}
+        self.stage_entry_constant_value_parameter_aliases = {}
         self.stage_entry_resource_declaration_names = set()
         self.current_identifier_aliases = {}
         self.current_mesh_output_parameters = {}
@@ -1651,12 +1659,7 @@ class GLSLCodeGen:
         stage_names = set()
 
         for func in getattr(ast, "functions", []) or []:
-            qualifier = (
-                func.qualifiers[0]
-                if getattr(func, "qualifiers", None)
-                else getattr(func, "qualifier", None)
-            )
-            stage_name = normalize_stage_name(qualifier)
+            stage_name = function_stage_name(func)
             if should_emit_qualified_function(target_stage, stage_name):
                 stage_names.add(stage_name)
 
@@ -2180,12 +2183,7 @@ class GLSLCodeGen:
         roots.extend(getattr(ast, "constants", []) or [])
 
         for func in getattr(ast, "functions", []) or []:
-            qualifier = (
-                func.qualifiers[0]
-                if getattr(func, "qualifiers", None)
-                else getattr(func, "qualifier", None)
-            )
-            stage_name = normalize_stage_name(qualifier)
+            stage_name = function_stage_name(func)
             if should_emit_qualified_function(target_stage, stage_name):
                 roots.append(func)
 
@@ -2538,6 +2536,7 @@ class GLSLCodeGen:
         self.current_stage_parameter_aliases = {}
         self.stage_entry_functions_by_stage = {}
         self.stage_entry_resource_parameter_aliases = {}
+        self.stage_entry_constant_value_parameter_aliases = {}
         self.stage_entry_resource_declaration_names = set()
         self.current_identifier_aliases = {}
         self.current_target_stage = target_stage
@@ -3344,11 +3343,7 @@ class GLSLCodeGen:
                 called_function_names,
             ):
                 continue
-            if hasattr(func, "qualifiers") and func.qualifiers:
-                qualifier = func.qualifiers[0] if func.qualifiers else None
-            else:
-                qualifier = getattr(func, "qualifier", None)
-            qualifier_name = normalize_stage_name(qualifier)
+            qualifier_name = function_stage_name(func)
 
             if not should_emit_qualified_function(target_stage, qualifier_name):
                 continue
@@ -3605,10 +3600,7 @@ class GLSLCodeGen:
                 func_name = getattr(func, "name", None)
                 if not func_name or id(func) in deferred_ids:
                     continue
-                if normalize_stage_name(getattr(func, "qualifier", None)):
-                    continue
-                qualifiers = getattr(func, "qualifiers", []) or []
-                if qualifiers and normalize_stage_name(qualifiers[0]):
+                if function_stage_name(func):
                     continue
 
                 for node in self.walk_ast(getattr(func, "body", [])):
@@ -4278,12 +4270,7 @@ class GLSLCodeGen:
         stage_entry_types = self.combined_stage_entry_types()
         has_global_main_helper = False
         for func in getattr(ast, "functions", []) or []:
-            qualifier = (
-                func.qualifiers[0]
-                if hasattr(func, "qualifiers") and func.qualifiers
-                else getattr(func, "qualifier", None)
-            )
-            stage_name = normalize_stage_name(qualifier)
+            stage_name = function_stage_name(func)
             if stage_name in stage_entry_types:
                 continue
             if getattr(func, "name", None) == "main":
@@ -4312,35 +4299,146 @@ class GLSLCodeGen:
         self, ast, target_stage=None
     ):
         cbuffers = []
+        existing_cbuffers = list(getattr(ast, "cbuffers", []) or [])
+        existing_cbuffers += collect_stage_local_cbuffers(ast, target_stage)
+        used_block_names = self.glsl_existing_cbuffer_block_names(
+            ast, target_stage, existing_cbuffers
+        )
+        used_member_names = self.glsl_existing_cbuffer_member_names(existing_cbuffers)
+        used_member_names.update(
+            self.glsl_existing_cbuffer_global_member_names(ast, target_stage)
+        )
+        self.stage_entry_constant_value_parameter_aliases = {}
         stage_entry_types = self.combined_stage_entry_types()
-        for _entry_id, _stage_name, func in collect_stage_entry_records(
+        for _entry_id, stage_name, func in collect_stage_entry_records(
             ast, target_stage, stage_entry_types
         ):
             for parameter in getattr(func, "parameters", getattr(func, "params", [])):
                 member_type = self.stage_entry_constant_value_parameter_type(parameter)
+                if member_type is None and stage_name == "compute":
+                    member_type = self.stage_entry_compute_value_parameter_type(
+                        parameter
+                    )
                 if member_type is None:
                     continue
                 binding = self.explicit_resource_binding_index(parameter)
-                if binding is None:
-                    continue
                 parameter_name = getattr(parameter, "name", None)
                 if not parameter_name:
                     continue
-                cbuffer = StructNode(
-                    self.stage_entry_constant_value_parameter_block_name(
-                        func, parameter_name
-                    ),
-                    [StructMemberNode(parameter_name, member_type)],
-                    attributes=[
+                attributes = []
+                if binding is not None:
+                    attributes.append(
                         AttributeNode(
                             "binding",
                             [LiteralNode(binding, PrimitiveType("int"))],
                         )
-                    ],
+                    )
+                block_name = self.unique_stage_entry_constant_value_block_name(
+                    self.stage_entry_constant_value_parameter_block_name(
+                        func, parameter_name
+                    ),
+                    used_block_names,
+                )
+                used_block_names.add(block_name)
+                member_name = self.stage_entry_constant_value_parameter_member_name(
+                    block_name, parameter_name, used_member_names
+                )
+                used_member_names.add(member_name)
+                if member_name != parameter_name:
+                    self.stage_entry_constant_value_parameter_aliases.setdefault(
+                        id(func), {}
+                    )[parameter_name] = member_name
+                member = StructMemberNode(member_name, member_type)
+                member.add_annotation("opengl.source_name", parameter_name)
+                cbuffer = StructNode(
+                    block_name,
+                    [member],
+                    attributes=attributes,
                 )
                 cbuffer.is_cbuffer = True
                 cbuffers.append(cbuffer)
         return cbuffers
+
+    def glsl_existing_cbuffer_block_names(self, ast, target_stage, cbuffers):
+        names = {
+            getattr(cbuffer, "name", None)
+            for cbuffer in cbuffers
+            if getattr(cbuffer, "name", None)
+        }
+        for node in (
+            list(getattr(ast, "structs", []) or [])
+            + collect_stage_local_structs(ast, target_stage)
+            + list(getattr(ast, "global_variables", []) or [])
+            + list(getattr(ast, "constants", []) or [])
+        ):
+            name = getattr(node, "name", None)
+            if name:
+                names.add(name)
+        return names
+
+    def glsl_existing_cbuffer_member_names(self, cbuffers):
+        names = set()
+        for cbuffer in cbuffers:
+            for member in getattr(cbuffer, "members", []) or []:
+                name = getattr(member, "name", None)
+                if name:
+                    names.add(name)
+        return names
+
+    def glsl_existing_cbuffer_global_member_names(self, ast, target_stage):
+        names = set()
+        for node in (
+            list(getattr(ast, "global_variables", []) or [])
+            + list(getattr(ast, "constants", []) or [])
+            + collect_stage_local_variables(
+                ast,
+                target_stage,
+                lambda _node: True,
+            )
+        ):
+            name = getattr(node, "name", None)
+            if name:
+                names.add(name)
+        return names
+
+    def unique_stage_entry_constant_value_identifier(
+        self, base_name, used_names, fallback
+    ):
+        candidate_base = sanitize_type_name(base_name or fallback)
+        if not candidate_base:
+            candidate_base = sanitize_type_name(fallback)
+        if not candidate_base:
+            candidate_base = "EntryConstant"
+        if candidate_base[0].isdigit():
+            candidate_base = f"Entry_{candidate_base}"
+
+        candidate = candidate_base
+        suffix = 2
+        while candidate in used_names or candidate in self.GLSL_RESERVED_IDENTIFIERS:
+            candidate = f"{candidate_base}_{suffix}"
+            suffix += 1
+        return candidate
+
+    def unique_stage_entry_constant_value_block_name(self, block_name, used_names):
+        return self.unique_stage_entry_constant_value_identifier(
+            block_name,
+            used_names,
+            "Entry_Value_Args",
+        )
+
+    def stage_entry_constant_value_parameter_member_name(
+        self, block_name, parameter_name, used_names
+    ):
+        parameter_name = sanitize_type_name(parameter_name or "value")
+        block_name = sanitize_type_name(block_name or "Entry_Value_Args")
+        base_name = "_".join(
+            part for part in (block_name, parameter_name or "value") if part
+        )
+        return self.unique_stage_entry_constant_value_identifier(
+            base_name,
+            used_names,
+            "Entry_Value",
+        )
 
     def stage_entry_constant_value_parameter_block_name(self, func, parameter_name):
         function_name = sanitize_type_name(getattr(func, "name", None) or "entry")
@@ -5772,12 +5870,7 @@ class GLSLCodeGen:
         for func in functions:
             if id(func) not in top_level_function_ids:
                 continue
-            qualifier = (
-                func.qualifiers[0]
-                if getattr(func, "qualifiers", None)
-                else getattr(func, "qualifier", None)
-            )
-            qualifier_name = normalize_stage_name(qualifier)
+            qualifier_name = function_stage_name(func)
             if qualifier_name in stage_entry_types:
                 continue
             if should_emit_qualified_function(target_stage, qualifier_name):
@@ -6077,6 +6170,11 @@ class GLSLCodeGen:
             if shader_type is not None
             else {}
         )
+        stage_entry_constant_value_aliases = (
+            self.stage_entry_constant_value_parameter_aliases.get(id(func), {})
+            if shader_type is not None
+            else {}
+        )
         unsupported_buffer_array_info = (
             self.unsupported_structured_buffer_array_functions.get(func.name, {})
         )
@@ -6107,6 +6205,7 @@ class GLSLCodeGen:
         self.current_structured_buffer_counter_parameters = {}
         self.current_structured_buffer_access_parameters = {}
         self.current_identifier_aliases.update(stage_entry_resource_aliases)
+        self.current_identifier_aliases.update(stage_entry_constant_value_aliases)
         for alias_name, binding in resource_aliases.items():
             self.local_variable_types[alias_name] = binding.get("type")
         for index, p in enumerate(param_list):
@@ -6136,6 +6235,11 @@ class GLSLCodeGen:
             stage_resource_alias = stage_entry_resource_aliases.get(p.name)
             if stage_resource_alias:
                 self.local_variable_types[stage_resource_alias] = (
+                    parameter_expression_type
+                )
+            stage_constant_value_alias = stage_entry_constant_value_aliases.get(p.name)
+            if stage_constant_value_alias:
+                self.local_variable_types[stage_constant_value_alias] = (
                     parameter_expression_type
                 )
             self.validate_resource_access_metadata_operands(p)
@@ -6477,11 +6581,7 @@ class GLSLCodeGen:
         functions = []
 
         for func in getattr(ast, "functions", []) or []:
-            qualifiers = getattr(func, "qualifiers", []) or []
-            qualifier = (
-                qualifiers[0] if qualifiers else getattr(func, "qualifier", None)
-            )
-            if normalize_stage_name(qualifier) == stage_name:
+            if function_stage_name(func) == stage_name:
                 functions.append(func)
 
         for stage_type, stage in getattr(ast, "stages", {}).items():
@@ -6718,12 +6818,7 @@ class GLSLCodeGen:
                 seen.add(id(param))
 
         for func in getattr(ast, "functions", []) or []:
-            qualifier = (
-                func.qualifiers[0]
-                if hasattr(func, "qualifiers") and func.qualifiers
-                else getattr(func, "qualifier", None)
-            )
-            qualifier_name = normalize_stage_name(qualifier)
+            qualifier_name = function_stage_name(func)
             if qualifier_name not in stage_entry_types:
                 continue
             if should_emit_qualified_function(target_stage, qualifier_name):
@@ -6766,6 +6861,7 @@ class GLSLCodeGen:
             "array_sizes",
             "declarator_type_suffix",
             "declarator_type_suffix_grouped",
+            "resource_qualifiers",
         ):
             if hasattr(parameter, attr_name):
                 setattr(node, attr_name, getattr(parameter, attr_name))
@@ -6962,6 +7058,27 @@ class GLSLCodeGen:
             type_name = stripped
 
     def stage_entry_constant_value_parameter_type(self, param):
+        resource_qualifiers = self.resource_parameter_qualifiers(param)
+        if "uniform" in resource_qualifiers:
+            raw_type = self.resource_node_type(param)
+            if isinstance(raw_type, (PointerType, ReferenceType)):
+                return None
+            type_name = self.type_name_string(raw_type)
+            if not type_name or type_name in self.structs_by_name:
+                return None
+            if self.is_sampler_type(type_name):
+                return None
+            if self.is_structured_buffer_type(type_name) or self.is_constant_buffer_type(
+                type_name
+            ):
+                return None
+            mapped_type = self.map_resource_type_with_format(
+                self.resource_base_type(type_name), param
+            )
+            if self.is_opaque_resource_type(mapped_type):
+                return None
+            return type_name
+
         qualifiers = {str(q).lower() for q in getattr(param, "qualifiers", []) or []}
         if "constant" not in qualifiers:
             return None
@@ -6980,6 +7097,33 @@ class GLSLCodeGen:
             self.type_name_string(raw_type)
         )
         if not type_name or type_name in self.structs_by_name:
+            return None
+        if self.is_sampler_type(type_name):
+            return None
+        if self.is_structured_buffer_type(type_name) or self.is_constant_buffer_type(
+            type_name
+        ):
+            return None
+        mapped_type = self.map_resource_type_with_format(
+            self.resource_base_type(type_name), param
+        )
+        if self.is_opaque_resource_type(mapped_type):
+            return None
+        return type_name
+
+    def stage_entry_compute_value_parameter_type(self, param):
+        if self.semantic_from_node(param) is not None:
+            return None
+        if self.is_stage_entry_resource_parameter(param):
+            return None
+
+        raw_type = self.resource_node_type(param)
+        if isinstance(raw_type, (PointerType, ReferenceType)):
+            return None
+        type_name = self.type_name_string(raw_type)
+        if not type_name or type_name in self.structs_by_name:
+            return None
+        if "[" in str(type_name) and "]" in str(type_name):
             return None
         if self.is_sampler_type(type_name):
             return None
@@ -7026,10 +7170,41 @@ class GLSLCodeGen:
         )
         return f"{buffer_type}<{element_type}>"
 
+    def resource_parameter_qualifiers(self, param):
+        return {
+            str(qualifier).lower()
+            for qualifier in getattr(param, "resource_qualifiers", []) or []
+        }
+
+    def stage_entry_storage_array_structured_buffer_type(self, param):
+        resource_qualifiers = self.resource_parameter_qualifiers(param)
+        if "storage" not in resource_qualifiers:
+            return None
+
+        raw_type = self.resource_node_type(param)
+        if not (
+            hasattr(raw_type, "element_type")
+            and str(type(raw_type)).find("ArrayType") != -1
+        ):
+            return None
+
+        element_type = self.convert_type_node_to_string(raw_type.element_type)
+        access = None
+        for qualifier in resource_qualifiers:
+            normalized = normalized_image_access(qualifier)
+            if normalized is not None:
+                access = normalized
+                break
+        buffer_type = "StructuredBuffer" if access == "read" else "RWStructuredBuffer"
+        return f"{buffer_type}<{element_type}>"
+
     def stage_entry_resource_parameter_type(self, param):
         constant_struct_type = self.stage_entry_constant_struct_parameter_type(param)
         if constant_struct_type is not None:
             return constant_struct_type
+        storage_array_type = self.stage_entry_storage_array_structured_buffer_type(param)
+        if storage_array_type is not None:
+            return storage_array_type
         return self.stage_entry_metal_pointer_structured_buffer_type(param)
 
     def stage_entry_parameter_expression_type(self, param, raw_type):
@@ -7069,6 +7244,8 @@ class GLSLCodeGen:
         if self.is_sampler_type(raw_type):
             return False
         if self.is_stage_entry_resource_parameter(param):
+            return False
+        if self.stage_entry_constant_value_parameter_type(param) is not None:
             return False
         type_name = self.type_node_name(raw_type)
         return type_name not in self.structs_by_name
@@ -7267,12 +7444,7 @@ class GLSLCodeGen:
                     declarations.append(declaration)
 
         for func in getattr(ast, "functions", []) or []:
-            qualifier = (
-                func.qualifiers[0]
-                if hasattr(func, "qualifiers") and func.qualifiers
-                else getattr(func, "qualifier", None)
-            )
-            qualifier_name = normalize_stage_name(qualifier)
+            qualifier_name = function_stage_name(func)
             if qualifier_name not in graphics_stages:
                 continue
             if not should_emit_qualified_function(target_stage, qualifier_name):
@@ -7347,12 +7519,7 @@ class GLSLCodeGen:
                     declarations.append(declaration)
 
         for func in getattr(ast, "functions", []) or []:
-            qualifier = (
-                func.qualifiers[0]
-                if hasattr(func, "qualifiers") and func.qualifiers
-                else getattr(func, "qualifier", None)
-            )
-            qualifier_name = normalize_stage_name(qualifier)
+            qualifier_name = function_stage_name(func)
             if qualifier_name not in graphics_stages:
                 continue
             if not should_emit_qualified_function(target_stage, qualifier_name):
@@ -9635,7 +9802,26 @@ class GLSLCodeGen:
             "dmat4x4",
         }:
             return constructor
+        if constructor in getattr(self, "structs_by_name", {}):
+            return constructor
+        if constructor in getattr(self, "struct_member_types", {}):
+            return constructor
+        if constructor in getattr(self, "enum_struct_type_names", set()):
+            return constructor
         return None
+
+    def glsl_builtin_identifier_result_type(self, name):
+        if not name:
+            return None
+        target_name = self.glsl_target_builtin_identifier(name)
+        return {
+            "gl_GlobalInvocationID": "uvec3",
+            "gl_LocalInvocationID": "uvec3",
+            "gl_WorkGroupID": "uvec3",
+            "gl_NumWorkGroups": "uvec3",
+            "gl_WorkGroupSize": "uvec3",
+            "gl_LocalInvocationIndex": "uint",
+        }.get(target_name)
 
     def expression_result_type(self, expr):
         if expr is None:
@@ -9646,6 +9832,15 @@ class GLSLCodeGen:
                 self.local_variable_types.get(name)
                 or self.glsl_buffer_block_variable_types.get(name)
                 or self.global_variable_types.get(name)
+                or self.glsl_builtin_identifier_result_type(name)
+            )
+        if hasattr(expr, "__class__") and "IdentifierNode" in str(type(expr)):
+            name = getattr(expr, "name", None)
+            return (
+                self.local_variable_types.get(name)
+                or self.glsl_buffer_block_variable_types.get(name)
+                or self.global_variable_types.get(name)
+                or self.glsl_builtin_identifier_result_type(name)
             )
         if isinstance(expr, (int, float)):
             return "float" if isinstance(expr, float) else "int"
@@ -17748,6 +17943,12 @@ class GLSLCodeGen:
             if access is not None:
                 choices.append((source, access))
 
+        for qualifier in getattr(node, "resource_qualifiers", []) or []:
+            source = str(qualifier).lower()
+            access = normalized_image_access(source)
+            if access is not None:
+                choices.append((source, access))
+
         for attr in getattr(node, "attributes", []) or []:
             attr_name = getattr(attr, "name", None)
             if not attr_name:
@@ -17879,9 +18080,16 @@ class GLSLCodeGen:
         generic_args = getattr(type_node, "generic_args", [])
         type_name = getattr(type_node, "name", None)
         if type_name and generic_args:
-            args = ", ".join(
-                self.convert_type_node_to_string(arg) for arg in generic_args
-            )
+            converted_args = []
+            for arg in generic_args:
+                converted = self.convert_type_node_to_string(arg)
+                if converted is None:
+                    if hasattr(arg, "value"):
+                        converted = str(arg.value)
+                    else:
+                        converted = str(arg)
+                converted_args.append(converted)
+            args = ", ".join(converted_args)
             return f"{type_name}<{args}>"
         if type_name:
             return type_name

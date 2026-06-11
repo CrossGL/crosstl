@@ -72,6 +72,36 @@ def test_preprocessor_materializes_mlx_instantiate_kernel_macros():
     assert "out[gid] = half(gid + 3);" in output
 
 
+def test_preprocessor_materializes_mlx_instantiations_with_template_defaults():
+    code = """
+    #define instantiate_rope(name, type, idx_type) \\
+        instantiate_kernel("rope_" #name, rope, type, idx_type)
+
+    template <typename T, typename IdxT, int N = 4>
+    [[kernel]] void rope(
+        device const T* src [[buffer(0)]],
+        device T* dst [[buffer(1)]],
+        device const IdxT* positions [[buffer(2)]],
+        uint gid [[thread_position_in_grid]]) {
+        IdxT pos = positions[gid];
+        dst[gid] = src[pos] + T(N);
+    }
+
+    instantiate_rope(float32, float, uint)
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "template <typename T" not in output
+    assert "instantiate_kernel" not in output
+    assert '[[host_name("rope_float32")]]' in output
+    assert "void rope_float32(" in output
+    assert "device const float* src" in output
+    assert "device const uint* positions" in output
+    assert "uint pos = positions[gid];" in output
+    assert "dst[gid] = src[pos] + float(4);" in output
+
+
 def test_preprocessor_materializes_multiple_mlx_instantiations_from_one_macro():
     code = """
     #define instantiate_copy_pair(name, type) \\
@@ -152,6 +182,70 @@ def test_preprocessor_materializes_decltype_instantiation_with_joined_host_name(
     assert "device uint* out" in output
     assert "out[gid] = uint(gid);" in output
 
+
+def test_preprocessor_materializes_signature_only_template_instantiation_entries():
+    code = """
+    template <int N>
+    struct ConvParams {
+        int shape[N];
+    };
+
+    template <typename T, int N>
+    [[kernel]] void naive_unfold_Nd(
+        const device T* in [[buffer(0)]],
+        device T* out [[buffer(1)]],
+        const constant ConvParams<N>* params [[buffer(2)]],
+        uint gid [[thread_position_in_grid]]) {
+        out[gid] = in[gid] + T(N + params->shape[0]);
+    }
+
+    template <typename T, int N>
+    [[kernel]] void naive_unfold_transpose_Nd(
+        const device T* in [[buffer(0)]],
+        device T* out [[buffer(1)]],
+        const constant ConvParams<N>* params [[buffer(2)]],
+        uint gid [[thread_position_in_grid]]) {
+        out[gid] = in[gid] - T(N + params->shape[0]);
+    }
+
+    #define instantiate_naive_unfold_nd(name, itype, n) \\
+        template [[host_name("naive_unfold_nd_" #name "_" #n)]] [[kernel]] void \\
+        naive_unfold_Nd( \\
+            const device itype* in [[buffer(0)]], \\
+            device itype* out [[buffer(1)]], \\
+            const constant ConvParams<n>* params [[buffer(2)]], \\
+            uint gid [[thread_position_in_grid]]); \\
+        template [[host_name("naive_unfold_transpose_nd_" #name "_" #n)]] [[kernel]] void \\
+        naive_unfold_transpose_Nd( \\
+            const device itype* in [[buffer(0)]], \\
+            device itype* out [[buffer(1)]], \\
+            const constant ConvParams<n>* params [[buffer(2)]], \\
+            uint gid [[thread_position_in_grid]]);
+
+    instantiate_naive_unfold_nd(float32, float, 2) instantiate_naive_unfold_nd(float16, half, 3)
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert '[[host_name("naive_unfold_nd_float32_2")]]' in output
+    assert "void naive_unfold_nd_float32_2(" in output
+    assert "const device float* in" in output
+    assert "device float* out" in output
+    assert "const constant ConvParams<2>* params" in output
+    assert "out[gid] = in[gid] + float(2 + params->shape[0]);" in output
+    assert '[[host_name("naive_unfold_transpose_nd_float32_2")]]' in output
+    assert "void naive_unfold_transpose_nd_float32_2(" in output
+    assert "out[gid] = in[gid] - float(2 + params->shape[0]);" in output
+    assert '[[host_name("naive_unfold_nd_float16_3")]]' in output
+    assert "void naive_unfold_nd_float16_3(" in output
+    assert "const device half* in" in output
+    assert "const constant ConvParams<3>* params" in output
+    assert '[[host_name("naive_unfold_transpose_nd_float16_3")]]' in output
+    assert "void naive_unfold_transpose_nd_float16_3(" in output
+    assert "template [[host_name" not in output
+    assert "naive_unfold_Nd(" not in output
+    assert "naive_unfold_transpose_Nd(" not in output
+    assert "ConvParams<n>" not in output
 
 def test_preprocessor_materialized_numeric_specialization_preserves_member_names():
     code = """

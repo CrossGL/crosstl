@@ -12,18 +12,19 @@ The current harness verifies:
 - discovery of the MLX Metal kernel project surface under
   `mlx/backend/metal/kernels`;
 - DirectX and Vulkan artifact generation for the current reduced frontier:
-  `arange.metal`, `binary_two.metal`, `fence.metal`, `random.metal`, and
-  `ternary.metal`;
+  `arange.metal`, `fence.metal`, and `random.metal`;
 - Vulkan assembly validation when SPIR-V tools are available;
 - OpenGL artifact generation for `arange.metal`.
 
-A separate full-corpus scout against the same pinned MLX revision currently
-translates 47 of 120 target artifacts across DirectX, OpenGL, and Vulkan:
-DirectX translates 19 of 40 artifacts, OpenGL translates 12 of 40 artifacts,
-and Vulkan translates 16 of 40 artifacts. The current materialization pass rejects
-template-hostile targets when concrete variants are missing instead of emitting
-generic artifacts, so the full-corpus count reflects stricter diagnostics rather
-than a claim that previously translated artifacts were runtime-complete.
+A previous full-corpus scout against the same pinned MLX revision translated 47
+of 120 target artifacts across DirectX, OpenGL, and Vulkan: DirectX translated
+19 of 40 artifacts, OpenGL translated 12 of 40 artifacts, and Vulkan translated
+16 of 40 artifacts. After the latest mainline materialization fixes, a fresh
+full-corpus scout is currently blocked by CrossGL/crosstl#1146, which tracks
+bounded plain Metal template helper call-site scanning for large helper graphs.
+The current materialization pass rejects template-hostile targets when concrete
+variants are missing instead of emitting generic artifacts, so historical
+full-corpus counts should not be treated as runtime-complete coverage.
 
 This is shader/kernel artifact coverage. It does not claim that the MLX host
 runtime has been ported to Direct3D, OpenGL, or Vulkan. Running the upstream MLX
@@ -60,17 +61,13 @@ The harness writes reports, generated artifacts, and command logs under
 
 ## Current Translator Gaps
 
-- CrossGL/crosstl#1106, CrossGL/crosstl#1107, CrossGL/crosstl#1122, and
-  CrossGL/crosstl#1124 cover the remaining Metal template materialization work
-  for convolution helpers, shared reduction/normalization helper graphs, common
-  utility helpers, and Steel attention helpers.
-- CrossGL/crosstl#1110 and CrossGL/crosstl#1111 cover latent OpenGL template
-  binding propagation for reduction/ordering kernels and nested Steel kernels
-  once earlier materialization blockers are cleared.
-- CrossGL/crosstl#1127 covers the remaining OpenGL uniform block and cbuffer
-  member disambiguation failures.
-- CrossGL/crosstl#1126 covers the remaining SPIR-V storage-buffer overload
-  resolution failures.
+- CrossGL/crosstl#1146 covers the current full-corpus scout blocker: bounded
+  plain Metal template helper call-site scanning for large helper graphs. The
+  reproducers include `mlx/backend/metal/kernels/fp_quantized_nax.metal`, which
+  did not complete a single-source DirectX/OpenGL/Vulkan project translation
+  within a 45-second isolation timeout, plus `binary_two.metal` and
+  `ternary.metal`, which did not complete bounded single-source DirectX/Vulkan
+  translations in the reduced frontier.
 
 These gaps are translator work. Host runtime integration gaps should be handled
 in MLX-specific integration code or downstream runtime adapters, not hidden as
@@ -99,4 +96,8 @@ issue set. CrossGL/crosstl#1027 is no longer reported by the latest full-corpus
 scout because the generated Metal quantization declarator now parses far enough
 to reach target codegen. The current full-corpus scout no longer reports
 runtime-adapter contracts, boolean SPIR-V interface lowering, or the previous
-closed issue set as active missing capabilities.
+closed issue set as active missing capabilities. CrossGL/crosstl#1106,
+CrossGL/crosstl#1107, CrossGL/crosstl#1110, CrossGL/crosstl#1111,
+CrossGL/crosstl#1122, CrossGL/crosstl#1124, CrossGL/crosstl#1126, and
+CrossGL/crosstl#1127 are also closed and are no longer tracked as active MLX
+blockers.

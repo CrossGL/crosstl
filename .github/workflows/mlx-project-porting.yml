@@ -3,14 +3,7 @@ name: MLX Project Porting
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   MLX_COMMIT: "968d264f2903d578e699c4452a4dbf48633921aa"
-  METAL_CONVOLUTION_HELPER_TEMPLATE_VARIANTS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1106"
-  METAL_SHARED_REDUCTION_HELPER_TEMPLATE_VARIANTS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1107"
-  OPENGL_REDUCTION_ORDERING_TEMPLATE_BINDINGS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1110"
-  OPENGL_STEEL_TEMPLATE_BINDINGS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1111"
-  METAL_COMMON_UTILITY_TEMPLATE_VARIANTS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1122"
-  METAL_STEEL_ATTENTION_TEMPLATE_VARIANTS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1124"
-  SPIRV_STORAGE_BUFFER_OVERLOADS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1126"
-  OPENGL_CBUFFER_MEMBER_DISAMBIGUATION_ISSUE: "https://github.com/CrossGL/crosstl/issues/1127"
+  PLAIN_TEMPLATE_HELPER_SCANNING_ISSUE: "https://github.com/CrossGL/crosstl/issues/1146"
 
 on:
   push:

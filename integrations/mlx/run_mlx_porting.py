@@ -18,21 +18,12 @@ MLX_METAL_KERNEL_ROOT = "mlx/backend/metal/kernels"
 MLX_ARANGE_SOURCE = "mlx/backend/metal/kernels/arange.metal"
 MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/arange.metal",
-    "mlx/backend/metal/kernels/binary_two.metal",
     "mlx/backend/metal/kernels/fence.metal",
     "mlx/backend/metal/kernels/random.metal",
-    "mlx/backend/metal/kernels/ternary.metal",
 )
 EXPECTED_METAL_KERNEL_COUNT = 40
 FULL_CORPUS_TRACKED_ISSUES = (
-    "https://github.com/CrossGL/crosstl/issues/1106",
-    "https://github.com/CrossGL/crosstl/issues/1107",
-    "https://github.com/CrossGL/crosstl/issues/1110",
-    "https://github.com/CrossGL/crosstl/issues/1111",
-    "https://github.com/CrossGL/crosstl/issues/1122",
-    "https://github.com/CrossGL/crosstl/issues/1124",
-    "https://github.com/CrossGL/crosstl/issues/1126",
-    "https://github.com/CrossGL/crosstl/issues/1127",
+    "https://github.com/CrossGL/crosstl/issues/1146",
 )
 RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/939",
@@ -75,6 +66,14 @@ RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1068",
     "https://github.com/CrossGL/crosstl/issues/1104",
     "https://github.com/CrossGL/crosstl/issues/1105",
+    "https://github.com/CrossGL/crosstl/issues/1106",
+    "https://github.com/CrossGL/crosstl/issues/1107",
+    "https://github.com/CrossGL/crosstl/issues/1110",
+    "https://github.com/CrossGL/crosstl/issues/1111",
+    "https://github.com/CrossGL/crosstl/issues/1122",
+    "https://github.com/CrossGL/crosstl/issues/1124",
+    "https://github.com/CrossGL/crosstl/issues/1126",
+    "https://github.com/CrossGL/crosstl/issues/1127",
 )
 
 

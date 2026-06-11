@@ -80,6 +80,60 @@ def test_wgsl_codegen_emits_vertex_and_fragment_entry_points():
     assert "return vec4<f32>(input.uv, 0.0, 1.0);" in generated
 
 
+def test_wgsl_codegen_narrows_vec4_assignment_to_vec3_with_swizzle():
+    shader = """
+    shader WGSLVectorNarrowAssignment {
+        cbuffer Uniforms {
+            mat4 matModel;
+        };
+        struct VSInput {
+            vec3 vertexPosition @ POSITION;
+        };
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            vec3 fragPosition @ TEXCOORD0;
+        };
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.position = vec4(input.vertexPosition, 1.0);
+                output.fragPosition = matModel * vec4(input.vertexPosition, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "output.fragPosition = "
+        "(_Uniforms.matModel * vec4<f32>(input.vertexPosition, 1.0)).xyz;"
+        in generated
+    )
+    assert "vec3<f32>((_Uniforms.matModel *" not in generated
+
+
+def test_wgsl_codegen_narrows_vec4_constructor_argument_to_vec3_swizzle():
+    shader = """
+    shader WGSLVectorNarrowConstructor {
+        vertex {
+            vec4 main(vec4 position @ POSITION) @ gl_Position {
+                vec3 implicit = vec3(position);
+                vec3 typed = vec3<f32>(position);
+                return vec4(implicit + typed, position.w);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var implicit: vec3<f32> = position.xyz;" in generated
+    assert "var typed: vec3<f32> = position.xyz;" in generated
+    assert "vec3<f32>(position)" not in generated
+
+
 def test_wgsl_codegen_preserves_explicit_io_attributes():
     shader = """
     shader WGSLExplicitAttributes {
@@ -181,6 +235,32 @@ def test_wgsl_codegen_injects_direct_compute_builtin_references():
         "global_invocation_id: vec3<u32>)"
     ) in generated
     assert "var lane: u32 = global_invocation_id.x;" in generated
+
+
+def test_wgsl_codegen_casts_unsigned_compute_builtin_component_to_signed_local():
+    shader = """
+    shader WGSLSignedComputeBuiltin {
+        buffer float values[4];
+
+        compute {
+            layout(local_size_x = 4) in;
+            void main() {
+                int index = gl_GlobalInvocationID.x;
+                values[index] = values[index] + 1.0;
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "fn compute_main(@builtin(global_invocation_id) "
+        "global_invocation_id: vec3<u32>)"
+    ) in generated
+    assert "var index: i32 = i32(global_invocation_id.x);" in generated
+    assert "values[index] = (values[index] + 1.0);" in generated
 
 
 def test_wgsl_codegen_treats_attribute_compute_functions_as_entry_points():
@@ -1127,6 +1207,63 @@ def test_wgsl_codegen_allows_resource_like_user_type_names():
     assert "struct TextureInfo" in generated
     assert "fn makeInfo() -> TextureInfo" in generated
     assert "var info: TextureInfo;" in generated
+
+
+def test_wgsl_codegen_escapes_reserved_struct_fields_and_member_accesses():
+    shader = """
+    shader WGSLReservedStructFields {
+        struct Light {
+            int type;
+            float match;
+        };
+
+        float readLight(Light light) {
+            return float(light.type) + light.match;
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "struct Light {\n    type_: i32,\n    match_: f32,\n};" in generated
+    assert "return (f32(light.type_) + light.match_);" in generated
+    assert " type:" not in generated
+    assert " match:" not in generated
+    assert "light.type;" not in generated
+    assert "light.match;" not in generated
+
+
+def test_wgsl_codegen_escapes_reserved_resources_functions_and_locals():
+    shader = """
+    shader WGSLReservedFunctionIdentifiers {
+        sampler2D type;
+
+        float match(float type, float match) {
+            float while = type + match;
+            return while;
+        }
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                float value = match(uv.x, uv.y);
+                return texture(type, uv) + vec4(value);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(0)\nvar type_: texture_2d<f32>;" in generated
+    assert "@group(0) @binding(1)\nvar type__sampler: sampler;" in generated
+    assert "fn match_(type_: f32, match_: f32) -> f32" in generated
+    assert "var while_: f32 = (type_ + match_);" in generated
+    assert "return while_;" in generated
+    assert "var value: f32 = match_(uv.x, uv.y);" in generated
+    assert "textureSample(type_, type__sampler, uv)" in generated
+    assert "fn match(" not in generated
+    assert "var while:" not in generated
+    assert "textureSample(type," not in generated
 
 
 def test_wgsl_aliases_format_as_noop_wgsl():
