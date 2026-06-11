@@ -7089,6 +7089,53 @@ def test_translate_project_glsl_alpha_stitch_storage_image_lowers_to_wgsl(
     }
 
 
+def test_translate_project_glsl_fragcoord_lowers_to_wgsl_fragment_position(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "noise.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            layout(location = 0) out vec4 fragColor;
+
+            void main() {
+                float xVal = gl_FragCoord.x;
+                fragColor = vec4(xVal, gl_FragCoord.y, 0.0, 1.0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["wgsl"],
+        output_dir="out",
+        validate=True,
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("wgsl", "translated")}
+
+    wgsl = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    assert (
+        "fn fragment_main(@builtin(position) position: vec4<f32>) "
+        "-> @location(0) vec4<f32>"
+    ) in wgsl
+    assert "var xVal: f32 = position.x;" in wgsl
+    assert "fragColor = vec4<f32>(xVal, position.y, 0.0, 1.0);" in wgsl
+    assert "return fragColor;" in wgsl
+    assert "gl_FragCoord" not in wgsl
+
+    if shutil.which("naga"):
+        assert payload["validation"]["artifacts"][0]["status"] == "ok"
+        assert payload["validation"]["toolchainRuns"][0]["status"] == "ok"
+
+
 def test_translate_project_glsl_usampler_texel_fetch_lowers_to_cuda_hip_slang(
     tmp_path,
 ):
