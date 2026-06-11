@@ -1,0 +1,116 @@
+{
+  "generatedFile": "crosstl-out/vulkan/main.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 227,
+        "file": "crosstl-out/vulkan/main.spvasm",
+        "length": 60,
+        "line": 8,
+        "offset": 167
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 1528,
+        "file": "main.hip",
+        "length": 93,
+        "line": 27,
+        "offset": 1435
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 321,
+        "file": "crosstl-out/vulkan/main.spvasm",
+        "length": 30,
+        "line": 11,
+        "offset": 291
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 38,
+        "endOffset": 1899,
+        "file": "main.hip",
+        "length": 51,
+        "line": 37,
+        "offset": 1848
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 399,
+        "file": "crosstl-out/vulkan/main.spvasm",
+        "length": 29,
+        "line": 14,
+        "offset": 370
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 38,
+        "endOffset": 1899,
+        "file": "main.hip",
+        "length": 51,
+        "line": 37,
+        "offset": 1848
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 52,
+        "endOffset": 1409,
+        "file": "crosstl-out/vulkan/main.spvasm",
+        "length": 23,
+        "line": 51,
+        "offset": 1386
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 1790,
+        "file": "main.hip",
+        "length": 58,
+        "line": 35,
+        "offset": 1732
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 69,
+        "endOffset": 1870,
+        "file": "crosstl-out/vulkan/main.spvasm",
+        "length": 22,
+        "line": 68,
+        "offset": 1848
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 1790,
+        "file": "main.hip",
+        "length": 58,
+        "line": 35,
+        "offset": 1732
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

@@ -104,6 +104,15 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/godotengine/godot/blob/3df26a02c446710c979daa541b74f87edeca81b0/LICENSE.txt
 
+## glfw/glfw
+
+- Repository: https://github.com/glfw/glfw
+- Commit: `567b1ec2442d59525e24c19e8d413df6baf02496`
+- Source path: `examples/triangle-opengl.c`
+- License: Zlib
+- License URL:
+  https://github.com/glfw/glfw/blob/567b1ec2442d59525e24c19e8d413df6baf02496/LICENSE.md
+
 ## libgdx/libgdx
 
 - Repository: https://github.com/libgdx/libgdx
@@ -216,8 +225,9 @@ should be treated with the same upstream license context when redistributed.
 
 - Repository: https://github.com/ROCm/rocm-examples
 - Commit: `cf369da68f209c315074204bd0eb61d1a5c015d1`
-- Source path:
+- Source paths:
   `HIP-Doc/Programming-Guide/Introduction-to-the-HIP-Programming-Model/add_kernel/main.hip`
+  `HIP-Basic/bit_extract/main.hip`
 - License: MIT
 - License URL:
   https://github.com/ROCm/rocm-examples/blob/cf369da68f209c315074204bd0eb61d1a5c015d1/LICENSE.md
@@ -314,3 +324,12 @@ should be treated with the same upstream license context when redistributed.
 - License: Apache-2.0 WITH LLVM-exception
 - License URL:
   https://github.com/shader-slang/slang/blob/29e69b0bf626f87500be73a7fb3764db25658c66/LICENSE
+
+## shader-slang/slang default parameter
+
+- Repository: https://github.com/shader-slang/slang
+- Commit: `adc996670ec281aa8a4ee131f30b324648cbbe60`
+- Source path: `tests/compute/default-parameter.slang`
+- License: Apache-2.0 WITH LLVM-exception
+- License URL:
+  https://github.com/shader-slang/slang/blob/adc996670ec281aa8a4ee131f30b324648cbbe60/LICENSE

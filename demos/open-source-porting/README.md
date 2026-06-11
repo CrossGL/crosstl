@@ -50,6 +50,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `directx-sdk-samples-tutorial02` | `walbourn/directx-sdk-samples-reworked` at `1ad8f0f6a3e4d9be7e54ca52640ac12b6565ab0c` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Direct3D 11 Tutorial02 effect include unchanged. |
 | `diligent-samples-tutorial02-cube` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Tutorial02 cube vertex and pixel shader pair with repository whitespace normalization. |
 | `diligent-samples-vrs-cube` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | GLSL | CrossGL, OpenGL, DirectX, Vulkan | Uses the upstream VRS cube vertex and fragment-density shader pair unchanged. Metal has no fragment-size input equivalent. |
+| `glfw-opengl-triangle` | `glfw/glfw` at `567b1ec2442d59525e24c19e8d413df6baf02496` | Zlib | GLSL | CrossGL, Metal, DirectX, Vulkan | Uses the upstream OpenGL triangle shader strings extracted from `triangle-opengl.c`. OpenGL output is tracked separately in issue #1304. |
 | `glslang-push-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream push-constant vertex shader unchanged. |
 | `glslang-spec-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream specialization-constant vertex shader unchanged. Source-target output records fallback literals where native specialization IDs cannot be preserved. |
 | `godot-betsy-alpha-stitch` | `godotengine/godot` at `3df26a02c446710c979daa541b74f87edeca81b0` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Removes the Godot shader-section marker so the compute shader is standalone GLSL. |
@@ -69,6 +70,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `opencl-sdk-reduce` | `KhronosGroup/OpenCL-SDK` at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` | Apache-2.0 | OpenCL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream reduce compute kernel unchanged. |
 | `opencl-sdk-saxpy` | `KhronosGroup/OpenCL-SDK` at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` | Apache-2.0 | OpenCL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream SAXPY compute kernel unchanged. |
 | `rocm-examples-add-kernel` | `ROCm/rocm-examples` at `cf369da68f209c315074204bd0eb61d1a5c015d1` | MIT | HIP | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream sphinx-marked add-kernel slice. Host HIP runtime setup remains outside the demo scope. |
+| `rocm-examples-bit-extract` | `ROCm/rocm-examples` at `cf369da68f209c315074204bd0eb61d1a5c015d1` | MIT | HIP | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream bit-extract kernel slice with the AMD HIP branch selected through project defines. Host HIP runtime setup remains outside the demo scope. |
 | `raylib-base-fragment` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream base fragment shader unchanged. |
 | `raylib-base-vertex` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream base vertex shader unchanged. |
 | `raylib-lighting-shader-pair` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream lighting vertex and fragment shaders unchanged. |
@@ -79,6 +81,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `sascha-willems-vulkan-conservative-triangle` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream conservative raster triangle vertex shader without semantic edits. Host conservative-rasterizer pipeline state remains outside the demo scope. |
 | `sascha-willems-vulkan-headless-compute` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream headless compute shader unchanged. |
 | `slang-hello-world-compute` | `shader-slang/slang` at `29e69b0bf626f87500be73a7fb3764db25658c66` | Apache-2.0 WITH LLVM-exception | Slang | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream compute shader unchanged. |
+| `slang-default-parameter-compute` | `shader-slang/slang` at `adc996670ec281aa8a4ee131f30b324648cbbe60` | Apache-2.0 WITH LLVM-exception | Slang | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream default-parameter compute shader with repository newline normalization. |
 | `spirv-tools-basic-src` | `KhronosGroup/SPIRV-Tools` at `199cb207b911501ddd76dcddf100a6e21c15ef23` | Apache-2.0 | SPIR-V assembly | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream SPIR-V assembly fixture unchanged. |
 | `vulkan-tools-cube` | `KhronosGroup/Vulkan-Tools` at `68749eafbf27114a1dd807d6c870e53306673e64` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream cube demo shader pair unchanged. |
 
@@ -144,8 +147,10 @@ The `glfw/glfw` OpenGL triangle shader strings were tested as a candidate and
 originally exposed the CrossGL intermediate keyword collision tracked in issue
 #766. Retesting after issue #1159 closed shows the generated Metal fragment
 shader now escapes the `fragment` stage keyword collision and compiles
-directly. The case remains a future expansion candidate because it is not yet
-stored with the checked demo corpus and third-party notices.
+directly. The extracted shader strings are now checked for CrossGL, Metal,
+DirectX, and Vulkan output. OpenGL target validation remains tracked in issue
+#1304 because generated vertex output currently mixes GLSL 110 with modern
+interface qualifiers.
 
 The checked `KhronosGroup/glslang` push-constant vertex shader was retested
 after issue #813 and issue #856 closed and is now checked for DirectX and
@@ -235,8 +240,8 @@ The `shader-slang/slang` default-parameter compute shader from
 `adc996670ec281aa8a4ee131f30b324648cbbe60` was tested as a candidate and
 exposed target lowering gaps for default function parameters in OpenGL and
 Metal output. Retesting after issue #781 closed shows OpenGL, Metal, and
-SPIR-V output now validate, so the source is a candidate for a future demo
-expansion.
+SPIR-V output now validate. The source is checked for CrossGL, OpenGL, Metal,
+DirectX, and Vulkan output.
 
 The `microsoft/DirectXShaderCompiler` scalar-splat compute test keeps the
 upstream source unchanged and is checked for CrossGL, OpenGL, Metal, DirectX,
@@ -268,12 +273,11 @@ validation remain outside this source-focused demo scope.
 The `ROCm/rocm-examples` add-kernel case uses only the upstream
 `[sphinx-kernel-start]` to `[sphinx-kernel-end]` source section and is checked
 for CrossGL, OpenGL, Metal, DirectX, and Vulkan output after issue #1216 closed.
-The full sample host `main()`, HIP runtime calls, and launch configuration are
-runtime integration work outside this shader translation demo. The earlier
-`ROCm/rocm-examples` bit-extract HIP kernel was retested after issue #795
-closed; generated Metal now compiles and generated SPIR-V contains only the
-translated compute entry point. It remains a candidate for a future demo
-expansion.
+The bit-extract case uses the upstream kernel slice and selects the AMD HIP
+branch with a project define after issue #795 closed. Both HIP sources are
+checked for CrossGL, OpenGL, Metal, DirectX, and Vulkan output. Full sample
+host `main()` functions, HIP runtime calls, and launch configuration remain
+runtime integration work outside this shader translation demo.
 
 The `modular/modular` Mojo GPU vector-add example was tested as a candidate.
 It now generates Metal and SPIR-V artifacts after issue #798 closed, but those

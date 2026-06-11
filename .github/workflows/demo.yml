@@ -115,11 +115,13 @@ jobs:
             --case raylib-lighting-shader-pair \
             --case renderdoc-vktext-fragment \
             --case rocm-examples-add-kernel \
+            --case rocm-examples-bit-extract \
             --case rust-gpu-compute-collatz \
             --case rust-gpu-graphics-stage-inputs \
             --case rust-gpu-vulkan-examples-triangle-overlay \
             --case sascha-willems-vulkan-conservative-triangle \
             --case sascha-willems-vulkan-headless-compute \
+            --case slang-default-parameter-compute \
             --case slang-hello-world-compute \
             --case spirv-cross-round-fragment \
             --case spirv-tools-basic-src \
@@ -147,6 +149,7 @@ jobs:
             --case directx-sdk-samples-tutorial02 \
             --case directx-shader-compiler-groupshared-splat \
             --case directx-shader-compiler-neg1 \
+            --case glfw-opengl-triangle \
             --case glslang-push-constant-vertex \
             --case glslang-spec-constant-vertex \
             --case godot-betsy-alpha-stitch \
@@ -165,11 +168,13 @@ jobs:
             --case raylib-lighting-shader-pair \
             --case renderdoc-vktext-fragment \
             --case rocm-examples-add-kernel \
+            --case rocm-examples-bit-extract \
             --case rust-gpu-compute-collatz \
             --case rust-gpu-graphics-stage-inputs \
             --case rust-gpu-vulkan-examples-triangle-overlay \
             --case sascha-willems-vulkan-conservative-triangle \
             --case sascha-willems-vulkan-headless-compute \
+            --case slang-default-parameter-compute \
             --case slang-hello-world-compute \
             --case spirv-cross-round-fragment \
             --case spirv-tools-basic-src \
@@ -194,6 +199,7 @@ jobs:
             --case directx-shader-compiler-neg1 \
             --case directx-sdk-samples-tutorial02 \
             --case diligent-samples-tutorial02-cube \
+            --case glfw-opengl-triangle \
             --case glslang-push-constant-vertex \
             --case glslang-spec-constant-vertex \
             --case godot-betsy-alpha-stitch \
@@ -215,11 +221,13 @@ jobs:
             --case raylib-lighting-shader-pair \
             --case renderdoc-vktext-fragment \
             --case rocm-examples-add-kernel \
+            --case rocm-examples-bit-extract \
             --case rust-gpu-compute-collatz \
             --case rust-gpu-graphics-stage-inputs \
             --case rust-gpu-vulkan-examples-triangle-overlay \
             --case sascha-willems-vulkan-conservative-triangle \
             --case sascha-willems-vulkan-headless-compute \
+            --case slang-default-parameter-compute \
             --case slang-hello-world-compute \
             --case spirv-cross-round-fragment \
             --case spirv-tools-basic-src \
@@ -247,6 +255,8 @@ jobs:
             demos/open-source-porting/cases/directx-sdk-samples-tutorial02/crosstl-out/metal/Tutorial02.metal \
             demos/open-source-porting/cases/diligent-samples-tutorial02-cube/crosstl-out/metal/cube.psh.metal \
             demos/open-source-porting/cases/diligent-samples-tutorial02-cube/crosstl-out/metal/cube.vsh.metal \
+            demos/open-source-porting/cases/glfw-opengl-triangle/crosstl-out/metal/triangle.frag.metal \
+            demos/open-source-porting/cases/glfw-opengl-triangle/crosstl-out/metal/triangle.vert.metal \
             demos/open-source-porting/cases/glslang-push-constant-vertex/crosstl-out/metal/spv.pushConstant.metal \
             demos/open-source-porting/cases/glslang-spec-constant-vertex/crosstl-out/metal/spv.specConstant.metal \
             demos/open-source-porting/cases/godot-betsy-alpha-stitch/crosstl-out/metal/alpha_stitch.metal \
@@ -271,10 +281,12 @@ jobs:
             demos/open-source-porting/cases/raylib-lighting-shader-pair/crosstl-out/metal/lighting.vs.metal \
             demos/open-source-porting/cases/renderdoc-vktext-fragment/crosstl-out/metal/vktext.metal \
             demos/open-source-porting/cases/rocm-examples-add-kernel/crosstl-out/metal/main.metal \
+            demos/open-source-porting/cases/rocm-examples-bit-extract/crosstl-out/metal/main.metal \
             demos/open-source-porting/cases/rust-gpu-compute-collatz/crosstl-out/metal/lib.metal \
             demos/open-source-porting/cases/rust-gpu-graphics-stage-inputs/crosstl-out/metal/lib.metal \
             demos/open-source-porting/cases/rust-gpu-vulkan-examples-triangle-overlay/crosstl-out/metal/lib.metal \
             demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/metal/headless.metal \
+            demos/open-source-porting/cases/slang-default-parameter-compute/crosstl-out/metal/default-parameter.metal \
             demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/metal/hello-world.metal \
             demos/open-source-porting/cases/spirv-cross-round-fragment/crosstl-out/metal/round.metal \
             demos/open-source-porting/cases/spirv-tools-basic-src/crosstl-out/metal/basic_src.metal \
@@ -302,6 +314,7 @@ jobs:
             --case directx-sdk-samples-tutorial02 \
             --case diligent-samples-tutorial02-cube \
             --case diligent-samples-vrs-cube \
+            --case glfw-opengl-triangle \
             --case glslang-push-constant-vertex \
             --case glslang-spec-constant-vertex \
             --case godot-betsy-alpha-stitch \
@@ -320,6 +333,7 @@ jobs:
             --case raylib-lighting-shader-pair \
             --case renderdoc-vktext-fragment \
             --case rocm-examples-add-kernel \
+            --case rocm-examples-bit-extract \
             --case angle-simple-texture-2d \
             --case apple-modern-rendering-mesh-viewdir \
             --case arm-opengl-es-sdk-cube \
@@ -328,6 +342,7 @@ jobs:
             --case rust-gpu-vulkan-examples-triangle-overlay \
             --case sascha-willems-vulkan-conservative-triangle \
             --case sascha-willems-vulkan-headless-compute \
+            --case slang-default-parameter-compute \
             --case slang-hello-world-compute \
             --case spirv-cross-round-fragment \
             --case spirv-tools-basic-src \
@@ -365,6 +380,8 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/diligent-samples-tutorial02-cube/crosstl-out/directx/cube.psh.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/diligent-samples-vrs-cube/crosstl-out/directx/CubeFDM_vs.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/diligent-samples-vrs-cube/crosstl-out/directx/CubeFDM_fs.hlsl PSMain ps_6_4
+          compile_hlsl demos/open-source-porting/cases/glfw-opengl-triangle/crosstl-out/directx/triangle.vert.hlsl VSMain vs_6_0
+          compile_hlsl demos/open-source-porting/cases/glfw-opengl-triangle/crosstl-out/directx/triangle.frag.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/glslang-spec-constant-vertex/crosstl-out/directx/spv.specConstant.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/godot-betsy-alpha-stitch/crosstl-out/directx/alpha_stitch.hlsl CSMain cs_6_0
           compile_hlsl demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.vert.hlsl VSMain vs_6_0
@@ -387,6 +404,7 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/raylib-lighting-shader-pair/crosstl-out/directx/lighting.fs.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/renderdoc-vktext-fragment/crosstl-out/directx/vktext.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/rocm-examples-add-kernel/crosstl-out/directx/main.hlsl CSMain cs_6_0
+          compile_hlsl demos/open-source-porting/cases/rocm-examples-bit-extract/crosstl-out/directx/main.hlsl CSMain cs_6_0
           compile_hlsl demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.vert.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.frag.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/apple-modern-rendering-mesh-viewdir/crosstl-out/directx/AAPLMeshRenderer.hlsl VSMain vs_6_0
@@ -398,6 +416,7 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/rust-gpu-vulkan-examples-triangle-overlay/crosstl-out/directx/lib.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/sascha-willems-vulkan-conservative-triangle/crosstl-out/directx/triangle.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/directx/headless.hlsl CSMain cs_6_0
+          compile_hlsl demos/open-source-porting/cases/slang-default-parameter-compute/crosstl-out/directx/default-parameter.hlsl CSMain cs_6_0
           compile_hlsl demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/directx/hello-world.hlsl CSMain cs_6_0
           compile_hlsl demos/open-source-porting/cases/spirv-cross-round-fragment/crosstl-out/directx/round.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/spirv-tools-basic-src/crosstl-out/directx/basic_src.hlsl VSMain vs_6_0
