@@ -1362,6 +1362,7 @@ REPORT_DIAGNOSTIC_FIELDS = frozenset(
         "variant",
         "checkKind",
         "missingCapabilities",
+        "details",
     )
 )
 REPORT_ARTIFACT_FIELDS = frozenset(
@@ -6767,6 +6768,7 @@ class ProjectDiagnostic:
     check_kind: str | None = None
     missing_capabilities: Sequence[str] = ()
     original_location: SourceLocation | None = None
+    details: Mapping[str, Any] | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload = {
@@ -6787,6 +6789,8 @@ class ProjectDiagnostic:
             payload["checkKind"] = self.check_kind
         if self.missing_capabilities:
             payload["missingCapabilities"] = list(self.missing_capabilities)
+        if self.details:
+            payload["details"] = dict(self.details)
         return payload
 
 
@@ -13154,6 +13158,7 @@ def _translation_failure_project_diagnostics(
     unit: ProjectTranslationUnit,
     variant: str | None,
     message: str,
+    artifact_path: str | None = None,
 ) -> list[ProjectDiagnostic]:
     contracts = getattr(exc, "contracts", None)
     if contracts:
@@ -13187,6 +13192,12 @@ def _translation_failure_project_diagnostics(
                     source_backend=unit.source_backend,
                     variant=variant,
                     missing_capabilities=missing_capabilities,
+                    details=_translation_failure_details(
+                        exc,
+                        target,
+                        unit,
+                        artifact_path,
+                    ),
                 )
             )
         return diagnostics
@@ -13201,8 +13212,43 @@ def _translation_failure_project_diagnostics(
             source_backend=unit.source_backend,
             variant=variant,
             missing_capabilities=_translation_failure_missing_capabilities(exc, target),
+            details=_translation_failure_details(exc, target, unit, artifact_path),
         )
     ]
+
+
+def _translation_failure_details(
+    exc: Exception,
+    target: str,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any] | None:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.opengl-template-type-unresolved"
+    ):
+        return None
+
+    unresolved_parameter = getattr(exc, "unresolved_parameter", None)
+    if not _is_non_empty_string(unresolved_parameter):
+        unresolved_parameter = _metal_template_missing_binding(exc)
+    enclosing_type = getattr(exc, "enclosing_generated_type", None)
+    if not _is_non_empty_string(enclosing_type):
+        enclosing_type = _opengl_template_enclosing_type_from_message(exc)
+
+    details = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    if _is_non_empty_string(unresolved_parameter):
+        details["unresolvedParameter"] = unresolved_parameter
+    if _is_non_empty_string(enclosing_type):
+        details["enclosingGeneratedType"] = enclosing_type
+    return dict(sorted(details.items()))
+
+
+def _opengl_template_enclosing_type_from_message(exc: Exception) -> str | None:
+    match = re.search(r" from '([^']+)'", str(exc))
+    return match.group(1) if match is not None else None
 
 
 def _is_metal_template_failure(exc: Exception, unit: ProjectTranslationUnit) -> bool:
@@ -13667,6 +13713,7 @@ def translate_project(
                             unit,
                             variant,
                             failure_message,
+                            artifact.get("path"),
                         )
                     )
                     artifacts.append(artifact)
@@ -13771,6 +13818,7 @@ def translate_project(
                             unit,
                             variant,
                             failure_message,
+                            artifact.get("path"),
                         )
                     )
                 finally:
@@ -15228,6 +15276,7 @@ def _diagnostic_identity(diagnostic: Mapping[str, Any]) -> tuple[Any, ...]:
             "variant",
             "checkKind",
             "missingCapabilities",
+            "details",
         )
     )
 
@@ -33018,6 +33067,10 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 reasons.append(
                     f"diagnostics[{index}].missingCapabilities must be a list of strings"
                 )
+            if "details" in diagnostic and not isinstance(
+                diagnostic.get("details"), Mapping
+            ):
+                reasons.append(f"diagnostics[{index}].details must be an object")
         if has_summary and isinstance(units, list) and isinstance(project, Mapping):
             reasons.extend(
                 _current_project_config_diagnostic_contract_reasons(
