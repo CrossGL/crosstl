@@ -22660,8 +22660,7 @@ def test_translate_project_directx_translates_mlx_steel_issue_943_frontier(
                 }}
 
                 instantiate_steel(float32, float, {offset})
-                """).strip()
-            + "\n",
+                """).strip() + "\n",
             encoding="utf-8",
         )
 
@@ -22679,8 +22678,7 @@ def test_translate_project_directx_translates_mlx_steel_issue_943_frontier(
             ]
             targets = ["directx"]
             output_dir = "out"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
