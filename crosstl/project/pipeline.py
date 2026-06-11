@@ -9247,8 +9247,7 @@ def _runtime_manifest_summary(
         "runtimeReferenceCount": runtime_reference_count,
         "compilerRequestCount": compiler_request_count,
         "entryPointCount": sum(
-            len(_record_sequence(artifact.get("entryPoints")))
-            for artifact in artifacts
+            len(_record_sequence(artifact.get("entryPoints"))) for artifact in artifacts
         ),
         "resourceBindingCount": sum(
             len(_record_sequence(artifact.get("resourceBindings")))
@@ -9263,15 +9262,9 @@ def _runtime_manifest_summary(
             for artifact in artifacts
             if isinstance(artifact.get("dispatch"), Mapping)
         ),
-        "artifactsBySource": _runtime_manifest_artifact_counter(
-            artifacts, "source"
-        ),
-        "artifactsByTarget": _runtime_manifest_artifact_counter(
-            artifacts, "target"
-        ),
-        "artifactsByVariant": _runtime_manifest_artifact_counter(
-            artifacts, "variant"
-        ),
+        "artifactsBySource": _runtime_manifest_artifact_counter(artifacts, "source"),
+        "artifactsByTarget": _runtime_manifest_artifact_counter(artifacts, "target"),
+        "artifactsByVariant": _runtime_manifest_artifact_counter(artifacts, "variant"),
         "validationStatusCounts": _runtime_manifest_status_counts(
             artifacts, "validation"
         ),

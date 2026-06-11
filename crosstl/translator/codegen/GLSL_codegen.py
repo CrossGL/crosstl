@@ -10561,11 +10561,9 @@ class GLSLCodeGen:
             if specialized_func_name is not None:
                 func_name = specialized_func_name
                 callee = specialized_func_name
-            elif (
-                original_func_name
-                in getattr(self, "generic_function_definitions", {})
-                and getattr(self, "enforce_concrete_glsl_types", False)
-            ):
+            elif original_func_name in getattr(
+                self, "generic_function_definitions", {}
+            ) and getattr(self, "enforce_concrete_glsl_types", False):
                 raise OpenGLTemplateTypeError(
                     "OpenGL codegen cannot infer concrete template arguments "
                     f"for generic function '{original_func_name}'; provide a "
@@ -16061,7 +16059,9 @@ class GLSLCodeGen:
         else:
             vtype_str = str(vtype)
 
-        substitutions = getattr(self, "current_generic_function_substitutions", {}) or {}
+        substitutions = (
+            getattr(self, "current_generic_function_substitutions", {}) or {}
+        )
         if substitutions:
             substituted_type = substitute_generic_type_name(vtype_str, substitutions)
             if substituted_type != vtype_str:

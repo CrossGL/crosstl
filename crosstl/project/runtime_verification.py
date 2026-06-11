@@ -13,7 +13,6 @@ from typing import Any, Mapping, Sequence
 
 from crosstl.translator.codegen import normalize_backend_name
 
-
 RUNTIME_VERIFICATION_FIXTURES_KIND = "crosstl-runtime-verification-fixtures"
 RUNTIME_VERIFICATION_REPORT_KIND = "crosstl-runtime-verification-report"
 RUNTIME_VERIFICATION_SCHEMA_VERSION = 1
@@ -235,13 +234,13 @@ def compare_runtime_outputs(
 ) -> list[dict[str, Any]]:
     """Compare executor outputs with fixture expectations."""
 
-    tolerance = _parse_tolerance(
-        default_tolerance, field_name="defaultTolerance"
-    )
+    tolerance = _parse_tolerance(default_tolerance, field_name="defaultTolerance")
     expected = [
-        value
-        if isinstance(value, RuntimeValue)
-        else _parse_runtime_value(value, field_name=f"expectedOutputs[{index}]")
+        (
+            value
+            if isinstance(value, RuntimeValue)
+            else _parse_runtime_value(value, field_name=f"expectedOutputs[{index}]")
+        )
         for index, value in enumerate(expected_outputs)
     ]
     actual_by_name = _runtime_values_by_name(actual_outputs)
@@ -456,7 +455,9 @@ def _parse_runtime_value(
     if not isinstance(value, Mapping):
         raise RuntimeVerificationError(f"{field_name} must be an object.")
     name = _required_string(value.get("name"), field_name=f"{field_name}.name")
-    kind = _optional_string(value.get("kind"), field_name=f"{field_name}.kind") or "buffer"
+    kind = (
+        _optional_string(value.get("kind"), field_name=f"{field_name}.kind") or "buffer"
+    )
     dtype = _optional_string(value.get("dtype"), field_name=f"{field_name}.dtype")
     shape = _parse_shape(value.get("shape"), field_name=f"{field_name}.shape")
     tolerance = (
@@ -551,7 +552,7 @@ def _normalize_target(target: str) -> str:
 
 
 def _load_artifact_payload(
-    artifact_report: str | os.PathLike[str] | Mapping[str, Any]
+    artifact_report: str | os.PathLike[str] | Mapping[str, Any],
 ) -> tuple[Mapping[str, Any], Path | None]:
     if isinstance(artifact_report, Mapping):
         return artifact_report, None
@@ -559,7 +560,9 @@ def _load_artifact_payload(
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
-        raise RuntimeVerificationError(f"Artifact report could not be read: {exc}") from exc
+        raise RuntimeVerificationError(
+            f"Artifact report could not be read: {exc}"
+        ) from exc
     except json.JSONDecodeError as exc:
         raise RuntimeVerificationError(
             f"Artifact report is not valid JSON: {exc}"
@@ -583,11 +586,15 @@ def _load_fixture_argument(
     if isinstance(fixtures, Mapping):
         return parse_runtime_verification_fixtures(fixtures), None
     if not isinstance(fixtures, Sequence):
-        raise RuntimeVerificationError("Runtime fixtures must be a fixture path or list.")
+        raise RuntimeVerificationError(
+            "Runtime fixtures must be a fixture path or list."
+        )
     parsed = [
-        fixture
-        if isinstance(fixture, RuntimeFixture)
-        else _parse_runtime_fixture(fixture, index=index)
+        (
+            fixture
+            if isinstance(fixture, RuntimeFixture)
+            else _parse_runtime_fixture(fixture, index=index)
+        )
         for index, fixture in enumerate(fixtures)
     ]
     return parsed, None
@@ -621,7 +628,9 @@ def _executor_registry(executors: Mapping[str, Any] | Sequence[Any] | None):
     if isinstance(executors, Mapping):
         for key, executor in executors.items():
             if not isinstance(key, str) or not key.strip():
-                raise RuntimeVerificationError("Executor registry keys must be strings.")
+                raise RuntimeVerificationError(
+                    "Executor registry keys must be strings."
+                )
             registry[_normalize_target(key)] = executor
         return registry
     if not isinstance(executors, Sequence) or isinstance(
@@ -663,7 +672,9 @@ def _verify_runtime_fixture(
 
     artifact = selected["artifact"]
     artifact_path = _runtime_artifact_path(artifact, root_path=root_path)
-    target = _normalize_target(str(artifact.get("target", fixture.selector.target or "")))
+    target = _normalize_target(
+        str(artifact.get("target", fixture.selector.target or ""))
+    )
     executor_key = _normalize_target(fixture.executor) if fixture.executor else target
     executor = executors.get(executor_key)
     if executor is None:
@@ -723,7 +734,11 @@ def _verify_runtime_fixture(
             status=UNAVAILABLE,
             failure_phase="runtime",
             artifact=artifact,
-            executor={"key": executor_key, "name": executor_name, "status": UNAVAILABLE},
+            executor={
+                "key": executor_key,
+                "name": executor_name,
+                "status": UNAVAILABLE,
+            },
             diagnostics=[
                 _diagnostic(
                     "note",
@@ -845,7 +860,9 @@ def _verify_runtime_fixture(
         execution.outputs,
         default_tolerance=fixture.default_tolerance,
     )
-    comparison_failed = any(comparison["status"] != PASSED for comparison in comparisons)
+    comparison_failed = any(
+        comparison["status"] != PASSED for comparison in comparisons
+    )
     return _fixture_result(
         fixture,
         status=COMPARISON_FAILED if comparison_failed else PASSED,
@@ -862,7 +879,8 @@ def _select_runtime_artifact(
     artifacts = [
         artifact
         for artifact in payload.get("artifacts", [])
-        if isinstance(artifact, Mapping) and _selector_matches_artifact(selector, artifact)
+        if isinstance(artifact, Mapping)
+        and _selector_matches_artifact(selector, artifact)
     ]
     ready = [artifact for artifact in artifacts if not _artifact_failed(artifact)]
     if len(ready) == 1:
@@ -969,7 +987,9 @@ def _executor_availability(
     if isinstance(value, Mapping):
         return RuntimeExecutorAvailability(
             bool(value.get("available")),
-            reason=value.get("reason") if isinstance(value.get("reason"), str) else None,
+            reason=(
+                value.get("reason") if isinstance(value.get("reason"), str) else None
+            ),
             details={
                 key: item
                 for key, item in value.items()
@@ -979,7 +999,9 @@ def _executor_availability(
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         values = list(value)
         if values:
-            reason = values[1] if len(values) > 1 and isinstance(values[1], str) else None
+            reason = (
+                values[1] if len(values) > 1 and isinstance(values[1], str) else None
+            )
             return RuntimeExecutorAvailability(bool(values[0]), reason=reason)
     raise RuntimeVerificationError("Executor availability probe returned invalid data.")
 
@@ -991,7 +1013,9 @@ def _normalize_executor_result(value: Any) -> RuntimeExecutorResult:
         return RuntimeExecutorResult(
             status=str(value.get("status", "ok")),
             outputs=value.get("outputs", {}),
-            message=value.get("message") if isinstance(value.get("message"), str) else None,
+            message=(
+                value.get("message") if isinstance(value.get("message"), str) else None
+            ),
             details=(
                 dict(value.get("details"))
                 if isinstance(value.get("details"), Mapping)
@@ -1018,12 +1042,16 @@ def _runtime_values_by_name(outputs: Any) -> dict[str, RuntimeValue]:
             if isinstance(value, Mapping):
                 payload = dict(value)
                 payload.setdefault("name", str(name))
-                parsed = _parse_runtime_value(payload, field_name=f"actualOutputs.{name}")
+                parsed = _parse_runtime_value(
+                    payload, field_name=f"actualOutputs.{name}"
+                )
             else:
                 parsed = RuntimeValue(name=str(name), values=value)
             result[parsed.name] = parsed
         return result
-    if isinstance(outputs, Sequence) and not isinstance(outputs, (str, bytes, bytearray)):
+    if isinstance(outputs, Sequence) and not isinstance(
+        outputs, (str, bytes, bytearray)
+    ):
         result = {}
         for index, output in enumerate(outputs):
             value = (
@@ -1107,7 +1135,9 @@ def _compare_runtime_value(
     first_mismatch = None
     max_absolute = 0.0
     max_relative = 0.0
-    for index, (expected_item, actual_item) in enumerate(zip(expected_flat, actual_flat)):
+    for index, (expected_item, actual_item) in enumerate(
+        zip(expected_flat, actual_flat)
+    ):
         matches, absolute_error, relative_error = _values_match(
             expected_item, actual_item, tolerance
         )
@@ -1201,7 +1231,9 @@ def _json_metric(value: float) -> float | None:
     return value if math.isfinite(value) else None
 
 
-def _runtime_verification_summary(results: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+def _runtime_verification_summary(
+    results: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
     statuses = Counter(result.get("status") for result in results)
     runtime_failed = statuses[RUNTIME_FAILED]
     translation_failed = statuses[TRANSLATION_FAILED]
@@ -1242,7 +1274,9 @@ def _fixture_result(
     return result
 
 
-def _artifact_result_payload(artifact: Mapping[str, Any] | None) -> dict[str, Any] | None:
+def _artifact_result_payload(
+    artifact: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
     if artifact is None:
         return None
     payload = {}

@@ -16724,9 +16724,7 @@ class VulkanSPIRVCodeGen:
             for func_key, param_names in function_parameter_names_by_id.items()
         }
         requirements = {
-            id(func): {}
-            for func in functions
-            if getattr(func, "name", None)
+            id(func): {} for func in functions if getattr(func, "name", None)
         }
         storage_buffer_parameter_sets = {
             id(func): self.function_storage_buffer_parameters(func)
