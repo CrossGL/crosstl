@@ -41121,7 +41121,7 @@ def test_translate_project_target_template_variant_manifest_materializes_for_ope
     assert validation["success"] is True
 
 
-def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(
+def test_translate_project_khronos_opencl_reduce_lowers_targets_and_reports_cgl_diagnostics(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -41228,60 +41228,74 @@ def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(
         repo,
         targets=["cgl", "opengl", "metal", "vulkan"],
         output_dir="out",
+        validate=True,
     ).to_json()
 
-    expected_targets = {"cgl", "opengl", "metal", "vulkan"}
+    supported_targets = {"opengl", "metal", "vulkan"}
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
-    } == {(target, "failed") for target in expected_targets}
-    assert payload["summary"]["translatedCount"] == 0
-    assert payload["summary"]["failedCount"] == 4
-    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 7}
+    } == {
+        ("cgl", "failed"),
+        ("opengl", "translated"),
+        ("metal", "translated"),
+        ("vulkan", "translated"),
+    }
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 5}
     assert payload["summary"]["diagnosticsByCode"] == {
         "opencl.target.pointer-helper-parameter": 1,
-        "opencl.target.unresolved-helper": 4,
+        "opencl.target.unresolved-helper": 1,
         "opencl.target.unsupported-builtin": 2,
+        "project.validate.failed-artifact": 1,
     }
-    assert payload["summary"]["diagnosticsByTarget"] == {
-        "cgl": 4,
-        "opengl": 1,
-        "metal": 1,
-        "vulkan": 1,
-    }
+    assert payload["summary"]["diagnosticsByTarget"] == {"cgl": 5}
 
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert not (repo / artifacts["cgl"]["path"]).exists()
+    assert "opencl.target.unsupported" in artifacts["cgl"]["error"]
+    assert "read_local(shared_: ptr<i32>)" in artifacts["cgl"]["error"]
+    assert "async_work_group_copy, wait_group_events" in artifacts["cgl"]["error"]
+
+    for target in supported_targets:
+        assert (repo / artifacts[target]["path"]).exists()
+
+    opengl_source = (repo / artifacts["opengl"]["path"]).read_text(encoding="utf-8")
+    assert "int op(int lhs, int rhs)" in opengl_source
+    assert "return min(lhs, rhs);" in opengl_source
+    assert "shared int shared_[1024];" in opengl_source
+    assert (
+        "int read_local(int shared_[1024], uint count, int zero, uint i)"
+        in opengl_source
+    )
+    assert "async_work_group_copy" not in opengl_source
+    assert "wait_group_events" not in opengl_source
+    assert "ptr<i32>" not in opengl_source
+
+    metal_source = (repo / artifacts["metal"]["path"]).read_text(encoding="utf-8")
+    assert "int op(int lhs, int rhs)" in metal_source
+    assert "return min(lhs, rhs);" in metal_source
+    assert "threadgroup int shared_[1024];" in metal_source
+    assert "int read_local(threadgroup int shared_[1024]" in metal_source
+    assert "async_work_group_copy" not in metal_source
+    assert "wait_group_events" not in metal_source
+
+    vulkan_source = (repo / artifacts["vulkan"]["path"]).read_text(encoding="utf-8")
+    assert "async_work_group_copy" not in vulkan_source
+    assert "wait_group_events" not in vulkan_source
+
+    assert len(payload["diagnostics"]) == 5
     for artifact in payload["artifacts"]:
-        assert not (repo / artifact["path"]).exists()
-        assert "opencl.target.unsupported" in artifact["error"]
-        assert (
-            "unresolved non-void helper declarations without bodies: " "op"
-        ) in artifact["error"]
-        if artifact["target"] == "cgl":
-            assert "read_local(shared_: ptr<i32>)" in artifact["error"]
-            assert "async_work_group_copy, wait_group_events" in artifact["error"]
-
-    assert len(payload["diagnostics"]) == 7
-    for target in expected_targets:
-        target_diagnostics = [
-            diagnostic
-            for diagnostic in payload["diagnostics"]
-            if diagnostic["target"] == target
-        ]
-        if target == "cgl":
-            assert len(target_diagnostics) == 4
-            assert {diagnostic["code"] for diagnostic in target_diagnostics} == {
-                "opencl.target.unresolved-helper",
-                "opencl.target.pointer-helper-parameter",
-                "opencl.target.unsupported-builtin",
-            }
-        else:
-            assert len(target_diagnostics) == 1
-            assert target_diagnostics[0]["code"] == "opencl.target.unresolved-helper"
+        if artifact["target"] in supported_targets:
+            assert artifact["generatedHash"]["algorithm"] == "sha256"
+            assert artifact["generatedSizeBytes"] > 0
 
     for diagnostic in payload["diagnostics"]:
         assert diagnostic["sourceBackend"] == "opencl"
         assert diagnostic["location"]["file"] == "reduce.cl"
-        assert diagnostic["target"] in expected_targets
-        assert "Suggested action:" in diagnostic["message"]
+        assert diagnostic["target"] == "cgl"
+        if diagnostic["code"].startswith("opencl.target."):
+            assert "Suggested action:" in diagnostic["message"]
 
     messages = [diagnostic["message"] for diagnostic in payload["diagnostics"]]
     assert any("op(lhs: i32, rhs: i32) -> i32" in message for message in messages)
