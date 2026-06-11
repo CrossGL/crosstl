@@ -31297,6 +31297,103 @@ def test_translate_project_opencl_targets_do_not_leak_resource_parameter_syntax(
     assert "kernel void kernel_scale(" in outputs["metal"]
 
 
+def test_translate_project_opencl_directx_allocates_generated_parameter_bindings(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "ops.cl").write_text(
+        textwrap.dedent("""
+            kernel void scale(global float *out_a,
+                              global const float *in_a,
+                              const float factor) {
+                uint i = get_global_id(0);
+                out_a[i] = in_a[i] * factor;
+            }
+
+            kernel void bias(global float *out_b,
+                             global const float *in_b,
+                             const float offset) {
+                uint i = get_global_id(0);
+                out_b[i] = in_b[i] + offset;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "RWStructuredBuffer<float> out_a : register(u0);" in output
+    assert "StructuredBuffer<float> in_a : register(t1);" in output
+    assert "RWStructuredBuffer<float> out_b : register(u1);" in output
+    assert "StructuredBuffer<float> in_b : register(t2);" in output
+    assert "cbuffer scale_Args : register(b2)" in output
+    assert "cbuffer bias_Args : register(b3)" in output
+    assert output.count(": register(b2)") == 1
+
+
+def test_translate_project_metal_directx_relocates_stage_entry_buffer_bindings(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "kernels.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct ParamsA {
+                uint n;
+            };
+
+            struct ParamsB {
+                uint n;
+            };
+
+            kernel void first(device float* out [[buffer(0)]],
+                              constant ParamsA& params [[buffer(2)]],
+                              uint gid [[thread_position_in_grid]]) {
+                out[gid] = float(params.n);
+            }
+
+            kernel void second(device float* dst [[buffer(0)]],
+                               constant ParamsB& params [[buffer(2)]],
+                               uint gid [[thread_position_in_grid]]) {
+                dst[gid] = float(params.n);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "RWStructuredBuffer<float> out_ : register(u0);" in output
+    assert "ConstantBuffer<ParamsA> params : register(b2);" in output
+    assert "RWStructuredBuffer<float> dst : register(u1);" in output
+    assert "ConstantBuffer<ParamsB> second_params : register(b3);" in output
+    assert output.count(": register(b2)") == 1
+
+
 def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(
     tmp_path,
 ):

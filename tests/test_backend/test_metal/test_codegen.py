@@ -2643,13 +2643,14 @@ def test_codegen_sampled_texture_reads_roundtrip_to_texel_fetch():
     assert "textureLoad(" not in crossgl
 
     metal = MetalCodeGen().generate(parse_crossgl(crossgl))
-    assert "tex.read(pixel, lod)" in metal
+    assert "tex.read(uint2(pixel), uint(lod))" in metal
     assert (
-        "layers.read((uint3(pixel, layer)).xy, " "uint((uint3(pixel, layer)).z), lod)"
+        "layers.read(uint2((uint3(pixel, layer)).xy), "
+        "uint((uint3(pixel, layer)).z), uint(lod))"
     ) in metal
-    assert "msTex.read(pixel, uint(sample))" in metal
+    assert "msTex.read(uint2(pixel), uint(sample))" in metal
     assert (
-        "msLayers.read((uint3(pixel, layer)).xy, "
+        "msLayers.read(uint2((uint3(pixel, layer)).xy), "
         "uint((uint3(pixel, layer)).z), uint(sample))"
     ) in metal
     assert "line.read(uint(x), uint(0))" in metal
@@ -2657,7 +2658,7 @@ def test_codegen_sampled_texture_reads_roundtrip_to_texel_fetch():
         "lineLayers.read(uint((uint2(x, layer)).x), "
         "uint((uint2(x, layer)).y), uint(0))"
     ) in metal
-    assert "volume.read(voxel, lod)" in metal
+    assert "volume.read(uint3(voxel), uint(lod))" in metal
     assert "textureLoad(" not in metal
 
 
