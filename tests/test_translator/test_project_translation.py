@@ -23682,6 +23682,74 @@ def test_translate_project_resolves_generic_vulkan_storage_buffer_helper_family(
     assert payload["diagnostics"] == []
 
 
+def test_translate_project_resolves_vulkan_resource_pointer_helper_overloads(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "resource_pointer_helpers.cgl"
+    source_path.write_text(
+        textwrap.dedent("""
+            shader ResourcePointerHelperOverloads {
+                StructuredBuffer<uint> counters @binding(0);
+                RWStructuredBuffer<float> values @binding(1);
+
+                generic<T> fn copy_resource(
+                    T* source,
+                    float* target,
+                    uint index
+                ) -> void {
+                    target[index] = float(source[index]);
+                    return;
+                }
+
+                generic<T> fn copy_resource(
+                    StructuredBuffer<T>& source,
+                    RWStructuredBuffer<float>& target,
+                    uint index
+                ) -> void {
+                    target.Store(index + 1u, float(source.Load(index)));
+                }
+
+                compute {
+                    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                    layout(set = 0, binding = 2) buffer uint* rawCounters;
+                    layout(set = 0, binding = 3) buffer float* rawValues;
+
+                    void main() {
+                        uint staticScratch = 11u;
+                        copy_resource(rawCounters, rawValues, 0u, staticScratch);
+                        copy_resource(counters, values, 1u, staticScratch);
+                        return;
+                    }
+                }
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["vulkan"], output_dir="out").to_json()
+
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["diagnosticCounts"]["error"] == 0
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["target"] == "vulkan"
+    assert artifact["source"] == "resource_pointer_helpers.cgl"
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "copy_resource" not in generated
+    assert "OpFunctionCall" not in generated
+    assert "OpConvertUToF" in generated
+    assert "generic-helper-specialization" not in generated
+    assert "storage-buffer-function-overload" not in generated
+    assert "WARNING" not in generated
+    assert payload["diagnostics"] == []
+
+
 def test_translate_project_drops_mlx_metal_system_includes_for_opengl(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

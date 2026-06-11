@@ -14621,6 +14621,191 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_storage_buffer_pointer_overloads_preserve_resource_type_with_extra_args(
+        self, tmp_path
+    ):
+        source_code = """
+        shader StorageBufferPointerOverloadProvenance {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer float* weights;
+                layout(set = 0, binding = 1) buffer uint* counters;
+                layout(set = 0, binding = 2) buffer float* values;
+
+                void copy_value(float* source, float* target, uint index) {
+                    target[index] = source[index];
+                    return;
+                }
+
+                void copy_value(uint* source, float* target, uint index) {
+                    target[index] = float(source[index]);
+                    return;
+                }
+
+                void copy_value(float scalar, float* target, uint index) {
+                    target[index] = scalar;
+                    return;
+                }
+
+                void main() {
+                    uint staticScratch = 7u;
+                    uint dynamicScratch = 5u;
+                    copy_value(weights, values, 0u, staticScratch, dynamicScratch);
+                    copy_value(counters, values, 1u, staticScratch, dynamicScratch);
+                    return;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        weights_var = spirv_named_variable(spv_code, "weights", storage_class="Uniform")
+        counters_var = spirv_named_variable(
+            spv_code, "counters", storage_class="Uniform"
+        )
+        values_var = spirv_named_variable(spv_code, "values", storage_class="Uniform")
+
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(weights_var)} %\d+ %\d+", spv_code
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(counters_var)} %\d+ %\d+", spv_code
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(values_var)} %\d+ %\d+", spv_code
+        )
+        assert "OpConvertUToF" in spv_code
+        assert "copy_value" not in spv_code
+        assert "storage-buffer-function-overload" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_storage_buffer_reference_overloads_preserve_resource_type(
+        self, tmp_path
+    ):
+        source_code = """
+        shader StorageBufferReferenceOverloadProvenance {
+            StructuredBuffer<float> weights @binding(0);
+            RWStructuredBuffer<float> values @binding(1);
+
+            void forward_value(
+                StructuredBuffer<float>& source,
+                RWStructuredBuffer<float>& target,
+                uint index
+            ) {
+                target.Store(index, source.Load(index));
+            }
+
+            void forward_value(
+                float scalar,
+                RWStructuredBuffer<float>& target,
+                uint index
+            ) {
+                target.Store(index, scalar);
+            }
+
+            compute {
+                void main() {
+                    forward_value(weights, values, 0u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        weights_var = spirv_named_variable(spv_code, "weights", storage_class="Uniform")
+        values_var = spirv_named_variable(spv_code, "values", storage_class="Uniform")
+
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(weights_var)} %\d+ %\d+", spv_code
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(values_var)} %\d+ %\d+", spv_code
+        )
+        assert "forward_value" not in spv_code
+        assert "storage-buffer-function-overload" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_generic_storage_buffer_pointer_and_reference_overloads_specialize(
+        self, tmp_path
+    ):
+        source_code = """
+        shader GenericStorageBufferPointerReferenceOverload {
+            StructuredBuffer<uint> counters @binding(0);
+            RWStructuredBuffer<float> values @binding(1);
+
+            generic<T> fn copy_generic(
+                T* source,
+                float* target,
+                uint index
+            ) -> void {
+                target[index] = float(source[index]);
+                return;
+            }
+
+            generic<T> fn copy_generic(
+                StructuredBuffer<T>& source,
+                RWStructuredBuffer<float>& target,
+                uint index
+            ) -> void {
+                target.Store(index + 1u, float(source.Load(index)));
+            }
+
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 2) buffer uint* rawCounters;
+                layout(set = 0, binding = 3) buffer float* rawValues;
+
+                void main() {
+                    uint staticScratch = 11u;
+                    copy_generic(rawCounters, rawValues, 0u, staticScratch);
+                    copy_generic(counters, values, 1u, staticScratch);
+                    return;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        counters_var = spirv_named_variable(
+            spv_code, "counters", storage_class="Uniform"
+        )
+        raw_counters_var = spirv_named_variable(
+            spv_code, "rawCounters", storage_class="Uniform"
+        )
+        values_var = spirv_named_variable(spv_code, "values", storage_class="Uniform")
+        raw_values_var = spirv_named_variable(
+            spv_code, "rawValues", storage_class="Uniform"
+        )
+
+        for variable in (counters_var, raw_counters_var, values_var, raw_values_var):
+            assert re.search(
+                rf"OpAccessChain %\d+ {re.escape(variable)} %\d+ %\d+",
+                spv_code,
+            )
+        assert "OpConvertUToF" in spv_code
+        assert "copy_generic" not in spv_code
+        assert "generic-helper-specialization" not in spv_code
+        assert "storage-buffer-function-overload" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_structured_buffer_overload_diagnostic_lists_rejection_reasons(self):
         source_code = """
         shader StorageBufferOverloadDiagnostic {
@@ -14663,7 +14848,59 @@ class TestVulkanSPIRVCodeGen:
             "block_sort(StructuredBuffer<uint>, RWStructuredBuffer<float>, uint)"
             in message
         )
-        assert "argument 1 type StructuredBuffer<float> is incompatible" in message
+        assert (
+            "argument 1 expression weights type StructuredBuffer<float> is "
+            "incompatible with expected StructuredBuffer parameter data "
+            "(StructuredBuffer<uint>)"
+        ) in message
+
+    def test_structured_buffer_overload_diagnostic_names_lost_resource_expression(
+        self,
+    ):
+        source_code = """
+        shader StorageBufferLostProvenanceDiagnostic {
+            RWStructuredBuffer<float> values @binding(0);
+            StructuredBuffer<float> weights @binding(1);
+
+            void block_sort(
+                StructuredBuffer<float> data,
+                RWStructuredBuffer<float> target,
+                uint index
+            ) {
+                target.Store(index, data.Load(index));
+            }
+
+            void block_sort(
+                StructuredBuffer<float> data,
+                RWStructuredBuffer<float> target,
+                uint base,
+                uint index
+            ) {
+                target.Store(base + index, data.Load(index));
+            }
+
+            compute {
+                void main() {
+                    float scalar = weights.Load(0u);
+                    block_sort(scalar, values, 0u);
+                }
+            }
+        }
+        """
+
+        with pytest.raises(ValueError) as exc_info:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        message = str(exc_info.value)
+        assert (
+            "actual call arity/types: 3 "
+            "(block_sort(float, RWStructuredBuffer<float>, uint))"
+        ) in message
+        assert (
+            "argument 1 expression scalar does not carry storage-buffer "
+            "provenance; expected StructuredBuffer for parameter data "
+            "(StructuredBuffer<float>), got float"
+        ) in message
 
     def test_structured_buffer_overloaded_helpers_resolve_by_buffer_type(
         self, tmp_path
