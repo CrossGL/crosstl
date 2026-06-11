@@ -106,6 +106,19 @@ def generic_function_parameters(func):
     ]
 
 
+def generic_function_parameter_defaults(generator, func):
+    defaults = {}
+    for param in getattr(func, "generic_params", []) or []:
+        name = getattr(param, "name", None)
+        default_type = getattr(param, "default_type", None)
+        if not name or default_type is None:
+            continue
+        rendered = generator.type_name_string(default_type)
+        if rendered:
+            defaults[name] = rendered
+    return defaults
+
+
 def iter_function_nodes(ast_node):
     """Yield every function node reachable from an AST object."""
     visited = set()
@@ -207,6 +220,17 @@ def generic_function_call_key(generator, func_name, args):
             substitutions,
             set(generic_params),
         )
+
+    if any(param not in substitutions for param in generic_params):
+        defaults = generic_function_parameter_defaults(generator, func)
+        if defaults:
+            for param in generic_params:
+                if param in substitutions or param not in defaults:
+                    continue
+                substitutions[param] = substitute_generic_type_name(
+                    defaults[param],
+                    substitutions,
+                )
 
     if any(param not in substitutions for param in generic_params):
         return None

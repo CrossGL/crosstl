@@ -7377,7 +7377,10 @@ def _is_directx_unresolved_type_attribute_error(exc: Exception, target: str) -> 
 
 
 def _translation_failure_message(
-    exc: Exception, target: str, unit: ProjectTranslationUnit
+    exc: Exception,
+    target: str,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None = None,
 ) -> str:
     if _is_directx_unresolved_type_attribute_error(exc, target):
         return (
@@ -7386,6 +7389,14 @@ def _translation_failure_message(
             "could not be determined before DirectX codegen reached an internal "
             "type check."
         )
+    metal_template_message = _metal_template_failure_message(
+        exc,
+        target,
+        unit,
+        artifact_path,
+    )
+    if metal_template_message is not None:
+        return metal_template_message
     return str(exc)
 
 
@@ -7406,6 +7417,176 @@ def _translation_failure_missing_capabilities(
     if capabilities:
         return [str(capability) for capability in capabilities]
     return ["batch.translation"]
+
+
+def _is_metal_template_failure(exc: Exception, unit: ProjectTranslationUnit) -> bool:
+    return (
+        unit.source_backend == "metal"
+        and _translation_failure_diagnostic_code(exc)
+        == "project.translate.opengl-template-type-unresolved"
+    )
+
+
+def _metal_template_missing_binding(exc: Exception) -> str | None:
+    message = str(exc)
+    match = re.search(r"unresolved template type '([^']+)'", message)
+    if match is not None:
+        return match.group(1)
+    match = re.search(r"generic function '([^']+)'", message)
+    if match is not None:
+        return match.group(1)
+    return None
+
+
+def _metal_template_failure_function(exc: Exception) -> str | None:
+    match = re.search(r"generic function '([^']+)'", str(exc))
+    return match.group(1) if match is not None else None
+
+
+def _split_template_parameters(text: str) -> list[str]:
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    pairs = {"<": ">", "(": ")", "[": "]", "{": "}"}
+    closers = set(pairs.values())
+    for character in text:
+        if character in pairs:
+            depth += 1
+        elif character in closers and depth > 0:
+            depth -= 1
+        if character == "," and depth == 0:
+            part = "".join(current).strip()
+            if part:
+                parts.append(part)
+            current = []
+            continue
+        current.append(character)
+    part = "".join(current).strip()
+    if part:
+        parts.append(part)
+    return parts
+
+
+def _metal_template_parameter_name(parameter: str) -> str | None:
+    parameter = parameter.split("=", 1)[0].strip()
+    tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", parameter)
+    if not tokens:
+        return None
+    if tokens[0] in {"typename", "class"} and len(tokens) >= 2:
+        return tokens[-1]
+    if len(tokens) >= 2:
+        return tokens[-1]
+    return None
+
+
+def _source_location_at_offset(
+    unit: ProjectTranslationUnit, text: str, offset: int, length: int
+) -> SourceLocation:
+    prefix = text[:offset]
+    line = prefix.count("\n") + 1
+    previous_newline = prefix.rfind("\n")
+    column = offset + 1 if previous_newline == -1 else offset - previous_newline
+    end_line, end_column = _advance_source_position(
+        text[offset : offset + length],
+        line,
+        column,
+    )
+    return SourceLocation(
+        file=unit.relative_path,
+        line=line,
+        column=column,
+        offset=offset,
+        length=length,
+        end_line=end_line,
+        end_column=end_column,
+        end_offset=offset + length,
+    )
+
+
+def _metal_template_declaration_context(
+    exc: Exception, unit: ProjectTranslationUnit
+) -> dict[str, Any] | None:
+    if not _is_metal_template_failure(exc, unit):
+        return None
+    try:
+        text = unit.path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+    function_name = _metal_template_failure_function(exc)
+    missing_binding = _metal_template_missing_binding(exc)
+    pattern = re.compile(
+        r"\btemplate\s*<(?P<params>.*?)>\s*"
+        r"(?P<header>(?:(?!\btemplate\b).){0,1200}?)"
+        r"\b(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^;{}()]*>)?\s*\(",
+        re.DOTALL,
+    )
+    fallback = None
+    for match in pattern.finditer(text):
+        name = match.group("name")
+        params = [
+            name
+            for name in (
+                _metal_template_parameter_name(part)
+                for part in _split_template_parameters(match.group("params"))
+            )
+            if name
+        ]
+        if function_name and name != function_name:
+            continue
+        if missing_binding and not function_name and missing_binding not in params:
+            continue
+        location = _source_location_at_offset(
+            unit,
+            text,
+            match.start(),
+            max(match.end() - match.start(), 0),
+        )
+        context = {
+            "name": name,
+            "parameters": params,
+            "location": location,
+        }
+        if function_name or missing_binding in params:
+            return context
+        if fallback is None:
+            fallback = context
+    return fallback
+
+
+def _metal_template_failure_message(
+    exc: Exception,
+    target: str,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> str | None:
+    context = _metal_template_declaration_context(exc, unit)
+    if context is None and not _is_metal_template_failure(exc, unit):
+        return None
+    missing_binding = _metal_template_missing_binding(exc)
+    if missing_binding is None and context is not None:
+        missing_binding = ", ".join(context.get("parameters", ())) or None
+
+    parts = [str(exc)]
+    if missing_binding:
+        parts.append(f"Missing template binding: {missing_binding}.")
+    if context is not None:
+        location = context["location"]
+        declaration_name = context.get("name") or "<unknown>"
+        parts.append(
+            "Source declaration: "
+            f"{declaration_name} at {location.file}:{location.line}:{location.column}."
+        )
+    else:
+        parts.append(f"Source declaration: not found in {unit.relative_path}.")
+    if artifact_path:
+        parts.append(f"Target artifact: {artifact_path}.")
+    parts.append(
+        "Suggested action: add a concrete Metal template instantiation, supply "
+        f"explicit template arguments, or specialize the source before {target} "
+        "generation."
+    )
+    return " ".join(parts)
 
 
 def _translation_source_location_value(location: Any, *names: str) -> Any:
@@ -7453,6 +7634,9 @@ def _translation_failure_location(
             return source_location
         return replace(source_location, file=file_name)
     if source_location is None:
+        context = _metal_template_declaration_context(exc, unit)
+        if context is not None:
+            return context["location"]
         return SourceLocation(file=unit.relative_path)
 
     file_name = _translation_source_location_file(
@@ -7686,7 +7870,12 @@ def translate_project(
                 except Exception as exc:  # noqa: BLE001
                     # Project translation reports per-artifact failures so one bad
                     # unit does not hide the rest of the repository's migration state.
-                    failure_message = _translation_failure_message(exc, target, unit)
+                    failure_message = _translation_failure_message(
+                        exc,
+                        target,
+                        unit,
+                        artifact.get("path"),
+                    )
                     artifact["status"] = "failed"
                     artifact["error"] = failure_message
                     artifact.pop("generatedHash", None)

@@ -2676,7 +2676,18 @@ class Parser:
                     self.eat("PLUS")
                     constraints.append(self.parse_type())
 
-            params.append(GenericParameterNode(name=name, constraints=constraints))
+            default_type = None
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                default_type = self.parse_type()
+
+            params.append(
+                GenericParameterNode(
+                    name=name,
+                    constraints=constraints,
+                    default_type=default_type,
+                )
+            )
 
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
