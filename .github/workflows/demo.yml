@@ -89,6 +89,7 @@ jobs:
             --case angle-simple-texture-2d \
             --case apple-modern-rendering-mesh-viewdir \
             --case arm-opengl-es-sdk-cube \
+            --case directx-graphics-samples-hello-const-buffers \
             --case directx-graphics-samples-hello-triangle \
             --case directx-graphics-samples-hello-texture \
             --case directx-shader-compiler-groupshared-splat \
@@ -142,6 +143,7 @@ jobs:
             --run-toolchains \
             --require-toolchain-runs \
             --case apple-modern-rendering-mesh-viewdir \
+            --case directx-graphics-samples-hello-const-buffers \
             --case directx-graphics-samples-hello-triangle \
             --case directx-graphics-samples-hello-texture \
             --case directx-shader-compiler-groupshared-splat \
@@ -191,6 +193,7 @@ jobs:
             demos/open-source-porting/cases/apple-modern-rendering-mesh-viewdir/crosstl-out/metal/AAPLMeshRenderer.metal \
             demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/metal/Cube_cube.frag.metal \
             demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/metal/Cube_cube.vert.metal \
+            demos/open-source-porting/cases/directx-graphics-samples-hello-const-buffers/crosstl-out/metal/shaders.metal \
             demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/metal/shaders.metal \
             demos/open-source-porting/cases/directx-shader-compiler-groupshared-splat/crosstl-out/metal/SplatGroupSharedScalar.metal \
             demos/open-source-porting/cases/directx-shader-compiler-neg1/crosstl-out/metal/neg1.metal \
@@ -241,6 +244,7 @@ jobs:
             --check \
             --run-toolchains \
             --require-toolchain-runs \
+            --case directx-graphics-samples-hello-const-buffers \
             --case directx-graphics-samples-hello-triangle \
             --case directx-graphics-samples-hello-texture \
             --case directx-shader-compiler-groupshared-splat \
@@ -281,6 +285,8 @@ jobs:
           }
           compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-triangle/crosstl-out/directx/shaders.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-triangle/crosstl-out/directx/shaders.hlsl PSMain ps_6_0
+          compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-const-buffers/crosstl-out/directx/shaders.hlsl VSMain vs_6_0
+          compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-const-buffers/crosstl-out/directx/shaders.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/directx/shaders.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/directx/shaders.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/directx-shader-compiler-groupshared-splat/crosstl-out/directx/SplatGroupSharedScalar.hlsl CSMain cs_6_0

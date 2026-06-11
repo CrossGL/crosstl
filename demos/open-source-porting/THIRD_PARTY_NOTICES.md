@@ -21,6 +21,7 @@ should be treated with the same upstream license context when redistributed.
 - Commit: `31ae3c91160d8634264004cdaf4e41a99c41243e`
 - Source paths:
   - `Samples/Desktop/D3D12HelloWorld/src/HelloTriangle/shaders.hlsl`
+  - `Samples/Desktop/D3D12HelloWorld/src/HelloConstBuffers/shaders.hlsl`
   - `Samples/Desktop/D3D12HelloWorld/src/HelloTexture/shaders.hlsl`
 - License: MIT
 - License URL:

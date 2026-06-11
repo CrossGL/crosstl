@@ -43,6 +43,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | Case | Upstream | License | Source backend | Checked targets | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `directx-graphics-samples-hello-triangle` | `microsoft/DirectX-Graphics-Samples` at `31ae3c91160d8634264004cdaf4e41a99c41243e` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Hello Triangle shader file without source edits. |
+| `directx-graphics-samples-hello-const-buffers` | `microsoft/DirectX-Graphics-Samples` at `31ae3c91160d8634264004cdaf4e41a99c41243e` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Hello ConstBuffers shader file unchanged. Host constant-buffer setup remains outside the demo scope. |
 | `directx-graphics-samples-hello-texture` | `microsoft/DirectX-Graphics-Samples` at `31ae3c91160d8634264004cdaf4e41a99c41243e` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Hello Texture shader file without source edits. Host texture setup remains outside the demo scope. |
 | `directx-shader-compiler-groupshared-splat` | `microsoft/DirectXShaderCompiler` at `517dd5eb5d8cbb46c15fc1230acac1d2f4779092` | University of Illinois/NCSA | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream groupshared scalar-splat compute shader unchanged. |
 | `directx-shader-compiler-neg1` | `microsoft/DirectXShaderCompiler` at `d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652` | University of Illinois/NCSA | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream negated swizzle pixel shader unchanged. |
@@ -90,6 +91,8 @@ SPIRV-Cross, SPIRV-Tools, Vulkan-Tools, raylib, SaschaWillems triangle, and
 Slang cases keep upstream source files unchanged apart from repository
 formatting checks. The DirectX Hello Texture shader was retested after issue
 #783 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan output.
+The DirectX Hello ConstBuffers shader is checked for the same target set while
+leaving host-side constant-buffer allocation outside this source-focused demo.
 The SaschaWillems headless compute shader was retested after issue #756 and
 issue #780 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan
 output. The Vulkan Samples, Apple, ROCm add-kernel, and Rust-GPU/rust-gpu
