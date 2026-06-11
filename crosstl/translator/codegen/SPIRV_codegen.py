@@ -1559,6 +1559,34 @@ class VulkanSPIRVCodeGen:
 
         return True
 
+    def scalar_type_can_initialize_complex_struct(self, type_id: SpirvId) -> bool:
+        type_name = self.normalize_primitive_name(type_id.type.base_type)
+        return type_name in {"float", "double"} | self.INTEGER_TYPE_NAMES
+
+    def convert_scalar_value_to_complex_struct_type(
+        self,
+        value_id: SpirvId,
+        source_type: SpirvId,
+        target_type: SpirvId,
+        target_members: List[Tuple[SpirvId, str]],
+    ) -> Optional[SpirvId]:
+        if not self.is_complex_struct_type(target_type, target_members):
+            return None
+        if not self.scalar_type_can_initialize_complex_struct(source_type):
+            return None
+
+        values = []
+        for index, (member_type, _) in enumerate(target_members):
+            if index == 0:
+                converted = self.convert_value_to_type(value_id, member_type)
+                if not self.value_has_type(converted, member_type):
+                    return None
+                values.append(converted)
+            else:
+                values.append(self.default_value_for_type(member_type))
+
+        return self.composite_construct(target_type, values)
+
     def convert_aggregate_value_to_type(
         self, value_id: SpirvId, source_type: SpirvId, target_type: SpirvId
     ) -> Optional[SpirvId]:
@@ -1571,6 +1599,13 @@ class VulkanSPIRVCodeGen:
         target_vector = self.vector_type_info_from_type(target_type)
         source_members = self.current_struct_members.get(source_type.type.base_type)
         target_members = self.current_struct_members.get(target_type.type.base_type)
+
+        if source_members is None and target_members is not None:
+            scalar_complex = self.convert_scalar_value_to_complex_struct_type(
+                value_id, source_type, target_type, target_members
+            )
+            if scalar_complex is not None:
+                return scalar_complex
 
         if source_vector is not None and target_members is not None:
             source_component_type, source_count = source_vector
