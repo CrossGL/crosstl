@@ -25855,37 +25855,22 @@ def test_metal_glsl_es_shadow_sampler_lod_overloads_lower_to_compare_sampling():
         f"c = s2da.sample_compare({default_sampler}, input.tc.xyz.xy, "
         "uint(input.tc.xyz.z), input.tc.w"
     )
-    assert (
-        f"{s2da_compare}, bias(0.0));"
-        in generated_code
-    )
+    assert f"{s2da_compare}, bias(0.0));" in generated_code
     assert (
         f"c = sca.sample_compare({default_sampler}, input.tc.xyz, "
-        "uint(input.tc.w), 0.0, bias(0.0));"
-        in generated_code
+        "uint(input.tc.w), 0.0, bias(0.0));" in generated_code
     )
-    assert (
-        f"{s2da_compare}, bias(0.0), int2(0.0));"
-        in generated_code
-    )
-    assert (
-        f"{s2da_lod_compare}, level(0.0));"
-        in generated_code
-    )
+    assert f"{s2da_compare}, bias(0.0), int2(0.0));" in generated_code
+    assert f"{s2da_lod_compare}, level(0.0));" in generated_code
     assert (
         f"c = sc.sample_compare({default_sampler}, input.tc.xyz, "
-        "input.tc.w, level(0.0));"
-        in generated_code
+        "input.tc.w, level(0.0));" in generated_code
     )
     assert (
         f"c = sca.sample_compare({default_sampler}, input.tc.xyz, "
-        "uint(input.tc.w), 0.0, level(0.0));"
-        in generated_code
+        "uint(input.tc.w), 0.0, level(0.0));" in generated_code
     )
-    assert (
-        f"{s2da_lod_compare}, level(0.0), int2(0.0));"
-        in generated_code
-    )
+    assert f"{s2da_lod_compare}, level(0.0), int2(0.0));" in generated_code
     assert "texture(s2da" not in generated_code
     assert "textureOffset(" not in generated_code
     assert "textureLod(" not in generated_code
