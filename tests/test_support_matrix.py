@@ -3053,7 +3053,7 @@ def test_project_external_corpus_coverage_documents_entry_consistency_checks():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
-            "test_translate_project_skips_duplicate_external_corpus_entries"
+            "test_translate_project_preserves_external_corpus_entries_with_shared_path"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
