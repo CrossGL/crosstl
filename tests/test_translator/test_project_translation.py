@@ -12640,6 +12640,7 @@ def test_metal_project_materialization_concretizes_steel_attention_load_helper(
         "Rows": "2",
         "T": "float",
     }
+    assert "LoadTile<float,2,2> tile;" in materialized.text
     assert "load_float_2_2(tile, src[gid]);" in materialized.text
     assert not re.search(r"\bload\s*\(", materialized.text)
 
