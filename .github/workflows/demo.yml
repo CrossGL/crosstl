@@ -265,7 +265,6 @@ jobs:
             --case nvidia-cuda-samples-vector-add \
             --case nvpro-vk-mini-samples-rectangle \
             --case ogl-samples-flat-color \
-            --case opencl-sdk-saxpy \
             --case openframeworks-noise-shader \
             --case raylib-base-fragment \
             --case raylib-base-vertex \

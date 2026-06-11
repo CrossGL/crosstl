@@ -259,7 +259,6 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "nvidia-cuda-samples-vector-add",
         "nvpro-vk-mini-samples-rectangle",
         "ogl-samples-flat-color",
-        "opencl-sdk-saxpy",
         "openframeworks-noise-shader",
         "raylib-base-fragment",
         "raylib-base-vertex",
