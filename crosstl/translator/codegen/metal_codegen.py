@@ -4078,9 +4078,7 @@ class MetalCodeGen:
             semantic = self.semantic_from_node(func)
             function_name = entry_name or func.name
             semantic_attr = self.map_non_stage_function_semantic(semantic)
-            code += (
-                f"{return_type} {function_name}({params_str}){semantic_attr};\n\n"
-            )
+            code += f"{return_type} {function_name}({params_str}){semantic_attr};\n\n"
             self.current_function_name = previous_function_name
             self.current_function_return_type = previous_function_return_type
             self.current_function_return_wrapper = previous_function_return_wrapper

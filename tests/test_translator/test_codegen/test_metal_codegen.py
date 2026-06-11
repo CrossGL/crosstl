@@ -14186,7 +14186,9 @@ def test_legacy_glsl_fragment_output_semantic_is_not_emitted_on_metal_helper():
     }
     """
 
-    generated = MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
 
     assert "float4 shade() {" in generated
     assert "[[gl_FragData]]" not in generated
