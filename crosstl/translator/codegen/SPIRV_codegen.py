@@ -118,8 +118,21 @@ class UnsupportedSPIRVFeatureError(ValueError):
 class VulkanSPIRVCodeGen:
     """Generates SPIR-V code from a CrossGL shader AST."""
 
+    SIGNED_INT32_MIN = -(1 << 31)
     SIGNED_INT32_MAX = (1 << 31) - 1
     UNSIGNED_INT32_MAX = (1 << 32) - 1
+    SIGNED_INT64_MIN = -(1 << 63)
+    SIGNED_INT64_MAX = (1 << 63) - 1
+    UNSIGNED_INT64_MAX = (1 << 64) - 1
+    INTEGER_TYPE_WIDTHS = {
+        "int": 32,
+        "uint": 32,
+        "i64": 64,
+        "u64": 64,
+    }
+    SIGNED_INTEGER_TYPES = {"int", "i64"}
+    UNSIGNED_INTEGER_TYPES = {"uint", "u64"}
+    INTEGER_TYPE_NAMES = SIGNED_INTEGER_TYPES | UNSIGNED_INTEGER_TYPES
 
     def __init__(self, *, include_resource_interface_variables: bool = False):
         """Initialize an empty SPIR-V module-generation state."""
@@ -339,6 +352,12 @@ class VulkanSPIRVCodeGen:
             self.emit(f"%{id_value} = OpTypeInt 32 1")
         elif name == "uint":
             self.emit(f"%{id_value} = OpTypeInt 32 0")
+        elif name == "i64":
+            self.require_capability("Int64")
+            self.emit(f"%{id_value} = OpTypeInt 64 1")
+        elif name == "u64":
+            self.require_capability("Int64")
+            self.emit(f"%{id_value} = OpTypeInt 64 0")
 
         spirv_type = SpirvType(name)
         spirv_id = SpirvId(id_value, spirv_type, name)
@@ -650,7 +669,7 @@ class VulkanSPIRVCodeGen:
             opcode = "OpConstantTrue" if value else "OpConstantFalse"
             self.emit(f"%{id_value} = {opcode} %{type_id.id}")
         else:
-            constant_value = str(value)
+            constant_value = self.spirv_constant_literal_text(value, type_name)
             self.emit(f"%{id_value} = OpConstant %{type_id.id} {constant_value}")
 
         spirv_id = SpirvId(id_value, type_id.type, f"{type_name}_{value}")
@@ -658,15 +677,50 @@ class VulkanSPIRVCodeGen:
         self.constants[key] = spirv_id
         return spirv_id
 
+    def spirv_constant_literal_text(
+        self, value: Union[bool, int, float], type_name: str
+    ) -> str:
+        """Return a SPIR-V assembly literal valid for the result type."""
+        type_name = self.normalize_primitive_name(type_name)
+        if not isinstance(value, int) or isinstance(value, bool):
+            return str(value)
+
+        if (
+            type_name == "int"
+            and self.SIGNED_INT32_MAX < value <= self.UNSIGNED_INT32_MAX
+        ):
+            return str(value - (1 << 32))
+        if (
+            type_name == "i64"
+            and self.SIGNED_INT64_MAX < value <= self.UNSIGNED_INT64_MAX
+        ):
+            return str(value - (1 << 64))
+        return str(value)
+
     def integer_literal_type_for_value(
         self, primitive_type_name: str, value: int
     ) -> str:
         """Return a SPIR-V scalar integer type that can encode a literal value."""
-        if (
-            primitive_type_name == "int"
-            and self.SIGNED_INT32_MAX < value <= self.UNSIGNED_INT32_MAX
-        ):
-            return "uint"
+        primitive_type_name = self.normalize_primitive_name(primitive_type_name)
+        if primitive_type_name == "int":
+            if self.SIGNED_INT32_MIN <= value <= self.SIGNED_INT32_MAX:
+                return "int"
+            if 0 <= value <= self.UNSIGNED_INT32_MAX:
+                return "uint"
+            if 0 <= value <= self.UNSIGNED_INT64_MAX:
+                return "u64"
+            if self.SIGNED_INT64_MIN <= value <= self.SIGNED_INT64_MAX:
+                return "i64"
+        elif primitive_type_name == "uint":
+            if 0 <= value <= self.UNSIGNED_INT32_MAX:
+                return "uint"
+            if 0 <= value <= self.UNSIGNED_INT64_MAX:
+                return "u64"
+        elif primitive_type_name == "i64":
+            if self.SIGNED_INT64_MIN <= value <= self.SIGNED_INT64_MAX:
+                return "i64"
+            if 0 <= value <= self.UNSIGNED_INT64_MAX:
+                return "u64"
         return primitive_type_name
 
     def register_specialization_constant(
@@ -807,7 +861,7 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[Union[bool, int, float]]:
         """Return a Python scalar value for a literal constant expression."""
         type_name = self.normalize_primitive_name(target_type.type.base_type)
-        if type_name not in {"bool", "float", "double", "int", "uint"}:
+        if type_name not in {"bool", "float", "double", *self.INTEGER_TYPE_NAMES}:
             return None
 
         if isinstance(expr, LiteralNode):
@@ -881,11 +935,11 @@ class VulkanSPIRVCodeGen:
         type_name = self.normalize_primitive_name(type_id.type.base_type)
         if type_name == "bool":
             return self.coerce_scalar_constant_value(expr, type_id)
-        if type_name in {"int", "uint"}:
+        if type_name in self.INTEGER_TYPE_NAMES:
             value = evaluate_literal_int_expression(expr, self.literal_int_constants)
             if value is None:
                 return None
-            if type_name == "uint" and value < 0:
+            if type_name in self.UNSIGNED_INTEGER_TYPES and value < 0:
                 return None
             return int(value)
         if type_name not in {"float", "double"}:
@@ -1422,7 +1476,7 @@ class VulkanSPIRVCodeGen:
         return self.composite_construct(target_type, values)
 
     def promoted_numeric_type_name(self, type_names: List[str]) -> Optional[str]:
-        numeric_types = {"int", "uint", "float", "double"}
+        numeric_types = {"float", "double"} | self.INTEGER_TYPE_NAMES
         normalized = [self.normalize_primitive_name(name) for name in type_names]
         if any(name not in numeric_types for name in normalized):
             return None
@@ -1430,9 +1484,27 @@ class VulkanSPIRVCodeGen:
             return "double"
         if "float" in normalized:
             return "float"
+        if any(self.integer_type_width(name) == 64 for name in normalized):
+            if any(name in self.UNSIGNED_INTEGER_TYPES for name in normalized):
+                return "u64"
+            return "i64"
         if "int" in normalized:
             return "int"
         return "uint"
+
+    def promoted_bitwise_integer_type_name(
+        self, type_names: List[str]
+    ) -> Optional[str]:
+        normalized = [self.normalize_primitive_name(name) for name in type_names]
+        if any(name not in self.INTEGER_TYPE_NAMES for name in normalized):
+            return None
+        if any(self.integer_type_width(name) == 64 for name in normalized):
+            if any(name in self.UNSIGNED_INTEGER_TYPES for name in normalized):
+                return "u64"
+            return "i64"
+        if any(name in self.UNSIGNED_INTEGER_TYPES for name in normalized):
+            return "uint"
+        return "int"
 
     def ternary_result_type(self, true_value: SpirvId, false_value: SpirvId) -> SpirvId:
         true_type = self.value_types.get(true_value.id) or self.ensure_registered_type(
@@ -1935,8 +2007,12 @@ class VulkanSPIRVCodeGen:
             else:
                 spv_op = (
                     unsigned_op
-                    if component_type == "uint"
-                    else signed_op if component_type == "int" else float_op
+                    if component_type in self.UNSIGNED_INTEGER_TYPES
+                    else (
+                        signed_op
+                        if component_type in self.SIGNED_INTEGER_TYPES
+                        else float_op
+                    )
                 )
         elif op in arithmetic_ops:
             result_type, left, right = self.align_binary_arithmetic_operands(
@@ -1946,14 +2022,24 @@ class VulkanSPIRVCodeGen:
             component_type = self.scalar_or_vector_component_type(left.type)
             spv_op = (
                 unsigned_op
-                if component_type == "uint"
-                else signed_op if component_type == "int" else float_op
+                if component_type in self.UNSIGNED_INTEGER_TYPES
+                else (
+                    signed_op
+                    if component_type in self.SIGNED_INTEGER_TYPES
+                    else float_op
+                )
             )
-        else:
+        elif op in {"&", "|", "^"}:
+            result_type, left, right = self.align_binary_bitwise_operands(
+                result_type, left, right
+            )
             spv_op = {
                 "&": "OpBitwiseAnd",
                 "|": "OpBitwiseOr",
                 "^": "OpBitwiseXor",
+            }[op]
+        else:
+            spv_op = {
                 "<<": "OpShiftLeftLogical",
                 ">>": "OpShiftRightLogical",
             }.get(op, f"Op{op}")
@@ -1965,6 +2051,15 @@ class VulkanSPIRVCodeGen:
         spirv_id = SpirvId(id_value, result_type.type)
         self.value_types[id_value] = result_type
         return spirv_id
+
+    def align_binary_bitwise_operands(
+        self, result_type: SpirvId, left: SpirvId, right: SpirvId
+    ) -> Tuple[SpirvId, SpirvId, SpirvId]:
+        """Convert bitwise operands to the result integer type before emission."""
+        result_type = self.ensure_registered_type(result_type)
+        left = self.convert_value_to_type(left, result_type)
+        right = self.convert_value_to_type(right, result_type)
+        return result_type, left, right
 
     def matrix_binary_operation(
         self, op: str, result_type: SpirvId, left: SpirvId, right: SpirvId
@@ -2473,6 +2568,36 @@ class VulkanSPIRVCodeGen:
                 )
             return self.register_primitive_type("bool")
 
+        if op in {"&", "|", "^"}:
+            if left_vector is not None or right_vector is not None:
+                component_count = (left_vector or right_vector)[1]
+                component_type = self.promoted_bitwise_integer_type_name(
+                    [
+                        (
+                            left_vector[0]
+                            if left_vector is not None
+                            else left_type.type.base_type
+                        ),
+                        (
+                            right_vector[0]
+                            if right_vector is not None
+                            else right_type.type.base_type
+                        ),
+                    ]
+                )
+                if component_type is None:
+                    return left_type
+                return self.register_vector_type(
+                    self.register_primitive_type(component_type), component_count
+                )
+
+            scalar_type = self.promoted_bitwise_integer_type_name(
+                [left_type.type.base_type, right_type.type.base_type]
+            )
+            if scalar_type is None:
+                return left_type
+            return self.register_primitive_type(scalar_type)
+
         if op not in {"+", "-", "*", "MULTIPLY", "/", "%"}:
             return left_type
 
@@ -2538,19 +2663,19 @@ class VulkanSPIRVCodeGen:
         if source_type_name == target_type_name:
             return value
 
-        if source_type_name == "bool" and target_type_name in {"int", "uint"}:
+        if source_type_name == "bool" and target_type_name in self.INTEGER_TYPE_NAMES:
             true_value = self.register_constant(1, target_type)
             false_value = self.register_constant(0, target_type)
             return self.select_operation(target_type, value, true_value, false_value)
 
-        if source_type_name in {"int", "uint"} and target_type_name == "bool":
+        if source_type_name in self.INTEGER_TYPE_NAMES and target_type_name == "bool":
             source_type = self.ensure_registered_type(value.type)
             zero_value = self.register_constant(0, source_type)
             bool_type = self.register_primitive_type("bool")
             return self.binary_operation("!=", bool_type, value, zero_value)
 
         float_types = {"float", "double"}
-        integer_types = {"int", "uint"}
+        integer_types = self.INTEGER_TYPE_NAMES
         scalar_types = float_types | integer_types
         if source_type_name not in scalar_types or target_type_name not in scalar_types:
             return value
@@ -2558,11 +2683,29 @@ class VulkanSPIRVCodeGen:
         if source_type_name in float_types and target_type_name in float_types:
             opcode = "OpFConvert"
         elif source_type_name in integer_types and target_type_name in float_types:
-            opcode = "OpConvertUToF" if source_type_name == "uint" else "OpConvertSToF"
+            opcode = (
+                "OpConvertUToF"
+                if source_type_name in self.UNSIGNED_INTEGER_TYPES
+                else "OpConvertSToF"
+            )
         elif source_type_name in float_types and target_type_name in integer_types:
-            opcode = "OpConvertFToU" if target_type_name == "uint" else "OpConvertFToS"
+            opcode = (
+                "OpConvertFToU"
+                if target_type_name in self.UNSIGNED_INTEGER_TYPES
+                else "OpConvertFToS"
+            )
         elif source_type_name in integer_types and target_type_name in integer_types:
-            opcode = "OpBitcast"
+            source_width = self.integer_type_width(source_type_name)
+            target_width = self.integer_type_width(target_type_name)
+            if source_width == target_width:
+                opcode = "OpBitcast"
+            elif (
+                source_type_name in self.UNSIGNED_INTEGER_TYPES
+                and target_type_name in self.UNSIGNED_INTEGER_TYPES
+            ):
+                opcode = "OpUConvert"
+            else:
+                opcode = "OpSConvert"
         else:
             return value
 
@@ -2572,10 +2715,19 @@ class VulkanSPIRVCodeGen:
         return SpirvId(id_value, target_type.type)
 
     def is_integer_type(self, spirv_type: SpirvType) -> bool:
-        return spirv_type.base_type in {"int", "uint"}
+        return (
+            self.normalize_primitive_name(spirv_type.base_type)
+            in self.INTEGER_TYPE_NAMES
+        )
 
     def is_unsigned_type(self, spirv_type: SpirvType) -> bool:
-        return spirv_type.base_type == "uint"
+        return (
+            self.normalize_primitive_name(spirv_type.base_type)
+            in self.UNSIGNED_INTEGER_TYPES
+        )
+
+    def integer_type_width(self, type_name: str) -> Optional[int]:
+        return self.INTEGER_TYPE_WIDTHS.get(self.normalize_primitive_name(type_name))
 
     def unary_operation(
         self, op: str, result_type: Union[SpirvId, SpirvType], operand: SpirvId
@@ -2664,8 +2816,8 @@ class VulkanSPIRVCodeGen:
 
     def is_select_result_type(self, result_type: SpirvId) -> bool:
         """Return whether OpSelect can directly produce this result type."""
-        base_type = result_type.type.base_type
-        if base_type in {"bool", "int", "uint", "float", "double"}:
+        base_type = self.normalize_primitive_name(result_type.type.base_type)
+        if base_type in {"bool", "float", "double"} | self.INTEGER_TYPE_NAMES:
             return True
         return any(
             vector_type.type.base_type == base_type
@@ -9500,7 +9652,7 @@ class VulkanSPIRVCodeGen:
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         primitive_name = self.normalize_primitive_name(function_name)
-        if primitive_name not in {"bool", "int", "uint", "float", "double"}:
+        if primitive_name not in {"bool", "float", "double"} | self.INTEGER_TYPE_NAMES:
             return None
 
         target_type = self.register_primitive_type(primitive_name)
@@ -9615,7 +9767,7 @@ class VulkanSPIRVCodeGen:
 
         component_type = self.scalar_or_vector_component_type(args[0].type)
         primitive_type = self.normalize_primitive_name(component_type)
-        if primitive_type in {"float", "double", "int", "uint", "bool"}:
+        if primitive_type in {"float", "double", "bool"} | self.INTEGER_TYPE_NAMES:
             return self.register_primitive_type(primitive_type)
 
         return self.register_primitive_type("float")
@@ -10295,6 +10447,12 @@ class VulkanSPIRVCodeGen:
             "f64": "double",
             "i32": "int",
             "u32": "uint",
+            "int64": "i64",
+            "int64_t": "i64",
+            "long": "i64",
+            "uint64": "u64",
+            "uint64_t": "u64",
+            "ulong": "u64",
         }
         return aliases.get(str(type_name), str(type_name))
 
@@ -11934,7 +12092,16 @@ class VulkanSPIRVCodeGen:
             return self.register_array_type(element_type, size)
 
         primitive_type = self.normalize_primitive_name(type_str)
-        if primitive_type in {"float", "double", "int", "uint", "bool", "void"}:
+        if primitive_type in {
+            "float",
+            "double",
+            "int",
+            "uint",
+            "i64",
+            "u64",
+            "bool",
+            "void",
+        }:
             return self.register_primitive_type(primitive_type)
 
         vector_info = self.vector_component_type_and_count(type_str)
@@ -14004,7 +14171,7 @@ class VulkanSPIRVCodeGen:
             return self.any_bool_vector_operation(condition_vector)
 
         scalar_type_name = self.normalize_primitive_name(type_name)
-        if scalar_type_name not in {"float", "double", "int", "uint"}:
+        if scalar_type_name not in {"float", "double"} | self.INTEGER_TYPE_NAMES:
             return None
 
         scalar_type = self.register_primitive_type(scalar_type_name)
@@ -14029,6 +14196,13 @@ class VulkanSPIRVCodeGen:
         if isinstance(expr, float):
             return self.register_primitive_type("float")
         if isinstance(expr, LiteralNode):
+            literal_type = self.convert_type_node_to_string(expr.literal_type)
+            primitive_type = self.normalize_primitive_name(literal_type)
+            if primitive_type in self.INTEGER_TYPE_NAMES:
+                primitive_type = self.integer_literal_type_for_value(
+                    primitive_type, int(expr.value)
+                )
+                return self.register_primitive_type(primitive_type)
             return self.map_crossgl_type(expr.literal_type)
         if isinstance(expr, (IdentifierNode, VariableNode, str)):
             name = expr if isinstance(expr, str) else expr.name
@@ -14060,7 +14234,15 @@ class VulkanSPIRVCodeGen:
             if re.fullmatch(r"(d)?mat([234])(?:x([234]))?", matrix_type_name):
                 return self.map_crossgl_type(matrix_type_name)
             primitive_name = self.normalize_primitive_name(callee_name)
-            if primitive_name in {"bool", "int", "uint", "float", "double"}:
+            if primitive_name in {
+                "bool",
+                "int",
+                "uint",
+                "i64",
+                "u64",
+                "float",
+                "double",
+            }:
                 return self.register_primitive_type(primitive_name)
             signature = self.resolve_function_signature(callee_name)
             if signature is not None:
@@ -18519,7 +18701,7 @@ class VulkanSPIRVCodeGen:
         primitive_name = self.normalize_primitive_name(type_id.type.base_type)
         if primitive_name in {"float", "double"}:
             return self.register_constant(0.0, type_id)
-        if primitive_name in {"int", "uint"}:
+        if primitive_name in self.INTEGER_TYPE_NAMES:
             return self.register_constant(0, type_id)
         if primitive_name == "bool":
             return self.register_constant(False, type_id)
@@ -18655,8 +18837,8 @@ class VulkanSPIRVCodeGen:
 
         if target_type_name in {"float", "double"}:
             return self.register_constant(float(value), target_type)
-        if target_type_name in {"int", "uint"}:
-            if target_type_name == "uint" and value < 0:
+        if target_type_name in self.INTEGER_TYPE_NAMES:
+            if target_type_name in self.UNSIGNED_INTEGER_TYPES and value < 0:
                 return None
             return self.register_constant(int(value), target_type)
         return None
@@ -20389,9 +20571,10 @@ class VulkanSPIRVCodeGen:
             bool_type = self.register_primitive_type("bool")
             return self.register_constant(expr, bool_type)
         elif isinstance(expr, int):
+            expected_type = self.expected_primitive_type_name()
             primitive_type = (
-                "uint"
-                if self.expected_primitive_type_name() == "uint" and expr >= 0
+                expected_type
+                if expected_type in self.UNSIGNED_INTEGER_TYPES and expr >= 0
                 else "int"
             )
             primitive_type = self.integer_literal_type_for_value(primitive_type, expr)
@@ -20469,14 +20652,15 @@ class VulkanSPIRVCodeGen:
             if primitive_type_name in {"float", "double"}:
                 literal_type_id = self.register_primitive_type(primitive_type_name)
                 return self.register_constant(float(expr.value), literal_type_id)
-            if primitive_type_name in {"int", "uint"}:
+            if primitive_type_name in self.INTEGER_TYPE_NAMES:
                 literal_value = int(expr.value)
                 if (
-                    primitive_type_name == "int"
-                    and self.expected_primitive_type_name() == "uint"
+                    primitive_type_name in self.SIGNED_INTEGER_TYPES
+                    and self.expected_primitive_type_name()
+                    in self.UNSIGNED_INTEGER_TYPES
                     and literal_value >= 0
                 ):
-                    primitive_type_name = "uint"
+                    primitive_type_name = self.expected_primitive_type_name()
                 primitive_type_name = self.integer_literal_type_for_value(
                     primitive_type_name, literal_value
                 )

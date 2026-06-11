@@ -23070,6 +23070,46 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_mlx_quantized_bit_packing_literals_use_valid_spirv_types(self, tmp_path):
+        source_code = """
+        shader MLXQuantizedBitPackingLiterals {
+            compute {
+                void main() {
+                    uint packed32 = 4278190080;
+                    uint masked32 = packed32 & 4278190080;
+                    u64 packed40 = 1095216660480;
+                    u64 masked40 = packed40 & 1095216660480;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1\b", spv_code)
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        u64_type = re.search(r"(%\d+) = OpTypeInt 64 0\b", spv_code)
+
+        assert int_type is not None
+        assert uint_type is not None
+        assert u64_type is not None
+        assert "OpCapability Int64" in spv_code
+        assert f"OpConstant {uint_type.group(1)} 4278190080" in spv_code
+        assert f"OpConstant {u64_type.group(1)} 1095216660480" in spv_code
+        assert not re.search(
+            rf"OpConstant {re.escape(int_type.group(1))} "
+            r"(4278190080|1095216660480)\b",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpBitwiseAnd {re.escape(u64_type.group(1))} %\d+ %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_bitwise_not_unary_operation(self, tmp_path):
         source_code = """
         shader BitwiseNot {
