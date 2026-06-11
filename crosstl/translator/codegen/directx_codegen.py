@@ -18537,8 +18537,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         attributes = getattr(node, "attributes", []) or []
         if not any(
-            str(getattr(attr, "name", "")).lower() == "buffer"
-            for attr in attributes
+            str(getattr(attr, "name", "")).lower() == "buffer" for attr in attributes
         ):
             return None
 
