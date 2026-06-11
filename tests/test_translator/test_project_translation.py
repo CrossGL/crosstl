@@ -11191,6 +11191,7 @@ def test_plain_metal_helper_call_scan_uses_indexed_excluded_spans(monkeypatch):
             "plain_helper",
             ["value"],
             (helper_start, helper_start + len("plain_helper")),
+            [],
         )
     ]
 
@@ -11232,9 +11233,43 @@ def test_plain_metal_helper_call_scan_starts_at_included_body_span():
             "plain_helper",
             ["value"],
             (helper_start, helper_start + len("plain_helper")),
+            [],
         )
     ]
     assert CountingSource.index_reads < len(function_source) * 4
+
+
+def test_plain_metal_helper_call_scan_reports_explicit_template_arguments():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    preprocessor = MetalPreprocessor()
+    source = textwrap.dedent("""
+        uint call_plain(uint value, uint gid) {
+            return plain_helper<float, uint, 7>(value, gid);
+        }
+        """)
+    function_start = source.find("uint call_plain")
+    body_start = source.find("{", function_start) + 1
+    body_end = source.find("}", body_start)
+
+    calls = project_pipeline._plain_template_helper_call_sites(
+        preprocessor,
+        source,
+        {"plain_helper": [object()]},
+        [],
+        [(body_start, body_end)],
+    )
+
+    helper_start = source.find("plain_helper")
+    helper_end = source.find("(", helper_start)
+    assert calls == [
+        (
+            "plain_helper",
+            ["value", "gid"],
+            (helper_start, helper_end),
+            ["float", "uint", "7"],
+        )
+    ]
 
 
 def test_plain_metal_template_replacement_scan_uses_indexed_included_spans(

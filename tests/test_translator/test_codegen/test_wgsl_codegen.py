@@ -226,7 +226,7 @@ def test_wgsl_codegen_casts_integer_vector_constructor_arguments():
                 int x = 1;
                 int y = 2;
                 vec2 offset = vec2(x, y);
-                return vec4(uv + offset, 0.0, 1.0);
+                return vec4(uv + offset, 0, 1);
             }
         }
     }
@@ -236,6 +236,8 @@ def test_wgsl_codegen_casts_integer_vector_constructor_arguments():
 
     assert "vec2<f32>(f32(x), f32(y))" in generated
     assert "vec2<f32>(x, y)" not in generated
+    assert "return vec4<f32>((uv + offset), 0, 1);" in generated
+    assert "return vec4<f32>((uv + offset), f32(0), f32(1));" not in generated
 
 
 def test_wgsl_codegen_preserves_explicit_io_attributes():
