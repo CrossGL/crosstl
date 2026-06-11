@@ -4349,15 +4349,19 @@ class GLSLCodeGen:
         self.stage_entry_constant_value_parameter_aliases = {}
         self.stage_entry_constant_value_cbuffer_names = set()
         stage_entry_types = self.combined_stage_entry_types()
-        for _entry_id, stage_name, func in collect_stage_entry_records(
-            ast, target_stage, stage_entry_types
-        ):
+        stage_entry_records = list(
+            collect_stage_entry_records(ast, target_stage, stage_entry_types)
+        )
+        parameter_member_name_counts = (
+            self.collect_stage_entry_constant_value_parameter_member_name_counts(
+                stage_entry_records
+            )
+        )
+        for _entry_id, stage_name, func in stage_entry_records:
             for parameter in getattr(func, "parameters", getattr(func, "params", [])):
-                member_type = self.stage_entry_constant_value_parameter_type(parameter)
-                if member_type is None and stage_name == "compute":
-                    member_type = self.stage_entry_compute_value_parameter_type(
-                        parameter
-                    )
+                member_type = self.stage_entry_constant_value_parameter_member_type(
+                    parameter, stage_name
+                )
                 if member_type is None:
                     continue
                 binding = self.explicit_resource_binding_index(parameter)
@@ -4379,8 +4383,13 @@ class GLSLCodeGen:
                     used_block_names,
                 )
                 used_block_names.add(block_name)
-                member_name = self.stage_entry_constant_value_parameter_member_name(
-                    block_name, parameter_name, used_member_names
+                member_name = (
+                    self.stage_entry_constant_value_parameter_member_name(
+                        block_name,
+                        parameter_name,
+                        used_member_names,
+                        parameter_member_name_counts,
+                    )
                 )
                 used_member_names.add(member_name)
                 if member_name != parameter_name:
@@ -4399,6 +4408,34 @@ class GLSLCodeGen:
                 self.stage_entry_constant_value_cbuffer_names.add(block_name)
                 cbuffers.append(cbuffer)
         return cbuffers
+
+    def stage_entry_constant_value_parameter_member_type(self, parameter, stage_name):
+        member_type = self.stage_entry_constant_value_parameter_type(parameter)
+        if member_type is None and stage_name == "compute":
+            return self.stage_entry_compute_value_parameter_type(parameter)
+        return member_type
+
+    def collect_stage_entry_constant_value_parameter_member_name_counts(
+        self, stage_entry_records
+    ):
+        counts = {}
+        for _entry_id, stage_name, func in stage_entry_records:
+            for parameter in getattr(func, "parameters", getattr(func, "params", [])):
+                if (
+                    self.stage_entry_constant_value_parameter_member_type(
+                        parameter, stage_name
+                    )
+                    is None
+                ):
+                    continue
+                parameter_name = getattr(parameter, "name", None)
+                if not parameter_name:
+                    continue
+                member_name = sanitize_type_name(parameter_name)
+                if not member_name:
+                    continue
+                counts[member_name] = counts.get(member_name, 0) + 1
+        return counts
 
     def glsl_existing_cbuffer_block_names(self, ast, target_stage, cbuffers):
         names = {
@@ -4468,9 +4505,16 @@ class GLSLCodeGen:
         )
 
     def stage_entry_constant_value_parameter_member_name(
-        self, block_name, parameter_name, used_names
+        self, block_name, parameter_name, used_names, parameter_member_name_counts=None
     ):
         parameter_name = sanitize_type_name(parameter_name or "value")
+        if (
+            parameter_name
+            and parameter_name not in self.GLSL_RESERVED_IDENTIFIERS
+            and parameter_name not in used_names
+            and (parameter_member_name_counts or {}).get(parameter_name, 0) == 1
+        ):
+            return parameter_name
         block_name = sanitize_type_name(block_name or "Entry_Value_Args")
         base_name = "_".join(
             part for part in (block_name, parameter_name or "value") if part
