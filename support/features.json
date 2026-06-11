@@ -2836,7 +2836,7 @@
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
+          "status": "validated_rejection",
           "notes": "WGSL has no projected texture sampling builtin; projected texture functions emit deterministic diagnostics instructing callers to divide projected coordinates explicitly before sampling.",
           "evidence": [
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_projected_texture_functions"
@@ -2935,8 +2935,8 @@
           ]
         },
         "webgl": {
-          "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "validated_rejection",
+          "notes": "WebGL2 rejects textureGather and related GLSL ES 3.10 gather intrinsics with deterministic diagnostics because the target emits GLSL ES 3.00.",
           "evidence": [
             "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_glsl_es_310_texture_gather_intrinsics"
           ]
@@ -3547,7 +3547,7 @@
         },
         "wgsl": {
           "status": "diagnostic",
-          "notes": "WGSL lowers supported LOD, gradient, offset, gather, query, and multisample texture forms while projected and WebGPU-unsupported variants emit deterministic diagnostics.",
+          "notes": "WGSL lowers supported LOD, gradient, bias, offset, gather, query, and multisample texture forms while projected and WebGPU-unsupported variants emit deterministic diagnostics.",
           "evidence": [
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_split_sampler_lod_grad_and_offset_calls",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_projected_texture_functions",
@@ -3777,7 +3777,7 @@
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
+          "status": "validated_rejection",
           "notes": "WGSL storage textures do not expose image atomic operations, so imageAtomic* calls emit deterministic diagnostics instead of leaking invalid WGSL.",
           "evidence": [
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_storage_image_atomics"
@@ -3881,7 +3881,7 @@
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
+          "status": "validated_rejection",
           "notes": "WGSL/WebGPU exposes sampled multisample textures separately from storage textures; multisample storage image declarations are rejected with deterministic diagnostics.",
           "evidence": [
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsupported_resource_texture_constructs"
@@ -4472,8 +4472,8 @@
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL wave/subgroup intrinsic lowering has not been promoted yet; Wave* calls emit deterministic diagnostics instead of falling through to invalid expressions.",
+          "status": "validated_rejection",
+          "notes": "WGSL wave/subgroup intrinsic lowering is not part of the current target contract; Wave* calls emit deterministic diagnostics instead of falling through to invalid expressions.",
           "evidence": [
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_wave_intrinsics"
           ]
@@ -4588,9 +4588,11 @@
         },
         "wgsl": {
           "status": "diagnostic",
-          "notes": "WGSL match/pattern lowering has not been promoted yet; match statements emit deterministic diagnostics while structured lowering is implemented.",
+          "notes": "WGSL lowers statement-position literal/wildcard matches to switch control flow and bool literal matches to ordered conditionals, while expression-position matches and richer pattern destructuring remain deterministic diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_match_statements"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_literal_match_statements_to_switch",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_bool_match_statements_to_conditionals",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_match_identifier_patterns"
           ]
         }
       }

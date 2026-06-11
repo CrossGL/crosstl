@@ -26,6 +26,7 @@ from ..ast import (
     IdentifierNode,
     IfNode,
     LiteralNode,
+    LiteralPatternNode,
     LoopNode,
     MatchNode,
     MatrixType,
@@ -46,6 +47,7 @@ from ..ast import (
     VectorType,
     WaveOpNode,
     WhileNode,
+    WildcardPatternNode,
 )
 from .enum_utils import (
     generic_enum_specialization_name,
@@ -55,6 +57,11 @@ from .enum_utils import (
 from .image_access_contracts import (
     explicit_image_access,
     merge_image_access_requirement,
+)
+from .match_utils import (
+    generate_ordered_conditional_match,
+    generate_switch_match,
+    is_switch_lowerable_match,
 )
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
@@ -351,6 +358,7 @@ class WGSLCodeGen:
     }
     MULTISAMPLED_TEXTURE_UNSUPPORTED_FUNCTIONS = {
         "texture",
+        "texturebias",
         "texturecompare",
         "texturecomparelod",
         "texturecomparelodoffset",
@@ -2707,7 +2715,7 @@ class WGSLCodeGen:
         if isinstance(stmt, ForInNode):
             raise ValueError("WGSL target does not support for-in statements")
         if isinstance(stmt, MatchNode):
-            raise ValueError("WGSL target does not support match statements")
+            return self.generate_match(stmt, indent)
         raise ValueError(
             f"WGSL target does not support statement {type(stmt).__name__}"
         )
@@ -2810,6 +2818,78 @@ class WGSLCodeGen:
             lines.append(f"{pad}    }}")
         lines.append(f"{pad}}}")
         return "\n".join(lines)
+
+    def generate_match(self, node, indent):
+        self.validate_wgsl_match_statement(node)
+        expression_type = self.type_name_string(
+            self.expression_type(getattr(node, "expression", None))
+        )
+        if is_switch_lowerable_match(node) and expression_type != "bool":
+            return generate_switch_match(self, node, indent).rstrip()
+        return generate_ordered_conditional_match(self, node, indent, "WGSL").rstrip()
+
+    def validate_wgsl_match_statement(self, node):
+        for arm in getattr(node, "arms", []) or []:
+            pattern = getattr(arm, "pattern", None)
+            if isinstance(pattern, (LiteralPatternNode, WildcardPatternNode)):
+                continue
+            raise ValueError(
+                "WGSL target currently only supports literal and wildcard match "
+                "statement patterns"
+            )
+
+    def generate_switch_case(self, label, body, indent, auto_break=False):
+        pad = "    " * indent
+        if not auto_break and not self.statement_body_has_statements(body):
+            return f"{pad}{label}:\n"
+
+        code = f"{pad}{label}: {{\n"
+        body_text = self.generate_scoped_statement_body(body, indent + 1)
+        if body_text:
+            code += body_text
+            if not body_text.endswith("\n"):
+                code += "\n"
+        if auto_break and not self.statement_body_terminates(body):
+            code += f"{pad}    break;\n"
+        code += f"{pad}}}\n"
+        return code
+
+    def generate_scoped_statement_body(self, body, indent):
+        self.push_identifier_scope()
+        try:
+            return self.generate_statement_body(body, indent)
+        finally:
+            self.pop_identifier_scope()
+
+    def generate_statement_body(self, body, indent):
+        statements = self.statement_list(body)
+        if not statements:
+            return ""
+        return "\n".join(self.generate_statement(stmt, indent) for stmt in statements)
+
+    def statement_body_has_statements(self, body):
+        return bool(self.statement_list(body))
+
+    def statement_body_terminates(self, body):
+        statements = self.statement_list(body)
+        return bool(statements) and isinstance(
+            statements[-1], (BreakNode, ContinueNode, ReturnNode)
+        )
+
+    def statement_list(self, body):
+        if hasattr(body, "statements"):
+            return list(getattr(body, "statements", []) or [])
+        if isinstance(body, list):
+            return list(body)
+        if body is None:
+            return []
+        return [body]
+
+    def map_type(self, vtype):
+        return self.type_name_string(vtype)
+
+    def expression_result_type(self, expr):
+        return self.expression_type(expr)
 
     def generate_assignment(self, node):
         self.validate_storage_assignment_target(node.target)
@@ -3811,6 +3891,8 @@ class WGSLCodeGen:
             return self.generate_texture_sample_level_call(function_name, args)
         if normalized_name == "texturelodoffset":
             return self.generate_texture_sample_level_offset_call(function_name, args)
+        if normalized_name == "texturebias":
+            return self.generate_texture_sample_bias_call(function_name, args)
         if normalized_name == "texturegrad":
             return self.generate_texture_sample_grad_call(function_name, args)
         if normalized_name == "texturegradoffset":
@@ -4154,6 +4236,11 @@ class WGSLCodeGen:
     def generate_texture_sample_level_offset_call(self, function_name, args):
         return self.generate_texture_builtin_call(
             "textureSampleLevel", function_name, args, implicit=4, explicit=5
+        )
+
+    def generate_texture_sample_bias_call(self, function_name, args):
+        return self.generate_texture_builtin_call(
+            "textureSampleBias", function_name, args, implicit=3, explicit=4
         )
 
     def generate_texture_sample_grad_call(self, function_name, args):

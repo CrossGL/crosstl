@@ -2495,7 +2495,7 @@ def test_wgsl_codegen_rejects_wave_intrinsics():
         WGSLCodeGen().generate(parse_shader(shader))
 
 
-def test_wgsl_codegen_rejects_match_statements():
+def test_wgsl_codegen_lowers_literal_match_statements_to_switch():
     shader = """
     shader WGSLMatchStatement {
         fragment {
@@ -2509,9 +2509,56 @@ def test_wgsl_codegen_rejects_match_statements():
     }
     """
 
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "switch (mode) {" in generated
+    assert "case 0: {" in generated
+    assert "return vec4<f32>(1.0);" in generated
+    assert "default: {" in generated
+    assert "return vec4<f32>(0.0);" in generated
+
+
+def test_wgsl_codegen_lowers_bool_match_statements_to_conditionals():
+    shader = """
+    shader WGSLBoolMatchStatement {
+        fragment {
+            vec4 main(bool enabled @ TEXCOORD0) @ gl_FragColor {
+                match enabled {
+                    true => { return vec4(1.0); },
+                    false => { return vec4(0.0); },
+                }
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "if ((enabled == true)) {" in generated
+    assert "else if ((enabled == false)) {" in generated
+    assert "switch (enabled)" not in generated
+
+
+def test_wgsl_codegen_rejects_match_identifier_patterns():
+    shader = """
+    shader WGSLIdentifierMatchStatement {
+        fragment {
+            vec4 main(int mode @ TEXCOORD0) @ gl_FragColor {
+                match mode {
+                    value => { return vec4(float(value)); },
+                    _ => { return vec4(0.0); },
+                }
+            }
+        }
+    }
+    """
+
     with pytest.raises(
         ValueError,
-        match="WGSL target does not support match statements",
+        match=(
+            "WGSL target currently only supports literal and wildcard match "
+            "statement patterns"
+        ),
     ):
         WGSLCodeGen().generate(parse_shader(shader))
 
@@ -2905,6 +2952,7 @@ def test_wgsl_codegen_rejects_multisampled_array_texture_resources():
     "call",
     (
         "texture(colorMs, uv)",
+        "textureBias(colorMs, uv, 0.0)",
         "textureLod(colorMs, uv, 0.0)",
         "textureGrad(colorMs, uv, vec2(1.0), vec2(1.0))",
         "textureGather(colorMs, uv)",
@@ -3636,6 +3684,8 @@ def test_wgsl_codegen_lowers_split_sampler_lod_grad_and_offset_calls():
                 vec2 ddx = vec2(0.1, 0.0);
                 vec2 ddy = vec2(0.0, 0.1);
                 return textureLodOffset(colorTex, linearSampler, uv, 1.0, ivec2(1, 0))
+                    + textureBias(colorTex, uv, 0.125)
+                    + textureBias(colorTex, linearSampler, uv, 0.25)
                     + textureGrad(colorTex, linearSampler, uv, ddx, ddy)
                     + textureGradOffset(colorTex, linearSampler, uv, ddx, ddy, ivec2(1, 0))
                     + textureOffset(colorTex, linearSampler, uv, ivec2(1, 0))
@@ -3652,6 +3702,8 @@ def test_wgsl_codegen_lowers_split_sampler_lod_grad_and_offset_calls():
         "textureSampleLevel(colorTex, linearSampler, uv, 1.0, vec2<i32>(1, 0))"
         in generated
     )
+    assert "textureSampleBias(colorTex, colorTex_sampler, uv, 0.125)" in generated
+    assert "textureSampleBias(colorTex, linearSampler, uv, 0.25)" in generated
     assert "textureSampleGrad(colorTex, linearSampler, uv, ddx, ddy)" in generated
     assert (
         "textureSampleGrad(colorTex, linearSampler, uv, ddx, ddy, vec2<i32>(1, 0))"
