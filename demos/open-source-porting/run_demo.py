@@ -19,6 +19,20 @@ CASE_ROOT = DEMO_ROOT / "cases"
 OUTPUT_DIR_NAME = "crosstl-out"
 REPORT_NAME = "portability-report.json"
 TARGET_RE = re.compile(r"(?m)^\s*targets\s*=\s*(\[[^\]]*\])")
+DIRECTX_DEFAULT_ENTRY_PROFILES = (
+    ("VSMain", "vs_6_0"),
+    ("PSMain", "ps_6_0"),
+    ("CSMain", "cs_6_0"),
+)
+DIRECTX_COMPILE_OVERRIDES = {
+    "demos/open-source-porting/cases/diligent-samples-vrs-cube/"
+    "crosstl-out/directx/CubeFDM_fs.hlsl": (("PSMain", "ps_6_4"),),
+    "demos/open-source-porting/cases/monogame-sprite-effect/"
+    "crosstl-out/directx/SpriteEffect.hlsl": (
+        ("SpriteVertexShader", "vs_6_0"),
+        ("SpritePixelShader", "ps_6_0"),
+    ),
+}
 
 
 def _case_dirs() -> list[Path]:
@@ -38,6 +52,51 @@ def _case_targets(case_dir: Path) -> list[str]:
     ):
         raise ValueError(f"{case_dir}/crosstl.toml targets must be a string list")
     return targets
+
+
+def _repo_relative(path: Path) -> str:
+    return path.relative_to(DEMO_ROOT.parents[1]).as_posix()
+
+
+def _case_names_for_target(target: str) -> list[str]:
+    return [
+        case_dir.name for case_dir in _case_dirs() if target in _case_targets(case_dir)
+    ]
+
+
+def _case_args_for_target(target: str) -> list[str]:
+    args: list[str] = []
+    for case_name in _case_names_for_target(target):
+        args.extend(["--case", case_name])
+    return args
+
+
+def _artifact_paths_for_target(target: str, suffix: str = "") -> list[str]:
+    paths: list[str] = []
+    for case_dir in _case_dirs():
+        if target not in _case_targets(case_dir):
+            continue
+        target_dir = case_dir / OUTPUT_DIR_NAME / target
+        if not target_dir.is_dir():
+            continue
+        for path in sorted(target_dir.rglob("*")):
+            if path.is_file() and (not suffix or path.name.endswith(suffix)):
+                paths.append(_repo_relative(path))
+    return paths
+
+
+def _directx_compile_jobs() -> list[tuple[str, str, str]]:
+    jobs: list[tuple[str, str, str]] = []
+    for path in _artifact_paths_for_target("directx", ".hlsl"):
+        override = DIRECTX_COMPILE_OVERRIDES.get(path)
+        if override is not None:
+            jobs.extend((path, entry, profile) for entry, profile in override)
+            continue
+        source = (DEMO_ROOT.parents[1] / path).read_text(encoding="utf-8")
+        for entry, profile in DIRECTX_DEFAULT_ENTRY_PROFILES:
+            if re.search(rf"\b{re.escape(entry)}\s*\(", source):
+                jobs.append((path, entry, profile))
+    return jobs
 
 
 def _selected_case_dirs(case_names: list[str]) -> list[Path]:
@@ -403,6 +462,26 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Regenerate checked-in reference artifacts",
     )
+    mode.add_argument(
+        "--emit-case-args",
+        metavar="TARGET",
+        help="Print run_demo.py --case arguments for cases configured for TARGET",
+    )
+    mode.add_argument(
+        "--emit-artifact-paths",
+        metavar="TARGET",
+        help="Print checked-in artifact paths for TARGET",
+    )
+    mode.add_argument(
+        "--emit-directx-compile-jobs",
+        action="store_true",
+        help="Print DirectX compile jobs as '<path> <entry> <profile>' records",
+    )
+    parser.add_argument(
+        "--artifact-suffix",
+        default="",
+        help="Optional suffix filter for --emit-artifact-paths",
+    )
     parser.add_argument(
         "--run-toolchains",
         action="store_true",
@@ -419,6 +498,21 @@ def main(argv: list[str] | None = None) -> int:
         help="Optional directory for generated portability and validation reports",
     )
     args = parser.parse_args(argv)
+
+    if args.emit_case_args:
+        print(" ".join(_case_args_for_target(args.emit_case_args)))
+        return 0
+    if args.emit_artifact_paths:
+        for path in _artifact_paths_for_target(
+            args.emit_artifact_paths,
+            args.artifact_suffix,
+        ):
+            print(path)
+        return 0
+    if args.emit_directx_compile_jobs:
+        for path, entry, profile in _directx_compile_jobs():
+            print(path, entry, profile)
+        return 0
 
     update = bool(args.update)
     for case_dir in _selected_case_dirs(args.case):

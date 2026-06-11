@@ -86,48 +86,7 @@ jobs:
             --check \
             --run-toolchains \
             --require-toolchain-runs \
-            --case angle-simple-texture-2d \
-            --case apple-modern-rendering-mesh-viewdir \
-            --case arm-opengl-es-sdk-cube \
-            --case diligent-samples-tutorial02-cube \
-            --case diligent-samples-vrs-cube \
-            --case directx-graphics-samples-hello-const-buffers \
-            --case directx-graphics-samples-hello-texture \
-            --case directx-graphics-samples-hello-triangle \
-            --case directx-sdk-samples-tutorial02 \
-            --case directx-shader-compiler-groupshared-splat \
-            --case directx-shader-compiler-neg1 \
-            --case glfw-opengl-triangle \
-            --case glslang-push-constant-vertex \
-            --case glslang-spec-constant-vertex \
-            --case godot-betsy-alpha-stitch \
-            --case libgdx-batch-shader \
-            --case lonelydevil-vulkan-tutorial-triangle \
-            --case metal-performance-testing-matmul \
-            --case monogame-sprite-effect \
-            --case nvidia-cuda-samples-vector-add \
-            --case nvpro-vk-mini-samples-rectangle \
-            --case ogl-samples-flat-color \
-            --case opencl-sdk-reduce \
-            --case opencl-sdk-saxpy \
-            --case openframeworks-noise-shader \
-            --case raylib-base-fragment \
-            --case raylib-base-vertex \
-            --case raylib-lighting-shader-pair \
-            --case renderdoc-vktext-fragment \
-            --case rocm-examples-add-kernel \
-            --case rocm-examples-bit-extract \
-            --case rust-gpu-compute-collatz \
-            --case rust-gpu-graphics-stage-inputs \
-            --case rust-gpu-vulkan-examples-triangle-overlay \
-            --case sascha-willems-vulkan-conservative-triangle \
-            --case sascha-willems-vulkan-headless-compute \
-            --case slang-default-parameter-compute \
-            --case slang-hello-world-compute \
-            --case spirv-cross-round-fragment \
-            --case spirv-tools-basic-src \
-            --case vulkan-samples-dynamic-line-grid \
-            --case vulkan-tools-cube \
+            $(python demos/open-source-porting/run_demo.py --emit-case-args opengl) \
             --target opengl \
             --reports-dir support/generated/demo-reports/linux-opengl
         shell: bash
@@ -139,48 +98,7 @@ jobs:
             --check \
             --run-toolchains \
             --require-toolchain-runs \
-            --case angle-simple-texture-2d \
-            --case apple-modern-rendering-mesh-viewdir \
-            --case arm-opengl-es-sdk-cube \
-            --case diligent-samples-tutorial02-cube \
-            --case diligent-samples-vrs-cube \
-            --case directx-graphics-samples-hello-const-buffers \
-            --case directx-graphics-samples-hello-texture \
-            --case directx-graphics-samples-hello-triangle \
-            --case directx-sdk-samples-tutorial02 \
-            --case directx-shader-compiler-groupshared-splat \
-            --case directx-shader-compiler-neg1 \
-            --case glfw-opengl-triangle \
-            --case glslang-push-constant-vertex \
-            --case glslang-spec-constant-vertex \
-            --case godot-betsy-alpha-stitch \
-            --case libgdx-batch-shader \
-            --case lonelydevil-vulkan-tutorial-triangle \
-            --case metal-performance-testing-matmul \
-            --case monogame-sprite-effect \
-            --case nvidia-cuda-samples-vector-add \
-            --case nvpro-vk-mini-samples-rectangle \
-            --case ogl-samples-flat-color \
-            --case opencl-sdk-reduce \
-            --case opencl-sdk-saxpy \
-            --case openframeworks-noise-shader \
-            --case raylib-base-fragment \
-            --case raylib-base-vertex \
-            --case raylib-lighting-shader-pair \
-            --case renderdoc-vktext-fragment \
-            --case rocm-examples-add-kernel \
-            --case rocm-examples-bit-extract \
-            --case rust-gpu-compute-collatz \
-            --case rust-gpu-graphics-stage-inputs \
-            --case rust-gpu-vulkan-examples-triangle-overlay \
-            --case sascha-willems-vulkan-conservative-triangle \
-            --case sascha-willems-vulkan-headless-compute \
-            --case slang-default-parameter-compute \
-            --case slang-hello-world-compute \
-            --case spirv-cross-round-fragment \
-            --case spirv-tools-basic-src \
-            --case vulkan-samples-dynamic-line-grid \
-            --case vulkan-tools-cube \
+            $(python demos/open-source-porting/run_demo.py --emit-case-args vulkan) \
             --target vulkan \
             --reports-dir support/generated/demo-reports/linux-vulkan
         shell: bash
@@ -192,47 +110,7 @@ jobs:
             --check \
             --run-toolchains \
             --require-toolchain-runs \
-            --case apple-modern-rendering-mesh-viewdir \
-            --case directx-graphics-samples-hello-const-buffers \
-            --case directx-graphics-samples-hello-triangle \
-            --case directx-graphics-samples-hello-texture \
-            --case directx-shader-compiler-groupshared-splat \
-            --case directx-shader-compiler-neg1 \
-            --case directx-sdk-samples-tutorial02 \
-            --case diligent-samples-tutorial02-cube \
-            --case glfw-opengl-triangle \
-            --case glslang-push-constant-vertex \
-            --case glslang-spec-constant-vertex \
-            --case godot-betsy-alpha-stitch \
-            --case libgdx-batch-shader \
-            --case lonelydevil-vulkan-tutorial-triangle \
-            --case vulkan-samples-dynamic-line-grid \
-            --case angle-simple-texture-2d \
-            --case arm-opengl-es-sdk-cube \
-            --case metal-performance-testing-matmul \
-            --case monogame-sprite-effect \
-            --case nvidia-cuda-samples-vector-add \
-            --case nvpro-vk-mini-samples-rectangle \
-            --case ogl-samples-flat-color \
-            --case opencl-sdk-reduce \
-            --case opencl-sdk-saxpy \
-            --case openframeworks-noise-shader \
-            --case raylib-base-fragment \
-            --case raylib-base-vertex \
-            --case raylib-lighting-shader-pair \
-            --case renderdoc-vktext-fragment \
-            --case rocm-examples-add-kernel \
-            --case rocm-examples-bit-extract \
-            --case rust-gpu-compute-collatz \
-            --case rust-gpu-graphics-stage-inputs \
-            --case rust-gpu-vulkan-examples-triangle-overlay \
-            --case sascha-willems-vulkan-conservative-triangle \
-            --case sascha-willems-vulkan-headless-compute \
-            --case slang-default-parameter-compute \
-            --case slang-hello-world-compute \
-            --case spirv-cross-round-fragment \
-            --case spirv-tools-basic-src \
-            --case vulkan-tools-cube \
+            $(python demos/open-source-porting/run_demo.py --emit-case-args metal) \
             --target metal \
             --reports-dir support/generated/demo-reports/macos-metal
         shell: bash
@@ -243,63 +121,14 @@ jobs:
           set -euo pipefail
           out_dir="${RUNNER_TEMP}/demo-metal-air"
           mkdir -p "$out_dir"
-          for shader in \
-            demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/metal/SimpleTexture2D.frag.metal \
-            demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/metal/SimpleTexture2D.vert.metal \
-            demos/open-source-porting/cases/apple-modern-rendering-mesh-viewdir/crosstl-out/metal/AAPLMeshRenderer.metal \
-            demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/metal/Cube_cube.frag.metal \
-            demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/metal/Cube_cube.vert.metal \
-            demos/open-source-porting/cases/directx-graphics-samples-hello-const-buffers/crosstl-out/metal/shaders.metal \
-            demos/open-source-porting/cases/directx-graphics-samples-hello-triangle/crosstl-out/metal/shaders.metal \
-            demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/metal/shaders.metal \
-            demos/open-source-porting/cases/directx-shader-compiler-groupshared-splat/crosstl-out/metal/SplatGroupSharedScalar.metal \
-            demos/open-source-porting/cases/directx-shader-compiler-neg1/crosstl-out/metal/neg1.metal \
-            demos/open-source-porting/cases/directx-sdk-samples-tutorial02/crosstl-out/metal/Tutorial02.metal \
-            demos/open-source-porting/cases/diligent-samples-tutorial02-cube/crosstl-out/metal/cube.psh.metal \
-            demos/open-source-porting/cases/diligent-samples-tutorial02-cube/crosstl-out/metal/cube.vsh.metal \
-            demos/open-source-porting/cases/glfw-opengl-triangle/crosstl-out/metal/triangle.frag.metal \
-            demos/open-source-porting/cases/glfw-opengl-triangle/crosstl-out/metal/triangle.vert.metal \
-            demos/open-source-porting/cases/glslang-push-constant-vertex/crosstl-out/metal/spv.pushConstant.metal \
-            demos/open-source-porting/cases/glslang-spec-constant-vertex/crosstl-out/metal/spv.specConstant.metal \
-            demos/open-source-porting/cases/godot-betsy-alpha-stitch/crosstl-out/metal/alpha_stitch.metal \
-            demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/metal/batch.frag.metal \
-            demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/metal/batch.vert.metal \
-            demos/open-source-porting/cases/lonelydevil-vulkan-tutorial-triangle/crosstl-out/metal/shader.frag.metal \
-            demos/open-source-porting/cases/lonelydevil-vulkan-tutorial-triangle/crosstl-out/metal/shader.vert.metal \
-            demos/open-source-porting/cases/metal-performance-testing-matmul/crosstl-out/metal/mat_mul_simple1.metal \
-            demos/open-source-porting/cases/monogame-sprite-effect/crosstl-out/metal/SpriteEffect.metal \
-            demos/open-source-porting/cases/nvidia-cuda-samples-vector-add/crosstl-out/metal/vectorAdd_kernel.metal \
-            demos/open-source-porting/cases/nvpro-vk-mini-samples-rectangle/crosstl-out/metal/rectangle.frag.metal \
-            demos/open-source-porting/cases/nvpro-vk-mini-samples-rectangle/crosstl-out/metal/rectangle.vert.metal \
-            demos/open-source-porting/cases/ogl-samples-flat-color/crosstl-out/metal/flat-color.frag.metal \
-            demos/open-source-porting/cases/ogl-samples-flat-color/crosstl-out/metal/flat-color.vert.metal \
-            demos/open-source-porting/cases/opencl-sdk-reduce/crosstl-out/metal/reduce.metal \
-            demos/open-source-porting/cases/opencl-sdk-saxpy/crosstl-out/metal/saxpy.metal \
-            demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/metal/noise.frag.metal \
-            demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/metal/noise.vert.metal \
-            demos/open-source-porting/cases/raylib-base-fragment/crosstl-out/metal/base.metal \
-            demos/open-source-porting/cases/raylib-base-vertex/crosstl-out/metal/base.metal \
-            demos/open-source-porting/cases/raylib-lighting-shader-pair/crosstl-out/metal/lighting.fs.metal \
-            demos/open-source-porting/cases/raylib-lighting-shader-pair/crosstl-out/metal/lighting.vs.metal \
-            demos/open-source-porting/cases/renderdoc-vktext-fragment/crosstl-out/metal/vktext.metal \
-            demos/open-source-porting/cases/rocm-examples-add-kernel/crosstl-out/metal/main.metal \
-            demos/open-source-porting/cases/rocm-examples-bit-extract/crosstl-out/metal/main.metal \
-            demos/open-source-porting/cases/rust-gpu-compute-collatz/crosstl-out/metal/lib.metal \
-            demos/open-source-porting/cases/rust-gpu-graphics-stage-inputs/crosstl-out/metal/lib.metal \
-            demos/open-source-porting/cases/rust-gpu-vulkan-examples-triangle-overlay/crosstl-out/metal/lib.metal \
-            demos/open-source-porting/cases/sascha-willems-vulkan-conservative-triangle/crosstl-out/metal/triangle.metal \
-            demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/metal/headless.metal \
-            demos/open-source-porting/cases/slang-default-parameter-compute/crosstl-out/metal/default-parameter.metal \
-            demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/metal/hello-world.metal \
-            demos/open-source-porting/cases/spirv-cross-round-fragment/crosstl-out/metal/round.metal \
-            demos/open-source-porting/cases/spirv-tools-basic-src/crosstl-out/metal/basic_src.metal \
-            demos/open-source-porting/cases/vulkan-samples-dynamic-line-grid/crosstl-out/metal/grid.metal \
-            demos/open-source-porting/cases/vulkan-tools-cube/crosstl-out/metal/cube.frag.metal \
-            demos/open-source-porting/cases/vulkan-tools-cube/crosstl-out/metal/cube.vert.metal
-          do
+          while IFS= read -r shader; do
             output="$(printf '%s' "$shader" | tr '/.' '__').air"
             xcrun -sdk macosx metal -c "$shader" -o "$out_dir/$output"
-          done
+          done < <(
+            python demos/open-source-porting/run_demo.py \
+              --emit-artifact-paths metal \
+              --artifact-suffix .metal
+          )
         shell: bash
 
       - name: Windows DirectX smoke checks
@@ -309,48 +138,7 @@ jobs:
             --check \
             --run-toolchains \
             --require-toolchain-runs \
-            --case directx-graphics-samples-hello-const-buffers \
-            --case directx-graphics-samples-hello-triangle \
-            --case directx-graphics-samples-hello-texture \
-            --case directx-shader-compiler-groupshared-splat \
-            --case directx-shader-compiler-neg1 \
-            --case directx-sdk-samples-tutorial02 \
-            --case diligent-samples-tutorial02-cube \
-            --case diligent-samples-vrs-cube \
-            --case glfw-opengl-triangle \
-            --case glslang-push-constant-vertex \
-            --case glslang-spec-constant-vertex \
-            --case godot-betsy-alpha-stitch \
-            --case libgdx-batch-shader \
-            --case lonelydevil-vulkan-tutorial-triangle \
-            --case metal-performance-testing-matmul \
-            --case monogame-sprite-effect \
-            --case nvidia-cuda-samples-vector-add \
-            --case nvpro-vk-mini-samples-rectangle \
-            --case ogl-samples-flat-color \
-            --case opencl-sdk-reduce \
-            --case opencl-sdk-saxpy \
-            --case openframeworks-noise-shader \
-            --case raylib-base-fragment \
-            --case raylib-base-vertex \
-            --case raylib-lighting-shader-pair \
-            --case renderdoc-vktext-fragment \
-            --case rocm-examples-add-kernel \
-            --case rocm-examples-bit-extract \
-            --case angle-simple-texture-2d \
-            --case apple-modern-rendering-mesh-viewdir \
-            --case arm-opengl-es-sdk-cube \
-            --case rust-gpu-compute-collatz \
-            --case rust-gpu-graphics-stage-inputs \
-            --case rust-gpu-vulkan-examples-triangle-overlay \
-            --case sascha-willems-vulkan-conservative-triangle \
-            --case sascha-willems-vulkan-headless-compute \
-            --case slang-default-parameter-compute \
-            --case slang-hello-world-compute \
-            --case spirv-cross-round-fragment \
-            --case spirv-tools-basic-src \
-            --case vulkan-tools-cube \
-            --case vulkan-samples-dynamic-line-grid \
+            $(python demos/open-source-porting/run_demo.py --emit-case-args directx) \
             --target directx \
             --reports-dir support/generated/demo-reports/windows-directx
         shell: bash
@@ -369,63 +157,12 @@ jobs:
             output="$(printf '%s_%s_%s' "$shader" "$entry" "$profile" | tr '/.:' '____').dxil"
             dxc -T "$profile" -E "$entry" "$shader" -Fo "$out_dir/$output"
           }
-          compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-triangle/crosstl-out/directx/shaders.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-triangle/crosstl-out/directx/shaders.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-const-buffers/crosstl-out/directx/shaders.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-const-buffers/crosstl-out/directx/shaders.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/directx/shaders.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/directx/shaders.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/directx-shader-compiler-groupshared-splat/crosstl-out/directx/SplatGroupSharedScalar.hlsl CSMain cs_6_0
-          compile_hlsl demos/open-source-porting/cases/directx-shader-compiler-neg1/crosstl-out/directx/neg1.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/directx-sdk-samples-tutorial02/crosstl-out/directx/Tutorial02.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/directx-sdk-samples-tutorial02/crosstl-out/directx/Tutorial02.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/diligent-samples-tutorial02-cube/crosstl-out/directx/cube.vsh.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/diligent-samples-tutorial02-cube/crosstl-out/directx/cube.psh.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/diligent-samples-vrs-cube/crosstl-out/directx/CubeFDM_vs.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/diligent-samples-vrs-cube/crosstl-out/directx/CubeFDM_fs.hlsl PSMain ps_6_4
-          compile_hlsl demos/open-source-porting/cases/glfw-opengl-triangle/crosstl-out/directx/triangle.vert.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/glfw-opengl-triangle/crosstl-out/directx/triangle.frag.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/glslang-spec-constant-vertex/crosstl-out/directx/spv.specConstant.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/godot-betsy-alpha-stitch/crosstl-out/directx/alpha_stitch.hlsl CSMain cs_6_0
-          compile_hlsl demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.vert.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.frag.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/metal-performance-testing-matmul/crosstl-out/directx/mat_mul_simple1.hlsl CSMain cs_6_0
-          compile_hlsl demos/open-source-porting/cases/monogame-sprite-effect/crosstl-out/directx/SpriteEffect.hlsl SpriteVertexShader vs_6_0
-          compile_hlsl demos/open-source-porting/cases/monogame-sprite-effect/crosstl-out/directx/SpriteEffect.hlsl SpritePixelShader ps_6_0
-          compile_hlsl demos/open-source-porting/cases/nvidia-cuda-samples-vector-add/crosstl-out/directx/vectorAdd_kernel.hlsl CSMain cs_6_0
-          compile_hlsl demos/open-source-porting/cases/nvpro-vk-mini-samples-rectangle/crosstl-out/directx/rectangle.vert.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/nvpro-vk-mini-samples-rectangle/crosstl-out/directx/rectangle.frag.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/ogl-samples-flat-color/crosstl-out/directx/flat-color.vert.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/ogl-samples-flat-color/crosstl-out/directx/flat-color.frag.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/opencl-sdk-reduce/crosstl-out/directx/reduce.hlsl CSMain cs_6_0
-          compile_hlsl demos/open-source-porting/cases/opencl-sdk-saxpy/crosstl-out/directx/saxpy.hlsl CSMain cs_6_0
-          compile_hlsl demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/directx/noise.vert.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/directx/noise.frag.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/raylib-base-fragment/crosstl-out/directx/base.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/raylib-base-vertex/crosstl-out/directx/base.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/raylib-lighting-shader-pair/crosstl-out/directx/lighting.vs.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/raylib-lighting-shader-pair/crosstl-out/directx/lighting.fs.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/renderdoc-vktext-fragment/crosstl-out/directx/vktext.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/rocm-examples-add-kernel/crosstl-out/directx/main.hlsl CSMain cs_6_0
-          compile_hlsl demos/open-source-porting/cases/rocm-examples-bit-extract/crosstl-out/directx/main.hlsl CSMain cs_6_0
-          compile_hlsl demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.vert.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.frag.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/apple-modern-rendering-mesh-viewdir/crosstl-out/directx/AAPLMeshRenderer.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.vert.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.frag.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/rust-gpu-compute-collatz/crosstl-out/directx/lib.hlsl CSMain cs_6_0
-          compile_hlsl demos/open-source-porting/cases/rust-gpu-graphics-stage-inputs/crosstl-out/directx/lib.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/rust-gpu-graphics-stage-inputs/crosstl-out/directx/lib.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/rust-gpu-vulkan-examples-triangle-overlay/crosstl-out/directx/lib.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/sascha-willems-vulkan-conservative-triangle/crosstl-out/directx/triangle.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/directx/headless.hlsl CSMain cs_6_0
-          compile_hlsl demos/open-source-porting/cases/slang-default-parameter-compute/crosstl-out/directx/default-parameter.hlsl CSMain cs_6_0
-          compile_hlsl demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/directx/hello-world.hlsl CSMain cs_6_0
-          compile_hlsl demos/open-source-porting/cases/spirv-cross-round-fragment/crosstl-out/directx/round.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/spirv-tools-basic-src/crosstl-out/directx/basic_src.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/vulkan-tools-cube/crosstl-out/directx/cube.vert.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/vulkan-tools-cube/crosstl-out/directx/cube.frag.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/vulkan-samples-dynamic-line-grid/crosstl-out/directx/grid.hlsl PSMain ps_6_0
+          while read -r shader entry profile; do
+            compile_hlsl "$shader" "$entry" "$profile"
+          done < <(
+            python demos/open-source-porting/run_demo.py \
+              --emit-directx-compile-jobs
+          )
         shell: bash
 
       - name: Upload demo reports

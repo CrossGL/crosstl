@@ -118,8 +118,12 @@ def test_open_source_demo_workflow_runs_platform_toolchain_smokes():
     assert "macOS Metal compile references" in workflow
     assert "Windows DirectX compile references" in workflow
     assert 'dxc -T "$profile" -E "$entry"' in workflow
-    assert "spirv-tools-basic-src/crosstl-out/metal/basic_src.metal" in workflow
-    assert "vulkan-tools-cube/crosstl-out/metal/cube.vert.metal" in workflow
+    assert "--emit-case-args opengl" in workflow
+    assert "--emit-case-args vulkan" in workflow
+    assert "--emit-case-args metal" in workflow
+    assert "--emit-case-args directx" in workflow
+    assert "--emit-artifact-paths metal" in workflow
+    assert "--emit-directx-compile-jobs" in workflow
     assert "demo-reports-${{ matrix.os }}" in workflow
 
 
@@ -130,171 +134,56 @@ def _workflow_step_block(workflow: str, step_name: str) -> str:
     return workflow[start:] if next_step == -1 else workflow[start:next_step]
 
 
-def _workflow_step_cases(workflow: str, step_name: str) -> set[str]:
-    return set(
-        re.findall(r"--case ([a-z0-9-]+)", _workflow_step_block(workflow, step_name))
-    )
+def _cases_for_target(runner, target: str) -> set[str]:
+    return {
+        case_dir.name
+        for case_dir in CASE_ROOT.iterdir()
+        if case_dir.is_dir() and target in runner._case_targets(case_dir)
+    }
 
 
-def _workflow_run_demo_invocations(workflow: str, step_name: str):
+def _assert_workflow_step_uses_case_generator(
+    workflow: str, step_name: str, target: str
+) -> None:
     block = _workflow_step_block(workflow, step_name)
-    normalized = re.sub(r"\\\n\s*", " ", block)
-    invocations = []
-    for line in normalized.splitlines():
-        if "python demos/open-source-porting/run_demo.py" not in line:
-            continue
-        invocations.append(
-            {
-                "cases": set(re.findall(r"--case ([a-z0-9-]+)", line)),
-                "targets": set(re.findall(r"--target ([a-z0-9-]+)", line)),
-            }
-        )
-    return invocations
+    assert f"--emit-case-args {target}" in block
+    assert "--case " not in block
 
 
-def _smoke_covers_target(invocations, case_name: str, target: str) -> bool:
-    return any(
-        case_name in invocation["cases"] and target in invocation["targets"]
-        for invocation in invocations
-    )
-
-
-def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
+def test_open_source_demo_runner_case_arg_generation_matches_checked_targets():
     runner = _load_demo_runner()
+
+    for target in ("opengl", "vulkan", "metal", "directx"):
+        args = runner._case_args_for_target(target)
+        assert args[::2] == ["--case"] * (len(args) // 2)
+        assert set(args[1::2]) == _cases_for_target(runner, target)
+
+
+def test_open_source_demo_workflow_uses_generated_case_smoke_lists():
     workflow = (ROOT / ".github" / "workflows" / "demo.yml").read_text(encoding="utf-8")
 
-    def cases_for_target(target: str) -> set[str]:
-        return {
-            case_dir.name
-            for case_dir in CASE_ROOT.iterdir()
-            if case_dir.is_dir() and target in runner._case_targets(case_dir)
-        }
-
-    assert _workflow_step_cases(
-        workflow, "Linux OpenGL smoke checks"
-    ) == cases_for_target("opengl")
-    assert _workflow_step_cases(
-        workflow, "Linux Vulkan smoke checks"
-    ) == cases_for_target("vulkan")
-    assert _workflow_step_cases(workflow, "macOS Metal smoke checks") == {
-        "angle-simple-texture-2d",
-        "apple-modern-rendering-mesh-viewdir",
-        "arm-opengl-es-sdk-cube",
-        "directx-graphics-samples-hello-const-buffers",
-        "directx-graphics-samples-hello-triangle",
-        "directx-graphics-samples-hello-texture",
-        "directx-shader-compiler-groupshared-splat",
-        "directx-shader-compiler-neg1",
-        "directx-sdk-samples-tutorial02",
-        "diligent-samples-tutorial02-cube",
-        "glfw-opengl-triangle",
-        "glslang-push-constant-vertex",
-        "glslang-spec-constant-vertex",
-        "godot-betsy-alpha-stitch",
-        "libgdx-batch-shader",
-        "lonelydevil-vulkan-tutorial-triangle",
-        "metal-performance-testing-matmul",
-        "monogame-sprite-effect",
-        "nvidia-cuda-samples-vector-add",
-        "nvpro-vk-mini-samples-rectangle",
-        "ogl-samples-flat-color",
-        "opencl-sdk-reduce",
-        "opencl-sdk-saxpy",
-        "openframeworks-noise-shader",
-        "raylib-base-fragment",
-        "raylib-base-vertex",
-        "raylib-lighting-shader-pair",
-        "renderdoc-vktext-fragment",
-        "rocm-examples-add-kernel",
-        "rocm-examples-bit-extract",
-        "rust-gpu-compute-collatz",
-        "rust-gpu-graphics-stage-inputs",
-        "rust-gpu-vulkan-examples-triangle-overlay",
-        "sascha-willems-vulkan-conservative-triangle",
-        "sascha-willems-vulkan-headless-compute",
-        "slang-default-parameter-compute",
-        "slang-hello-world-compute",
-        "spirv-cross-round-fragment",
-        "spirv-tools-basic-src",
-        "vulkan-samples-dynamic-line-grid",
-        "vulkan-tools-cube",
-    }
-    assert _workflow_step_cases(workflow, "Windows DirectX smoke checks") == {
-        "angle-simple-texture-2d",
-        "apple-modern-rendering-mesh-viewdir",
-        "arm-opengl-es-sdk-cube",
-        "directx-graphics-samples-hello-const-buffers",
-        "directx-graphics-samples-hello-triangle",
-        "directx-graphics-samples-hello-texture",
-        "directx-shader-compiler-groupshared-splat",
-        "directx-shader-compiler-neg1",
-        "directx-sdk-samples-tutorial02",
-        "diligent-samples-tutorial02-cube",
-        "diligent-samples-vrs-cube",
-        "glfw-opengl-triangle",
-        "glslang-push-constant-vertex",
-        "glslang-spec-constant-vertex",
-        "godot-betsy-alpha-stitch",
-        "libgdx-batch-shader",
-        "slang-default-parameter-compute",
-        "slang-hello-world-compute",
-        "lonelydevil-vulkan-tutorial-triangle",
-        "metal-performance-testing-matmul",
-        "monogame-sprite-effect",
-        "nvidia-cuda-samples-vector-add",
-        "nvpro-vk-mini-samples-rectangle",
-        "ogl-samples-flat-color",
-        "opencl-sdk-reduce",
-        "opencl-sdk-saxpy",
-        "openframeworks-noise-shader",
-        "raylib-base-fragment",
-        "raylib-base-vertex",
-        "raylib-lighting-shader-pair",
-        "renderdoc-vktext-fragment",
-        "rocm-examples-add-kernel",
-        "rocm-examples-bit-extract",
-        "rust-gpu-compute-collatz",
-        "rust-gpu-graphics-stage-inputs",
-        "rust-gpu-vulkan-examples-triangle-overlay",
-        "sascha-willems-vulkan-conservative-triangle",
-        "sascha-willems-vulkan-headless-compute",
-        "spirv-cross-round-fragment",
-        "spirv-tools-basic-src",
-        "vulkan-tools-cube",
-        "vulkan-samples-dynamic-line-grid",
-    }
-
-
-def test_open_source_demo_workflow_covers_platform_targets():
-    runner = _load_demo_runner()
-    workflow = (ROOT / ".github" / "workflows" / "demo.yml").read_text(encoding="utf-8")
-    linux_invocations = _workflow_run_demo_invocations(
-        workflow, "Linux OpenGL smoke checks"
-    ) + _workflow_run_demo_invocations(workflow, "Linux Vulkan smoke checks")
-    macos_invocations = _workflow_run_demo_invocations(
-        workflow, "macOS Metal smoke checks"
+    _assert_workflow_step_uses_case_generator(
+        workflow, "Linux OpenGL smoke checks", "opengl"
     )
-    windows_invocations = _workflow_run_demo_invocations(
-        workflow, "Windows DirectX smoke checks"
+    _assert_workflow_step_uses_case_generator(
+        workflow, "Linux Vulkan smoke checks", "vulkan"
     )
-
-    for case_dir in sorted(path for path in CASE_ROOT.iterdir() if path.is_dir()):
-        targets = set(runner._case_targets(case_dir))
-        for target in {"opengl", "vulkan"} & targets:
-            assert _smoke_covers_target(linux_invocations, case_dir.name, target)
-        if "metal" in targets:
-            assert _smoke_covers_target(macos_invocations, case_dir.name, "metal")
-        if "directx" in targets:
-            assert _smoke_covers_target(windows_invocations, case_dir.name, "directx")
+    _assert_workflow_step_uses_case_generator(
+        workflow, "macOS Metal smoke checks", "metal"
+    )
+    _assert_workflow_step_uses_case_generator(
+        workflow, "Windows DirectX smoke checks", "directx"
+    )
 
 
 def test_open_source_demo_workflow_compile_reference_paths_exist():
+    runner = _load_demo_runner()
     workflow = (ROOT / ".github" / "workflows" / "demo.yml").read_text(encoding="utf-8")
 
     metal_block = _workflow_step_block(workflow, "macOS Metal compile references")
-    metal_paths = set(
-        re.findall(r"(demos/open-source-porting/cases/[^\s]+?\.metal)", metal_block)
-    )
+    assert "--emit-artifact-paths metal" in metal_block
+    assert "--artifact-suffix .metal" in metal_block
+    metal_paths = set(runner._artifact_paths_for_target("metal", ".metal"))
     assert {
         str(path.relative_to(ROOT))
         for path in CASE_ROOT.glob("*/crosstl-out/metal/*.metal")
@@ -302,71 +191,27 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
     assert all((ROOT / path).is_file() for path in metal_paths)
 
     directx_block = _workflow_step_block(workflow, "Windows DirectX compile references")
-    directx_paths = set(
-        re.findall(
-            r"compile_hlsl (demos/open-source-porting/cases/[^\s]+?\.hlsl)",
-            directx_block,
-        )
-    )
+    assert "--emit-directx-compile-jobs" in directx_block
+    directx_jobs = runner._directx_compile_jobs()
+    directx_paths = {path for path, _entry, _profile in directx_jobs}
     assert {
-        "demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.vert.hlsl",
-        "demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.frag.hlsl",
-        "demos/open-source-porting/cases/apple-modern-rendering-mesh-viewdir/crosstl-out/directx/AAPLMeshRenderer.hlsl",
-        "demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.vert.hlsl",
-        "demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.frag.hlsl",
-        "demos/open-source-porting/cases/directx-graphics-samples-hello-const-buffers/crosstl-out/directx/shaders.hlsl",
-        "demos/open-source-porting/cases/directx-graphics-samples-hello-triangle/crosstl-out/directx/shaders.hlsl",
-        "demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/directx/shaders.hlsl",
-        "demos/open-source-porting/cases/directx-shader-compiler-groupshared-splat/crosstl-out/directx/SplatGroupSharedScalar.hlsl",
-        "demos/open-source-porting/cases/directx-shader-compiler-neg1/crosstl-out/directx/neg1.hlsl",
-        "demos/open-source-porting/cases/directx-sdk-samples-tutorial02/crosstl-out/directx/Tutorial02.hlsl",
-        "demos/open-source-porting/cases/diligent-samples-tutorial02-cube/crosstl-out/directx/cube.vsh.hlsl",
-        "demos/open-source-porting/cases/diligent-samples-tutorial02-cube/crosstl-out/directx/cube.psh.hlsl",
-        "demos/open-source-porting/cases/diligent-samples-vrs-cube/crosstl-out/directx/CubeFDM_vs.hlsl",
-        "demos/open-source-porting/cases/diligent-samples-vrs-cube/crosstl-out/directx/CubeFDM_fs.hlsl",
-        "demos/open-source-porting/cases/glfw-opengl-triangle/crosstl-out/directx/triangle.vert.hlsl",
-        "demos/open-source-porting/cases/glfw-opengl-triangle/crosstl-out/directx/triangle.frag.hlsl",
-        "demos/open-source-porting/cases/glslang-spec-constant-vertex/crosstl-out/directx/spv.specConstant.hlsl",
-        "demos/open-source-porting/cases/godot-betsy-alpha-stitch/crosstl-out/directx/alpha_stitch.hlsl",
-        "demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.vert.hlsl",
-        "demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.frag.hlsl",
-        "demos/open-source-porting/cases/metal-performance-testing-matmul/crosstl-out/directx/mat_mul_simple1.hlsl",
-        "demos/open-source-porting/cases/monogame-sprite-effect/crosstl-out/directx/SpriteEffect.hlsl",
-        "demos/open-source-porting/cases/nvidia-cuda-samples-vector-add/crosstl-out/directx/vectorAdd_kernel.hlsl",
-        "demos/open-source-porting/cases/nvpro-vk-mini-samples-rectangle/crosstl-out/directx/rectangle.vert.hlsl",
-        "demos/open-source-porting/cases/nvpro-vk-mini-samples-rectangle/crosstl-out/directx/rectangle.frag.hlsl",
-        "demos/open-source-porting/cases/ogl-samples-flat-color/crosstl-out/directx/flat-color.vert.hlsl",
-        "demos/open-source-porting/cases/ogl-samples-flat-color/crosstl-out/directx/flat-color.frag.hlsl",
-        "demos/open-source-porting/cases/opencl-sdk-reduce/crosstl-out/directx/reduce.hlsl",
-        "demos/open-source-porting/cases/opencl-sdk-saxpy/crosstl-out/directx/saxpy.hlsl",
-        "demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/directx/noise.vert.hlsl",
-        "demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/directx/noise.frag.hlsl",
-        "demos/open-source-porting/cases/raylib-base-fragment/crosstl-out/directx/base.hlsl",
-        "demos/open-source-porting/cases/raylib-base-vertex/crosstl-out/directx/base.hlsl",
-        "demos/open-source-porting/cases/raylib-lighting-shader-pair/crosstl-out/directx/lighting.vs.hlsl",
-        "demos/open-source-porting/cases/raylib-lighting-shader-pair/crosstl-out/directx/lighting.fs.hlsl",
-        "demos/open-source-porting/cases/renderdoc-vktext-fragment/crosstl-out/directx/vktext.hlsl",
-        "demos/open-source-porting/cases/rocm-examples-add-kernel/crosstl-out/directx/main.hlsl",
-        "demos/open-source-porting/cases/rocm-examples-bit-extract/crosstl-out/directx/main.hlsl",
-        "demos/open-source-porting/cases/rust-gpu-compute-collatz/crosstl-out/directx/lib.hlsl",
-        "demos/open-source-porting/cases/rust-gpu-graphics-stage-inputs/crosstl-out/directx/lib.hlsl",
-        "demos/open-source-porting/cases/rust-gpu-vulkan-examples-triangle-overlay/crosstl-out/directx/lib.hlsl",
-        "demos/open-source-porting/cases/sascha-willems-vulkan-conservative-triangle/crosstl-out/directx/triangle.hlsl",
-        "demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/directx/headless.hlsl",
-        "demos/open-source-porting/cases/slang-default-parameter-compute/crosstl-out/directx/default-parameter.hlsl",
-        "demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/directx/hello-world.hlsl",
-        "demos/open-source-porting/cases/spirv-cross-round-fragment/crosstl-out/directx/round.hlsl",
-        "demos/open-source-porting/cases/spirv-tools-basic-src/crosstl-out/directx/basic_src.hlsl",
-        "demos/open-source-porting/cases/vulkan-tools-cube/crosstl-out/directx/cube.vert.hlsl",
-        "demos/open-source-porting/cases/vulkan-tools-cube/crosstl-out/directx/cube.frag.hlsl",
-        "demos/open-source-porting/cases/vulkan-samples-dynamic-line-grid/crosstl-out/directx/grid.hlsl",
+        str(path.relative_to(ROOT))
+        for path in CASE_ROOT.glob("*/crosstl-out/directx/*.hlsl")
     } == directx_paths
     assert all((ROOT / path).is_file() for path in directx_paths)
     assert (
-        "compile_hlsl "
         "demos/open-source-porting/cases/diligent-samples-vrs-cube/"
-        "crosstl-out/directx/CubeFDM_fs.hlsl PSMain ps_6_4"
-    ) in directx_block
+        "crosstl-out/directx/CubeFDM_fs.hlsl",
+        "PSMain",
+        "ps_6_4",
+    ) in directx_jobs
+    sprite_path = (
+        "demos/open-source-porting/cases/monogame-sprite-effect/"
+        "crosstl-out/directx/SpriteEffect.hlsl"
+    )
+    assert (sprite_path, "SpriteVertexShader", "vs_6_0") in directx_jobs
+    assert (sprite_path, "SpritePixelShader", "ps_6_0") in directx_jobs
+    assert (sprite_path, "PSMain", "ps_6_0") not in directx_jobs
 
 
 def test_open_source_demo_artifact_comparison_normalizes_platform_text(tmp_path):
