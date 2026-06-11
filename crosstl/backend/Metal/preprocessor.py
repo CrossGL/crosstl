@@ -187,6 +187,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         instantiations = self._find_project_template_instantiations(code)
         if not instantiations:
             return code
+        if len(instantiations) > self.max_template_specializations:
+            return code
 
         templates = self._find_template_functions(code)
         if not templates:
@@ -624,6 +626,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             if code[i].isalpha() or code[i] == "_":
                 ident, consumed = self._read_identifier(code, i)
+                if ident == "operator":
+                    i += consumed
+                    continue
                 if ident not in templates_by_name:
                     i += consumed
                     continue

@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/ml-explore/mlx",
+  "commit": "968d264f2903d578e699c4452a4dbf48633921aa",
+  "frontier_status": {
+    "status": "passing-artifacts-validation-blocked",
+    "sources": 5,
+    "targets": [
+      "directx",
+      "vulkan"
+    ],
+    "artifacts": 10,
+    "blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1317"
+    ]
+  },
+  "opengl_smoke_status": {
+    "status": "passing",
+    "source": "mlx/backend/metal/kernels/arange.metal",
+    "target": "opengl",
+    "artifacts": 1
+  },
+  "full_corpus_scout": {
+    "status": "passing",
+    "sources": 40,
+    "targets": [
+      "directx",
+      "opengl",
+      "vulkan"
+    ],
+    "artifacts": 120,
+    "validation_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1317"
+    ],
+    "last_completed": {
+      "translated_artifacts": 120,
+      "failed_artifacts": 0,
+      "translated_by_target": {
+        "directx": 40,
+        "opengl": 40,
+        "vulkan": 40
+      }
+    }
+  },
+  "tracked_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1317"
+  ],
+  "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1300",
+    "https://github.com/CrossGL/crosstl/issues/939",
+    "https://github.com/CrossGL/crosstl/issues/940",
+    "https://github.com/CrossGL/crosstl/issues/941",
+    "https://github.com/CrossGL/crosstl/issues/943",
+    "https://github.com/CrossGL/crosstl/issues/944",
+    "https://github.com/CrossGL/crosstl/issues/945",
+    "https://github.com/CrossGL/crosstl/issues/946",
+    "https://github.com/CrossGL/crosstl/issues/979",
+    "https://github.com/CrossGL/crosstl/issues/980",
+    "https://github.com/CrossGL/crosstl/issues/981",
+    "https://github.com/CrossGL/crosstl/issues/982",
+    "https://github.com/CrossGL/crosstl/issues/983",
+    "https://github.com/CrossGL/crosstl/issues/984",
+    "https://github.com/CrossGL/crosstl/issues/985",
+    "https://github.com/CrossGL/crosstl/issues/1001",
+    "https://github.com/CrossGL/crosstl/issues/1002",
+    "https://github.com/CrossGL/crosstl/issues/1003",
+    "https://github.com/CrossGL/crosstl/issues/1004",
+    "https://github.com/CrossGL/crosstl/issues/1006",
+    "https://github.com/CrossGL/crosstl/issues/1007",
+    "https://github.com/CrossGL/crosstl/issues/1012",
+    "https://github.com/CrossGL/crosstl/issues/1013",
+    "https://github.com/CrossGL/crosstl/issues/1019",
+    "https://github.com/CrossGL/crosstl/issues/1026",
+    "https://github.com/CrossGL/crosstl/issues/1027",
+    "https://github.com/CrossGL/crosstl/issues/1028",
+    "https://github.com/CrossGL/crosstl/issues/1029",
+    "https://github.com/CrossGL/crosstl/issues/1030",
+    "https://github.com/CrossGL/crosstl/issues/1031",
+    "https://github.com/CrossGL/crosstl/issues/1032",
+    "https://github.com/CrossGL/crosstl/issues/1033",
+    "https://github.com/CrossGL/crosstl/issues/1034",
+    "https://github.com/CrossGL/crosstl/issues/1035",
+    "https://github.com/CrossGL/crosstl/issues/1036",
+    "https://github.com/CrossGL/crosstl/issues/1037",
+    "https://github.com/CrossGL/crosstl/issues/1038",
+    "https://github.com/CrossGL/crosstl/issues/1039",
+    "https://github.com/CrossGL/crosstl/issues/1068",
+    "https://github.com/CrossGL/crosstl/issues/1104",
+    "https://github.com/CrossGL/crosstl/issues/1105",
+    "https://github.com/CrossGL/crosstl/issues/1106",
+    "https://github.com/CrossGL/crosstl/issues/1107",
+    "https://github.com/CrossGL/crosstl/issues/1110",
+    "https://github.com/CrossGL/crosstl/issues/1111",
+    "https://github.com/CrossGL/crosstl/issues/1122",
+    "https://github.com/CrossGL/crosstl/issues/1124",
+    "https://github.com/CrossGL/crosstl/issues/1126",
+    "https://github.com/CrossGL/crosstl/issues/1127",
+    "https://github.com/CrossGL/crosstl/issues/852",
+    "https://github.com/CrossGL/crosstl/issues/1146",
+    "https://github.com/CrossGL/crosstl/issues/1155",
+    "https://github.com/CrossGL/crosstl/issues/1160",
+    "https://github.com/CrossGL/crosstl/issues/1184",
+    "https://github.com/CrossGL/crosstl/issues/1203",
+    "https://github.com/CrossGL/crosstl/issues/1204",
+    "https://github.com/CrossGL/crosstl/issues/1206",
+    "https://github.com/CrossGL/crosstl/issues/1205",
+    "https://github.com/CrossGL/crosstl/issues/1207",
+    "https://github.com/CrossGL/crosstl/issues/1218",
+    "https://github.com/CrossGL/crosstl/issues/1222",
+    "https://github.com/CrossGL/crosstl/issues/1238",
+    "https://github.com/CrossGL/crosstl/issues/1239",
+    "https://github.com/CrossGL/crosstl/issues/1240",
+    "https://github.com/CrossGL/crosstl/issues/1246",
+    "https://github.com/CrossGL/crosstl/issues/1248",
+    "https://github.com/CrossGL/crosstl/issues/1249",
+    "https://github.com/CrossGL/crosstl/issues/1250",
+    "https://github.com/CrossGL/crosstl/issues/1259",
+    "https://github.com/CrossGL/crosstl/issues/1260",
+    "https://github.com/CrossGL/crosstl/issues/1261",
+    "https://github.com/CrossGL/crosstl/issues/1274",
+    "https://github.com/CrossGL/crosstl/issues/1287"
+  ]
+}

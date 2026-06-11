@@ -64,6 +64,7 @@ from .enum_utils import (
     infer_enum_constructor_type,
 )
 from .generic_function_utils import (
+    collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
     generic_function_call_name,
@@ -73,9 +74,6 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
-)
-from .generic_function_utils import (
-    reject_unsupported_generic_functions as reject_generic_functions_for_target,
 )
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
@@ -831,12 +829,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def reject_unsupported_generic_functions(self, ast_node):
         """Reject generic functions before emitting non-compilable HIP code."""
-        reject_generic_functions_for_target(
-            ast_node,
-            "HIP",
-            self.generic_function_specializations,
-            referenced_generic_names=set(),
+        functions = list(iter_function_nodes(ast_node)) + list(
+            (self.generic_function_specializations or {}).values()
         )
+        unresolved = collect_unresolved_generic_function_call_names(self, functions)
+        if unresolved:
+            raise_unresolved_generic_function_call(self, unresolved[0], "HIP")
 
     def setup_enum_and_generic_metadata(self, ast_node):
         """Collect enum and concrete generic type metadata used by HIP lowering."""

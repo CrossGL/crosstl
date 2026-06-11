@@ -2434,9 +2434,7 @@ DIRECTX_HLSL_STRUCT_RE = re.compile(
 DIRECTX_HLSL_SHADER_ATTR_RE = re.compile(
     r"\[\s*shader\s*\(\s*\"([^\"]+)\"\s*\)\s*\]", re.IGNORECASE
 )
-DIRECTX_HLSL_NUMTHREADS_RE = re.compile(
-    r"\[\s*numthreads\s*\(", re.IGNORECASE
-)
+DIRECTX_HLSL_NUMTHREADS_RE = re.compile(r"\[\s*numthreads\s*\(", re.IGNORECASE)
 DIRECTX_HLSL_SEMANTIC_RE = re.compile(
     r":\s*(?P<semantic>[A-Za-z_]\w*)\b", re.IGNORECASE
 )
@@ -10217,7 +10215,7 @@ def _metal_function_return_type(
     open_paren = preprocessor._function_parameter_start(header)
     if open_paren is None:
         return None
-    before_params = header[:open_paren].rstrip()
+    before_params = _masked_metal_non_code_text(header[:open_paren]).rstrip()
     match = re.search(rf"\b{re.escape(function_name)}\s*$", before_params)
     if match is None:
         return None
@@ -11730,14 +11728,14 @@ def _metal_block_spans(preprocessor: Any, source: str) -> list[tuple[int, int]]:
     return spans
 
 
-def _metal_enclosing_block_end(
+def _metal_enclosing_block_span(
     block_spans: Sequence[tuple[int, int]],
     position: int,
-) -> int | None:
+) -> tuple[int, int] | None:
     enclosing = [span for span in block_spans if span[0] < position < span[1]]
     if not enclosing:
         return None
-    return min(enclosing, key=lambda span: span[1] - span[0])[1]
+    return min(enclosing, key=lambda span: span[1] - span[0])
 
 
 def _metal_statement_semicolon(
@@ -11791,6 +11789,21 @@ def _metal_concrete_using_alias_type(alias_type: str) -> str | None:
     if any(character in alias_type for character in "{};="):
         return None
     return alias_type
+
+
+def _metal_local_integer_constants_before(
+    source: str,
+    block_start: int,
+    position: int,
+) -> dict[str, str]:
+    constants: dict[str, str] = {}
+    for start, end in _metal_statement_spans(source, block_start + 1, position):
+        constant = _metal_local_constant_declaration(source[start:end], constants)
+        if constant is None:
+            continue
+        name, value = constant
+        constants[name] = value
+    return constants
 
 
 def _metal_template_struct_members(
@@ -11965,10 +11978,27 @@ def _inline_metal_concrete_using_template_aliases(
                         continue
                     alias_type = (candidate.get("members") or {}).get(member)
                     break
-        scope_end = _metal_enclosing_block_end(block_spans, i)
-        if alias_type is None or scope_end is None:
+        scope_span = _metal_enclosing_block_span(block_spans, i)
+        if alias_type is None or scope_span is None:
             i = semicolon + 1
             continue
+        scope_start, scope_end = scope_span
+        scoped_aliases = {
+            str(alias["name"]): str(alias["type"])
+            for alias in aliases
+            if int(alias["end"]) <= i and int(alias["scope_end"]) >= scope_end
+        }
+        scoped_constants = _metal_local_integer_constants_before(
+            source,
+            scope_start,
+            i,
+        )
+        alias_type = _metal_resolve_type_identifiers(
+            preprocessor,
+            alias_type,
+            aliases=scoped_aliases,
+            constants=scoped_constants,
+        )
         members = _metal_concrete_template_struct_members(
             preprocessor,
             template_structs,
@@ -33864,7 +33894,9 @@ def _directx_dxc_entry_profiles_from_artifact(
         return ()
 
     candidates = []
-    for position, entry_point in enumerate(_directx_dxc_artifact_entry_points(artifact)):
+    for position, entry_point in enumerate(
+        _directx_dxc_artifact_entry_points(artifact)
+    ):
         name = entry_point.get("name")
         if not _is_non_empty_string(name):
             continue
@@ -34003,9 +34035,7 @@ def _directx_hlsl_struct_semantics(source: str) -> dict[str, tuple[str, ...]]:
     for match in DIRECTX_HLSL_STRUCT_RE.finditer(source):
         semantics_by_struct[match.group("name")] = tuple(
             semantic_match.group("semantic")
-            for semantic_match in DIRECTX_HLSL_SEMANTIC_RE.finditer(
-                match.group("body")
-            )
+            for semantic_match in DIRECTX_HLSL_SEMANTIC_RE.finditer(match.group("body"))
         )
     return semantics_by_struct
 
@@ -34030,9 +34060,7 @@ def _directx_hlsl_function_stage(
     if generic_stage is not None:
         return generic_stage
 
-    semantic_stage = _directx_hlsl_return_semantic_stage(
-        match.group("return_semantic")
-    )
+    semantic_stage = _directx_hlsl_return_semantic_stage(match.group("return_semantic"))
     if semantic_stage is not None:
         return semantic_stage
 
