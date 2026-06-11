@@ -2277,6 +2277,11 @@ DIRECTX_DXC_ENTRY_PROFILES = (
     ("MSMain", "ms_6_5"),
 )
 DIRECTX_DXC_DEFAULT_ENTRY_PROFILE = ("VSMain", "vs_6_0")
+DIRECTX_DXC_VRS_MIN_PROFILE_BY_STAGE = {
+    "vs": "vs_6_4",
+    "ps": "ps_6_4",
+    "gs": "gs_6_4",
+}
 TOOLCHAIN_SMOKE_TIMEOUT_SECONDS = 30
 TOOLCHAIN_TIMEOUT_RETURNCODE = 124
 RUNTIME_ADAPTER_CATALOG = {
@@ -11611,9 +11616,7 @@ def _metal_template_type_declarations(
             continue
 
         parameters = tuple(
-            preprocessor._template_parameter_names(
-                source[angle_start + 1 : angle_end]
-            )
+            preprocessor._template_parameter_names(source[angle_start + 1 : angle_end])
         )
         declaration_start = angle_end + 1
         header = source[declaration_start : declaration_start + 512]
@@ -31825,11 +31828,39 @@ def _directx_dxc_entry_profiles(
     for entry, profile in DIRECTX_DXC_ENTRY_PROFILES:
         match = re.search(rf"\b{re.escape(entry)}\s*\(", source)
         if match:
-            matches.append((match.start(), entry, profile))
+            matches.append(
+                (
+                    match.start(),
+                    entry,
+                    _directx_dxc_profile_for_source(profile, source),
+                )
+            )
     if not matches:
         return (DIRECTX_DXC_DEFAULT_ENTRY_PROFILE,)
 
     return tuple((entry, profile) for _position, entry, profile in sorted(matches))
+
+
+def _directx_dxc_profile_for_source(profile: str, source: str) -> str:
+    if not re.search(r"\bSV_ShadingRate\b", source, re.IGNORECASE):
+        return profile
+
+    stage = profile.split("_", 1)[0]
+    min_profile = DIRECTX_DXC_VRS_MIN_PROFILE_BY_STAGE.get(stage)
+    if min_profile is None:
+        return profile
+    if _directx_dxc_profile_version(profile) >= _directx_dxc_profile_version(
+        min_profile
+    ):
+        return profile
+    return min_profile
+
+
+def _directx_dxc_profile_version(profile: str) -> tuple[int, int]:
+    match = re.match(r"^[a-z]+_(\d+)_(\d+)$", profile)
+    if match is None:
+        return (0, 0)
+    return int(match.group(1)), int(match.group(2))
 
 
 GLSLANG_STAGE_BY_SUFFIX = {
