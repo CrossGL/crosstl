@@ -27430,6 +27430,42 @@ class TestSpirvShaderValidation:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_scalar_compute_builtin_materialization_extracts_matching_store_value(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ScalarBuiltinMaterialization {
+            compute {
+                @ stage_entry
+                void input_coherent(
+                    RWStructuredBuffer<uint> input @buffer(0),
+                    uint index @gl_GlobalInvocationID
+                ) {
+                    buffer_store(input, index, buffer_load(input, index));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        assert uint_type is not None
+        index = spirv_named_variable(spv_code, "index", storage_class="Function")
+
+        store_value = re.search(
+            rf"(?P<extract>%\d+) = OpCompositeExtract "
+            rf"{re.escape(uint_type.group(1))} %\d+ 0\n"
+            rf"OpStore {re.escape(index)} (?P=extract)",
+            spv_code,
+        )
+        assert store_value is not None
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_mixed_compute_builtin_aliases_share_interface_variable(self, tmp_path):
         source_code = """
         shader MixedComputeBuiltinAliases {
