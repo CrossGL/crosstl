@@ -11728,14 +11728,14 @@ def _metal_block_spans(preprocessor: Any, source: str) -> list[tuple[int, int]]:
     return spans
 
 
-def _metal_enclosing_block_end(
+def _metal_enclosing_block_span(
     block_spans: Sequence[tuple[int, int]],
     position: int,
-) -> int | None:
+) -> tuple[int, int] | None:
     enclosing = [span for span in block_spans if span[0] < position < span[1]]
     if not enclosing:
         return None
-    return min(enclosing, key=lambda span: span[1] - span[0])[1]
+    return min(enclosing, key=lambda span: span[1] - span[0])
 
 
 def _metal_statement_semicolon(
@@ -11789,6 +11789,21 @@ def _metal_concrete_using_alias_type(alias_type: str) -> str | None:
     if any(character in alias_type for character in "{};="):
         return None
     return alias_type
+
+
+def _metal_local_integer_constants_before(
+    source: str,
+    block_start: int,
+    position: int,
+) -> dict[str, str]:
+    constants: dict[str, str] = {}
+    for start, end in _metal_statement_spans(source, block_start + 1, position):
+        constant = _metal_local_constant_declaration(source[start:end], constants)
+        if constant is None:
+            continue
+        name, value = constant
+        constants[name] = value
+    return constants
 
 
 def _metal_template_struct_members(
@@ -11963,10 +11978,27 @@ def _inline_metal_concrete_using_template_aliases(
                         continue
                     alias_type = (candidate.get("members") or {}).get(member)
                     break
-        scope_end = _metal_enclosing_block_end(block_spans, i)
-        if alias_type is None or scope_end is None:
+        scope_span = _metal_enclosing_block_span(block_spans, i)
+        if alias_type is None or scope_span is None:
             i = semicolon + 1
             continue
+        scope_start, scope_end = scope_span
+        scoped_aliases = {
+            str(alias["name"]): str(alias["type"])
+            for alias in aliases
+            if int(alias["end"]) <= i and int(alias["scope_end"]) >= scope_end
+        }
+        scoped_constants = _metal_local_integer_constants_before(
+            source,
+            scope_start,
+            i,
+        )
+        alias_type = _metal_resolve_type_identifiers(
+            preprocessor,
+            alias_type,
+            aliases=scoped_aliases,
+            constants=scoped_constants,
+        )
         members = _metal_concrete_template_struct_members(
             preprocessor,
             template_structs,
