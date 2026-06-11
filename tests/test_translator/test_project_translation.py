@@ -34812,6 +34812,108 @@ def test_translate_project_metal_template_without_arguments_reports_metadata(
     }.isdisjoint({"project.validate.invalid-report"})
 
 
+def test_translate_project_metal_variadic_debug_helper_noops_for_opengl(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "debug_helper.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename... Args>
+            inline void log_debug(Args... args) {
+            }
+
+            void debug_path(uint gid) {
+                log_debug<uint>(gid);
+                log_debug(gid);
+            }
+
+            kernel void launch(
+                device float* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                log_debug<uint>(gid);
+                out[gid] = float(gid);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"] == {
+        "status": "materialized",
+        "specializationCount": 0,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "specializations": [],
+        "unsupported": [],
+    }
+
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "log_debug" not in output
+    assert "Args" not in output
+    assert "out_[gid] = float(gid);" in output
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_metal_required_variadic_entry_reports_metadata(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "required_variadic.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename... Args>
+            kernel void launch(
+                device float* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = 0.0;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    unsupported = artifact["templateMaterialization"]["unsupported"]
+    assert unsupported == [
+        {
+            "name": "launch",
+            "parameters": ["Args"],
+            "missingParameters": ["Args"],
+            "reason": "missing-template-arguments",
+            "sourceDeclaration": {
+                "file": "required_variadic.metal",
+                "line": 4,
+                "column": 1,
+                "name": "launch",
+            },
+            "target": "opengl",
+            "requiredSignature": "launch<Args>",
+        }
+    ]
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert "launch missing Args" in diagnostic["message"]
+
+
 def test_translate_project_groups_unresolved_template_bindings_by_signature(
     tmp_path,
 ):
