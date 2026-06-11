@@ -204,9 +204,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 21,
-        "endOffset": 602,
+        "endOffset": 604,
         "file": "crosstl-out/metal/grid.metal",
-        "length": 73,
+        "length": 75,
         "line": 20,
         "offset": 529
       },
@@ -226,11 +226,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 22,
-        "endOffset": 683,
+        "endOffset": 687,
         "file": "crosstl-out/metal/grid.metal",
-        "length": 81,
+        "length": 83,
         "line": 21,
-        "offset": 602
+        "offset": 604
       },
       "original": {
         "column": 1,
@@ -248,11 +248,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 23,
-        "endOffset": 709,
+        "endOffset": 713,
         "file": "crosstl-out/metal/grid.metal",
         "length": 26,
         "line": 22,
-        "offset": 683
+        "offset": 687
       },
       "original": {
         "column": 1,

@@ -49,8 +49,8 @@ fragment float4 fragment_main(FragmentInput input [[stage_in]], constant Uniform
             specular += specCo;
         }
     }
-    finalColor = texelColor * tint + float4(specular, 1.0) * float4(lightDot, 1.0);
-    finalColor += texelColor * float4(uniforms.ambient / 10.0) * tint;
+    finalColor = texelColor * (tint + float4(specular, 1.0)) * float4(lightDot, 1.0);
+    finalColor += texelColor * float4((uniforms.ambient / 10.0)) * tint;
     finalColor = pow(finalColor, float4(1.0 / 2.2));
     return finalColor;
 }

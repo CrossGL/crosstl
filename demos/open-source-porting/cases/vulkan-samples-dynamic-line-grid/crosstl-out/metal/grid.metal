@@ -17,8 +17,8 @@ float4 grid(float3 pos) {
 // Fragment Shader
 fragment float4 fragment_main(FragmentInput input [[stage_in]]) {
     float4 outColor;
-    float t = -input.nearPoint.y / input.farPoint.y - input.nearPoint.y;
-    float3 pos = input.nearPoint + float3(t) * input.farPoint - input.nearPoint;
+    float t = -input.nearPoint.y / (input.farPoint.y - input.nearPoint.y);
+    float3 pos = input.nearPoint + float3(t) * (input.farPoint - input.nearPoint);
     outColor = grid(pos);
     return outColor;
 }
