@@ -1733,6 +1733,69 @@ class GLSLCodeGen:
             return True
         return version_number >= 420
 
+    def glsl_resource_declaration_minimum_version(self, ast, target_stage=None):
+        minimum_version = None
+        resource_nodes = list(getattr(ast, "global_variables", []) or [])
+        resource_nodes.extend(
+            collect_stage_local_variables(
+                ast, target_stage, self.is_stage_local_resource_variable
+            )
+        )
+        resource_nodes.extend(
+            self.glsl_stage_entry_resource_parameter_declarations(ast, target_stage)
+        )
+
+        for node in resource_nodes:
+            node_minimum = self.glsl_resource_node_minimum_version(node)
+            if node_minimum is not None:
+                minimum_version = max(minimum_version or 0, node_minimum)
+        return minimum_version
+
+    def glsl_stage_entry_resource_parameter_declarations(self, ast, target_stage=None):
+        declarations = []
+        stage_entry_types = set(self.GLSL_STAGE_GUARD_MACROS)
+        for func in getattr(ast, "functions", []) or []:
+            qualifier_name = function_stage_name(func)
+            if qualifier_name not in stage_entry_types:
+                continue
+            if should_emit_qualified_function(target_stage, qualifier_name):
+                declarations.extend(
+                    self.glsl_resource_parameter_declarations_for_function(func)
+                )
+
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if not stage_matches(target_stage, stage_name):
+                continue
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is not None:
+                declarations.extend(
+                    self.glsl_resource_parameter_declarations_for_function(entry_point)
+                )
+        return declarations
+
+    def glsl_resource_parameter_declarations_for_function(self, func):
+        declarations = []
+        for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            if self.is_stage_entry_resource_parameter(param):
+                declarations.append(
+                    self.glsl_stage_entry_resource_parameter_declaration(param)
+                )
+        return declarations
+
+    def glsl_resource_node_minimum_version(self, node):
+        vtype, _, _, _ = self.resource_declaration_shape(node)
+        if self.is_glsl_buffer_block_variable(node, vtype):
+            return 430
+        if self.is_structured_buffer_type(vtype):
+            return 430
+
+        mapped_type = self.map_resource_type_with_format(vtype, node)
+        mapped_base_type, _ = split_array_type_suffix(str(mapped_type))
+        if is_glsl_storage_image_type(mapped_base_type):
+            return 420
+        return None
+
     def glsl_version_line_with_minimum(self, version_line, minimum_version):
         version_number = self.glsl_version_number(version_line)
         if version_number is None or version_number >= minimum_version:
@@ -2797,6 +2860,13 @@ class GLSLCodeGen:
                 extra_lines.append(line)
         if version_line is None:
             version_line = self.default_glsl_version_line(ast, target_stage)
+        resource_minimum_version = self.glsl_resource_declaration_minimum_version(
+            ast, target_stage
+        )
+        if resource_minimum_version is not None:
+            version_line = self.glsl_version_line_with_minimum(
+                version_line, resource_minimum_version
+            )
         self.current_glsl_version_line = version_line
         self.current_glsl_resource_binding_layouts_supported = (
             self.glsl_resource_binding_layouts_supported(version_line)

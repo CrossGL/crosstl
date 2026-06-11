@@ -245,7 +245,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1194
+        "test_count": 1196
       },
       "translator_codegen": {
         "exists": true,
@@ -371,7 +371,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_webgl_codegen.py"
         ],
-        "test_count": 62
+        "test_count": 66
       },
       "translator_codegen": {
         "exists": true,
@@ -522,7 +522,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 513,
+        "unsupported_marker_count": 516,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -615,7 +615,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1012
+        "test_count": 1013
       },
       "translator_codegen": {
         "exists": true,

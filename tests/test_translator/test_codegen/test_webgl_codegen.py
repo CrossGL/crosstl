@@ -759,6 +759,112 @@ def test_webgl_codegen_lowers_direct_dynamic_sampler_array_if_condition():
     assert "if ((crossgl_dynamic_sampler_value.r > 0.5)) {" in generated
 
 
+def test_webgl_codegen_lowers_dynamic_sampler_array_while_condition():
+    shader = """
+    shader WebGLDynamicSamplerArrayWhileCondition {
+        fragment {
+            uniform sampler2D colorMaps[2];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                float threshold = 0.25;
+                while (texture(colorMaps[colorIndex], uv).r > threshold) {
+                    threshold = threshold + 0.25;
+                }
+                return vec4(threshold);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "texture(colorMaps[colorIndex]" not in generated
+    assert "while (true) {" in generated
+    assert "switch (colorIndex)" in generated
+    assert "if (!((crossgl_dynamic_sampler_value.r > threshold))) {" in generated
+    assert "break;" in generated
+
+
+def test_webgl_codegen_lowers_dynamic_sampler_array_for_condition():
+    shader = """
+    shader WebGLDynamicSamplerArrayForCondition {
+        fragment {
+            uniform sampler2D colorMaps[2];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                float total = 0.0;
+                for (int i = 0; texture(colorMaps[colorIndex], uv).r > 0.5; i = i + 1) {
+                    total = total + float(i);
+                }
+                return vec4(total);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "texture(colorMaps[colorIndex]" not in generated
+    assert "for (int i = 0; ; i = (i + 1)) {" in generated
+    assert "switch (colorIndex)" in generated
+    assert "if (!((crossgl_dynamic_sampler_value.r > 0.5))) {" in generated
+    assert "break;" in generated
+
+
+def test_webgl_codegen_lowers_dynamic_sampler_array_do_while_condition():
+    shader = """
+    shader WebGLDynamicSamplerArrayDoWhileCondition {
+        fragment {
+            uniform sampler2D colorMaps[2];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec4 color = vec4(0.0);
+                do {
+                    color = color + vec4(0.25);
+                } while (texture(colorMaps[colorIndex], uv).r > 0.5);
+                return color;
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "texture(colorMaps[colorIndex]" not in generated
+    assert "while (true) {" in generated
+    assert "color = (color + vec4(0.25));" in generated
+    assert "switch (colorIndex)" in generated
+    assert "if (!((crossgl_dynamic_sampler_value.r > 0.5))) {" in generated
+    assert "break;" in generated
+
+
+def test_webgl_codegen_rejects_dynamic_sampler_array_do_while_condition_with_continue():
+    shader = """
+    shader WebGLDynamicSamplerArrayDoWhileContinue {
+        fragment {
+            uniform sampler2D colorMaps[2];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                do {
+                    continue;
+                } while (texture(colorMaps[colorIndex], uv).r > 0.5);
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="dynamic sampler array do-while condition",
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
 def test_webgl_aliases_format_as_glsl():
     assert format_shader_code("void main(){}", "webgl") == format_shader_code(
         "void main(){}", "glsl"

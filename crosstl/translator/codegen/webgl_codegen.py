@@ -5,6 +5,7 @@ from copy import copy
 from ..ast import (
     AssignmentNode,
     BinaryOpNode,
+    ContinueNode,
     FunctionCallNode,
     StageMap,
     TernaryOpNode,
@@ -749,6 +750,97 @@ class WebGLCodeGen(GLSLCodeGen):
 
         code += "\n"
         return code
+
+    def generate_for(self, node, indent, is_main=False):
+        condition_node = getattr(node, "condition", None)
+        if condition_node is None:
+            return super().generate_for(node, indent, is_main=is_main)
+
+        prefix, condition = self.webgl_dynamic_sampler_condition_expression(
+            condition_node,
+            indent + 1,
+        )
+        if not prefix:
+            return super().generate_for(node, indent, is_main=is_main)
+
+        indent_str = "    " * indent
+        inner_indent = "    " * (indent + 1)
+        previous_local_variable_types = dict(self.local_variable_types)
+
+        try:
+            init = self.generate_for_initializer(getattr(node, "init", None))
+            update = (
+                self.generate_expression(node.update)
+                if getattr(node, "update", None)
+                else ""
+            )
+
+            code = f"{indent_str}for ({init}; ; {update}) {{\n"
+            code += prefix
+            code += f"{inner_indent}if (!({condition})) {{\n"
+            code += f"{inner_indent}    break;\n"
+            code += f"{inner_indent}}}\n"
+            code += self.generate_scoped_statement_body(node.body, indent + 1)
+            code += f"{indent_str}}}\n"
+            return code
+        finally:
+            self.local_variable_types = previous_local_variable_types
+
+    def generate_while(self, node, indent):
+        condition_node = getattr(node, "condition", "")
+        prefix, condition = self.webgl_dynamic_sampler_condition_expression(
+            condition_node,
+            indent + 1,
+        )
+        if not prefix:
+            return super().generate_while(node, indent)
+
+        indent_str = "    " * indent
+        inner_indent = "    " * (indent + 1)
+
+        code = f"{indent_str}while (true) {{\n"
+        code += prefix
+        code += f"{inner_indent}if (!({condition})) {{\n"
+        code += f"{inner_indent}    break;\n"
+        code += f"{inner_indent}}}\n"
+        code += self.generate_scoped_statement_body(
+            getattr(node, "body", []),
+            indent + 1,
+        )
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_do_while(self, node, indent):
+        condition_node = getattr(node, "condition", "")
+        prefix, condition = self.webgl_dynamic_sampler_condition_expression(
+            condition_node,
+            indent + 1,
+        )
+        if not prefix:
+            return super().generate_do_while(node, indent)
+        if self.webgl_statement_body_contains_continue(getattr(node, "body", [])):
+            raise ValueError(
+                "WebGL target cannot lower dynamic sampler array do-while "
+                "condition when the loop body contains continue"
+            )
+
+        indent_str = "    " * indent
+        inner_indent = "    " * (indent + 1)
+
+        code = f"{indent_str}while (true) {{\n"
+        code += self.generate_scoped_statement_body(
+            getattr(node, "body", []),
+            indent + 1,
+        )
+        code += prefix
+        code += f"{inner_indent}if (!({condition})) {{\n"
+        code += f"{inner_indent}    break;\n"
+        code += f"{inner_indent}}}\n"
+        code += f"{indent_str}}}\n"
+        return code
+
+    def webgl_statement_body_contains_continue(self, body):
+        return any(isinstance(node, ContinueNode) for node in self.walk_ast(body))
 
     def webgl_dynamic_sampler_condition_expression(self, expr, indent):
         direct_dispatch = self.glsl_dynamic_resource_call_dispatch_info(expr)

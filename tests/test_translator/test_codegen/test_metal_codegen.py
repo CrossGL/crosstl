@@ -13919,6 +13919,44 @@ def test_glsl_fragment_subgroup_builtins_emit_metal_diagnostics(tmp_path):
     assert "gl_SubgroupInvocationID, 0" not in generated
 
 
+def test_metal_glsl_subgroup_function_calls_emit_compile_safe_diagnostics():
+    code = """
+    shader MetalGLSLSubgroupCalls {
+        compute {
+            void main() {
+                uint total = subgroupAdd(1u);
+                bool anyLane = subgroupAny(total > 0u);
+                uvec4 ballot = subgroupBallot(anyLane);
+                subgroupBarrier();
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+
+    assert (
+        "uint total = /* unsupported Metal GLSL subgroup intrinsic: subgroupAdd "
+        "requires explicit Metal simdgroup lowering */ 0u;" in generated
+    )
+    assert (
+        "bool anyLane = /* unsupported Metal GLSL subgroup intrinsic: subgroupAny "
+        "requires explicit Metal simdgroup lowering */ false;" in generated
+    )
+    assert (
+        "uint4 ballot = /* unsupported Metal GLSL subgroup intrinsic: subgroupBallot "
+        "requires explicit Metal simdgroup lowering */ uint4(0);" in generated
+    )
+    assert (
+        "/* unsupported Metal GLSL subgroup intrinsic: subgroupBarrier "
+        "requires explicit Metal simdgroup lowering */;" in generated
+    )
+    assert "subgroupAdd(" not in generated
+    assert "subgroupAny(" not in generated
+    assert "subgroupBallot(" not in generated
+    assert "subgroupBarrier(" not in generated
+
+
 def test_graphics_builtin_parameter_semantics_roundtrip():
     code = """
     shader GraphicsBuiltinMetal {
