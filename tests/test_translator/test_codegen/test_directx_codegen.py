@@ -33594,11 +33594,16 @@ def test_hlsl_compute_builtins_are_auto_parameters_when_referenced_by_name():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "uint3 gl_GlobalInvocationID : SV_DispatchThreadID" in generated_code
-    assert "uint3 gl_LocalInvocationID : SV_GroupThreadID" in generated_code
-    assert "uint3 gl_WorkGroupID : SV_GroupID" in generated_code
-    assert "uint gl_LocalInvocationIndex : SV_GroupIndex" in generated_code
-    assert "uint3 gl_NumWorkGroups" in generated_code
+    assert "uint3 dispatchThreadID : SV_DispatchThreadID" in generated_code
+    assert "uint3 groupThreadID : SV_GroupThreadID" in generated_code
+    assert "uint3 groupID : SV_GroupID" in generated_code
+    assert "uint groupIndex : SV_GroupIndex" in generated_code
+    assert "uint3 numWorkGroups" in generated_code
+    assert "gl_GlobalInvocationID" not in generated_code
+    assert "gl_LocalInvocationID" not in generated_code
+    assert "gl_WorkGroupID" not in generated_code
+    assert "gl_LocalInvocationIndex" not in generated_code
+    assert "gl_NumWorkGroups" not in generated_code
 
 
 def test_hlsl_arrayed_resource_struct_members_lower_to_globals():
