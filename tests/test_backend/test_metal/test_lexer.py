@@ -72,6 +72,18 @@ def test_tokenizes_numeric_heavy_generated_identifier_as_single_token():
     assert ("NUMBER", "4") not in tokens
 
 
+def test_tokenizes_split_numeric_suffix_as_adjacent_tokens_with_position():
+    tokens = tokenize_code("float generated_quantize_float_gs 16_b_4(float value);")
+    values = [(token[0], token[1]) for token in tokens]
+    number = next(token for token in tokens if token == ("NUMBER", "16"))
+
+    assert ("IDENTIFIER", "generated_quantize_float_gs") in values
+    assert ("NUMBER", "16") in values
+    assert ("IDENTIFIER", "_b_4") in values
+    assert number.line == 1
+    assert number.column == 35
+
+
 def test_tokenizes_structs_functions_and_attributes():
     code = """
     #include <metal_stdlib>

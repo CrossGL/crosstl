@@ -5211,6 +5211,135 @@
     },
     {
       "category": "project",
+      "description": "Plan and report backend-agnostic runtime tests for translated project artifacts.",
+      "id": "project.runtime_test_manifest",
+      "name": "Runtime test manifest",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
+            "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_runs_executor_and_links_failed_check",
+            "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
+          ],
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "status": "supported"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
+            "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_runs_executor_and_links_failed_check",
+            "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
+          ],
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
+            "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_runs_executor_and_links_failed_check",
+            "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
+          ],
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
+            "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_runs_executor_and_links_failed_check",
+            "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
+          ],
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "status": "supported"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
+            "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_runs_executor_and_links_failed_check",
+            "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
+          ],
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
+            "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_runs_executor_and_links_failed_check",
+            "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
+          ],
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
+            "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_runs_executor_and_links_failed_check",
+            "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
+          ],
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "status": "supported"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
+            "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_runs_executor_and_links_failed_check",
+            "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
+          ],
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "status": "supported"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
+            "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_runs_executor_and_links_failed_check",
+            "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
+          ],
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
+            "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_runs_executor_and_links_failed_check",
+            "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
+          ],
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "status": "supported"
+        },
+        "wgsl": {
+          "evidence": [
+            "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
+            "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
+            "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_runs_executor_and_links_failed_check",
+            "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
+          ],
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Emit deterministic host loader scaffold metadata from runtime loader manifests without rewriting host code or executing device code.",
       "id": "project.runtime_host_loader_scaffolds",
       "name": "Runtime host loader scaffolds",
@@ -8975,12 +9104,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 24,
+    "feature_count": 25,
     "status_counts": {
       "cuda": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 23,
+        "supported": 24,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -8988,7 +9117,7 @@
       "directx": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 23,
+        "supported": 24,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -8996,7 +9125,7 @@
       "hip": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 23,
+        "supported": 24,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9004,7 +9133,7 @@
       "metal": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 23,
+        "supported": 24,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9012,7 +9141,7 @@
       "mojo": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 23,
+        "supported": 24,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9020,7 +9149,7 @@
       "opengl": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 23,
+        "supported": 24,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9028,7 +9157,7 @@
       "rust": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 23,
+        "supported": 24,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9036,7 +9165,7 @@
       "slang": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 23,
+        "supported": 24,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9044,7 +9173,7 @@
       "vulkan": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 23,
+        "supported": 24,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9052,7 +9181,7 @@
       "webgl": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 23,
+        "supported": 24,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9060,7 +9189,7 @@
       "wgsl": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 23,
+        "supported": 24,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

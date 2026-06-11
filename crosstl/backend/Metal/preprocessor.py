@@ -933,12 +933,25 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             if text[i].isalpha() or text[i] == "_":
                 ident, consumed = self._read_identifier(text, i)
-                result += replacements.get(ident, ident)
+                if self._is_member_identifier_context(text, i):
+                    result += ident
+                else:
+                    result += replacements.get(ident, ident)
                 i += consumed
                 continue
             result += text[i]
             i += 1
         return result
+
+    def _is_member_identifier_context(self, text: str, index: int) -> bool:
+        previous = index - 1
+        while previous >= 0 and text[previous].isspace():
+            previous -= 1
+        if previous < 0:
+            return False
+        if text[previous] == ".":
+            return True
+        return previous >= 1 and text[previous - 1 : previous + 1] == "->"
 
     def _find_matching_angle(self, code: str, start: int) -> Optional[int]:
         return self._find_matching_delimiter(code, start, "<", ">")

@@ -260,6 +260,7 @@ def test_project_package_exposes_public_api_surface():
         "RuntimeArtifactSelector",
         "RuntimeBoundConstant",
         "RuntimeBoundResource",
+        "RuntimeDependencyProbeExecutor",
         "RuntimeDispatchGeometry",
         "RuntimeEntryPoint",
         "RuntimeExecutionAdapter",
@@ -274,8 +275,12 @@ def test_project_package_exposes_public_api_surface():
         "RuntimeExecutorSkipped",
         "RuntimeExecutorUnavailable",
         "RuntimeFixture",
+        "RuntimePlatformRequirements",
         "RuntimeResourceBinding",
         "RuntimeSpecializationConstant",
+        "RuntimeTestAdapterSpec",
+        "RuntimeTestCase",
+        "RuntimeTestManifest",
         "RuntimeTolerance",
         "RuntimeValue",
         "RuntimeValidationHook",
@@ -286,13 +291,17 @@ def test_project_package_exposes_public_api_surface():
         "build_runtime_loader_manifest",
         "build_runtime_package",
         "compare_runtime_outputs",
+        "default_runtime_test_adapters",
         "inspect_runtime_host_integration_handoff",
         "inspect_runtime_host_loader_scaffolds",
         "inspect_runtime_package",
         "inspect_project_report",
         "load_runtime_verification_fixtures",
+        "load_runtime_test_manifest",
         "load_project_config",
         "parse_runtime_verification_fixtures",
+        "parse_runtime_test_manifest",
+        "plan_runtime_test_manifest",
         "prepare_runtime_execution",
         "plan_runtime_adapters",
         "plan_runtime_host_bindings",
@@ -303,7 +312,9 @@ def test_project_package_exposes_public_api_surface():
         "translate_project",
         "validate_project_report",
         "verify_runtime_fixtures",
+        "verify_runtime_test_manifest",
         "write_runtime_verification_report",
+        "write_runtime_test_report",
     }
     for name in project_api.__all__:
         assert hasattr(project_api, name)
@@ -1039,13 +1050,31 @@ def test_support_project_feature_evidence_references_existing_tests():
     catalog = json.loads(
         (ROOT / "support" / "features.json").read_text(encoding="utf-8")
     )
-    test_file = ROOT / "tests" / "test_translator" / "test_project_translation.py"
-    declared_tests = {
-        line.strip().split("(", 1)[0][len("def ") :]
-        for line in test_file.read_text(encoding="utf-8").splitlines()
-        if line.strip().startswith("def test_")
-    }
-    evidence_prefix = "tests/test_translator/test_project_translation.py::def "
+
+    declared_tests_by_path = {}
+
+    def declared_tests(path_text):
+        if path_text not in declared_tests_by_path:
+            test_file = ROOT / path_text
+            declared_tests_by_path[path_text] = {
+                line.strip().split("(", 1)[0][len("def ") :]
+                for line in test_file.read_text(encoding="utf-8").splitlines()
+                if line.strip().startswith("def test_")
+            }
+        return declared_tests_by_path[path_text]
+
+    def referenced_test(item):
+        if not isinstance(item, str):
+            return None
+        path_text, separator, test_name = item.partition("::def ")
+        if (
+            not separator
+            or not path_text.startswith("tests/")
+            or not path_text.endswith(".py")
+            or not test_name.startswith("test_")
+        ):
+            return None
+        return path_text, test_name
 
     missing_evidence = []
     missing_tests = []
@@ -1057,18 +1086,17 @@ def test_support_project_feature_evidence_references_existing_tests():
             if not evidence:
                 missing_evidence.append(f"{feature.get('id')}:{backend}")
                 continue
-            project_evidence = [
-                item
-                for item in evidence
-                if isinstance(item, str) and item.startswith(evidence_prefix)
-            ]
-            if not project_evidence:
-                missing_evidence.append(f"{feature.get('id')}:{backend}")
-                continue
-            for item in project_evidence:
-                test_name = item[len(evidence_prefix) :]
-                if test_name not in declared_tests:
+            test_evidence = []
+            for item in evidence:
+                test_reference = referenced_test(item)
+                if test_reference is None:
+                    continue
+                path_text, test_name = test_reference
+                test_evidence.append(item)
+                if test_name not in declared_tests(path_text):
                     missing_tests.append(item)
+            if not test_evidence:
+                missing_evidence.append(f"{feature.get('id')}:{backend}")
 
     assert missing_evidence == []
     assert missing_tests == []
@@ -8909,6 +8937,73 @@ def test_translate_project_materializes_mlx_metal_instantiate_kernel_entries(
     assert "void arangefloat16(" in output
     assert "buffer_store(out_, gid, float16(gid + 3));" in output
     assert "void arange(" not in output
+
+
+def test_translate_project_materialized_metal_quantized_specialization_to_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "fp_quantized.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct PackedScale {
+                float bits;
+            };
+
+            template <typename T, const int group_size, const int bits>
+            [[kernel]] void nvfp4_quantize(
+                const device T* in [[buffer(0)]],
+                device T* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                PackedScale s;
+                s.bits = float(group_size);
+                T sample = in[gid];
+                float q_scale = s.bits;
+                float output = q_scale + bits;
+                out[gid] = sample + T(output);
+            }
+
+            template [[host_name("nvfp4_quantize_float_gs_16_b_4")]] [[kernel]]
+            decltype(nvfp4_quantize<float, 16, 4>) nvfp4_quantize<float, 16, 4>;
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["cgl", "directx", "opengl", "vulkan", "metal"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    artifacts = {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    }
+
+    assert payload["summary"]["translatedCount"] == 5
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert artifacts == {
+        ("cgl", "translated"),
+        ("directx", "translated"),
+        ("metal", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+    for artifact in payload["artifacts"]:
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        assert "bits" in output
+        assert "s.4" not in output
+        if artifact["target"] in {"cgl", "metal", "vulkan"}:
+            assert "nvfp4_quantize_float_gs_16_b_4" in output
 
 
 def test_translate_project_opengl_materializes_mlx_explicit_template_helpers(
@@ -23661,6 +23756,74 @@ def test_translate_project_resolves_generic_vulkan_storage_buffer_helper_family(
     assert "elem_to_loc_broadcast" not in generated
     assert "OpFunctionCall" not in generated
     assert "OpConvertUToF" in generated
+    assert "WARNING" not in generated
+    assert payload["diagnostics"] == []
+
+
+def test_translate_project_resolves_vulkan_resource_pointer_helper_overloads(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "resource_pointer_helpers.cgl"
+    source_path.write_text(
+        textwrap.dedent("""
+            shader ResourcePointerHelperOverloads {
+                StructuredBuffer<uint> counters @binding(0);
+                RWStructuredBuffer<float> values @binding(1);
+
+                generic<T> fn copy_resource(
+                    T* source,
+                    float* target,
+                    uint index
+                ) -> void {
+                    target[index] = float(source[index]);
+                    return;
+                }
+
+                generic<T> fn copy_resource(
+                    StructuredBuffer<T>& source,
+                    RWStructuredBuffer<float>& target,
+                    uint index
+                ) -> void {
+                    target.Store(index + 1u, float(source.Load(index)));
+                }
+
+                compute {
+                    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                    layout(set = 0, binding = 2) buffer uint* rawCounters;
+                    layout(set = 0, binding = 3) buffer float* rawValues;
+
+                    void main() {
+                        uint staticScratch = 11u;
+                        copy_resource(rawCounters, rawValues, 0u, staticScratch);
+                        copy_resource(counters, values, 1u, staticScratch);
+                        return;
+                    }
+                }
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["vulkan"], output_dir="out").to_json()
+
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["diagnosticCounts"]["error"] == 0
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["target"] == "vulkan"
+    assert artifact["source"] == "resource_pointer_helpers.cgl"
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "copy_resource" not in generated
+    assert "OpFunctionCall" not in generated
+    assert "OpConvertUToF" in generated
+    assert "generic-helper-specialization" not in generated
+    assert "storage-buffer-function-overload" not in generated
     assert "WARNING" not in generated
     assert payload["diagnostics"] == []
 

@@ -131,6 +131,42 @@ def test_preprocessor_materializes_mlx_decltype_instantiation_entries():
     assert "out[gid] = float(gid);" in output
 
 
+def test_preprocessor_materialized_numeric_specialization_preserves_member_names():
+    code = """
+    struct PackedScale {
+        uint8_t bits;
+    };
+
+    template <typename T, const int group_size, const int bits>
+    [[kernel]] void nvfp4_quantize(
+        const device T* in [[buffer(0)]],
+        device uint8_t* out [[buffer(1)]]) {
+        PackedScale s;
+        T sample = in[0];
+        uint8_t q_scale = s.bits;
+        uint8_t output = q_scale + bits;
+        out[0] = output;
+    }
+
+    template [[host_name("nvfp4_quantize_float_gs_16_b_4")]] [[kernel]]
+    decltype(nvfp4_quantize<float, 16, 4>) nvfp4_quantize<float, 16, 4>;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+    ast = MetalParser(MetalLexer(output, preprocess=False).tokenize()).parse()
+
+    assert "decltype(nvfp4_quantize<float, 16, 4>)" not in output
+    assert "void nvfp4_quantize_float_gs_16_b_4(" in output
+    assert "const device float* in" in output
+    assert "float sample = in[0];" in output
+    assert "uint8_t q_scale = s.bits;" in output
+    assert "uint8_t q_scale = s.4;" not in output
+    assert "uint8_t output = q_scale + 4;" in output
+    assert [function.name for function in ast.functions] == [
+        "nvfp4_quantize_float_gs_16_b_4"
+    ]
+
+
 def test_preprocessor_materializes_explicit_template_helper_calls():
     code = """
     template <typename T, typename IdxT, int Offset>

@@ -100,6 +100,27 @@ def test_numeric_leading_generated_identifier_reports_specific_error():
     assert getattr(error, "raw_message", "").startswith("Invalid Metal identifier")
 
 
+def test_adjacent_numeric_suffix_in_declaration_reports_fragment_and_position():
+    code = """
+    float generated_quantize_float_gs_16_b_4(float value) {
+        float scaled = value 16_b_4;
+        return scaled;
+    }
+    """
+
+    with pytest.raises(SyntaxError) as excinfo:
+        parse_code(code)
+
+    error = excinfo.value
+    assert "Invalid adjacent numeric suffix fragment '16_b_4'" in str(error)
+    assert "function generated_quantize_float_gs_16_b_4" in str(error)
+    assert getattr(error, "raw_message", "").startswith(
+        "Invalid adjacent numeric suffix fragment"
+    )
+    assert getattr(error, "source_location", {})["line"] == 3
+    assert getattr(error, "source_location", {})["column"] == 30
+
+
 def test_parse_vertex_fragment_program():
     code = """
     #include <metal_stdlib>

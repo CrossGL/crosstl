@@ -144,8 +144,9 @@ KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
         "cross_platform/UniversalPBRShader.cgl",
         "wgsl",
         ValueError,
-        "WGSL target does not support CrossGL resource type sampler2D yet; "
-        "split texture/sampler/storage bindings are required",
+        "WGSL target does not support resource arrays of sampler2D; "
+        "WebGPU/WGSL requires texture, sampler, image, and storage-buffer "
+        "resources to be declared as individual module-scope bindings",
     ),
     (
         "graphics/ComplexShader.cgl",
