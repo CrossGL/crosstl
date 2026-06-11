@@ -134,6 +134,58 @@ def assert_directx_vertex_validates_if_available(hlsl_code, tmp_path):
     assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
 
 
+def assert_directx_compute_validates_if_available(hlsl_code, tmp_path):
+    shader_path = tmp_path / "shader.hlsl"
+    shader_path.write_text(hlsl_code, encoding="utf-8")
+
+    glslang = shutil.which("glslangValidator")
+    if glslang:
+        output_path = tmp_path / "shader.spv"
+        compile_result = subprocess.run(
+            [
+                glslang,
+                "-D",
+                "-V",
+                "-S",
+                "comp",
+                "-e",
+                "CSMain",
+                str(shader_path),
+                "-o",
+                str(output_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert compile_result.returncode == 0, (
+            compile_result.stdout + compile_result.stderr
+        )
+        return
+
+    dxc = shutil.which("dxc")
+    if not dxc:
+        return
+
+    output_path = tmp_path / "shader.dxil"
+    compile_result = subprocess.run(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
+
+
 def assert_guarded_glsl_validates_if_available(glsl_code, tmp_path):
     glslang = shutil.which("glslangValidator")
     if not glslang:
@@ -624,6 +676,10 @@ def test_translate_project_glslang_spec_constant_vertex_to_directx(tmp_path):
         "void foo(float4 p[arraySize], VertexInput input, " "inout VertexOutput output)"
     ) in generated
     assert "foo(input.ucol, input, output);" in generated
+    assert "float4 ucol[arraySize]: TEXCOORD0;" in generated
+    assert "float4 dupUcol[dupArraySize]: TEXCOORD5;" in generated
+    assert "float4 dupUcol[dupArraySize]: TEXCOORD1;" not in generated
+    assert_directx_vertex_validates_if_available(generated, tmp_path)
 
 
 def test_translate_project_glsl_overloaded_vector_helper_to_mojo(tmp_path):
@@ -6924,12 +6980,12 @@ def test_translate_project_lowers_hlsl_struct_main_vsh_psh_pair_to_native_entrie
     fragment_metal = (repo / "translated" / "metal" / "cube.psh.metal").read_text(
         encoding="utf-8"
     )
-    vertex_vulkan = (
-        repo / "translated" / "vulkan" / "cube.vsh.spvasm"
-    ).read_text(encoding="utf-8")
-    fragment_vulkan = (
-        repo / "translated" / "vulkan" / "cube.psh.spvasm"
-    ).read_text(encoding="utf-8")
+    vertex_vulkan = (repo / "translated" / "vulkan" / "cube.vsh.spvasm").read_text(
+        encoding="utf-8"
+    )
+    fragment_vulkan = (repo / "translated" / "vulkan" / "cube.psh.spvasm").read_text(
+        encoding="utf-8"
+    )
 
     assert payload["summary"]["unitCount"] == 2
     assert payload["summary"]["translatedCount"] == 8
@@ -6976,6 +7032,62 @@ def test_translate_project_lowers_hlsl_struct_main_vsh_psh_pair_to_native_entrie
     assert_metal_validates_if_available(fragment_metal, tmp_path)
     assert_spirv_asm_validates_if_available(vertex_vulkan, tmp_path)
     assert_spirv_asm_validates_if_available(fragment_vulkan, tmp_path)
+
+
+def test_translate_project_hlsl_groupshared_scalar_lowers_to_metal_threadgroup(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "SplatGroupSharedScalar.hlsl").write_text(
+        textwrap.dedent("""
+            groupshared int a;
+            [numthreads(64, 1, 1)]
+            void main() {
+              a = 123;
+              int4 x = (a).xxxx;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["."]
+            include = ["SplatGroupSharedScalar.hlsl"]
+            targets = ["cgl", "metal", "vulkan"]
+            output_dir = "crosstl-out"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        load_project_config(repo),
+        format_output=False,
+        validate=True,
+    )
+    payload = report.to_json()
+    artifacts_by_target = {
+        artifact["target"]: artifact for artifact in payload["artifacts"]
+    }
+    metal = (repo / artifacts_by_target["metal"]["path"]).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert artifacts_by_target["metal"]["status"] == "translated"
+    assert "constant int a = int(0)" not in metal
+    assert "unsupported Metal program-scope groupshared" not in metal
+    assert "threadgroup int a;" in metal
+    assert metal.index("threadgroup int a;") > metal.index("kernel void kernel_main")
+    assert metal.index("threadgroup int a;") < metal.index("a = 123;")
+    assert "a = 123;" in metal
+    assert "int4 x = int4(a);" in metal
+    assert not any(
+        diagnostic["code"] == project_pipeline.GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE
+        and diagnostic.get("target") == "metal"
+        for diagnostic in payload["diagnostics"]
+    )
+    assert_metal_validates_if_available(metal, tmp_path)
 
 
 def test_translate_project_wgsl_hlsl_texture_sampler_register_pair(
@@ -10264,6 +10376,122 @@ def test_translate_project_opengl_materializes_mlx_pointer_and_value_bindings(
     assert "float factor;" in output
     assert "dst[gid] = (float(src[gid]) * factor);" in output
     assert not re.search(r"\b(?:T|U)\b", output)
+
+
+def test_translate_project_opengl_validates_implicit_metal_matmul_resources(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "metal_performance_testing"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "ShaderParams.h").write_text(
+        textwrap.dedent("""
+            #ifndef _SHADER_PARAMS_H
+            #define _SHADER_PARAMS_H
+
+            typedef struct
+            {
+                unsigned int row_dim_x;
+                unsigned int col_dim_x;
+                unsigned int inner_dim;
+            } MatMulParams;
+
+            #endif
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "mat_mul_simple1.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            #include "ShaderParams.h"
+            using namespace metal;
+
+            kernel void mat_mul_simple1(device const float* A,
+                                        device const float* B,
+                                        device float* X,
+                                        constant MatMulParams& params,
+                                        uint2 id [[ thread_position_in_grid ]])
+            {
+                const uint row_dim_x = params.row_dim_x;
+                const uint col_dim_x = params.col_dim_x;
+                const uint inner_dim = params.inner_dim;
+
+                if ((id.x < col_dim_x) && (id.y < row_dim_x)) {
+                    const uint index = id.y*col_dim_x + id.x;
+                    float sum = 0;
+                    for (uint k = 0; k < inner_dim; ++k) {
+                        const uint index_A = id.y*inner_dim + k;
+                        const uint index_B = k*col_dim_x + id.x;
+                        sum += A[index_A] * B[index_B];
+                    }
+                    X[index] = sum;
+                }
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["metal_performance_testing"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    validator_inputs = []
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/usr/bin/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
+
+    def run_validator(command, **kwargs):
+        assert command == ["glslangValidator", "--stdin", "-S", "comp"]
+        shader_source = kwargs["input"]
+        assert "layout(std430, binding = 0) readonly buffer ABuffer" in shader_source
+        assert "layout(std430, binding = 1) readonly buffer BBuffer" in shader_source
+        assert "layout(std430, binding = 2) buffer XBuffer" in shader_source
+        assert "layout(std140, binding = 3) uniform MatMulParams" in shader_source
+        assert "params.row_dim_x" in shader_source
+        assert "A[index_A]" in shader_source
+        assert "B[index_B]" in shader_source
+        assert "X[index] = sum;" in shader_source
+        validator_inputs.append(shader_source)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_validator)
+
+    report = translate_project(
+        load_project_config(repo),
+        validate=True,
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+    output = (
+        repo
+        / "translated"
+        / "opengl"
+        / "metal_performance_testing"
+        / "mat_mul_simple1.glsl"
+    ).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["validation"]["toolchainRuns"][0]["status"] == "ok"
+    assert payload["validation"]["toolchainRuns"][0]["sourceBackend"] == "metal"
+    assert payload["validation"]["toolchainRuns"][0]["command"] == [
+        "glslangValidator",
+        "--stdin",
+        "-S",
+        "comp",
+    ]
+    assert len(validator_inputs) == 1
+    assert output == validator_inputs[0]
 
 
 def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
@@ -26335,6 +26563,61 @@ def test_translate_project_resolves_mlx_sort_vulkan_storage_buffer_overload(
     assert payload["diagnostics"] == []
 
 
+def test_translate_project_vulkan_resets_metal_entry_resource_bindings_per_artifact(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for prefix in ("alpha", "beta"):
+        (repo / f"{prefix}.metal").write_text(
+            textwrap.dedent(f"""
+                #include <metal_stdlib>
+                using namespace metal;
+
+                kernel void {prefix}_copy(
+                    device uint* values [[buffer(0)]],
+                    constant uint& limit [[buffer(1)]],
+                    uint gid [[thread_position_in_grid]]
+                ) {{
+                    if (gid < limit) {{
+                        values[gid] = values[gid];
+                    }}
+                }}
+
+                kernel void {prefix}_fill(
+                    device uint* values [[buffer(0)]],
+                    constant uint& limit [[buffer(1)]],
+                    uint gid [[thread_position_in_grid]]
+                ) {{
+                    if (gid < limit) {{
+                        values[gid] = 1u;
+                    }}
+                }}
+            """).strip(),
+            encoding="utf-8",
+        )
+
+    payload = translate_project(repo, targets=["vulkan"], output_dir="out").to_json()
+
+    assert payload["summary"]["artifactCount"] == 2
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+    assert payload["diagnosticCounts"]["error"] == 0
+    assert payload["diagnostics"] == []
+
+    for artifact in payload["artifacts"]:
+        assert artifact["status"] == "translated"
+        generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+        source_stem = Path(artifact["source"]).stem
+        assert f'"{source_stem}_copy"' in generated
+        assert f'"{source_stem}_fill"' in generated
+        assert "DescriptorSet 0" in generated
+        assert "Binding 0" in generated
+        assert "Binding 1" in generated
+
+
 def test_translate_project_resolves_mlx_metal_vulkan_storage_buffer_template_overloads(
     tmp_path,
 ):
@@ -36769,6 +37052,87 @@ def test_translate_project_metal_matmul_device_buffers_do_not_emit_directx_param
     assert "float* B" not in output
     assert "float* X" not in output
     assert "void CSMain(float*" not in output
+
+
+def test_translate_project_metal_matmul_unbound_device_buffers_lower_to_directx_resources(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "ShaderParams.h").write_text(
+        textwrap.dedent("""
+            #ifndef _SHADER_PARAMS_H
+            #define _SHADER_PARAMS_H
+
+            typedef struct
+            {
+                unsigned int row_dim_x;
+                unsigned int col_dim_x;
+                unsigned int inner_dim;
+            } MatMulParams;
+
+            #endif
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "mat_mul_simple1.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            #include "ShaderParams.h"
+            using namespace metal;
+
+            kernel void mat_mul_simple1(device const float* A,
+                                        device const float* B,
+                                        device float* X,
+                                        constant MatMulParams& params,
+                                        uint2 id [[ thread_position_in_grid ]])
+            {
+                const uint row_dim_x = params.row_dim_x;
+                const uint col_dim_x = params.col_dim_x;
+                const uint inner_dim = params.inner_dim;
+
+                if ((id.x < col_dim_x) && (id.y < row_dim_x)) {
+                    const uint index = id.y*col_dim_x + id.x;
+                    float sum = 0;
+                    for (uint k = 0; k < inner_dim; ++k) {
+                        const uint index_A = id.y*inner_dim + k;
+                        const uint index_B = k*col_dim_x + id.x;
+
+                        sum += A[index_A] * B[index_B];
+                    }
+                    X[index] = sum;
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "StructuredBuffer<float> A : register(t0);" in output
+    assert "StructuredBuffer<float> B : register(t1);" in output
+    assert "RWStructuredBuffer<float> X : register(u0);" in output
+    assert "ConstantBuffer<MatMulParams> params : register(b0);" in output
+    assert "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)" in output
+    assert "uint2 id = id_dispatchThreadID.xy;" in output
+    assert "A.Load(index_A)" in output
+    assert "B.Load(index_B)" in output
+    assert "X.Store(index, sum);" in output
+    assert "float* A" not in output
+    assert "float* B" not in output
+    assert "float* X" not in output
+    assert "void CSMain(float*" not in output
+    assert_directx_compute_validates_if_available(output, tmp_path)
 
 
 def test_translate_project_metal_matmul_uint2_grid_id_normalizes_for_compute_targets(

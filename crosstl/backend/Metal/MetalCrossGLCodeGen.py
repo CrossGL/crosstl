@@ -433,6 +433,7 @@ class MetalToCrossGLConverter:
         self.current_storage_texture_names = set()
         self.global_structured_buffer_names = set()
         self.current_structured_buffer_names = set()
+        self.current_stage_entry_resource_parameter_ids = set()
         self.global_sampler_names = set()
         self.suppress_structured_buffer_index_lowering = False
         self.struct_member_types = {}
@@ -1374,6 +1375,7 @@ class MetalToCrossGLConverter:
         self.current_storage_texture_names = set()
         self.global_structured_buffer_names = set()
         self.current_structured_buffer_names = set()
+        self.current_stage_entry_resource_parameter_ids = set()
         self.global_sampler_names = set()
         self.user_function_names = set()
         self.identifier_maps = [{}]
@@ -1626,12 +1628,23 @@ class MetalToCrossGLConverter:
             code += "    " * indent
             code += "@ stage_entry\n"
         code += "    " * indent
+        implicit_buffer_bindings = (
+            self.apply_implicit_stage_entry_buffer_bindings(func)
+            if stage_entry
+            else []
+        )
         previous_variable_types = self.current_variable_types
         self.current_variable_types = dict(self.global_variable_types)
         previous_storage_texture_names = self.current_storage_texture_names
         self.current_storage_texture_names = set(self.global_storage_texture_names)
         previous_structured_buffer_names = self.current_structured_buffer_names
         self.current_structured_buffer_names = set(self.global_structured_buffer_names)
+        previous_stage_entry_resource_parameter_ids = (
+            self.current_stage_entry_resource_parameter_ids
+        )
+        self.current_stage_entry_resource_parameter_ids = (
+            {id(param) for param in func.params} if stage_entry else set()
+        )
         self.push_identifier_scope()
         try:
             for param in func.params:
@@ -1664,10 +1677,15 @@ class MetalToCrossGLConverter:
             code += self.generate_function_body(func.body, indent=indent + 1)
             code += "    }\n\n"
         finally:
+            for param, attributes in implicit_buffer_bindings:
+                param.attributes = attributes
             self.pop_identifier_scope()
             self.current_variable_types = previous_variable_types
             self.current_storage_texture_names = previous_storage_texture_names
             self.current_structured_buffer_names = previous_structured_buffer_names
+            self.current_stage_entry_resource_parameter_ids = (
+                previous_stage_entry_resource_parameter_ids
+            )
         return code
 
     def map_function_return_type(self, return_type):
@@ -3040,10 +3058,36 @@ class MetalToCrossGLConverter:
         return self.normalized_metal_type(metal_type) in {"SwiftUI::Layer"}
 
     def has_attribute(self, node, name):
+        name = str(name).lower()
         return any(
-            getattr(attr, "name", None) == name
+            str(getattr(attr, "name", "")).lower() == name
             for attr in getattr(node, "attributes", []) or []
         )
+
+    def buffer_attribute_binding(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != "buffer":
+                continue
+            args = getattr(attr, "args", getattr(attr, "arguments", [])) or []
+            if not args:
+                return None
+            text = self.format_metadata_argument(args[0]).strip()
+            return int(text) if text.isdigit() else None
+        return None
+
+    def reference_element_type(self, metal_type):
+        if not metal_type:
+            return None
+        base = str(metal_type).strip()
+        if base.startswith("metal::"):
+            base = base.split("metal::", 1)[1]
+
+        reference_depth = 0
+        while base.endswith("*") or base.endswith("&"):
+            if base.endswith("&"):
+                reference_depth += 1
+            base = base[:-1].strip()
+        return base if reference_depth else None
 
     def pointer_element_type(self, metal_type):
         if not metal_type:
@@ -3059,8 +3103,52 @@ class MetalToCrossGLConverter:
             base = base[:-1].strip()
         return base if pointer_depth else None
 
+    def is_stage_entry_buffer_resource_parameter(self, var):
+        if not getattr(var, "name", None):
+            return False
+        qualifiers = {
+            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
+        }
+        if not qualifiers.intersection({"device", "constant"}):
+            return False
+        raw_type = getattr(var, "vtype", None)
+        if self.pointer_element_type(raw_type):
+            return True
+        return bool(self.reference_element_type(raw_type))
+
+    def apply_implicit_stage_entry_buffer_bindings(self, func):
+        params = list(getattr(func, "params", []) or [])
+        used_bindings = {
+            binding
+            for param in params
+            for binding in [self.buffer_attribute_binding(param)]
+            if binding is not None
+        }
+        snapshots = []
+        next_binding = 0
+        for param in params:
+            if not self.is_stage_entry_buffer_resource_parameter(param):
+                continue
+            if self.buffer_attribute_binding(param) is not None:
+                continue
+            previous_attributes = list(getattr(param, "attributes", []) or [])
+            if previous_attributes:
+                continue
+            while next_binding in used_bindings:
+                next_binding += 1
+            param.attributes = previous_attributes + [
+                AttributeNode("buffer", [str(next_binding)])
+            ]
+            snapshots.append((param, previous_attributes))
+            used_bindings.add(next_binding)
+            next_binding += 1
+        return snapshots
+
     def structured_buffer_pointer_type(self, var):
-        if not self.has_attribute(var, "buffer"):
+        if not (
+            self.has_attribute(var, "buffer")
+            or id(var) in self.current_stage_entry_resource_parameter_ids
+        ):
             return None
 
         qualifiers = {
