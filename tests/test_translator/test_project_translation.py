@@ -8924,6 +8924,73 @@ def test_translate_project_materializes_mlx_metal_instantiate_kernel_entries(
     assert "void arange(" not in output
 
 
+def test_translate_project_materialized_metal_numeric_suffix_member_names_to_core_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "quantize.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct PackedScale {
+                float bits;
+            };
+
+            template <typename T, const int group_size, const int bits>
+            [[kernel]] void generated_quantize(
+                const device T* in [[buffer(0)]],
+                device T* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                PackedScale s;
+                s.bits = float(group_size);
+                T sample = in[gid];
+                float q_scale = s.bits;
+                float output = q_scale + bits;
+                out[gid] = sample + T(output);
+            }
+
+            instantiate_kernel(
+                "generated_quantize_float_gs_16_b_4",
+                generated_quantize,
+                float,
+                16,
+                4)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx", "opengl", "vulkan"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    artifacts = {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    }
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert artifacts == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+    for artifact in payload["artifacts"]:
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        assert "bits" in output
+        assert "s.4" not in output
+
+
 def test_translate_project_opengl_materializes_mlx_explicit_template_helpers(
     tmp_path,
 ):
