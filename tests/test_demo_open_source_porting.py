@@ -236,6 +236,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "monogame-sprite-effect",
         "openframeworks-noise-shader",
         "sascha-willems-vulkan-headless-compute",
+        "vulkan-samples-dynamic-line-grid",
     }
 
 
@@ -305,6 +306,7 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
         "demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/directx/noise.frag.hlsl",
         "demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/directx/headless.hlsl",
         "demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/directx/hello-world.hlsl",
+        "demos/open-source-porting/cases/vulkan-samples-dynamic-line-grid/crosstl-out/directx/grid.hlsl",
     } == directx_paths
     assert all((ROOT / path).is_file() for path in directx_paths)
 

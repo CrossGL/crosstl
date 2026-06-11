@@ -242,6 +242,7 @@ jobs:
             --case arm-opengl-es-sdk-cube \
             --case sascha-willems-vulkan-headless-compute \
             --case slang-hello-world-compute \
+            --case vulkan-samples-dynamic-line-grid \
             --target directx \
             --reports-dir support/generated/demo-reports/windows-directx
         shell: bash
@@ -280,6 +281,7 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.frag.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/directx/headless.hlsl CSMain cs_6_0
           compile_hlsl demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/directx/hello-world.hlsl CSMain cs_6_0
+          compile_hlsl demos/open-source-porting/cases/vulkan-samples-dynamic-line-grid/crosstl-out/directx/grid.hlsl PSMain ps_6_0
         shell: bash
 
       - name: Upload demo reports

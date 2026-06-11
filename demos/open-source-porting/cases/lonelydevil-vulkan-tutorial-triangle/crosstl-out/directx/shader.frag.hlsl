@@ -1,6 +1,6 @@
 
 struct FragmentInput {
-    float3 fragColor: location;
+    float3 fragColor: TEXCOORD0;
 };
 // Fragment Shader
 float4 PSMain(FragmentInput input): SV_Target0 {
