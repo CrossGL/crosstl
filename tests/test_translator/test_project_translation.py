@@ -151,6 +151,22 @@ def assert_guarded_glsl_validates_if_available(glsl_code, tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
 
 
+def assert_glsl_stage_validates_if_available(glsl_code, tmp_path, stage):
+    glslang = shutil.which("glslangValidator")
+    if not glslang:
+        return
+
+    shader_path = tmp_path / f"shader.{stage}.glsl"
+    shader_path.write_text(glsl_code, encoding="utf-8")
+    result = subprocess.run(
+        [glslang, "-S", stage, str(shader_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def assert_compute_glsl_validates_if_available(glsl_code, tmp_path):
     glslang = shutil.which("glslangValidator")
     if not glslang:
@@ -6820,6 +6836,151 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
     assert_metal_validates_if_available(metal, tmp_path)
     assert_guarded_glsl_validates_if_available(opengl, tmp_path)
     assert_spirv_asm_validates_if_available(vulkan, tmp_path)
+
+
+def test_translate_project_lowers_hlsl_struct_main_vsh_psh_pair_to_native_entries(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    (repo / "cube.vsh").parent.mkdir(parents=True, exist_ok=True)
+    (repo / "cube.vsh").write_text(
+        textwrap.dedent("""
+            cbuffer Constants
+            {
+                float4x4 g_WorldViewProj;
+            };
+
+            struct VSInput
+            {
+                float3 Pos   : ATTRIB0;
+                float4 Color : ATTRIB1;
+            };
+
+            struct PSInput
+            {
+                float4 Pos   : SV_POSITION;
+                float4 Color : COLOR0;
+            };
+
+            void main(in  VSInput VSIn,
+                      out PSInput PSIn)
+            {
+                PSIn.Pos   = mul(float4(VSIn.Pos, 1.0), g_WorldViewProj);
+                PSIn.Color = VSIn.Color;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "cube.psh").write_text(
+        textwrap.dedent("""
+            struct PSInput
+            {
+                float4 Pos   : SV_POSITION;
+                float4 Color : COLOR0;
+            };
+
+            struct PSOutput
+            {
+                float4 Color : SV_TARGET;
+            };
+
+            void main(in  PSInput  PSIn,
+                      out PSOutput PSOut)
+            {
+                float4 Color = PSIn.Color;
+                PSOut.Color = Color;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["."]
+            include = ["cube.vsh", "cube.psh"]
+            targets = ["cgl", "opengl", "metal", "vulkan"]
+            output_dir = "translated"
+
+            [project.sources]
+            "cube.vsh" = "directx"
+            "cube.psh" = "directx"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    vertex_cgl = (repo / "translated" / "cgl" / "cube.vsh.cgl").read_text(
+        encoding="utf-8"
+    )
+    fragment_cgl = (repo / "translated" / "cgl" / "cube.psh.cgl").read_text(
+        encoding="utf-8"
+    )
+    vertex_glsl = (repo / "translated" / "opengl" / "cube.vsh.glsl").read_text(
+        encoding="utf-8"
+    )
+    fragment_glsl = (repo / "translated" / "opengl" / "cube.psh.glsl").read_text(
+        encoding="utf-8"
+    )
+    vertex_metal = (repo / "translated" / "metal" / "cube.vsh.metal").read_text(
+        encoding="utf-8"
+    )
+    fragment_metal = (repo / "translated" / "metal" / "cube.psh.metal").read_text(
+        encoding="utf-8"
+    )
+    vertex_vulkan = (
+        repo / "translated" / "vulkan" / "cube.vsh.spvasm"
+    ).read_text(encoding="utf-8")
+    fragment_vulkan = (
+        repo / "translated" / "vulkan" / "cube.psh.spvasm"
+    ).read_text(encoding="utf-8")
+
+    assert payload["summary"]["unitCount"] == 2
+    assert payload["summary"]["translatedCount"] == 8
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticCounts"] == {
+        "note": 0,
+        "warning": 0,
+        "error": 0,
+    }
+    assert len(payload["artifacts"]) == 8
+
+    assert "vertex {" in vertex_cgl
+    assert "fragment {" in fragment_cgl
+
+    assert "void main()" in vertex_glsl
+    assert "void main()" in fragment_glsl
+    assert not re.search(r"void\s+main\s*\([^)]*\bVSInput\b", vertex_glsl)
+    assert not re.search(r"void\s+main\s*\([^)]*\bPSInput\b", vertex_glsl)
+    assert not re.search(r"void\s+main\s*\([^)]*\bPSInput\b", fragment_glsl)
+    assert not re.search(r"void\s+main\s*\([^)]*\bPSOutput\b", fragment_glsl)
+    assert vertex_glsl.splitlines().count("in vec4 VSIn_Color;") == 1
+    assert vertex_glsl.splitlines().count("out vec4 PSIn_Color;") == 1
+    assert fragment_glsl.splitlines().count("in vec4 PSIn_Color;") == 1
+    assert "layout(location = 0) out vec4 fragColor;" in fragment_glsl
+    assert "fragColor = Color;" in fragment_glsl
+
+    assert "vertex vertex_main_Return vertex_main(" in vertex_metal
+    assert "fragment fragment_main_Return fragment_main(" in fragment_metal
+    assert "void main(" not in vertex_metal
+    assert "void main(" not in fragment_metal
+    assert "float3 VSIn_Pos [[attribute(0)]];" in vertex_metal
+    assert "float4 VSIn_Color [[attribute(1)]];" in vertex_metal
+    assert "vertex_main_Input _crossglInput [[stage_in]]" in vertex_metal
+    assert "float4 PSIn_Color [[user(Color0)]];" in vertex_metal
+    assert "fragment_main_Input _crossglInput [[stage_in]]" in fragment_metal
+    assert "float4 PSOut_Color [[color(0)]];" in fragment_metal
+
+    assert "OpEntryPoint Vertex" in vertex_vulkan
+    assert "OpEntryPoint Fragment" in fragment_vulkan
+
+    assert_glsl_stage_validates_if_available(vertex_glsl, tmp_path, "vert")
+    assert_glsl_stage_validates_if_available(fragment_glsl, tmp_path, "frag")
+    assert_metal_validates_if_available(vertex_metal, tmp_path)
+    assert_metal_validates_if_available(fragment_metal, tmp_path)
+    assert_spirv_asm_validates_if_available(vertex_vulkan, tmp_path)
+    assert_spirv_asm_validates_if_available(fragment_vulkan, tmp_path)
 
 
 def test_translate_project_wgsl_hlsl_texture_sampler_register_pair(
