@@ -315,6 +315,16 @@ from .stage_utils import (
 )
 
 
+class DirectXUnresolvedSourceTypeError(ValueError):
+    """Diagnostic exception for source expressions with missing type metadata."""
+
+    project_diagnostic_code = "project.translate.unresolved-source-type"
+    missing_capabilities = ("directx.type-inference",)
+
+    def __init__(self, message):
+        super().__init__(message)
+
+
 class HLSLCodeGen:
     """Emit HLSL source from the shared CrossGL translator AST."""
 
@@ -599,6 +609,7 @@ class HLSLCodeGen:
         self.literal_bool_constants = {}
         self.current_identifier_aliases = {}
         self.current_identifier_reserved_names = set()
+        self.current_function_name = None
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.current_hlsl_visible_int_constants = None
@@ -1018,6 +1029,7 @@ class HLSLCodeGen:
         self.required_hlsl_inverse_helpers = set()
         self.current_identifier_aliases = {}
         self.current_identifier_reserved_names = set()
+        self.current_function_name = None
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.allow_hlsl_byteaddress_interlocked_member_expression = False
@@ -3272,6 +3284,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         previous_local_variable_types = self.local_variable_types
         previous_identifier_aliases = self.current_identifier_aliases
         previous_identifier_reserved_names = self.current_identifier_reserved_names
+        previous_function_name = self.current_function_name
         previous_generic_function_substitutions = (
             self.current_generic_function_substitutions
         )
@@ -3302,6 +3315,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.current_generic_function_substitutions = (
             getattr(func, "_generic_substitutions", {}) or {}
         )
+        self.current_function_name = getattr(func, "name", None) or entry_name
         self.local_variable_types = {}
         self.current_identifier_aliases = {}
         self.current_identifier_reserved_names = (
@@ -3554,6 +3568,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "HLSL", getattr(func, "name", None), unsupported_function_reason
             )
             self.current_function_return_type = previous_function_return_type
+            self.current_function_name = previous_function_name
             self.local_variable_types = previous_local_variable_types
             self.current_identifier_aliases = previous_identifier_aliases
             self.current_identifier_reserved_names = previous_identifier_reserved_names
@@ -3592,6 +3607,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"{return_semantic_attr};\n\n"
             )
             self.current_function_return_type = previous_function_return_type
+            self.current_function_name = previous_function_name
             self.local_variable_types = previous_local_variable_types
             self.current_identifier_aliases = previous_identifier_aliases
             self.current_identifier_reserved_names = previous_identifier_reserved_names
@@ -3722,6 +3738,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             previous_implicit_texture_query_lod_samplers
         )
         self.current_function_return_type = previous_function_return_type
+        self.current_function_name = previous_function_name
         self.local_variable_types = previous_local_variable_types
         self.current_identifier_aliases = previous_identifier_aliases
         self.current_identifier_reserved_names = previous_identifier_reserved_names
@@ -14599,6 +14616,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if self.texture_resource_type(args[0]) is not None:
             return
         arg_type = self.expression_result_type(args[0])
+        if arg_type is None:
+            raise self.unresolved_source_resource_type_error(
+                func_name, args[0], "texture or image resource"
+            )
         if arg_type is not None and self.is_texture_or_image_type(arg_type):
             return
 
@@ -14606,6 +14627,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         raise ValueError(
             f"DirectX texture operation '{func_name}' requires a declared "
             f"texture or image resource argument: {texture_name}"
+        )
+
+    def unresolved_source_resource_type_error(self, func_name, arg, resource_role):
+        expression_name = expression_debug_name(arg)
+        function_name = self.current_function_name or "<global>"
+        return DirectXUnresolvedSourceTypeError(
+            "DirectX translation could not resolve source type metadata for "
+            f"{resource_role} argument '{expression_name}' used by operation "
+            f"'{func_name}' in function '{function_name}'. Declare or annotate "
+            "the source resource type before translating to DirectX."
         )
 
     def validate_image_resource_argument(self, func_name, args):
@@ -14616,6 +14647,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         texture_type = self.texture_argument_resource_type(args[0])
         if self.is_storage_image_resource_type(texture_type):
             return
+        arg_type = self.expression_result_type(args[0])
+        if texture_type is None and arg_type is None:
+            raise self.unresolved_source_resource_type_error(
+                func_name, args[0], "storage image resource"
+            )
         texture_name = self.expression_name(args[0]) or str(args[0])
         raise ValueError(
             f"DirectX image operation '{func_name}' requires a storage "
