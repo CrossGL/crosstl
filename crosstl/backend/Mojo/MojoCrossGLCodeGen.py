@@ -148,12 +148,36 @@ class MojoToCrossGLConverter:
         "workgroup",
         "yield",
     }
+    MOJO_GPU_BUILTIN_MAP = {
+        "block_idx": "gl_WorkGroupID",
+        "block_dim": "gl_WorkGroupSize",
+        "thread_idx": "gl_LocalInvocationID",
+    }
+    MOJO_DTYPE_TYPE_MAP = {
+        "DType.float16": "half",
+        "DType.float32": "float",
+        "DType.float64": "double",
+        "DType.int8": "int8_t",
+        "DType.int16": "int16_t",
+        "DType.int32": "int",
+        "DType.int64": "int64_t",
+        "DType.uint8": "uint8_t",
+        "DType.uint16": "uint16_t",
+        "DType.uint32": "uint",
+        "DType.uint64": "uint64_t",
+        "DType.bool": "bool",
+    }
 
     def __init__(self):
         self.user_function_names = set()
         self.user_function_arities = {}
         self.imported_module_aliases = {}
         self.imported_function_aliases = {}
+        self.dtype_aliases = {}
+        self.selected_gpu_kernel_names = set()
+        self.reachable_gpu_function_names = set()
+        self.current_function_is_mojo_gpu_kernel = False
+        self.force_typed_declarations = False
         self.scoped_value_names = []
         self.function_body_depth = 0
         self.named_result_stack = []
@@ -293,6 +317,12 @@ class MojoToCrossGLConverter:
         self.imported_function_aliases = self.collect_imported_function_aliases(
             getattr(ast, "includes", []) or []
         )
+        self.dtype_aliases = {}
+        self.dtype_aliases = self.collect_dtype_aliases(ast)
+        self.selected_gpu_kernel_names = self.select_gpu_kernel_function_names(ast)
+        self.reachable_gpu_function_names = self.collect_reachable_gpu_function_names(
+            ast, self.selected_gpu_kernel_names
+        )
         self.scoped_value_names = []
         global_value_names = [
             getattr(variable, "name", None)
@@ -307,8 +337,9 @@ class MojoToCrossGLConverter:
 
     def generate_shader(self, ast):
         code = "shader main {\n"
+        kernel_names = set(self.selected_gpu_kernel_names)
 
-        if hasattr(ast, "functions") and ast.functions:
+        if not kernel_names and hasattr(ast, "functions") and ast.functions:
             imports = [f for f in ast.functions if isinstance(f, ImportNode)]
             if imports:
                 code += "    // Imports\n"
@@ -338,7 +369,11 @@ class MojoToCrossGLConverter:
                 for cbuffer in cbuffers:
                     code += self.generate_constant_buffer(cbuffer)
 
-        globals_code = self.generate_global_variables(ast)
+        globals_code = (
+            self.generate_selected_gpu_kernel_global_variables(ast, kernel_names)
+            if kernel_names
+            else self.generate_global_variables(ast)
+        )
         if globals_code:
             code += globals_code
 
@@ -352,6 +387,28 @@ class MojoToCrossGLConverter:
                 f for f in ast.functions if isinstance(f, ExtensionNode)
             ]:
                 functions.extend(getattr(extension_node, "methods", []))
+            if kernel_names:
+                functions_by_name = {
+                    getattr(func, "name", None): func
+                    for func in functions
+                    if getattr(func, "name", None)
+                }
+                for func in functions:
+                    if (
+                        getattr(func, "name", None) in self.reachable_gpu_function_names
+                        and getattr(func, "name", None) not in kernel_names
+                    ):
+                        code += self.generate_function(func, indent=1)
+                for kernel_name in sorted(kernel_names):
+                    func = functions_by_name.get(kernel_name)
+                    if func is None:
+                        continue
+                    code += "    // Compute Shader\n"
+                    code += "    compute {\n"
+                    code += self.generate_function(func, indent=2)
+                    code += "    }\n\n"
+                code += "}\n"
+                return code
             for func in functions:
                 if (
                     func.qualifier == "vertex"
@@ -385,6 +442,130 @@ class MojoToCrossGLConverter:
 
         code += "}\n"
         return code
+
+    def collect_dtype_aliases(self, ast):
+        aliases = {}
+        for variable in getattr(ast, "global_variables", []) or []:
+            if not isinstance(variable, VariableDeclarationNode):
+                continue
+            name = getattr(variable, "name", None)
+            if not isinstance(name, str):
+                continue
+            dtype_name = self.mojo_dtype_name(getattr(variable, "initial_value", None))
+            if dtype_name:
+                aliases[name] = dtype_name
+        return aliases
+
+    def mojo_dtype_name(self, node):
+        if isinstance(node, str):
+            return node if node.startswith("DType.") else None
+        if (
+            isinstance(node, MemberAccessNode)
+            and isinstance(node.object, VariableNode)
+            and node.object.name == "DType"
+            and isinstance(node.member, str)
+        ):
+            return f"DType.{node.member}"
+        if isinstance(node, VariableNode):
+            return self.dtype_aliases.get(node.name)
+        return None
+
+    def select_gpu_kernel_function_names(self, ast):
+        functions = [
+            node
+            for node in getattr(ast, "functions", [])
+            if isinstance(node, FunctionNode)
+        ]
+        function_names = {function.name for function in functions}
+        launched = set()
+
+        for function in functions:
+            for node in self.iter_ast_nodes(function):
+                launched_name = self.mojo_enqueue_function_kernel_name(node)
+                if launched_name in function_names:
+                    launched.add(launched_name)
+
+        selected = launched & function_names
+        selected.discard("main")
+        return selected
+
+    def collect_reachable_gpu_function_names(self, ast, kernel_names):
+        if not kernel_names:
+            return set()
+        functions = {
+            node.name: node
+            for node in getattr(ast, "functions", [])
+            if isinstance(node, FunctionNode)
+        }
+        reachable = set(kernel_names)
+        pending = list(kernel_names)
+        while pending:
+            function_name = pending.pop()
+            function = functions.get(function_name)
+            if function is None:
+                continue
+            for callee_name in self.collect_user_function_calls(function):
+                if callee_name == "main" or callee_name in reachable:
+                    continue
+                if callee_name in functions:
+                    reachable.add(callee_name)
+                    pending.append(callee_name)
+        return reachable
+
+    def collect_user_function_calls(self, root):
+        calls = set()
+        for node in self.iter_ast_nodes(root):
+            if isinstance(node, FunctionCallNode) and isinstance(node.name, str):
+                calls.add(node.name)
+            elif isinstance(node, CallNode):
+                callee = node.callee
+                if isinstance(callee, VariableNode) and isinstance(callee.name, str):
+                    calls.add(callee.name)
+        return calls
+
+    def mojo_enqueue_function_kernel_name(self, node):
+        if not isinstance(node, CallNode) or not isinstance(node.callee, ArrayAccessNode):
+            return None
+        callee_array = node.callee.array
+        if not (
+            isinstance(callee_array, MemberAccessNode)
+            and callee_array.member == "enqueue_function"
+        ):
+            return None
+        index = node.callee.index
+        if isinstance(index, VariableNode):
+            return index.name
+        if isinstance(index, TupleNode) and len(index.elements) == 1:
+            element = index.elements[0]
+            if isinstance(element, VariableNode):
+                return element.name
+        return None
+
+    def iter_ast_nodes(self, root):
+        stack = [root]
+        seen = set()
+        while stack:
+            node = stack.pop()
+            if node is None or isinstance(node, (str, int, float, bool)):
+                continue
+            node_id = id(node)
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            yield node
+            if isinstance(node, dict):
+                values = node.values()
+            elif isinstance(node, (list, tuple, set)):
+                values = node
+            else:
+                values = getattr(node, "__dict__", {}).values()
+            for value in values:
+                if isinstance(value, dict):
+                    stack.append(value)
+                elif isinstance(value, (list, tuple, set)):
+                    stack.extend(value)
+                elif not isinstance(value, (str, int, float, bool)):
+                    stack.append(value)
 
     def collect_user_function_arities(self, ast):
         arities = {}
@@ -536,6 +717,54 @@ class MojoToCrossGLConverter:
             code += f"    {self.generate_variable_declaration(variable)};\n"
         return code + "\n"
 
+    def generate_selected_gpu_kernel_global_variables(self, ast, kernel_names):
+        if not kernel_names:
+            return ""
+        global_variables = getattr(ast, "global_variables", []) or []
+        if not global_variables:
+            return ""
+
+        used_names = set()
+        for function in getattr(ast, "functions", []) or []:
+            if (
+                isinstance(function, FunctionNode)
+                and function.name in self.reachable_gpu_function_names
+            ):
+                used_names.update(self.collect_variable_reference_names(function))
+
+        selected_globals = [
+            variable
+            for variable in global_variables
+            if isinstance(variable, VariableDeclarationNode)
+            and getattr(variable, "name", None) in used_names
+            and self.infer_variable_declaration_type(variable) is not None
+        ]
+        if not selected_globals:
+            return ""
+
+        code = "    // Global Variables\n"
+        previous_force_typed_declarations = self.force_typed_declarations
+        self.force_typed_declarations = True
+        try:
+            for variable in selected_globals:
+                code += f"    {self.generate_variable_declaration(variable)};\n"
+        finally:
+            self.force_typed_declarations = previous_force_typed_declarations
+        return code + "\n"
+
+    def collect_variable_reference_names(self, root):
+        names = set()
+        for node in self.iter_ast_nodes(root):
+            if isinstance(node, VariableNode) and isinstance(node.name, str):
+                names.add(node.name)
+            elif (
+                isinstance(node, MemberAccessNode)
+                and isinstance(node.object, VariableNode)
+                and isinstance(node.object.name, str)
+            ):
+                names.add(node.object.name)
+        return names
+
     def generate_struct_like_declaration(self, name, members):
         code = f"    struct {name} {{\n"
         for member in members:
@@ -601,70 +830,81 @@ class MojoToCrossGLConverter:
         """Render one Mojo function node as a CrossGL function."""
         code = ""
         indent_str = "    " * indent
+        is_selected_gpu_kernel = func.name in self.selected_gpu_kernel_names
+        previous_gpu_kernel = self.current_function_is_mojo_gpu_kernel
+        previous_force_typed_declarations = self.force_typed_declarations
+        self.current_function_is_mojo_gpu_kernel = is_selected_gpu_kernel
+        if is_selected_gpu_kernel:
+            self.force_typed_declarations = True
         named_result = self.get_named_result_parameter(func)
         named_result_name = (
             self.map_identifier_name(named_result.name) if named_result else None
         )
 
-        params = []
-        param_names = []
-        if hasattr(func, "params") and func.params:
-            for p in func.params:
-                if p is named_result:
-                    continue
-                if self.is_receiver_parameter(p):
-                    continue
-                if not p.vtype:
-                    continue
-                param_name = self.map_identifier_name(p.name)
-                param_str = f"{self.map_type(p.vtype)} {param_name}"
-                if getattr(p, "default_value", None) is not None:
-                    default_value = self.generate_expression(p.default_value)
-                    param_str += f" = {default_value}"
-                if hasattr(p, "attributes") and p.attributes:
-                    semantic = self.map_semantic(p.attributes)
-                    if semantic:
-                        param_str += f" {semantic}"
-                params.append(param_str)
-                param_names.append(param_name)
-
-        params_str = ", ".join(params) if params else ""
-        if func.return_type:
-            return_type = self.map_return_type(func.return_type)
-        elif named_result:
-            return_type = self.map_return_type(named_result.vtype)
-        else:
-            return_type = "void"
-
-        func_attributes = self.map_function_attributes(func)
-        func_name = self.map_identifier_name(func.name)
-
-        code += (
-            f"{indent_str}{return_type} {func_name}({params_str}){func_attributes} {{\n"
-        )
-        if named_result:
-            result_type = self.map_type(named_result.vtype)
-            code += f"{indent_str}    {result_type} {named_result_name};\n"
-
-        saved_body_depth = self.function_body_depth
-        self.function_body_depth = 0
-        saved_loop_else_guard_stack = self.loop_else_guard_stack
-        self.loop_else_guard_stack = []
-        scope_names = list(param_names)
-        if named_result:
-            scope_names.append(named_result.name)
-        self.push_value_scope(scope_names)
-        self.named_result_stack.append(named_result_name)
         try:
-            if hasattr(func, "body") and func.body:
-                code += self.generate_function_body(func.body, indent + 1)
-            if named_result and self.needs_named_result_fallthrough_return(func.body):
-                code += f"{indent_str}    return {named_result_name};\n"
+            params = []
+            param_names = []
+            if hasattr(func, "params") and func.params:
+                for p in func.params:
+                    if p is named_result:
+                        continue
+                    if self.is_receiver_parameter(p):
+                        continue
+                    if not p.vtype:
+                        continue
+                    param_name = self.map_identifier_name(p.name)
+                    param_str = f"{self.map_type(p.vtype)} {param_name}"
+                    if getattr(p, "default_value", None) is not None:
+                        default_value = self.generate_expression(p.default_value)
+                        param_str += f" = {default_value}"
+                    if hasattr(p, "attributes") and p.attributes:
+                        semantic = self.map_semantic(p.attributes)
+                        if semantic:
+                            param_str += f" {semantic}"
+                    params.append(param_str)
+                    param_names.append(param_name)
+
+            params_str = ", ".join(params) if params else ""
+            if func.return_type:
+                return_type = self.map_return_type(func.return_type)
+            elif named_result:
+                return_type = self.map_return_type(named_result.vtype)
+            else:
+                return_type = "void"
+
+            func_attributes = self.map_function_attributes(func)
+            func_name = self.map_identifier_name(func.name)
+
+            code += (
+                f"{indent_str}{return_type} {func_name}({params_str})"
+                f"{func_attributes} {{\n"
+            )
+            if named_result:
+                result_type = self.map_type(named_result.vtype)
+                code += f"{indent_str}    {result_type} {named_result_name};\n"
+
+            saved_body_depth = self.function_body_depth
+            self.function_body_depth = 0
+            saved_loop_else_guard_stack = self.loop_else_guard_stack
+            self.loop_else_guard_stack = []
+            scope_names = list(param_names)
+            if named_result:
+                scope_names.append(named_result.name)
+            self.push_value_scope(scope_names)
+            self.named_result_stack.append(named_result_name)
+            try:
+                if hasattr(func, "body") and func.body:
+                    code += self.generate_function_body(func.body, indent + 1)
+                if named_result and self.needs_named_result_fallthrough_return(func.body):
+                    code += f"{indent_str}    return {named_result_name};\n"
+            finally:
+                self.named_result_stack.pop()
+                self.pop_value_scope()
+                self.loop_else_guard_stack = saved_loop_else_guard_stack
+                self.function_body_depth = saved_body_depth
         finally:
-            self.named_result_stack.pop()
-            self.pop_value_scope()
-            self.loop_else_guard_stack = saved_loop_else_guard_stack
-            self.function_body_depth = saved_body_depth
+            self.current_function_is_mojo_gpu_kernel = previous_gpu_kernel
+            self.force_typed_declarations = previous_force_typed_declarations
 
         code += f"{indent_str}}}\n\n"
         return code
@@ -835,8 +1075,14 @@ class MojoToCrossGLConverter:
         )
 
         name = self.generate_declaration_name(node.name)
-        if node.vtype:
-            declaration = f"{self.map_type(node.vtype)} {name}"
+        inferred_type = (
+            self.infer_variable_declaration_type(node)
+            if self.force_typed_declarations and not node.vtype
+            else None
+        )
+        if node.vtype or inferred_type:
+            declaration_type = self.map_type(node.vtype) if node.vtype else inferred_type
+            declaration = f"{declaration_type} {name}"
         else:
             var_type = "var" if node.var_type == "var" else "let"
             declaration = f"{var_type} {name}"
@@ -850,6 +1096,66 @@ class MojoToCrossGLConverter:
             if attributes:
                 declaration = f"{attributes} {declaration}"
         return declaration
+
+    def infer_variable_declaration_type(self, node):
+        value = getattr(node, "initial_value", getattr(node, "value", None))
+        if isinstance(value, bool):
+            return "bool"
+        if isinstance(value, int):
+            return "int"
+        if isinstance(value, float):
+            return "float"
+        if isinstance(value, str):
+            normalized = self.normalize_numeric_literal(value)
+            if self.is_integer_literal(normalized):
+                return "int"
+            if self.is_numeric_literal(normalized):
+                return "float"
+        if isinstance(value, UnaryOpNode) and value.op in {"-", "+"}:
+            operand = getattr(value, "operand", None)
+            if isinstance(operand, str):
+                normalized = self.normalize_numeric_literal(operand)
+                if self.is_integer_literal(normalized):
+                    return "int"
+                if self.is_numeric_literal(normalized):
+                    return "float"
+        if (
+            self.current_function_is_mojo_gpu_kernel
+            and isinstance(value, BinaryOpNode)
+            and self.expression_uses_mojo_gpu_builtins(value)
+        ):
+            return "int"
+        return None
+
+    def is_integer_literal(self, value):
+        if isinstance(value, int) and not isinstance(value, bool):
+            return True
+        if not isinstance(value, str):
+            return False
+        normalized = value.strip()
+        if normalized.startswith(("-", "+")):
+            normalized = normalized[1:]
+        return bool(
+            re.match(
+                r"^(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|\d[\d_]*)$",
+                normalized,
+            )
+        )
+
+    def expression_uses_mojo_gpu_builtins(self, node):
+        for child in self.iter_ast_nodes(node):
+            if (
+                isinstance(child, VariableNode)
+                and child.name in self.MOJO_GPU_BUILTIN_MAP
+            ):
+                return True
+            if (
+                isinstance(child, MemberAccessNode)
+                and isinstance(child.object, VariableNode)
+                and child.object.name in self.MOJO_GPU_BUILTIN_MAP
+            ):
+                return True
+        return False
 
     def generate_declaration_name(self, name):
         if isinstance(name, TupleNode):
@@ -1171,7 +1477,7 @@ class MojoToCrossGLConverter:
         elif isinstance(expr, (int, float, bool)):
             return str(expr)
         elif isinstance(expr, VariableNode):
-            name = self.map_identifier_name(expr.name)
+            name = self.map_mojo_gpu_builtin_name(expr.name)
             if hasattr(expr, "vtype") and expr.vtype:
                 return f"{self.map_type(expr.vtype)} {name}"
             else:
@@ -1461,6 +1767,9 @@ class MojoToCrossGLConverter:
             mojo_type = mojo_type[1:].lstrip()
         mojo_type = self.strip_reference_type(mojo_type)
         mojo_type = self.normalize_mojo_function_type_text(mojo_type)
+        gpu_resource_type = self.map_mojo_gpu_resource_type(mojo_type)
+        if gpu_resource_type:
+            return gpu_resource_type
         mapped_type = self.type_map.get(mojo_type)
         if mapped_type:
             return mapped_type
@@ -1471,6 +1780,64 @@ class MojoToCrossGLConverter:
         if matrix_type:
             return matrix_type
         return self.normalize_type_expression_operators(mojo_type)
+
+    def map_mojo_gpu_builtin_name(self, name):
+        if self.current_function_is_mojo_gpu_kernel:
+            return self.MOJO_GPU_BUILTIN_MAP.get(name, self.map_identifier_name(name))
+        return self.map_identifier_name(name)
+
+    def map_mojo_gpu_resource_type(self, mojo_type):
+        if not (
+            self.current_function_is_mojo_gpu_kernel
+            and isinstance(mojo_type, str)
+            and mojo_type.startswith("TileTensor[")
+            and mojo_type.endswith("]")
+        ):
+            return None
+
+        payload = mojo_type[len("TileTensor[") : -1]
+        parts = self.split_top_level_comma_list(payload)
+        if not parts:
+            return None
+        dtype = self.resolve_mojo_dtype_type(parts[0])
+        if dtype is None:
+            return None
+        return f"RWStructuredBuffer<{dtype}>"
+
+    def resolve_mojo_dtype_type(self, dtype_expr):
+        dtype_expr = dtype_expr.strip()
+        dtype_name = self.dtype_aliases.get(dtype_expr, dtype_expr)
+        mapped = self.MOJO_DTYPE_TYPE_MAP.get(dtype_name)
+        if mapped:
+            return mapped
+        mapped_type = self.type_map.get(dtype_name)
+        if mapped_type:
+            return mapped_type
+        if dtype_expr in {"float", "int", "uint", "bool", "half", "double"}:
+            return dtype_expr
+        return None
+
+    def split_top_level_comma_list(self, text):
+        parts = []
+        start = 0
+        depth = 0
+        quote = None
+        for index, char in enumerate(text):
+            if quote:
+                if char == quote:
+                    quote = None
+            elif char in {"'", '"', "`"}:
+                quote = char
+            elif char in "[({":
+                depth += 1
+            elif char in "])}":
+                if depth:
+                    depth -= 1
+            elif char == "," and depth == 0:
+                parts.append(text[start:index].strip())
+                start = index + 1
+        parts.append(text[start:].strip())
+        return parts
 
     def normalize_type_expression_operators(self, mojo_type):
         """Normalize Mojo-only operators embedded in source-like type strings."""
@@ -1963,12 +2330,17 @@ class MojoToCrossGLConverter:
         return "".join(escaped)
 
     def map_function_attributes(self, func):
-        if not hasattr(func, "attributes") or not func.attributes:
+        attributes = list(getattr(func, "attributes", []) or [])
+        if self.current_function_is_mojo_gpu_kernel and not any(
+            getattr(attr, "name", None) == "stage_entry" for attr in attributes
+        ):
+            attributes.append(AttributeNode("stage_entry", []))
+        if not attributes:
             return ""
 
         non_stage_attributes = [
             attr
-            for attr in func.attributes
+            for attr in attributes
             if not (hasattr(attr, "name") and attr.name in self.SHADER_STAGE_ATTRIBUTES)
         ]
         semantic = self.map_semantic(non_stage_attributes)
