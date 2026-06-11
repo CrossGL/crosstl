@@ -53,7 +53,11 @@ from ..ast import (
 )
 from .array_utils import get_array_size_from_node
 from .glsl_buffer_layout import glsl_buffer_block_node_type
-from .stage_utils import normalize_stage_name, stage_matches
+from .stage_utils import (
+    is_fragment_output_parameter,
+    normalize_stage_name,
+    stage_matches,
+)
 
 
 class RustCodeGen:
@@ -4240,6 +4244,20 @@ class RustCodeGen:
             return_type = "void"
         self.current_return_type = return_type
         return_semantic = self.node_semantic(func)
+        fragment_output_info = None
+        if self.map_type(return_type) == "()" and return_semantic is None:
+            for param in param_list:
+                semantic = self.node_semantic(param)
+                if is_fragment_output_parameter(shader_type, param, semantic):
+                    output_type = self.function_parameter_type(param)
+                    fragment_output_info = (param, output_type, semantic)
+                    return_type = output_type
+                    self.current_return_type = return_type
+                    return_semantic = semantic
+                    break
+        if fragment_output_info is not None:
+            output_param = fragment_output_info[0]
+            param_list = [param for param in param_list if param is not output_param]
         if shader_type == "geometry":
             self.validate_rust_geometry_stage(func, param_list)
         if shader_type in {"tessellation_control", "tessellation_evaluation"}:
@@ -4335,12 +4353,36 @@ class RustCodeGen:
                     code += self.generate_statement(variable, indent + 1)
 
         body = getattr(func, "body", [])
+        body_statements = []
+        if fragment_output_info is not None:
+            output_param, output_type, _semantic = fragment_output_info
+            output_name = self.rust_identifier(getattr(output_param, "name", None))
+            self.register_variable_type(
+                getattr(output_param, "name", None),
+                output_type,
+                scope="local",
+            )
+            code += (
+                "  " * (indent + 1)
+                + f"let mut {output_name}: "
+                + f"{self.map_type_with_lifetime(output_type, reference_lifetime)};\n"
+            )
         if hasattr(body, "statements"):
+            body_statements = body.statements
             for stmt in body.statements:
                 code += self.generate_statement(stmt, indent + 1)
         elif isinstance(body, list):
+            body_statements = body
             for stmt in body:
                 code += self.generate_statement(stmt, indent + 1)
+        if fragment_output_info is not None and not self.statement_body_terminates(
+            body_statements
+        ):
+            output_param = fragment_output_info[0]
+            code += (
+                "  " * (indent + 1)
+                + f"return {self.rust_identifier(getattr(output_param, 'name', None))};\n"
+            )
 
         code += "  " * indent + "}\n\n"
         self.variable_types = saved_variable_types

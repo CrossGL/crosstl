@@ -42,6 +42,45 @@ def function_stage_name(func):
     return stage_name
 
 
+def is_parameter_direction(parameter, direction):
+    target = normalize_layout_direction(direction)
+    return any(
+        normalize_layout_direction(qualifier) == target
+        for qualifier in getattr(parameter, "qualifiers", []) or []
+    )
+
+
+def is_fragment_output_semantic(semantic):
+    if semantic is None:
+        return False
+
+    semantic_name = str(semantic)
+    lower_name = semantic_name.lower()
+    upper_name = semantic_name.upper()
+    return (
+        lower_name == "gl_fragdepth"
+        or lower_name == "gl_fragcolor"
+        or (
+            lower_name.startswith("gl_fragcolor")
+            and lower_name[len("gl_fragcolor") :].isdigit()
+        )
+        or upper_name == "SV_DEPTH"
+        or upper_name == "SV_TARGET"
+        or (
+            upper_name.startswith("SV_TARGET")
+            and upper_name[len("SV_TARGET") :].isdigit()
+        )
+    )
+
+
+def is_fragment_output_parameter(stage_name, parameter, semantic):
+    return (
+        normalize_stage_name(stage_name) == "fragment"
+        and is_parameter_direction(parameter, "out")
+        and is_fragment_output_semantic(semantic)
+    )
+
+
 def collect_stage_entry_records(
     ast,
     target_stage,

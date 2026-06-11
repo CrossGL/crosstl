@@ -77,6 +77,7 @@ from .image_access_contracts import (
     image_format_channel_count,
     image_format_component_kind,
 )
+from .stage_utils import is_fragment_output_parameter
 
 
 def _matrix_aliases(prefix, dtype, *, rows_first):
@@ -5974,7 +5975,7 @@ class MojoCodeGen:
         previous_shader_type = self.current_shader_type
         self.current_shader_type = shader_type
 
-        param_list = getattr(func, "parameters", getattr(func, "params", []))
+        param_list = list(getattr(func, "parameters", getattr(func, "params", [])))
         param_infos = []
         for p in param_list:
             param_type = self.function_parameter_type_name(p)
@@ -5990,6 +5991,28 @@ class MojoCodeGen:
         ]
         for name, type_name in extra_param_infos:
             self.register_variable_type(name, type_name)
+
+        if hasattr(func, "return_type"):
+            return_type = self.convert_type_node_to_string(func.return_type)
+        else:
+            return_type = "void"
+        return_semantic = self.function_return_semantic(func)
+        fragment_output_info = None
+        if self.type_name(return_type) == "void" and return_semantic is None:
+            for p, param_type in param_infos:
+                semantic = self.node_semantic(p)
+                if is_fragment_output_parameter(shader_type, p, semantic):
+                    fragment_output_info = (p, param_type, semantic)
+                    return_type = param_type
+                    return_semantic = semantic
+                    break
+        if fragment_output_info is not None:
+            output_param = fragment_output_info[0]
+            param_infos = [
+                param_info
+                for param_info in param_infos
+                if param_info[0] is not output_param
+            ]
 
         if shader_type == "geometry":
             self.validate_geometry_stage(func, param_infos)
@@ -6036,10 +6059,6 @@ class MojoCodeGen:
 
         params_str = ", ".join(params) if params else ""
 
-        if hasattr(func, "return_type"):
-            return_type = self.convert_type_node_to_string(func.return_type)
-        else:
-            return_type = "void"
         function_name = self.shader_entry_function_name(
             func, shader_type, param_infos, return_type
         )
@@ -6047,7 +6066,6 @@ class MojoCodeGen:
         if function_name != func.name:
             self.function_return_types[function_name] = return_type
         self.current_return_type = return_type
-        return_semantic = self.function_return_semantic(func)
         if return_semantic:
             self.validate_return_semantic(shader_type, return_type, return_semantic)
         self.validate_struct_return_semantics(shader_type, return_type)
@@ -6077,6 +6095,14 @@ class MojoCodeGen:
             code += self.generate_function_local_shared_declarations(
                 stage_node, indent + 1
             )
+        if fragment_output_info is not None:
+            output_param, output_type, _semantic = fragment_output_info
+            output_name = getattr(output_param, "name", None)
+            self.register_variable_type(output_name, output_type)
+            code += (
+                f"{'    ' * (indent + 1)}var {self.mojo_identifier(output_name)}: "
+                f"{self.map_type(output_type)}\n"
+            )
 
         body = getattr(func, "body", [])
         statements = None
@@ -6093,6 +6119,16 @@ class MojoCodeGen:
 
         if statements is not None and not statements:
             code += "    pass\n"
+        if (
+            fragment_output_info is not None
+            and statements is not None
+            and not self.statement_body_terminates_inner_loop(statements)
+        ):
+            output_param = fragment_output_info[0]
+            code += (
+                f"{'    ' * (indent + 1)}return "
+                f"{self.mojo_identifier(getattr(output_param, 'name', None))}\n"
+            )
 
         code += "\n"
         self.variable_types = previous_variable_types
