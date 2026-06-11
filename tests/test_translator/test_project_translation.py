@@ -31986,6 +31986,74 @@ def test_translate_project_metal_directx_relocates_stage_entry_buffer_bindings(
     assert output.count(": register(b2)") == 1
 
 
+def test_translate_project_metal_matmul_buffers_lower_to_directx_resources(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "matmul.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct MatMulParams {
+                uint row_dim_x;
+                uint col_dim_x;
+                uint inner_dim;
+            };
+
+            kernel void mat_mul_simple1(
+                constant MatMulParams& params [[buffer(0)]],
+                device const float* A [[buffer(1)]],
+                device const float* B [[buffer(2)]],
+                device float* X [[buffer(3)]],
+                uint2 id [[thread_position_in_grid]]
+            ) {
+                uint row = id.y;
+                uint col = id.x;
+                float sum = 0.0;
+
+                for (uint inner = 0; inner < params.inner_dim; inner++) {
+                    uint index_A = (row * params.inner_dim) + inner;
+                    uint index_B = (inner * params.col_dim_x) + col;
+                    sum += A[index_A] * B[index_B];
+                }
+
+                uint index = (row * params.col_dim_x) + col;
+                X[index] = sum;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "ConstantBuffer<MatMulParams> params : register(b0);" in output
+    assert "StructuredBuffer<float> A : register(t1);" in output
+    assert "StructuredBuffer<float> B : register(t2);" in output
+    assert "RWStructuredBuffer<float> X : register(u3);" in output
+    assert "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)" in output
+    assert "uint2 id = id_dispatchThreadID.xy;" in output
+    assert "A.Load(index_A)" in output
+    assert "B.Load(index_B)" in output
+    assert "X.Store(index, sum);" in output
+    assert "float* A" not in output
+    assert "float* B" not in output
+    assert "float* X" not in output
+    assert "void CSMain(float*" not in output
+    assert "thread_position_in_grid" not in output
+
+
 def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(
     tmp_path,
 ):

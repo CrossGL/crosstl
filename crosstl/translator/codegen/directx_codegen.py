@@ -344,7 +344,25 @@ class HLSLCodeGen:
         "sample": "sample",
         "linear_sample": "sample",
     }
-    HLSL_RESERVED_IDENTIFIER_NAMES = {"linear"}
+    HLSL_RESERVED_IDENTIFIER_NAMES = {
+        "centroid",
+        "column_major",
+        "globallycoherent",
+        "line",
+        "lineadj",
+        "linear",
+        "nointerpolation",
+        "noperspective",
+        "point",
+        "precise",
+        "row_major",
+        "sample",
+        "snorm",
+        "triangle",
+        "triangleadj",
+        "uniform",
+        "unorm",
+    }
     HLSL_FEEDBACK_WRITE_HELPERS = {
         "write_sampler_feedback": ("WriteSamplerFeedback", {4, 5}),
         "write_sampler_feedback_bias": ("WriteSamplerFeedbackBias", {5, 6}),
@@ -15482,7 +15500,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.type_name_string,
             self.map_type,
             self.vector_component_type,
-            scalar_types={"float", "double", "int", "uint", "bool"},
+            scalar_types={
+                "float",
+                "half",
+                "min16float",
+                "min10float",
+                "double",
+                "int",
+                "min16int",
+                "min12int",
+                "uint",
+                "min16uint",
+                "bool",
+            },
             excluded_type_markers=("x",),
         )
 
@@ -15493,7 +15523,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.type_name_string,
             self.map_type,
             self.vector_component_type,
-            scalar_types={"float", "double", "int", "uint", "bool"},
+            scalar_types={
+                "float",
+                "half",
+                "min16float",
+                "min10float",
+                "double",
+                "int",
+                "min16int",
+                "min12int",
+                "uint",
+                "min16uint",
+                "bool",
+            },
             excluded_type_markers=("x",),
         )
 
@@ -15534,6 +15576,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return all(
                 self.hlsl_expression_is_repeatable(getattr(expr, name, None))
                 for name in ("condition", "true_expr", "false_expr")
+            )
+        if isinstance(expr, FunctionCallNode) or (
+            hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__)
+        ):
+            func_expr = getattr(expr, "function", getattr(expr, "name", None))
+            func_name = getattr(func_expr, "name", func_expr)
+            args = getattr(expr, "arguments", getattr(expr, "args", []))
+            return self.is_scalar_value_type(func_name) and all(
+                self.hlsl_expression_is_repeatable(arg) for arg in args
             )
         return False
 
