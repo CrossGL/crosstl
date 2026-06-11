@@ -18121,6 +18121,202 @@ def test_directx_toolchain_smoke_commands_compile_all_detected_entries(tmp_path)
     ]
 
 
+def test_directx_toolchain_smoke_commands_use_monogame_sprite_entries(tmp_path):
+    shader = tmp_path / "SpriteEffect.hlsl"
+    shader.write_text(
+        textwrap.dedent("""
+            struct VSOutput {
+                float4 Position : SV_Position;
+                float4 Color : COLOR0;
+                float2 TextureCoordinate : TEXCOORD0;
+            };
+
+            VSOutput SpriteVertexShader(
+                float4 position : POSITION0,
+                float4 color : COLOR0,
+                float2 texCoord : TEXCOORD0
+            ) {
+                VSOutput output;
+                output.Position = position;
+                output.Color = color;
+                output.TextureCoordinate = texCoord;
+                return output;
+            }
+
+            float4 SpritePixelShader(VSOutput input) : SV_Target0 {
+                return input.Color;
+            }
+
+            float4 PSMain() : SV_Target0 {
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    commands = project_pipeline._toolchain_smoke_commands("directx", ["dxc"], shader)
+
+    assert commands == [
+        (
+            [
+                "dxc",
+                "-T",
+                "vs_6_0",
+                "-E",
+                "SpriteVertexShader",
+                str(shader),
+                "-Fo",
+                project_pipeline.os.devnull,
+            ],
+            "artifact",
+        ),
+        (
+            [
+                "dxc",
+                "-T",
+                "ps_6_0",
+                "-E",
+                "SpritePixelShader",
+                str(shader),
+                "-Fo",
+                project_pipeline.os.devnull,
+            ],
+            "artifact",
+        ),
+    ]
+    assert all("PSMain" not in command for command, _kind in commands)
+
+
+def test_directx_toolchain_smoke_commands_prefer_report_entry_profiles(tmp_path):
+    shader = tmp_path / "reflected.hlsl"
+    shader.write_text(
+        textwrap.dedent("""
+            float4 PSMain() : SV_Target0 {
+                return 1.0.xxxx;
+            }
+
+            float4 ReportPixelShader() : SV_Target0 {
+                return 0.5.xxxx;
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_commands(
+        "directx",
+        ["dxc"],
+        shader,
+        artifact={
+            "entryProfiles": [{"entry": "ReportPixelShader", "profile": "ps_6_7"}]
+        },
+    ) == [
+        (
+            [
+                "dxc",
+                "-T",
+                "ps_6_7",
+                "-E",
+                "ReportPixelShader",
+                str(shader),
+                "-Fo",
+                project_pipeline.os.devnull,
+            ],
+            "artifact",
+        )
+    ]
+
+
+def test_project_directx_smoke_runs_monogame_entries_not_empty_generic_wrapper(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    artifact = repo / "out" / "directx" / "SpriteEffect.hlsl"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(
+        textwrap.dedent("""
+            struct VSOutput {
+                float4 Position : SV_Position;
+                float4 Color : COLOR0;
+                float2 TextureCoordinate : TEXCOORD0;
+            };
+
+            VSOutput SpriteVertexShader(float4 position : POSITION0) {
+                VSOutput output;
+                output.Position = position;
+                output.Color = 1.0.xxxx;
+                output.TextureCoordinate = 0.0.xx;
+                return output;
+            }
+
+            float4 SpritePixelShader(VSOutput input) : SV_Target0 {
+                return input.Color;
+            }
+
+            float4 PSMain() : SV_Target0 {
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+    expected_commands = [
+        [
+            "dxc",
+            "-T",
+            "vs_6_0",
+            "-E",
+            "SpriteVertexShader",
+            str(artifact.resolve()),
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+        [
+            "dxc",
+            "-T",
+            "ps_6_0",
+            "-E",
+            "SpritePixelShader",
+            str(artifact.resolve()),
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+    ]
+    commands = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: "/usr/bin/dxc" if tool == "dxc" else None,
+    )
+
+    def run_toolchain(command, **kwargs):
+        commands.append(command)
+        assert command in expected_commands
+        assert kwargs["cwd"] == str(repo)
+        assert kwargs["input"] is None
+        assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    runs = project_pipeline._run_toolchain_smoke(
+        [
+            {
+                "source": (
+                    "demos/open-source-porting/cases/monogame-sprite-effect/"
+                    "SpriteEffect.fx"
+                ),
+                "sourceBackend": "directx",
+                "target": "directx",
+                "path": "out/directx/SpriteEffect.hlsl",
+                "status": "translated",
+            }
+        ],
+        repo,
+    )
+
+    assert commands == expected_commands
+    assert [run["command"] for run in runs] == expected_commands
+    assert all("PSMain" not in run["command"] for run in runs)
+
+
 def test_directx_toolchain_smoke_command_uses_vrs_capable_profile(tmp_path):
     shader = tmp_path / "vrs_fragment.hlsl"
     shader.write_text(

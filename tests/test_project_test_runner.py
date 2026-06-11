@@ -108,6 +108,60 @@ def test_project_test_runner_plan_records_handoff_commands_and_provenance(tmp_pa
     assert runtime_test["provenance"]["upstreamTestName"] == "project.tests.test_add"
 
 
+def test_runtime_derived_command_inherits_unavailable_adapter_requirements(tmp_path):
+    missing_tool = "crosstl-test-runner-runtime-tool-that-does-not-exist"
+    manifest = _manifest(missing_tool)
+    manifest["tests"][0]["metadata"]["testCommand"] = ["true"]
+
+    plan = build_project_test_runner_plan(
+        _artifact_report(tmp_path, [_artifact()]),
+        manifest,
+        selected_targets=["opengl"],
+        project_root=tmp_path,
+    )
+
+    runtime_test = plan["runtimeTests"][0]
+    command = plan["testCommands"][0]
+
+    assert runtime_test["status"] == "skipped"
+    assert command["adapter"] == "opengl-native"
+    assert command["requiredAdapters"] == ["opengl-native"]
+    assert command["status"] == "skipped"
+    assert missing_tool in command["requiredTools"]
+    assert missing_tool in command["diagnostics"][0]["missingTools"]
+    assert set(command["diagnostics"][0]["missingTools"]) == set(
+        runtime_test["diagnostics"][0]["missingTools"]
+    )
+
+
+def test_project_test_runner_plans_mapping_adapter_references(tmp_path):
+    missing_tool = "crosstl-test-runner-mapping-tool-that-does-not-exist"
+
+    plan = build_project_test_runner_plan(
+        _artifact_report(tmp_path, [_artifact()]),
+        test_commands=[
+            {
+                "name": "mapping adapter command",
+                "command": ["true"],
+                "targets": ["opengl"],
+                "adapter": {
+                    "id": "opengl-mapped",
+                    "platformRequirements": {"requiredTools": [missing_tool]},
+                },
+            }
+        ],
+        project_root=tmp_path,
+    )
+
+    command = plan["testCommands"][0]
+
+    assert command["adapter"] == "opengl-mapped"
+    assert command["requiredAdapters"] == ["opengl-mapped"]
+    assert command["status"] == "skipped"
+    assert command["requiredTools"] == [missing_tool]
+    assert command["diagnostics"][0]["adapter"] == "opengl-mapped"
+
+
 def test_project_test_runner_executes_available_project_command(tmp_path):
     output_file = tmp_path / "command-output.txt"
     plan = build_project_test_runner_plan(
