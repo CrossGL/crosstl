@@ -58,7 +58,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `angle-simple-texture-2d` | `google/angle` at `52232eaf409a28d77947df5622af274e1ef770c6` | BSD-style | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses extracted upstream SimpleTexture2D shader strings. |
 | `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. |
 | `arm-opengl-es-sdk-cube` | `ARM-software/opengl-es-sdk-for-android` at `c3caf759bb2e71fa9a118b3e3abd996cf00e660a` | MIT | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream cube shader pair unchanged. |
-| `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. OpenGL resource lowering is tracked in issue #973, and DirectX buffer-resource lowering is tracked in issue #1156. |
+| `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. OpenGL resource lowering is tracked in issue #1158, and DirectX buffer-resource lowering is tracked in issue #1156. |
 | `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, Metal, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. Host launch and memory-management integration remain outside the demo scope. |
 | `nvpro-vk-mini-samples-rectangle` | `nvpro-samples/vk_mini_samples` at `994ac9f446ef44962c563b9600c8e9f117a3725d` | Apache-2.0 | GLSL | CrossGL, Metal, OpenGL, Vulkan | Uses the upstream rectangle shader pair unchanged. |
 | `ogl-samples-flat-color` | `g-truc/ogl-samples` at `38cada7a9458864265e25415ae61586d500ff5fc` | MIT | GLSL | CrossGL, Metal, OpenGL, Vulkan | Uses the upstream GLSL 330 flat-color shader pair unchanged. |
@@ -130,10 +130,10 @@ Metal output was retested after issue #887 closed and is now checked.
 
 The `glfw/glfw` OpenGL triangle shader strings were tested as a candidate and
 originally exposed the CrossGL intermediate keyword collision tracked in issue
-#766. Retesting after that fix showed the remaining blocker is Metal output:
-the fragment shader uses `fragment` as a user output variable, and Metal
-codegen still emits `fragment` as a local identifier even though it is a Metal
-stage keyword. That follow-up is tracked in issue #1140, and the case is
+#766. Retesting after issue #1140 closed showed the remaining blocker is Metal
+output: the fragment shader uses `fragment` as a user output variable, and
+Metal codegen still emits `fragment` as a local identifier even though it is a
+Metal stage keyword. That follow-up is tracked in issue #1159, and the case is
 intentionally not checked in until generated Metal artifacts compile directly.
 
 The checked `KhronosGroup/glslang` push-constant vertex shader was retested
@@ -258,7 +258,7 @@ issue #768 closed and is now checked for OpenGL, Metal, and Vulkan output.
 The `bkvogel/metal_performance_testing` matmul kernel is checked for CrossGL,
 Metal, and Vulkan output. OpenGL remains excluded because generated compute
 input parameters still lack valid GLSL resource declarations, tracked in issue
-#973. DirectX remains excluded because Metal buffer parameters still lower to
+#1158. DirectX remains excluded because Metal buffer parameters still lower to
 raw HLSL pointer parameters, tracked in issue #1156.
 
 The `SaschaWillems/Vulkan` headless compute shader was retested after issue
