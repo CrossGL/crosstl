@@ -29,9 +29,9 @@ generated portability reports, validation summaries embedded in those reports,
 generated logs, generated artifacts, and a concise JSON summary.
 
 The last completed full-corpus scout against the same pinned MLX revision
-translated 120 of 120 target artifacts across DirectX, OpenGL, and Vulkan:
-DirectX translated 40 of 40 artifacts, OpenGL translated 40 of 40 artifacts,
-and Vulkan translated 40 of 40 artifacts. The current materialization pass
+scanned 40 Metal kernels and attempted 120 target artifacts across DirectX,
+OpenGL, and Vulkan. It translated 24 artifacts and reported 96 structured
+artifact failures behind tracked issues. The current materialization pass
 rejects template-hostile targets when concrete variants are missing instead of
 emitting generic artifacts, so full-corpus counts should not be treated as
 runtime-complete coverage.
@@ -80,21 +80,23 @@ The harness writes reports, generated artifacts, and command logs under
 
 ## Current Translator Gaps
 
-No active shader artifact generation blocker is tracked for the pinned reduced
-harness or the latest full-corpus scout. CrossGL/crosstl#1317 tracks the
-remaining Vulkan toolchain validation failures for the reduced frontier.
-CrossGL/crosstl#1300 is closed and is tracked with the resolved frontier issues
-below. Future scouts should add issue-backed blockers only when there are
-concrete repros. Host runtime integration gaps should be handled in
-MLX-specific integration code or downstream runtime adapters, not hidden as
-shader translation successes.
+CrossGL/crosstl#1362 tracks the remaining Vulkan SPIR-V validation failures for
+the reduced DirectX/Vulkan frontier. CrossGL/crosstl#1354 tracks the remaining
+full-corpus Metal template materialization work for backend artifacts.
+CrossGL/crosstl#1376 tracks bounded runtime for the scheduled full-corpus scout.
+CrossGL/crosstl#1312 tracks native toolchain validation coverage for project
+CI. Future scouts should add issue-backed blockers only when there are concrete
+repros. Host runtime integration gaps should be handled in MLX-specific
+integration code or downstream runtime adapters, not hidden as shader
+translation successes.
 
 ## Resolved Frontier Issues
 
 The current reduced frontier no longer depends on the previously tracked issues:
-CrossGL/crosstl#939, CrossGL/crosstl#940, CrossGL/crosstl#941,
-CrossGL/crosstl#943, CrossGL/crosstl#944, CrossGL/crosstl#945, and
-CrossGL/crosstl#946. CrossGL/crosstl#979, CrossGL/crosstl#980,
+CrossGL/crosstl#1317, CrossGL/crosstl#939, CrossGL/crosstl#940,
+CrossGL/crosstl#941, CrossGL/crosstl#943, CrossGL/crosstl#944,
+CrossGL/crosstl#945, and CrossGL/crosstl#946. CrossGL/crosstl#979,
+CrossGL/crosstl#980,
 CrossGL/crosstl#981, CrossGL/crosstl#982, CrossGL/crosstl#983,
 CrossGL/crosstl#984, CrossGL/crosstl#985, CrossGL/crosstl#1001,
 CrossGL/crosstl#1002, CrossGL/crosstl#1003, CrossGL/crosstl#1004,
@@ -134,4 +136,7 @@ CrossGL/crosstl#1259, CrossGL/crosstl#1260, and CrossGL/crosstl#1261 are closed
 by the current mainline access-chain index, materialization scalability,
 templated functor, and Vulkan validation fixes. CrossGL/crosstl#1274 and
 CrossGL/crosstl#1287 are closed by the current Vulkan complex helper validation
-and full-corpus Metal template materialization fixes.
+and full-corpus Metal template materialization fixes. CrossGL/crosstl#1329,
+CrossGL/crosstl#1338, CrossGL/crosstl#1340, and CrossGL/crosstl#1346 are closed
+by the current project-scale template and SPIR-V validation fixes.
+CrossGL/crosstl#1355 is closed by the current OpenGL MLX template binding fix.

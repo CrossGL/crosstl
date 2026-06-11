@@ -31,7 +31,9 @@ def _test_function_names(test_file: Path) -> set[str]:
     try:
         tree = ast.parse(test_file.read_text(encoding="utf-8"))
     except OSError as exc:
-        raise DemoCiMetadataError(f"unable to read pytest file {test_file}: {exc}") from exc
+        raise DemoCiMetadataError(
+            f"unable to read pytest file {test_file}: {exc}"
+        ) from exc
     return {
         node.name
         for node in ast.walk(tree)
@@ -90,7 +92,9 @@ def validation_errors(metadata: dict[str, Any], *, root: Path = ROOT) -> list[st
             errors.append(f"{field}.selector must be a non-empty string")
             selector_matches: set[str] = set()
         elif not SELECTOR_RE.fullmatch(selector):
-            errors.append(f"{field}.selector must be a pytest -k safe token: {selector}")
+            errors.append(
+                f"{field}.selector must be a pytest -k safe token: {selector}"
+            )
             selector_matches = set()
         elif selector in seen_selectors:
             errors.append(f"{field}.selector is duplicated: {selector}")
@@ -131,13 +135,19 @@ def validation_errors(metadata: dict[str, Any], *, root: Path = ROOT) -> list[st
     return errors
 
 
-def load_metadata(path: Path = DEFAULT_METADATA_PATH, *, root: Path = ROOT) -> dict[str, Any]:
+def load_metadata(
+    path: Path = DEFAULT_METADATA_PATH, *, root: Path = ROOT
+) -> dict[str, Any]:
     try:
         metadata = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
-        raise DemoCiMetadataError(f"unable to read demo CI metadata {path}: {exc}") from exc
+        raise DemoCiMetadataError(
+            f"unable to read demo CI metadata {path}: {exc}"
+        ) from exc
     except json.JSONDecodeError as exc:
-        raise DemoCiMetadataError(f"invalid demo CI metadata JSON {path}: {exc}") from exc
+        raise DemoCiMetadataError(
+            f"invalid demo CI metadata JSON {path}: {exc}"
+        ) from exc
     if not isinstance(metadata, dict):
         raise DemoCiMetadataError("demo CI metadata must be a JSON object")
 
