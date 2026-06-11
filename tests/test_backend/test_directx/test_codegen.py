@@ -4934,7 +4934,7 @@ def test_codegen_tiled_resource_status_only_loads_roundtrip_without_offsets():
 
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
 
-    assert "float4 line = ramp.Load(int2(x, lod));" in hlsl
+    assert "float4 line_ = ramp.Load(int2(x, lod));" in hlsl
     assert "float4 color = colorMap.Load(int3(pixel, lod));" in hlsl
     assert "float4 layer = layers.Load(int4(pixelLayer, lod));" in hlsl
     assert "float4 volumeColor = volume.Load(int4(voxel, lod));" in hlsl
