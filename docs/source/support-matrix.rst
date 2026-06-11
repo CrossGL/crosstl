@@ -27,7 +27,7 @@ implicitly supported.
    "WebGL / GLSL ES", "webgl2, essl, glsl-es", "", ".webgl.glsl", "crosstl/translator/codegen/webgl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_webgl_codegen.py", "39", "38", "WebGL 2.0 specification; OpenGL ES Shading Language 3.00 specification"
    "WebGPU / WGSL", "webgpu", "", ".wgsl", "crosstl/translator/codegen/wgsl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_wgsl_codegen.py", "103", "70", "WGSL specification; WebGPU specification"
    "Metal", "", "", ".metal", "crosstl/translator/codegen/metal_codegen.py", "native", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "1011", "499", "Apple Metal resources; Metal Shading Language specification"
-   "Vulkan SPIR-V", "", "", ".spvasm", "crosstl/translator/codegen/SPIRV_codegen.py", "native", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "1016", "46", "SPIR-V unified grammar; Khronos SPIR-V headers"
+   "Vulkan SPIR-V", "", "", ".spvasm", "crosstl/translator/codegen/SPIRV_codegen.py", "native", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "1019", "46", "SPIR-V unified grammar; Khronos SPIR-V headers"
    "CUDA", "", "", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "native", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "780", "193", "CUDA C++ programming guide"
    "HIP", "", "", ".hip", "crosstl/translator/codegen/hip_codegen.py", "native", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "830", "135", "ROCm HIP documentation"
    "Mojo", "", "", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "native", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "928", "99", "Mojo manual"
@@ -37,17 +37,17 @@ implicitly supported.
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "66", "0", "2", "0", "0", "0"
-   "OpenGL / GLSL", "66", "0", "2", "0", "0", "0"
-   "WebGL / GLSL ES", "37", "0", "22", "9", "0", "0"
-   "WebGPU / WGSL", "41", "0", "20", "7", "0", "0"
-   "Metal", "65", "0", "3", "0", "0", "0"
-   "Vulkan SPIR-V", "66", "0", "2", "0", "0", "0"
-   "CUDA", "61", "0", "7", "0", "0", "0"
-   "HIP", "61", "0", "7", "0", "0", "0"
-   "Mojo", "63", "0", "5", "0", "0", "0"
-   "Rust", "64", "0", "4", "0", "0", "0"
-   "Slang", "65", "0", "3", "0", "0", "0"
+   "DirectX / HLSL", "67", "0", "2", "0", "0", "0"
+   "OpenGL / GLSL", "67", "0", "2", "0", "0", "0"
+   "WebGL / GLSL ES", "38", "0", "22", "9", "0", "0"
+   "WebGPU / WGSL", "42", "0", "20", "7", "0", "0"
+   "Metal", "66", "0", "3", "0", "0", "0"
+   "Vulkan SPIR-V", "67", "0", "2", "0", "0", "0"
+   "CUDA", "62", "0", "7", "0", "0", "0"
+   "HIP", "62", "0", "7", "0", "0", "0"
+   "Mojo", "64", "0", "5", "0", "0", "0"
+   "Rust", "65", "0", "4", "0", "0", "0"
+   "Slang", "66", "0", "3", "0", "0", "0"
 
 Graphics Backend Focus
 ----------------------
@@ -58,9 +58,9 @@ scope for graphics backend completion work.
 .. csv-table:: Graphics backend status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "66", "0", "2", "0", "0", "0"
-   "OpenGL / GLSL", "66", "0", "2", "0", "0", "0"
-   "Metal", "65", "0", "3", "0", "0", "0"
+   "DirectX / HLSL", "67", "0", "2", "0", "0", "0"
+   "OpenGL / GLSL", "67", "0", "2", "0", "0", "0"
+   "Metal", "66", "0", "3", "0", "0", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal actionable backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
@@ -75,17 +75,17 @@ inspection, diagnostics, validation, and corpus-coverage rows.
 .. csv-table:: Project-porting status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "24", "0", "1", "0", "0", "0"
-   "OpenGL / GLSL", "24", "0", "1", "0", "0", "0"
-   "WebGL / GLSL ES", "24", "0", "1", "0", "0", "0"
-   "WebGPU / WGSL", "24", "0", "1", "0", "0", "0"
-   "Metal", "24", "0", "1", "0", "0", "0"
-   "Vulkan SPIR-V", "24", "0", "1", "0", "0", "0"
-   "CUDA", "24", "0", "1", "0", "0", "0"
-   "HIP", "24", "0", "1", "0", "0", "0"
-   "Mojo", "24", "0", "1", "0", "0", "0"
-   "Rust", "24", "0", "1", "0", "0", "0"
-   "Slang", "24", "0", "1", "0", "0", "0"
+   "DirectX / HLSL", "25", "0", "1", "0", "0", "0"
+   "OpenGL / GLSL", "25", "0", "1", "0", "0", "0"
+   "WebGL / GLSL ES", "25", "0", "1", "0", "0", "0"
+   "WebGPU / WGSL", "25", "0", "1", "0", "0", "0"
+   "Metal", "25", "0", "1", "0", "0", "0"
+   "Vulkan SPIR-V", "25", "0", "1", "0", "0", "0"
+   "CUDA", "25", "0", "1", "0", "0", "0"
+   "HIP", "25", "0", "1", "0", "0", "0"
+   "Mojo", "25", "0", "1", "0", "0", "0"
+   "Rust", "25", "0", "1", "0", "0", "0"
+   "Slang", "25", "0", "1", "0", "0", "0"
 
 .. csv-table:: Project-porting actionable backlog
    :header: "Backend", "Feature", "Status", "Current gap", "Next scope"
@@ -198,6 +198,7 @@ Each category below uses the status codes from the legend.
    "Runtime host integration handoff", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Runtime host integration handoff inspection", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Runtime host integration execution plan", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Runtime host integration execution result", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Project report inspection", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Artifact manifest", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Source provenance and source-map bridge", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"

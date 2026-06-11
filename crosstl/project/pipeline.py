@@ -53,6 +53,9 @@ RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_KIND = (
 RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_KIND = (
     "crosstl-runtime-host-integration-execution-plan"
 )
+RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_KIND = (
+    "crosstl-runtime-host-integration-execution-result"
+)
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
 RUNTIME_LOADER_PLAN_CONTRACT = "runtime-loader-plan-v1"
@@ -75,6 +78,7 @@ RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_SCOPE = (
     "host-integration-handoff-readiness-inspection"
 )
 RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_SCOPE = "host-integration-execution-planning"
+RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_SCOPE = "host-integration-execution"
 RUNTIME_INTEGRATION_PLAN_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
@@ -152,6 +156,12 @@ RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_NON_GOALS = (
     "target-sdk-installation",
 )
 RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_NON_GOALS = (
+    "host-code-rewriting",
+    "device-execution",
+    "runtime-framework-generation",
+    "target-sdk-installation",
+)
+RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
     "runtime-framework-generation",
@@ -1055,6 +1065,67 @@ RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_STEP_FIELDS = frozenset(
         "tools",
         "hostResponsibilities",
         "sourceActionKind",
+    )
+)
+RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourceExecutionPlan",
+        "sourceExecutionPlanHash",
+        "generatedAt",
+        "success",
+        "status",
+        "scope",
+        "nonGoals",
+        "handoffRoot",
+        "hostRoot",
+        "hostRootStatus",
+        "scaffoldRoot",
+        "scaffoldRootStatus",
+        "packageRoot",
+        "packageRootStatus",
+        "project",
+        "summary",
+        "targets",
+        "stepResults",
+        "executionPlan",
+        "diagnosticCounts",
+        "diagnostics",
+    )
+)
+RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_TARGET_FIELDS = frozenset(
+    (
+        "target",
+        "status",
+        "stepCount",
+        "passedStepCount",
+        "skippedStepCount",
+        "blockedStepCount",
+        "failedStepCount",
+        "requiredTools",
+        "hostResponsibilities",
+        "packagePaths",
+        "scaffoldFiles",
+    )
+)
+RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_STEP_FIELDS = frozenset(
+    (
+        "id",
+        "target",
+        "phase",
+        "kind",
+        "planStatus",
+        "resultStatus",
+        "message",
+        "loaderUnit",
+        "packagePath",
+        "outputPath",
+        "tools",
+        "hostResponsibilities",
+        "sourceActionKind",
+        "checks",
+        "diagnostics",
     )
 )
 REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
@@ -13617,11 +13688,10 @@ def translate_project(
                         materialized_path = (
                             Path(template_temp_dir.name) / Path(unit.relative_path).name
                         )
-                        materialized_path.write_text(
-                            template_materialization.text,
-                            encoding="utf-8",
-                            newline="",
-                        )
+                        with materialized_path.open(
+                            "w", encoding="utf-8", newline=""
+                        ) as file:
+                            file.write(template_materialization.text)
                         translation_input_path = materialized_path
                         translation_defines = template_materialization.defines
                         translation_source_options = (
@@ -14537,7 +14607,7 @@ def _mojo_unresolved_target_construct_diagnostics(
             ),
             original_location=SourceLocation(file=str(artifact.get("source", ""))),
             **_artifact_diagnostic_context(artifact),
-            check_kind="artifact.validation",
+            check_kind="artifact",
             missing_capabilities=[MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY],
         )
     ]
@@ -23546,6 +23616,672 @@ def plan_runtime_host_integration_execution(
             "generatedFileCount": (
                 inspection.get("summary", {}).get("generatedFileCount", 0)
                 if isinstance(inspection.get("summary"), Mapping)
+                else 0
+            ),
+        },
+        "diagnosticCounts": _diagnostic_payload_counts(diagnostics_payload),
+        "diagnostics": diagnostics_payload,
+    }
+
+
+def _runtime_host_integration_execution_result_diagnostic(
+    path: Path,
+    code: str,
+    message: str,
+    *,
+    severity: str = "error",
+    target: Any = None,
+) -> ProjectDiagnostic:
+    return ProjectDiagnostic(
+        severity=severity,
+        code=f"project.runtime-host-integration-execution.{code}",
+        message=message,
+        location=SourceLocation(file=str(path)),
+        target=target if _is_non_empty_string(target) else None,
+        check_kind="runtime-host-integration-execution",
+    )
+
+
+def _runtime_host_integration_execution_load_plan(
+    path: Path,
+) -> tuple[dict[str, Any], list[ProjectDiagnostic]]:
+    try:
+        plan = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return {}, [
+            _runtime_host_integration_execution_result_diagnostic(
+                path,
+                "plan-read-failed",
+                f"Host integration execution plan could not be read: {exc}",
+            )
+        ]
+    except json.JSONDecodeError as exc:
+        return {}, [
+            _runtime_host_integration_execution_result_diagnostic(
+                path,
+                "plan-json-invalid",
+                f"Host integration execution plan is not valid JSON: {exc}",
+            )
+        ]
+    if not isinstance(plan, dict):
+        return {}, [
+            _runtime_host_integration_execution_result_diagnostic(
+                path,
+                "plan-invalid",
+                "Host integration execution input must be a JSON object.",
+            )
+        ]
+    return plan, []
+
+
+def _runtime_host_integration_execution_plan_diagnostics(
+    path: Path, plan: Mapping[str, Any]
+) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    if plan.get("schemaVersion") != REPORT_SCHEMA_VERSION:
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                path,
+                "plan-schema-invalid",
+                f"Host integration execution plan schemaVersion must be {REPORT_SCHEMA_VERSION}.",
+            )
+        )
+    if plan.get("kind") != RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_KIND:
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                path,
+                "plan-kind-invalid",
+                "Host integration execution input must be a "
+                f"{RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_KIND} document.",
+            )
+        )
+    if plan.get("success") is not True:
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                path,
+                "plan-failed",
+                "Host integration execution plan must be successful before "
+                "host integration execution can run.",
+            )
+        )
+    if not isinstance(plan.get("steps"), list):
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                path,
+                "plan-steps-invalid",
+                "Host integration execution plan steps must be a list.",
+            )
+        )
+    if not isinstance(plan.get("targets"), list):
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                path,
+                "plan-targets-invalid",
+                "Host integration execution plan targets must be a list.",
+            )
+        )
+    return diagnostics
+
+
+def _runtime_host_integration_execution_package_root(
+    package_root: str | os.PathLike[str] | None,
+    *,
+    plan_path: Path,
+) -> tuple[Path | None, str | None, str, list[ProjectDiagnostic]]:
+    if package_root is None:
+        return None, None, "not-provided", []
+    root = _filesystem_path_arg(package_root, field_name="Runtime package root")
+    if not root.exists():
+        return (
+            None,
+            str(root),
+            "missing",
+            [
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "package-root-missing",
+                    f"Runtime package root does not exist: {root}",
+                )
+            ],
+        )
+    if not root.is_dir():
+        return (
+            None,
+            str(root),
+            "not-directory",
+            [
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "package-root-not-directory",
+                    f"Runtime package root is not a directory: {root}",
+                )
+            ],
+        )
+    return root, str(root), "ready", []
+
+
+def _runtime_host_integration_execution_scaffold_root(
+    scaffold_root: str | os.PathLike[str] | None,
+    *,
+    plan_path: Path,
+) -> tuple[Path | None, str | None, str, list[ProjectDiagnostic]]:
+    if scaffold_root is None:
+        return None, None, "not-provided", []
+    root = _filesystem_path_arg(scaffold_root, field_name="Host loader scaffold root")
+    if not root.exists():
+        return (
+            None,
+            str(root),
+            "missing",
+            [
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "scaffold-root-missing",
+                    f"Host loader scaffold root does not exist: {root}",
+                )
+            ],
+        )
+    if not root.is_dir():
+        return (
+            None,
+            str(root),
+            "not-directory",
+            [
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "scaffold-root-not-directory",
+                    f"Host loader scaffold root is not a directory: {root}",
+                )
+            ],
+        )
+    return root, str(root), "ready", []
+
+
+def _runtime_host_integration_execution_check_payload(
+    kind: str,
+    status: str,
+    *,
+    field: str | None = None,
+    path: str | None = None,
+    tool: str | None = None,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"kind": kind, "status": status}
+    if field is not None:
+        payload["field"] = field
+    if path is not None:
+        payload["path"] = path
+    if tool is not None:
+        payload["tool"] = tool
+    if reason is not None:
+        payload["reason"] = reason
+    return payload
+
+
+def _runtime_host_integration_execution_file_check(
+    root: Path | None,
+    relative_path: Any,
+    *,
+    plan_path: Path,
+    step: Mapping[str, Any],
+    field_name: str,
+    root_label: str,
+    code_prefix: str,
+) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
+    if root is None:
+        return [
+            _runtime_host_integration_execution_check_payload(
+                "file-exists",
+                "skipped",
+                field=field_name,
+                reason=f"{root_label} is not provided.",
+            )
+        ], []
+    if not _is_non_empty_string(relative_path):
+        diagnostic = _runtime_host_integration_execution_result_diagnostic(
+            plan_path,
+            f"{code_prefix}-path-missing",
+            f"{field_name} must be a non-empty relative path.",
+            target=step.get("target"),
+        )
+        return [
+            _runtime_host_integration_execution_check_payload(
+                "file-exists", "failed", field=field_name
+            )
+        ], [diagnostic]
+    path_text = str(relative_path)
+    if _is_absolute_or_windows_drive_path(path_text):
+        diagnostic = _runtime_host_integration_execution_result_diagnostic(
+            plan_path,
+            f"{code_prefix}-path-absolute",
+            f"{field_name} must be relative to {root_label}.",
+            target=step.get("target"),
+        )
+        return [
+            _runtime_host_integration_execution_check_payload(
+                "file-exists", "failed", field=field_name, path=path_text
+            )
+        ], [diagnostic]
+    candidate = root / Path(path_text)
+    if not _is_relative_to(candidate, root):
+        diagnostic = _runtime_host_integration_execution_result_diagnostic(
+            plan_path,
+            f"{code_prefix}-path-outside-root",
+            f"{field_name} resolves outside {root_label}: {path_text}.",
+            target=step.get("target"),
+        )
+        return [
+            _runtime_host_integration_execution_check_payload(
+                "file-exists", "failed", field=field_name, path=path_text
+            )
+        ], [diagnostic]
+    if candidate.is_file():
+        return [
+            _runtime_host_integration_execution_check_payload(
+                "file-exists",
+                "passed",
+                field=field_name,
+                path=str(candidate),
+            )
+        ], []
+    diagnostic = _runtime_host_integration_execution_result_diagnostic(
+        plan_path,
+        f"{code_prefix}-missing",
+        f"{field_name} does not exist: {candidate}",
+        target=step.get("target"),
+    )
+    return [
+        _runtime_host_integration_execution_check_payload(
+            "file-exists",
+            "failed",
+            field=field_name,
+            path=str(candidate),
+        )
+    ], [diagnostic]
+
+
+def _runtime_host_integration_execution_tool_checks(
+    step: Mapping[str, Any],
+    *,
+    plan_path: Path,
+) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
+    checks: list[dict[str, Any]] = []
+    diagnostics: list[ProjectDiagnostic] = []
+    for tool in _record_sequence(step.get("tools")):
+        if not _is_non_empty_string(tool):
+            continue
+        resolved = shutil.which(str(tool))
+        if resolved:
+            checks.append(
+                _runtime_host_integration_execution_check_payload(
+                    "tool-available",
+                    "passed",
+                    tool=str(tool),
+                    path=resolved,
+                )
+            )
+            continue
+        checks.append(
+            _runtime_host_integration_execution_check_payload(
+                "tool-available",
+                "blocked",
+                tool=str(tool),
+                reason="Tool is not available on PATH.",
+            )
+        )
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                plan_path,
+                "tool-unavailable",
+                f"Host integration tool is not available on PATH: {tool}",
+                severity="warning",
+                target=step.get("target"),
+            )
+        )
+    if not checks:
+        checks.append(
+            _runtime_host_integration_execution_check_payload(
+                "tool-available",
+                "skipped",
+                reason="No host integration tools were listed for this step.",
+            )
+        )
+    return checks, diagnostics
+
+
+def _runtime_host_integration_execution_step_status(
+    checks: Sequence[Mapping[str, Any]],
+    diagnostics: Sequence[ProjectDiagnostic],
+    fallback: str,
+) -> str:
+    statuses = {check.get("status") for check in checks}
+    if any(diagnostic.severity == "error" for diagnostic in diagnostics):
+        return "failed"
+    if "failed" in statuses:
+        return "failed"
+    if "blocked" in statuses:
+        return "blocked"
+    if statuses and statuses <= {"skipped"}:
+        return "skipped"
+    if "skipped" in statuses and "passed" not in statuses:
+        return "skipped"
+    return fallback
+
+
+def _runtime_host_integration_execution_step_result(
+    step: Mapping[str, Any],
+    *,
+    plan_path: Path,
+    scaffold_root: Path | None,
+    package_root: Path | None,
+) -> tuple[dict[str, Any], list[ProjectDiagnostic]]:
+    checks: list[dict[str, Any]] = []
+    diagnostics: list[ProjectDiagnostic] = []
+    plan_status = step.get("status")
+    kind = step.get("kind")
+    phase = step.get("phase")
+    fallback_status = "passed" if plan_status == "ready" else str(plan_status)
+
+    if plan_status == "failed":
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                plan_path,
+                "plan-step-failed",
+                f"Host integration plan step failed before execution: {step.get('id')}",
+                target=step.get("target"),
+            )
+        )
+        checks.append(
+            _runtime_host_integration_execution_check_payload(
+                "plan-step-status", "failed", reason="Plan step is failed."
+            )
+        )
+    elif plan_status == "blocked":
+        checks.append(
+            _runtime_host_integration_execution_check_payload(
+                "plan-step-status", "blocked", reason="Plan step is blocked."
+            )
+        )
+        fallback_status = "blocked"
+    elif phase == "prepare-tools":
+        step_checks, step_diagnostics = _runtime_host_integration_execution_tool_checks(
+            step, plan_path=plan_path
+        )
+        checks.extend(step_checks)
+        diagnostics.extend(step_diagnostics)
+    elif kind == "consume-host-loader-unit":
+        step_checks, step_diagnostics = _runtime_host_integration_execution_file_check(
+            scaffold_root,
+            step.get("outputPath"),
+            plan_path=plan_path,
+            step=step,
+            field_name="outputPath",
+            root_label="host loader scaffold root",
+            code_prefix="output",
+        )
+        checks.extend(step_checks)
+        diagnostics.extend(step_diagnostics)
+    elif kind in {"load-package-artifact", "load-source-remap"}:
+        step_checks, step_diagnostics = _runtime_host_integration_execution_file_check(
+            package_root,
+            step.get("packagePath"),
+            plan_path=plan_path,
+            step=step,
+            field_name="packagePath",
+            root_label="runtime package root",
+            code_prefix="package",
+        )
+        checks.extend(step_checks)
+        diagnostics.extend(step_diagnostics)
+    elif kind == "satisfy-host-responsibility":
+        checks.append(
+            _runtime_host_integration_execution_check_payload(
+                "host-responsibility",
+                "skipped",
+                reason="Requires project-specific host code changes.",
+            )
+        )
+    else:
+        checks.append(
+            _runtime_host_integration_execution_check_payload(
+                "plan-step-ready", "passed"
+            )
+        )
+
+    result_status = _runtime_host_integration_execution_step_status(
+        checks, diagnostics, fallback_status
+    )
+    return {
+        "id": step.get("id"),
+        "target": step.get("target"),
+        "phase": phase,
+        "kind": kind,
+        "planStatus": plan_status,
+        "resultStatus": result_status,
+        "message": step.get("message"),
+        "loaderUnit": step.get("loaderUnit"),
+        "packagePath": step.get("packagePath"),
+        "outputPath": step.get("outputPath"),
+        "tools": [
+            tool
+            for tool in _record_sequence(step.get("tools"))
+            if _is_non_empty_string(tool)
+        ],
+        "hostResponsibilities": [
+            responsibility
+            for responsibility in _record_sequence(step.get("hostResponsibilities"))
+            if _is_non_empty_string(responsibility)
+        ],
+        "sourceActionKind": step.get("sourceActionKind"),
+        "checks": checks,
+        "diagnostics": [diagnostic.to_json() for diagnostic in diagnostics],
+    }, diagnostics
+
+
+def _runtime_host_integration_execution_result_status(
+    step_results: Sequence[Mapping[str, Any]], diagnostics: Sequence[Mapping[str, Any]]
+) -> str:
+    if any(diagnostic.get("severity") == "error" for diagnostic in diagnostics):
+        return "failed"
+    statuses = {step.get("resultStatus") for step in step_results}
+    if "failed" in statuses:
+        return "failed"
+    if "blocked" in statuses:
+        return "blocked"
+    if "skipped" in statuses and ("passed" in statuses or len(statuses) == 1):
+        return "partial" if "passed" in statuses else "skipped"
+    if "passed" in statuses:
+        return "passed"
+    return "empty"
+
+
+def _runtime_host_integration_execution_result_target(
+    target: Mapping[str, Any],
+    step_results: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    target_name = target.get("target")
+    target_steps = [step for step in step_results if step.get("target") == target_name]
+    passed_steps = [
+        step for step in target_steps if step.get("resultStatus") == "passed"
+    ]
+    skipped_steps = [
+        step for step in target_steps if step.get("resultStatus") == "skipped"
+    ]
+    blocked_steps = [
+        step for step in target_steps if step.get("resultStatus") == "blocked"
+    ]
+    failed_steps = [
+        step for step in target_steps if step.get("resultStatus") == "failed"
+    ]
+    status = _runtime_host_integration_execution_result_status(target_steps, [])
+    return {
+        "target": target_name,
+        "status": status,
+        "stepCount": len(target_steps),
+        "passedStepCount": len(passed_steps),
+        "skippedStepCount": len(skipped_steps),
+        "blockedStepCount": len(blocked_steps),
+        "failedStepCount": len(failed_steps),
+        "requiredTools": [
+            tool
+            for tool in _record_sequence(target.get("requiredTools"))
+            if _is_non_empty_string(tool)
+        ],
+        "hostResponsibilities": [
+            responsibility
+            for responsibility in _record_sequence(target.get("hostResponsibilities"))
+            if _is_non_empty_string(responsibility)
+        ],
+        "packagePaths": [
+            package_path
+            for package_path in _record_sequence(target.get("packagePaths"))
+            if _is_non_empty_string(package_path)
+        ],
+        "scaffoldFiles": [
+            scaffold_file
+            for scaffold_file in _record_sequence(target.get("scaffoldFiles"))
+            if _is_non_empty_string(scaffold_file)
+        ],
+    }
+
+
+def execute_runtime_host_integration(
+    execution_plan_path: str | os.PathLike[str],
+    *,
+    scaffold_root: str | os.PathLike[str] | None = None,
+    package_root: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Execute deterministic host integration checks from an execution plan."""
+
+    plan_path = _filesystem_path_arg(
+        execution_plan_path, field_name="Host integration execution plan path"
+    )
+    plan, load_diagnostics = _runtime_host_integration_execution_load_plan(plan_path)
+    diagnostics = list(load_diagnostics)
+    if plan:
+        diagnostics.extend(
+            _runtime_host_integration_execution_plan_diagnostics(plan_path, plan)
+        )
+    package_root_path, package_root_value, package_root_status, package_diagnostics = (
+        _runtime_host_integration_execution_package_root(
+            package_root, plan_path=plan_path
+        )
+    )
+    (
+        scaffold_root_path,
+        scaffold_root_value,
+        scaffold_root_status,
+        scaffold_diagnostics,
+    ) = _runtime_host_integration_execution_scaffold_root(
+        scaffold_root, plan_path=plan_path
+    )
+    diagnostics.extend(package_diagnostics)
+    diagnostics.extend(scaffold_diagnostics)
+
+    diagnostics_payload = [diagnostic.to_json() for diagnostic in diagnostics]
+    plan_ready = bool(plan) and not any(
+        diagnostic.severity == "error" for diagnostic in diagnostics
+    )
+    step_results: list[dict[str, Any]] = []
+    if plan_ready:
+        for step in _record_sequence(plan.get("steps")):
+            if not isinstance(step, Mapping):
+                continue
+            result, step_diagnostics = _runtime_host_integration_execution_step_result(
+                step,
+                plan_path=plan_path,
+                scaffold_root=scaffold_root_path,
+                package_root=package_root_path,
+            )
+            step_results.append(result)
+            diagnostics_payload.extend(
+                diagnostic.to_json() for diagnostic in step_diagnostics
+            )
+
+    passed_steps = [
+        step for step in step_results if step.get("resultStatus") == "passed"
+    ]
+    skipped_steps = [
+        step for step in step_results if step.get("resultStatus") == "skipped"
+    ]
+    blocked_steps = [
+        step for step in step_results if step.get("resultStatus") == "blocked"
+    ]
+    failed_steps = [
+        step for step in step_results if step.get("resultStatus") == "failed"
+    ]
+    targets = [
+        dict(target)
+        for target in _record_sequence(plan.get("targets"))
+        if isinstance(target, Mapping)
+    ]
+    required_tools = sorted(
+        {
+            tool
+            for target in targets
+            for tool in _record_sequence(target.get("requiredTools"))
+            if _is_non_empty_string(tool)
+        }
+    )
+    host_responsibilities = sorted(
+        {
+            responsibility
+            for target in targets
+            for responsibility in _record_sequence(target.get("hostResponsibilities"))
+            if _is_non_empty_string(responsibility)
+        }
+    )
+    status = _runtime_host_integration_execution_result_status(
+        step_results, diagnostics_payload
+    )
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_KIND,
+        "sourceExecutionPlan": str(plan_path),
+        "sourceExecutionPlanHash": _optional_source_hash(plan_path),
+        "generatedAt": int(time.time()),
+        "success": status != "failed",
+        "status": status,
+        "scope": RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_SCOPE,
+        "nonGoals": list(RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_NON_GOALS),
+        "handoffRoot": plan.get("handoffRoot") if plan else None,
+        "hostRoot": plan.get("hostRoot") if plan else None,
+        "hostRootStatus": plan.get("hostRootStatus") if plan else None,
+        "scaffoldRoot": scaffold_root_value,
+        "scaffoldRootStatus": scaffold_root_status,
+        "packageRoot": package_root_value,
+        "packageRootStatus": package_root_status,
+        "project": (
+            dict(plan.get("project"))
+            if isinstance(plan.get("project"), Mapping)
+            else {"targets": []}
+        ),
+        "summary": {
+            "targetCount": len(targets),
+            "stepCount": len(step_results),
+            "passedStepCount": len(passed_steps),
+            "skippedStepCount": len(skipped_steps),
+            "blockedStepCount": len(blocked_steps),
+            "failedStepCount": len(failed_steps),
+            "requiredToolCount": len(required_tools),
+            "hostResponsibilityCount": len(host_responsibilities),
+        },
+        "targets": [
+            _runtime_host_integration_execution_result_target(target, step_results)
+            for target in targets
+        ],
+        "stepResults": step_results,
+        "executionPlan": {
+            "kind": plan.get("kind") if plan else None,
+            "success": plan.get("success") if plan else False,
+            "status": plan.get("status") if plan else "failed",
+            "stepCount": (
+                (
+                    plan.get("summary", {}).get("stepCount", 0)
+                    if isinstance(plan.get("summary"), Mapping)
+                    else 0
+                )
+                if plan
                 else 0
             ),
         },

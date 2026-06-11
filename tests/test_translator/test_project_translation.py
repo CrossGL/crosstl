@@ -27,6 +27,7 @@ from crosstl.project import (
     build_runtime_host_loader_scaffolds,
     build_runtime_loader_manifest,
     build_runtime_package,
+    execute_runtime_host_integration,
     inspect_project_report,
     inspect_runtime_host_integration_handoff,
     inspect_runtime_host_loader_scaffolds,
@@ -237,6 +238,68 @@ def assert_guarded_glsl_validates_if_available(glsl_code, tmp_path):
             check=False,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+
+
+def assert_only_optional_project_toolchain_warnings(payload):
+    expected_toolchain_warnings = sum(
+        (
+            not shutil.which("glslangValidator"),
+            not shutil.which("xcrun"),
+            not (shutil.which("spirv-val") and shutil.which("spirv-as")),
+        )
+    )
+    assert payload["diagnosticCounts"] == {
+        "note": 0,
+        "warning": expected_toolchain_warnings,
+        "error": 0,
+    }
+
+    if not expected_toolchain_warnings:
+        assert payload["diagnostics"] == []
+        assert payload["summary"]["diagnosticsByCode"] == {}
+        assert payload["summary"]["diagnosticsByTarget"] == {}
+        return
+
+    diagnostics = payload["diagnostics"]
+    assert len(diagnostics) == expected_toolchain_warnings
+    assert {diagnostic["code"] for diagnostic in diagnostics} == {
+        "project.validate.toolchain-unavailable"
+    }
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.validate.toolchain-unavailable": expected_toolchain_warnings
+    }
+
+    diagnostics_by_target = {}
+    for diagnostic in diagnostics:
+        target = diagnostic.get("target")
+        if target:
+            diagnostics_by_target[target] = diagnostics_by_target.get(target, 0) + 1
+    assert payload["summary"]["diagnosticsByTarget"] == diagnostics_by_target
+
+
+def assert_only_optional_wgsl_toolchain_warning(payload):
+    expected_toolchain_warnings = 0 if shutil.which("naga") else 1
+    assert payload["diagnosticCounts"] == {
+        "note": 0,
+        "warning": expected_toolchain_warnings,
+        "error": 0,
+    }
+
+    if not expected_toolchain_warnings:
+        assert payload["diagnostics"] == []
+        assert payload["summary"]["diagnosticsByCode"] == {}
+        assert payload["summary"]["diagnosticsByTarget"] == {}
+        return
+
+    diagnostics = payload["diagnostics"]
+    assert len(diagnostics) == expected_toolchain_warnings
+    assert [diagnostic["code"] for diagnostic in diagnostics] == [
+        "project.validate.toolchain-unavailable"
+    ]
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.validate.toolchain-unavailable": expected_toolchain_warnings
+    }
+    assert payload["summary"]["diagnosticsByTarget"] == {"wgsl": 1}
 
 
 def assert_glsl_stage_validates_if_available(glsl_code, tmp_path, stage):
@@ -464,6 +527,7 @@ def test_project_package_exposes_public_api_surface():
         "build_runtime_package",
         "compare_runtime_outputs",
         "default_runtime_test_adapters",
+        "execute_runtime_host_integration",
         "inspect_runtime_host_integration_handoff",
         "inspect_runtime_host_loader_scaffolds",
         "inspect_runtime_package",
@@ -1362,43 +1426,6 @@ def _clear_report_diagnostics(payload):
         payload["migration"]["placeholderCount"] = 0
         payload["migration"]["placeholdersByTarget"] = {}
         payload["migration"]["placeholdersBySource"] = {}
-
-
-def _assert_no_errors_or_only_toolchain_unavailable_warnings(payload):
-    assert payload["diagnosticCounts"]["note"] == 0
-    assert payload["diagnosticCounts"]["error"] == 0
-    allowed_warning_code = "project.validate.toolchain-unavailable"
-    allowed_warnings = [
-        diagnostic
-        for diagnostic in payload["diagnostics"]
-        if (
-            diagnostic.get("severity") == "warning"
-            and diagnostic.get("code") == allowed_warning_code
-            and diagnostic.get("missingCapabilities") == ["toolchain.validation"]
-        )
-    ]
-    unexpected = [
-        diagnostic
-        for diagnostic in payload["diagnostics"]
-        if diagnostic not in allowed_warnings
-    ]
-    assert unexpected == []
-    summary = payload.get("summary", {})
-    assert {
-        code: count
-        for code, count in summary.get("diagnosticsByCode", {}).items()
-        if code != allowed_warning_code
-    } == {}
-    allowed_warning_targets = {
-        diagnostic.get("target")
-        for diagnostic in allowed_warnings
-        if diagnostic.get("target") is not None
-    }
-    assert {
-        target: count
-        for target, count in summary.get("diagnosticsByTarget", {}).items()
-        if target not in allowed_warning_targets
-    } == {}
 
 
 def _write_count_balanced_artifact_gap_report(repo, *, omit_artifact_matrix=False):
@@ -7449,7 +7476,7 @@ def test_translate_project_glsl_alpha_stitch_storage_image_lowers_to_wgsl(
 
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
-    _assert_no_errors_or_only_toolchain_unavailable_warnings(payload)
+    assert_only_optional_wgsl_toolchain_warning(payload)
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("wgsl", "translated")}
@@ -7533,7 +7560,7 @@ def test_translate_project_glsl_fragcoord_lowers_to_wgsl_fragment_position(tmp_p
 
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
-    _assert_no_errors_or_only_toolchain_unavailable_warnings(payload)
+    assert_only_optional_wgsl_toolchain_warning(payload)
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("wgsl", "translated")}
@@ -7572,7 +7599,7 @@ def test_translate_project_spirv_assembly_vertex_position_lowers_to_wgsl(tmp_pat
 
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
-    _assert_no_errors_or_only_toolchain_unavailable_warnings(payload)
+    assert_only_optional_wgsl_toolchain_warning(payload)
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("wgsl", "translated")}
@@ -7831,8 +7858,16 @@ def test_translate_project_generates_metal_and_spirv_for_modular_mojo_vector_add
         artifact["target"]: artifact for artifact in payload["artifacts"]
     }
 
+    assert payload["summary"]["artifactCount"] == 2
     assert payload["summary"]["translatedCount"] == 2
     assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticCounts"] == {
+        "note": 0,
+        "warning": 0,
+        "error": 0,
+    }
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["summary"]["missingCapabilityCounts"] == {}
     assert validation["success"] is True
     expected_toolchain_warning_targets = {"metal", "vulkan"}
     unexpected_validation_diagnostics = [
@@ -11079,13 +11114,15 @@ def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
             },
             "source": "call-site",
         }
-        output = (repo / artifact["path"]).read_text(encoding="utf-8")
-        assert not re.search(r"\b(?:T|IdxT|N)\b", output)
+        if artifact["status"] == "translated":
+            output = (repo / artifact["path"]).read_text(encoding="utf-8")
+            assert not re.search(r"\b(?:T|IdxT|N)\b", output)
 
     report_path = repo / "translated" / "report.json"
     report.write_json(report_path)
     validation = validate_project_report(report_path)
     assert validation["success"] is True
+    assert "project.validate.failed-artifact" not in validation["diagnosticsByCode"]
 
 
 def test_translate_project_metal_rope_missing_variant_data_reports_template_diagnostic(
@@ -35866,6 +35903,252 @@ def test_project_cli_plan_host_integration_execution_json_writes_output(tmp_path
     assert payload["steps"][0]["kind"] == "consume-host-loader-unit"
 
 
+def _write_runtime_host_integration_execution_plan_fixture(tmp_path, targets=("cgl",)):
+    repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
+        tmp_path, targets=targets
+    )
+    plan_payload = plan_runtime_host_integration_execution(
+        handoff_dir / "host-integration.json",
+        host_root=repo,
+    )
+    plan_path = repo / "host-integration-execution-plan.json"
+    plan_path.write_text(json.dumps(plan_payload, indent=2), encoding="utf-8")
+    return repo, plan_path, plan_payload
+
+
+def test_execute_runtime_host_integration_reports_checked_and_skipped_steps(
+    tmp_path,
+):
+    repo, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
+        tmp_path
+    )
+
+    payload = execute_runtime_host_integration(
+        plan_path,
+        scaffold_root=repo / "host-loader-scaffolds",
+        package_root=repo / "runtime-package",
+    )
+
+    assert (
+        set(payload)
+        == project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_FIELDS
+    )
+    assert (
+        payload["kind"]
+        == project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_KIND
+    )
+    assert payload["success"] is True
+    assert payload["status"] == "partial"
+    assert (
+        payload["scope"]
+        == project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_SCOPE
+    )
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_NON_GOALS
+    )
+    assert payload["packageRoot"] == str(repo / "runtime-package")
+    assert payload["packageRootStatus"] == "ready"
+    assert payload["scaffoldRoot"] == str(repo / "host-loader-scaffolds")
+    assert payload["scaffoldRootStatus"] == "ready"
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "stepCount": 6,
+        "passedStepCount": 4,
+        "skippedStepCount": 2,
+        "blockedStepCount": 0,
+        "failedStepCount": 0,
+        "requiredToolCount": 0,
+        "hostResponsibilityCount": 2,
+    }
+    assert set(payload["targets"][0]) == (
+        project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_TARGET_FIELDS
+    )
+    assert payload["targets"][0]["status"] == "partial"
+    assert [step["resultStatus"] for step in payload["stepResults"]] == [
+        "passed",
+        "passed",
+        "passed",
+        "passed",
+        "skipped",
+        "skipped",
+    ]
+    assert all(
+        set(step)
+        == project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_STEP_FIELDS
+        for step in payload["stepResults"]
+    )
+    assert payload["stepResults"][0]["checks"][0]["status"] == "passed"
+    assert payload["stepResults"][1]["checks"][0]["field"] == "packagePath"
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+
+
+def test_execute_runtime_host_integration_reports_missing_package_artifact(
+    tmp_path,
+):
+    repo, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
+        tmp_path
+    )
+    (repo / "runtime-package" / "artifacts" / "out" / "cgl" / "simple.cgl").unlink()
+
+    payload = execute_runtime_host_integration(
+        plan_path,
+        scaffold_root=repo / "host-loader-scaffolds",
+        package_root=repo / "runtime-package",
+    )
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["summary"]["failedStepCount"] == 1
+    assert any(
+        diagnostic["code"]
+        == "project.runtime-host-integration-execution.package-missing"
+        for diagnostic in payload["diagnostics"]
+    )
+    failed_steps = [
+        step for step in payload["stepResults"] if step["resultStatus"] == "failed"
+    ]
+    assert failed_steps[0]["kind"] == "load-package-artifact"
+
+
+def test_execute_runtime_host_integration_reports_blocked_steps_without_failure(
+    tmp_path,
+):
+    _, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
+        tmp_path, targets=("vulkan",)
+    )
+
+    payload = execute_runtime_host_integration(plan_path)
+
+    assert payload["success"] is True
+    assert payload["status"] == "blocked"
+    assert payload["summary"]["stepCount"] == 1
+    assert payload["summary"]["blockedStepCount"] == 1
+    assert payload["stepResults"][0]["kind"] == "resolve-loader-scaffold-blockers"
+    assert payload["stepResults"][0]["resultStatus"] == "blocked"
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+
+
+def test_execute_runtime_host_integration_reports_missing_tool_as_blocked(
+    tmp_path,
+):
+    repo, plan_path, plan_payload = (
+        _write_runtime_host_integration_execution_plan_fixture(tmp_path)
+    )
+    missing_tool = "definitely-missing-crosstl-host-tool"
+    tool_step = dict(plan_payload["steps"][0])
+    tool_step.update(
+        {
+            "id": "cgl-0000-prepare-missing-tool",
+            "phase": "prepare-tools",
+            "kind": "verify-host-tool",
+            "status": "ready",
+            "message": f"Verify host integration tool is available: {missing_tool}.",
+            "loaderUnit": None,
+            "scaffold": None,
+            "packagePath": None,
+            "outputPath": None,
+            "tools": [missing_tool],
+            "hostResponsibilities": [],
+            "sourceActionKind": None,
+        }
+    )
+    plan_payload["targets"][0]["requiredTools"] = [missing_tool]
+    plan_payload["steps"].insert(0, tool_step)
+    plan_path.write_text(json.dumps(plan_payload, indent=2), encoding="utf-8")
+
+    payload = execute_runtime_host_integration(
+        plan_path,
+        scaffold_root=repo / "host-loader-scaffolds",
+        package_root=repo / "runtime-package",
+    )
+
+    assert payload["success"] is True
+    assert payload["status"] == "blocked"
+    assert payload["summary"]["blockedStepCount"] == 1
+    assert payload["targets"][0]["requiredTools"] == [missing_tool]
+    assert payload["stepResults"][0]["resultStatus"] == "blocked"
+    assert payload["stepResults"][0]["checks"][0]["tool"] == missing_tool
+    assert (
+        payload["diagnostics"][0]["code"]
+        == "project.runtime-host-integration-execution.tool-unavailable"
+    )
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+
+
+def test_project_cli_execute_host_integration_text_outputs_results(tmp_path):
+    repo, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
+        tmp_path
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "execute-host-integration",
+            str(plan_path),
+            "--scaffold-root",
+            str(repo / "host-loader-scaffolds"),
+            "--package-root",
+            str(repo / "runtime-package"),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Runtime host integration execution: {plan_path}" in result.stdout
+    assert "Status: partial" in result.stdout
+    assert "Host loader scaffold root:" in result.stdout
+    assert "Runtime package root:" in result.stdout
+    assert "Summary: 1 targets, 6 steps, 4 passed, 2 skipped, 0 blocked, 0 failed" in (
+        result.stdout
+    )
+    assert "Runtime host integration step results:" in result.stdout
+    assert "satisfy-host-responsibility" in result.stdout
+
+
+def test_project_cli_execute_host_integration_json_writes_output(tmp_path):
+    repo, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
+        tmp_path
+    )
+    output_path = repo / "host-integration-execution-result.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "execute-host-integration",
+            str(plan_path),
+            "--scaffold-root",
+            str(repo / "host-loader-scaffolds"),
+            "--package-root",
+            str(repo / "runtime-package"),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert (
+        payload["kind"]
+        == project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_KIND
+    )
+    assert payload["summary"]["passedStepCount"] == 4
+    assert payload["summary"]["skippedStepCount"] == 2
+
+
 def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp_path):
     report_path = _write_large_migration_report(tmp_path / "repo")
 
@@ -41863,7 +42146,7 @@ def test_translate_project_khronos_opencl_reduce_lowers_all_target_artifacts(
     }
     assert payload["summary"]["translatedCount"] == 4
     assert payload["summary"]["failedCount"] == 0
-    _assert_no_errors_or_only_toolchain_unavailable_warnings(payload)
+    assert_only_optional_project_toolchain_warnings(payload)
 
     artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
 
@@ -41986,7 +42269,7 @@ def test_translate_project_khronos_opencl_reduce_lowers_supported_target_artifac
         validate=True,
     ).to_json()
 
-    _assert_no_errors_or_only_toolchain_unavailable_warnings(payload)
+    assert_only_optional_project_toolchain_warnings(payload)
     assert payload["summary"]["translatedCount"] == 4
     assert payload["summary"]["failedCount"] == 0
 
@@ -42312,7 +42595,7 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
         assert diagnostic["sourceBackend"] == "mojo"
         assert diagnostic["location"]["file"].startswith(f"out/{target}/")
         assert diagnostic["originalLocation"]["file"] == "vector_addition.mojo"
-        assert diagnostic["checkKind"] == "artifact.validation"
+        assert diagnostic["checkKind"] == "artifact"
         assert diagnostic["missingCapabilities"] == [
             project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY
         ]

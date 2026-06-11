@@ -101,12 +101,6 @@ ADDITIONAL_FIXED_CASES = (
 GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES = (
     (
         "advanced/GenericPatternMatching.cgl",
-        "cuda",
-        "CUDA codegen cannot emit unresolved generic parameter 'T'; "
-        "specialize generic declarations before CUDA generation",
-    ),
-    (
-        "advanced/GenericPatternMatching.cgl",
         "mojo",
         "Mojo generic payload enum specializations must be concrete",
     ),

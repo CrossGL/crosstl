@@ -138,14 +138,6 @@ EXAMPLE_BACKEND_SKIPS = {
         "WebGL codegen intentionally rejects compute stages; use WebGPU/WGSL for compute."
     ),
     (
-        "cross_platform",
-        "UniversalPBRShader",
-        "wgsl",
-    ): (
-        "WGSL codegen intentionally rejects unsplit combined sampler2D resources "
-        "until texture/sampler binding splitting is available for this example."
-    ),
-    (
         "gpu_computing",
         "MatrixMultiplication",
         "webgl",

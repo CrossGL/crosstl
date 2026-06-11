@@ -11011,7 +11011,23 @@ class VulkanSPIRVCodeGen:
             "float16_t": "float",
             "half": "float",
             "min16float": "float",
+            "i8": "int",
+            "int8": "int",
+            "int8_t": "int",
+            "char": "int",
+            "i16": "int",
+            "int16": "int",
+            "int16_t": "int",
+            "short": "int",
             "i32": "int",
+            "u8": "uint",
+            "uint8": "uint",
+            "uint8_t": "uint",
+            "uchar": "uint",
+            "u16": "uint",
+            "uint16": "uint",
+            "uint16_t": "uint",
+            "ushort": "uint",
             "u32": "uint",
             "int64": "i64",
             "int64_t": "i64",
@@ -11029,6 +11045,10 @@ class VulkanSPIRVCodeGen:
         )
         if half_vector_match:
             return f"vec{half_vector_match.group(1)}"
+        narrow_vector_match = re.fullmatch(r"([iu])(?:8|16)vec([234])", compact)
+        if narrow_vector_match:
+            signedness, size = narrow_vector_match.groups()
+            return f"{'i' if signedness == 'i' else 'u'}vec{size}"
         match = re.fullmatch(r"vec([234])<([^>]+)>", compact)
         if match:
             size, element_type = match.groups()
@@ -15215,6 +15235,7 @@ class VulkanSPIRVCodeGen:
         if self.type_name_from_value(var_type_source) == "auto":
             var_type_source = None
         var_type_name = self.type_name_from_value(var_type_source)
+        infer_declared_type = var_type_source is None or var_type_name == "auto"
         if self.process_local_resource_alias_declaration(
             node, var_type_source, var_type_name
         ):
@@ -15229,7 +15250,7 @@ class VulkanSPIRVCodeGen:
         initial_value = getattr(node, "initial_value", None)
         is_precise = self.has_attribute(node, "precise")
         if (
-            var_type_source is None
+            infer_declared_type
             and initial_value is not None
             and not isinstance(initial_value, (ArrayLiteralNode, MatchNode))
         ):
@@ -15245,7 +15266,7 @@ class VulkanSPIRVCodeGen:
                 self.store_to_variable(var_id, rhs_value)
                 return
 
-        if var_type_source is None and isinstance(initial_value, MatchNode):
+        if infer_declared_type and isinstance(initial_value, MatchNode):
             var_type = self.infer_match_expression_result_type(initial_value)
             if var_type is None:
                 var_type = self.map_resource_type_with_format(var_type_source, node)
@@ -19107,11 +19128,13 @@ class VulkanSPIRVCodeGen:
     def record_storage_buffer_pointer_offset_alias(
         self, source_pointer: SpirvId, alias_pointer: SpirvId, index: SpirvId
     ):
-        root_pointer, root_index = self.storage_buffer_pointer_offset_aliases.get(
-            source_pointer.id,
-            (source_pointer, index),
+        existing_alias = self.storage_buffer_pointer_offset_aliases.get(
+            source_pointer.id
         )
-        if root_pointer.id != source_pointer.id:
+        if existing_alias is None:
+            root_pointer, root_index = source_pointer, index
+        else:
+            root_pointer, root_index = existing_alias
             root_index = self.storage_buffer_pointer_alias_index(root_index, index)
         self.storage_buffer_pointer_offset_aliases[alias_pointer.id] = (
             root_pointer,
@@ -21077,6 +21100,21 @@ class VulkanSPIRVCodeGen:
         ):
             return
 
+        target_pointer = None
+        if not isinstance(target, MemberAccessNode):
+            target_pointer = self.assignable_pointer_from_expression(target)
+            if (
+                spv_operator == "+"
+                and target_pointer is not None
+                and self.is_storage_buffer_pointer_arithmetic_base(target_pointer)
+            ):
+                offset = self.process_expression(node.value)
+                if offset is not None:
+                    self.record_storage_buffer_pointer_offset_alias(
+                        target_pointer, target_pointer, offset
+                    )
+                return
+
         if isinstance(target, MemberAccessNode):
             base_pointer = self.assignable_pointer_from_expression(target.object)
             if (
@@ -21106,7 +21144,9 @@ class VulkanSPIRVCodeGen:
             ):
                 return
 
-        target_pointer = self.assignable_pointer_from_expression(target)
+        if target_pointer is None:
+            target_pointer = self.assignable_pointer_from_expression(target)
+
         if target_pointer is None:
             self.emit(
                 f"; WARNING: Unsupported LHS type in assignment: {type(target).__name__}"
@@ -21556,8 +21596,144 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{merge_label.id} = OpLabel")
         self.current_label = merge_label.id
 
+    def for_in_sequence_element_info(self, iterable):
+        """Return fixed-size sequence element info for array/vector for-in loops."""
+        iterable_pointer = self.variable_pointer_from_expression(iterable)
+        if iterable_pointer is not None:
+            iterable_type = self.variable_value_types.get(iterable_pointer.id)
+            array_info = self.array_type_info_from_type(iterable_type)
+            if array_info is not None:
+                return array_info
+
+            vector_info = self.vector_type_info_from_type(iterable_type)
+            if vector_info is not None:
+                return vector_info
+
+        iterable_value = self.process_expression(iterable)
+        if iterable_value is None:
+            return None
+
+        iterable_type = self.value_types.get(
+            iterable_value.id
+        ) or self.find_registered_type_by_base(iterable_value.type.base_type)
+        array_info = self.array_type_info_from_type(iterable_type)
+        if array_info is not None:
+            return array_info
+
+        return self.vector_type_info_from_type(iterable_type)
+
+    def for_in_sequence_size(self, size) -> Optional[int]:
+        """Return the literal sequence length when it is known at compile time."""
+        if isinstance(size, int):
+            return size
+        if isinstance(size, str):
+            try:
+                return int(size, 0)
+            except ValueError:
+                return None
+        literal_size = evaluate_literal_int_expression(size, self.literal_int_constants)
+        return int(literal_size) if literal_size is not None else None
+
+    def process_sequence_for_in(self, node: ForInNode, pattern: str, iterable) -> bool:
+        """Process array/vector CrossGL for-in loops as element iteration."""
+        sequence_info = self.for_in_sequence_element_info(iterable)
+        if sequence_info is None:
+            return False
+
+        element_type, sequence_size = sequence_info
+        sequence_size = self.for_in_sequence_size(sequence_size)
+        if sequence_size is None:
+            self.emit(
+                "; WARNING: for-in over dynamically sized sequence requires "
+                "a compile-time length"
+            )
+            return True
+
+        int_type = self.register_primitive_type("int")
+        start = self.register_constant(0, int_type)
+        end_value = self.register_constant(sequence_size, int_type)
+
+        previous_variable = self.local_variables.get(pattern)
+        previous_local_type = self.local_variable_types.get(pattern)
+        previous_was_alias = pattern in self.resource_alias_variables
+
+        loop_index = self.create_variable(int_type, "Function")
+        pattern_variable = self.create_variable(element_type, "Function", pattern)
+        self.local_variables[pattern] = pattern_variable
+        self.local_variable_types.pop(pattern, None)
+        self.resource_alias_variables.discard(pattern)
+        self.store_to_variable(loop_index, start)
+
+        header_label = SpirvId(self.get_id(), SpirvType("label"))
+        body_label = SpirvId(self.get_id(), SpirvType("label"))
+        continue_label = SpirvId(self.get_id(), SpirvType("label"))
+        merge_label = SpirvId(self.get_id(), SpirvType("label"))
+
+        self.create_branch(header_label)
+
+        self.emit(f"%{header_label.id} = OpLabel")
+        self.current_label = header_label.id
+
+        loop_value = self.get_variable_value(loop_index)
+        condition = self.binary_operation("<", int_type, loop_value, end_value)
+
+        self.create_loop_merge(merge_label, continue_label)
+        self.create_conditional_branch(condition, body_label, merge_label)
+
+        self.emit(f"%{body_label.id} = OpLabel")
+        self.current_label = body_label.id
+        loop_value = self.get_variable_value(loop_index)
+        element_pointer, current_element_type = self.create_array_element_access(
+            iterable, loop_value, iterable
+        )
+        if element_pointer is not None:
+            element_value = self.get_variable_value(element_pointer)
+            target_type = current_element_type or element_type
+            element_value = self.convert_value_to_type(element_value, target_type)
+            self.store_to_variable(pattern_variable, element_value)
+
+        self.loop_merge_labels.append(merge_label)
+        self.loop_continue_labels.append(continue_label)
+        try:
+            if node.body:
+                self.process_statements(node.body)
+            if not self.current_block_has_terminator():
+                self.create_branch(continue_label)
+        finally:
+            self.loop_continue_labels.pop()
+            self.loop_merge_labels.pop()
+
+        self.emit(f"%{continue_label.id} = OpLabel")
+        self.current_label = continue_label.id
+        current_value = self.get_variable_value(loop_index)
+        one = self.register_constant(1, int_type)
+        next_value = self.binary_operation("+", int_type, current_value, one)
+        self.store_to_variable(loop_index, next_value)
+        if not self.current_block_has_terminator():
+            self.create_branch(header_label)
+
+        self.emit(f"%{merge_label.id} = OpLabel")
+        self.current_label = merge_label.id
+
+        if previous_variable is None:
+            self.local_variables.pop(pattern, None)
+        else:
+            self.local_variables[pattern] = previous_variable
+
+        if previous_local_type is None:
+            self.local_variable_types.pop(pattern, None)
+        else:
+            self.local_variable_types[pattern] = previous_local_type
+
+        if previous_was_alias:
+            self.resource_alias_variables.add(pattern)
+        else:
+            self.resource_alias_variables.discard(pattern)
+
+        return True
+
     def process_for_in(self, node: ForInNode):
-        """Process numeric CrossGL for-in loops as structured counted loops."""
+        """Process CrossGL for-in loops as structured counted loops."""
         pattern = getattr(node, "pattern", "item")
         iterable = getattr(node, "iterable", None)
         int_type = self.register_primitive_type("int")
@@ -21566,6 +21742,8 @@ class VulkanSPIRVCodeGen:
             start = self.process_expression(iterable.start)
             end_expr = iterable.end
             comparator = "<=" if iterable.inclusive else "<"
+        elif self.process_sequence_for_in(node, pattern, iterable):
+            return
         else:
             start = self.register_constant(0, int_type)
             end_expr = iterable
