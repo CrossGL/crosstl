@@ -1468,6 +1468,47 @@ class VulkanSPIRVCodeGen:
         ) or self.type_contains_runtime_array(target_type):
             return None
 
+        source_vector = self.vector_type_info_from_type(source_type)
+        target_vector = self.vector_type_info_from_type(target_type)
+        source_members = self.current_struct_members.get(source_type.type.base_type)
+        target_members = self.current_struct_members.get(target_type.type.base_type)
+
+        if source_vector is not None and target_members is not None:
+            source_component_type, source_count = source_vector
+            if len(target_members) != source_count:
+                return None
+
+            values = []
+            for index, (target_member_type, _) in enumerate(target_members):
+                source_member = self.composite_extract(
+                    value_id, source_component_type, index
+                )
+                target_member = self.convert_value_to_type(
+                    source_member, target_member_type
+                )
+                if not self.value_has_type(target_member, target_member_type):
+                    return None
+                values.append(target_member)
+            return self.composite_construct(target_type, values)
+
+        if source_members is not None and target_vector is not None:
+            target_component_type, target_count = target_vector
+            if len(source_members) != target_count:
+                return None
+
+            values = []
+            for index, (source_member_type, _) in enumerate(source_members):
+                source_member = self.composite_extract(
+                    value_id, source_member_type, index
+                )
+                target_member = self.convert_value_to_type(
+                    source_member, target_component_type
+                )
+                if not self.value_has_type(target_member, target_component_type):
+                    return None
+                values.append(target_member)
+            return self.composite_construct(target_type, values)
+
         if not self.aggregate_types_are_layout_compatible(source_type, target_type):
             return None
 
@@ -1494,8 +1535,6 @@ class VulkanSPIRVCodeGen:
                 elements.append(target_element)
             return self.composite_construct(target_type, elements)
 
-        source_members = self.current_struct_members.get(source_type.type.base_type)
-        target_members = self.current_struct_members.get(target_type.type.base_type)
         if source_members is None or target_members is None:
             return None
         if len(source_members) != len(target_members):
