@@ -18700,16 +18700,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
 
         attributes = getattr(node, "attributes", []) or []
-        if not any(
+        has_buffer_attribute = any(
             str(getattr(attr, "name", "")).lower() == "buffer" for attr in attributes
-        ):
-            return None
+        )
 
         qualifiers = {
             str(qualifier).lower()
             for qualifier in getattr(node, "qualifiers", []) or []
         }
         resource_qualifiers = qualifiers.intersection({"device", "constant", "const"})
+        address_space_qualifiers = qualifiers.intersection({"device", "constant"})
+        if not has_buffer_attribute and not address_space_qualifiers:
+            return None
         if qualifiers and not resource_qualifiers:
             return None
 

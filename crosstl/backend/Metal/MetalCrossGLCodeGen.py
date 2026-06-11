@@ -433,6 +433,7 @@ class MetalToCrossGLConverter:
         self.current_storage_texture_names = set()
         self.global_structured_buffer_names = set()
         self.current_structured_buffer_names = set()
+        self.current_stage_entry_resource_parameter_ids = set()
         self.global_sampler_names = set()
         self.suppress_structured_buffer_index_lowering = False
         self.struct_member_types = {}
@@ -1374,6 +1375,7 @@ class MetalToCrossGLConverter:
         self.current_storage_texture_names = set()
         self.global_structured_buffer_names = set()
         self.current_structured_buffer_names = set()
+        self.current_stage_entry_resource_parameter_ids = set()
         self.global_sampler_names = set()
         self.user_function_names = set()
         self.identifier_maps = [{}]
@@ -1632,6 +1634,12 @@ class MetalToCrossGLConverter:
         self.current_storage_texture_names = set(self.global_storage_texture_names)
         previous_structured_buffer_names = self.current_structured_buffer_names
         self.current_structured_buffer_names = set(self.global_structured_buffer_names)
+        previous_stage_entry_resource_parameter_ids = (
+            self.current_stage_entry_resource_parameter_ids
+        )
+        self.current_stage_entry_resource_parameter_ids = (
+            {id(param) for param in func.params} if stage_entry else set()
+        )
         self.push_identifier_scope()
         try:
             for param in func.params:
@@ -1668,6 +1676,9 @@ class MetalToCrossGLConverter:
             self.current_variable_types = previous_variable_types
             self.current_storage_texture_names = previous_storage_texture_names
             self.current_structured_buffer_names = previous_structured_buffer_names
+            self.current_stage_entry_resource_parameter_ids = (
+                previous_stage_entry_resource_parameter_ids
+            )
         return code
 
     def map_function_return_type(self, return_type):
@@ -3060,7 +3071,10 @@ class MetalToCrossGLConverter:
         return base if pointer_depth else None
 
     def structured_buffer_pointer_type(self, var):
-        if not self.has_attribute(var, "buffer"):
+        if not (
+            self.has_attribute(var, "buffer")
+            or id(var) in self.current_stage_entry_resource_parameter_ids
+        ):
             return None
 
         qualifiers = {
