@@ -4191,6 +4191,134 @@ def test_scan_project_reports_include_define_shadowing(tmp_path):
     ] == [("material.inc", "resolved")]
 
 
+def test_scan_project_accepts_supported_native_macro_forms_across_source_frontends(
+    tmp_path,
+):
+    register_default_sources()
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    source_names = [
+        name
+        for name in sorted(SOURCE_REGISTRY.names())
+        if SOURCE_REGISTRY.get(name).supports_lexer_keyword("defines")
+    ]
+    assert source_names
+    source_overrides = []
+    for source_name in source_names:
+        shader_path = shader_dir / f"{source_name}.shader"
+        shader_path.write_text(
+            textwrap.dedent("""
+                #define OBJECT_MACRO 1
+                #define FUNCTION_MACRO(value) ((value) + OBJECT_MACRO)
+                #pragma once
+                void main() {}
+                """).strip(),
+            encoding="utf-8",
+        )
+        source_overrides.append(f'"shaders/{source_name}.shader" = "{source_name}"')
+    source_override_text = "\n".join(source_overrides)
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(f"""
+            [project]
+            source_roots = ["shaders"]
+
+            [project.sources]
+            {source_override_text}
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["cgl"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["summary"]["unitsBySourceBackend"] == {
+        source_name: 1 for source_name in source_names
+    }
+
+
+def test_scan_project_reports_unsupported_macro_forms_across_source_frontends(
+    tmp_path,
+):
+    register_default_sources()
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    source_names = sorted(SOURCE_REGISTRY.names())
+    assert source_names
+    source_overrides = []
+    for source_name in source_names:
+        shader_path = shader_dir / f"{source_name}.shader"
+        shader_path.write_text(
+            textwrap.dedent("""
+                #if defined(ENABLE_NATIVE_MACROS)
+                #define LOG_MESSAGE(fmt, ...) __VA_OPT__(fmt)
+                #endif
+                void main() {}
+                """).strip(),
+            encoding="utf-8",
+        )
+        source_overrides.append(f'"shaders/{source_name}.shader" = "{source_name}"')
+    source_override_text = "\n".join(source_overrides)
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(f"""
+            [project]
+            source_roots = ["shaders"]
+
+            [project.defines]
+            ENABLE_NATIVE_MACROS = "1"
+
+            [project.sources]
+            {source_override_text}
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["cgl"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    diagnostics = [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.scan.unsupported-macro-form"
+    ]
+
+    assert validation["success"] is True
+    assert len(diagnostics) == len(source_names)
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.scan.unsupported-macro-form": len(source_names)
+    }
+    assert payload["summary"]["diagnosticsBySourceBackend"] == {
+        source_name: 1 for source_name in source_names
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "macro.native": len(source_names)
+    }
+    assert {
+        diagnostic["sourceBackend"]: diagnostic["location"]["file"]
+        for diagnostic in diagnostics
+    } == {
+        source_name: f"shaders/{source_name}.shader" for source_name in source_names
+    }
+    for diagnostic in diagnostics:
+        assert diagnostic["missingCapabilities"] == ["macro.native"]
+        assert diagnostic["location"]["line"] == 2
+        if SOURCE_REGISTRY.get(diagnostic["sourceBackend"]).supports_lexer_keyword(
+            "defines"
+        ):
+            assert "__VA_OPT__ variadic expansion" in diagnostic["message"]
+        else:
+            assert "does not accept project define forwarding" in diagnostic["message"]
+
+
 def test_scan_project_scopes_define_shadowing_to_selected_variants(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
@@ -7540,7 +7668,7 @@ def test_translate_project_expands_named_variants_with_merged_defines(
             "generatedHashStatus": "ok",
             "generatedSizeStatus": "ok",
             "sourceMapStatus": "ok",
-            "sourceRemapStatus": "not-recorded",
+            "sourceRemapStatus": "ok",
             "variant": "debug",
         },
         {
@@ -7555,7 +7683,7 @@ def test_translate_project_expands_named_variants_with_merged_defines(
             "generatedHashStatus": "ok",
             "generatedSizeStatus": "ok",
             "sourceMapStatus": "ok",
-            "sourceRemapStatus": "not-recorded",
+            "sourceRemapStatus": "ok",
             "variant": "release",
         },
     ]
@@ -7571,7 +7699,7 @@ def test_translate_project_expands_named_variants_with_merged_defines(
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=2),
         "generatedSizeStatusCounts": _generated_size_status_counts(ok=2),
         "sourceMapStatusCounts": _source_map_status_counts(ok=2),
-        "sourceRemapStatusCounts": _source_remap_status_counts(**{"not-recorded": 2}),
+        "sourceRemapStatusCounts": _source_remap_status_counts(ok=2),
     }
     assert json.loads(
         (repo / "translated" / "opengl" / "debug" / "simple.glsl").read_text(
@@ -10381,11 +10509,14 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
         output
     )
     assert payload["artifacts"][0]["generatedSizeBytes"] == output.stat().st_size
-    assert "sourceRemap" not in payload["artifacts"][0]
-    assert payload["summary"]["sourceRemapCount"] == 0
-    assert payload["summary"]["sourceRemapsByGranularity"] == {}
-    assert payload["summary"]["sourceRemapsByTarget"] == {}
-    assert payload["summary"]["sourceRemapsBySourceBackend"] == {}
+    assert payload["artifacts"][0]["sourceRemap"]["target"] == "opengl"
+    assert payload["artifacts"][0]["sourceRemap"]["generatedFile"] == (
+        "translated/opengl/shaders/graphics/simple.glsl"
+    )
+    assert payload["summary"]["sourceRemapCount"] == 1
+    assert payload["summary"]["sourceRemapsByGranularity"] == {"line": 1}
+    assert payload["summary"]["sourceRemapsByTarget"] == {"opengl": 1}
+    assert payload["summary"]["sourceRemapsBySourceBackend"] == {"cgl": 1}
     assert payload["summary"]["sourceRemapsByVariant"] == {}
     assert payload["migration"]["nonGoals"] == [
         "automatic runtime API migration",
@@ -10512,7 +10643,6 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
         "variant",
         "error",
         "stage",
-        "sourceRemap",
     }
     assert set(artifact["sourceHash"]) == project_pipeline.REPORT_HASH_FIELDS
     assert isinstance(artifact["sourceSizeBytes"], int)
@@ -10528,6 +10658,9 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
     )
     assert set(artifact["provenance"]) == (
         project_pipeline.REPORT_ARTIFACT_PROVENANCE_FIELDS
+    )
+    assert set(artifact["sourceRemap"]) == (
+        project_pipeline.REPORT_ARTIFACT_SOURCE_REMAP_FIELDS
     )
 
     source_map = artifact["sourceMap"]
@@ -10859,28 +10992,83 @@ def test_translate_project_records_line_maps_across_final_newline_changes(
     assert source_map["mappings"] == expected_mappings
 
 
-def test_translate_project_uses_file_source_maps_for_generated_artifacts(tmp_path):
+def test_translate_project_records_fine_grained_source_maps_for_generated_artifacts(
+    tmp_path,
+):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
 
-    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    report = translate_project(
+        repo,
+        targets=["opengl", "metal", "directx", "wgsl", "cgl"],
+        output_dir="out",
+        validate=True,
+    )
     payload = report.to_json()
+    validation_artifacts = {
+        artifact["target"]: artifact for artifact in payload["validation"]["artifacts"]
+    }
 
-    artifact = payload["artifacts"][0]
-    source_map = artifact["sourceMap"]
-
-    assert payload["summary"]["sourceMapCount"] == 1
-    assert payload["summary"]["fineGrainedSourceMapCount"] == 0
-    assert payload["summary"]["sourceMapsByGranularity"] == {"file": 1}
-    assert source_map["mappingGranularity"] == "file"
-    assert source_map["mappings"] == [
-        {
-            "source": source_map["source"],
-            "generated": source_map["generated"],
-        }
-    ]
-    assert "sourceRemap" not in artifact
+    assert payload["summary"]["sourceMapCount"] == 5
+    assert payload["summary"]["fineGrainedSourceMapCount"] == 5
+    assert payload["summary"]["sourceMapsByGranularity"] == {"line": 5}
+    assert payload["summary"]["sourceMapsByTarget"] == {
+        "cgl": 1,
+        "directx": 1,
+        "metal": 1,
+        "opengl": 1,
+        "wgsl": 1,
+    }
+    assert payload["summary"]["sourceRemapCount"] == 5
+    assert payload["summary"]["sourceRemapsByGranularity"] == {"line": 5}
+    assert payload["summary"]["sourceRemapsByTarget"] == {
+        "cgl": 1,
+        "directx": 1,
+        "metal": 1,
+        "opengl": 1,
+        "wgsl": 1,
+    }
+    assert validation_artifacts.keys() == {
+        "cgl",
+        "directx",
+        "metal",
+        "opengl",
+        "wgsl",
+    }
+    assert all(
+        artifact["sourceMapStatus"] == "ok"
+        for artifact in validation_artifacts.values()
+    )
+    assert all(
+        artifact["sourceRemapStatus"] == "ok"
+        for artifact in validation_artifacts.values()
+    )
+    for artifact in payload["artifacts"]:
+        source_map = artifact["sourceMap"]
+        assert source_map["mappingGranularity"] == "line"
+        assert source_map["mappings"]
+        assert all(
+            mapping["source"]["file"] == artifact["source"]
+            for mapping in source_map["mappings"]
+        )
+        assert all(
+            mapping["generated"]["file"] == artifact["path"]
+            for mapping in source_map["mappings"]
+        )
+        if artifact["target"] != "cgl":
+            expected_mappings = project_pipeline._derived_line_source_map_mappings(
+                repo / artifact["source"],
+                artifact["source"],
+                repo / artifact["path"],
+                artifact["path"],
+            )
+            assert source_map["mappings"] == expected_mappings
+        source_remap = artifact["sourceRemap"]
+        assert source_remap["target"] == artifact["target"]
+        assert source_remap["generatedFile"] == artifact["path"]
+        assert source_remap["mappingGranularity"] == source_map["mappingGranularity"]
+        assert source_remap["mappingCount"] == len(source_map["mappings"])
 
 
 def test_source_map_rollups_count_fine_grained_artifact_maps():
@@ -12126,7 +12314,7 @@ def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch)
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
         "generatedSizeStatusCounts": _generated_size_status_counts(ok=1),
         "sourceMapStatusCounts": _source_map_status_counts(ok=1),
-        "sourceRemapStatusCounts": _source_remap_status_counts(**{"not-recorded": 1}),
+        "sourceRemapStatusCounts": _source_remap_status_counts(ok=1),
     }
     assert payload["validation"]["toolchainRuns"] == [
         {
@@ -13497,7 +13685,7 @@ def test_translate_project_validation_records_artifacts_and_toolchains(tmp_path)
             "generatedHashStatus": "ok",
             "generatedSizeStatus": "ok",
             "sourceMapStatus": "ok",
-            "sourceRemapStatus": "not-recorded",
+            "sourceRemapStatus": "ok",
         }
     ]
     assert payload["validation"]["summary"] == {
@@ -13509,7 +13697,7 @@ def test_translate_project_validation_records_artifacts_and_toolchains(tmp_path)
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
         "generatedSizeStatusCounts": _generated_size_status_counts(ok=1),
         "sourceMapStatusCounts": _source_map_status_counts(ok=1),
-        "sourceRemapStatusCounts": _source_remap_status_counts(**{"not-recorded": 1}),
+        "sourceRemapStatusCounts": _source_remap_status_counts(ok=1),
     }
     assert payload["validation"]["toolchains"][0]["target"] == "opengl"
     assert payload["validation"]["toolchains"][0]["status"] in {
@@ -18886,19 +19074,10 @@ def test_validate_project_report_accepts_fine_grained_source_map_contract(tmp_pa
     report = translate_project(repo, targets=["opengl"], output_dir="out")
     payload = report.to_json()
     source_map = payload["artifacts"][0]["sourceMap"]
-    source_map["mappingGranularity"] = "line"
-    source_map["mappings"] = [
-        {
-            "source": dict(source_map["source"]),
-            "generated": dict(source_map["generated"]),
-        },
-        {
-            "source": dict(source_map["source"]),
-            "generated": dict(source_map["generated"]),
-        },
-    ]
-    payload["summary"]["fineGrainedSourceMapCount"] = 1
-    payload["summary"]["sourceMapsByGranularity"] = {"line": 1}
+    artifact = payload["artifacts"][0]
+    assert source_map["mappingGranularity"] == "line"
+    assert artifact["sourceRemap"]["mappingGranularity"] == "line"
+    assert artifact["sourceRemap"]["mappingCount"] == len(source_map["mappings"])
     report_path = repo / "out" / "fine-grained-source-map-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -18909,7 +19088,7 @@ def test_validate_project_report_accepts_fine_grained_source_map_contract(tmp_pa
         _source_map_status_counts(ok=1)
     )
     assert validation["validation"]["summary"]["sourceRemapStatusCounts"] == (
-        _source_remap_status_counts(**{"not-recorded": 1})
+        _source_remap_status_counts(ok=1)
     )
 
 
@@ -19385,6 +19564,42 @@ def test_validate_project_report_rejects_stale_line_preserving_source_map_span(
     assert f"actual {stale_mapping}" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_stale_derived_source_map_span(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+    source_map = payload["artifacts"][0]["sourceMap"]
+    assert source_map["mappingGranularity"] == "line"
+    assert source_map["mappings"]
+    original_mapping = copy.deepcopy(source_map["mappings"][0])
+    source_map["mappings"][0]["generated"]["column"] += 1
+    stale_mapping = source_map["mappings"][0]
+    report_path = repo / "out" / "stale-derived-source-map-span-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"]["artifacts"][0]["sourceHashStatus"] == "ok"
+    assert validation["validation"]["artifacts"][0]["generatedHashStatus"] == "ok"
+    assert validation["validation"]["artifacts"][0]["sourceMapStatus"] == "mismatch"
+    diagnostic = next(
+        diagnostic
+        for diagnostic in validation["diagnostics"]
+        if diagnostic["code"] == "project.validate.source-map-line-span-mismatch"
+    )
+    assert diagnostic["missingCapabilities"] == ["source.provenance"]
+    assert (
+        "sourceMap.mappings[0] must match current derived line span"
+        in diagnostic["message"]
+    )
+    assert f"expected {original_mapping}" in diagnostic["message"]
+    assert f"actual {stale_mapping}" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -19632,34 +19847,28 @@ def test_validate_project_report_rejects_malformed_source_remap_metadata(tmp_pat
     ) in diagnostic["message"]
 
 
-def test_validate_project_report_rejects_non_crossgl_source_remap_metadata(tmp_path):
+def test_validate_project_report_accepts_non_crossgl_source_remap_metadata(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
-    payload = translate_project(repo, targets=["opengl"], output_dir="out").to_json()
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
     artifact = payload["artifacts"][0]
-    artifact["sourceRemap"] = {
-        "schemaVersion": 1,
-        "path": "out/opengl/simple.source-remap.json",
-        "target": "opengl",
-        "generatedFile": artifact["path"],
-        "mappingGranularity": "file",
-        "hash": {"algorithm": "sha256", "value": "0" * 64},
-    }
-    _refresh_artifact_summary(payload)
     report_path = repo / "out" / "non-crossgl-source-remap-report.json"
-    report_path.write_text(json.dumps(payload), encoding="utf-8")
+    report.write_json(report_path)
 
     validation = validate_project_report(report_path)
 
-    assert validation["success"] is False
-    assert validation["validation"] == {"toolchains": [], "artifacts": []}
-    diagnostic = validation["diagnostics"][0]
-    assert diagnostic["code"] == "project.validate.invalid-report"
-    assert (
-        "artifacts[0].sourceRemap must be omitted unless "
-        "artifacts[0].target is CrossGL"
-    ) in diagnostic["message"]
+    assert validation["success"] is True
+    assert artifact["sourceRemap"]["target"] == "opengl"
+    assert artifact["sourceRemap"]["generatedFile"] == artifact["path"]
+    assert artifact["sourceRemap"]["mappingGranularity"] == (
+        artifact["sourceMap"]["mappingGranularity"]
+    )
+    assert artifact["sourceRemap"]["mappingCount"] == len(
+        artifact["sourceMap"]["mappings"]
+    )
+    assert validation["validation"]["artifacts"][0]["sourceRemapStatus"] == "ok"
 
 
 def test_validate_project_report_rejects_source_remap_mapping_count_mismatches(
@@ -28241,9 +28450,10 @@ def test_runtime_loader_manifest_reports_blocked_host_interface_metadata(tmp_pat
     assert load_unit["validation"]["hostInterface"] == "unavailable"
     assert [step["kind"] for step in load_unit["loadSteps"]] == [
         "load-package-artifact",
+        "load-source-remap",
         "validate-target-toolchain",
     ]
-    assert load_unit["loadSteps"][1]["command"] == [
+    assert load_unit["loadSteps"][2]["command"] == [
         "spirv-as",
         "artifacts/out/vulkan/simple.spvasm",
         "-o",
@@ -28266,6 +28476,7 @@ def test_runtime_loader_manifest_reports_wgsl_validation_command(tmp_path):
     assert load_unit["hostInterface"]["status"] == "ready"
     assert [step["kind"] for step in load_unit["loadSteps"]] == [
         "load-package-artifact",
+        "load-source-remap",
         "bind-host-interface",
         "validate-target-toolchain",
     ]
@@ -28351,6 +28562,7 @@ def test_runtime_loader_manifest_reports_directx_dxc_entry_profile_metadata(tmp_
     assert load_unit["requiredTools"] == ["dxc"]
     assert [step["kind"] for step in load_unit["loadSteps"]] == [
         "load-package-artifact",
+        "load-source-remap",
         "bind-host-interface",
         "validate-target-toolchain",
     ]

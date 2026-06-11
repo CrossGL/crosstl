@@ -2089,6 +2089,31 @@ DEFINE_DIRECTIVE_RE = re.compile(
 PREPROCESSOR_DIAGNOSTIC_DIRECTIVE_RE = re.compile(
     r"^\s*#\s*(?P<directive>error|warning)\b(?P<body>.*?)\s*$"
 )
+PREPROCESSOR_DIRECTIVE_RE = re.compile(
+    r"^\s*#\s*(?P<directive>[A-Za-z_][A-Za-z0-9_]*)\b(?P<body>.*?)\s*$"
+)
+FUNCTION_LIKE_DEFINE_RE = re.compile(
+    r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\((?P<params>.*?)\)(?P<replacement>.*)$"
+)
+PROJECT_KNOWN_PREPROCESSOR_DIRECTIVES = frozenset(
+    (
+        "define",
+        "elif",
+        "else",
+        "endif",
+        "error",
+        "extension",
+        "if",
+        "ifdef",
+        "ifndef",
+        "include",
+        "line",
+        "pragma",
+        "undef",
+        "version",
+        "warning",
+    )
+)
 REPORT_PATH_BARE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -2741,6 +2766,130 @@ def _line_preserving_source_map_mappings(
             source_line_spans, generated_line_spans
         )
     ]
+
+
+SOURCE_MAP_LINE_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?")
+SOURCE_MAP_LINE_TOKEN_ALIASES = {
+    "bool1": "bool",
+    "bool2": "vec2",
+    "bool3": "vec3",
+    "bool4": "vec4",
+    "double2": "vec2",
+    "double3": "vec3",
+    "double4": "vec4",
+    "float2": "vec2",
+    "float3": "vec3",
+    "float4": "vec4",
+    "half2": "vec2",
+    "half3": "vec3",
+    "half4": "vec4",
+    "int2": "vec2",
+    "int3": "vec3",
+    "int4": "vec4",
+    "uint2": "vec2",
+    "uint3": "vec3",
+    "uint4": "vec4",
+    "vsmain": "main",
+    "vertex_main": "main",
+    "fragment_main": "main",
+    "compute_main": "main",
+}
+SOURCE_MAP_LINE_STOP_TOKENS = frozenset(
+    (
+        "attribute",
+        "buffer",
+        "case",
+        "cbuffer",
+        "centroid",
+        "class",
+        "const",
+        "constant",
+        "core",
+        "device",
+        "else",
+        "for",
+        "if",
+        "in",
+        "include",
+        "inout",
+        "layout",
+        "metal_stdlib",
+        "namespace",
+        "out",
+        "position",
+        "return",
+        "stage_in",
+        "static",
+        "struct",
+        "switch",
+        "uniform",
+        "using",
+        "void",
+        "while",
+    )
+)
+
+
+def _source_map_line_tokens(text: str) -> frozenset[str]:
+    tokens = set()
+    for match in SOURCE_MAP_LINE_TOKEN_RE.finditer(text):
+        raw_token = match.group(0).lower()
+        for part in raw_token.split("_"):
+            token = SOURCE_MAP_LINE_TOKEN_ALIASES.get(part, part)
+            if token and token not in SOURCE_MAP_LINE_STOP_TOKENS:
+                tokens.add(token)
+        token = SOURCE_MAP_LINE_TOKEN_ALIASES.get(raw_token, raw_token)
+        if token and token not in SOURCE_MAP_LINE_STOP_TOKENS:
+            tokens.add(token)
+    return frozenset(tokens)
+
+
+def _derived_line_source_map_mappings(
+    source_path: Path,
+    source_report_path: str,
+    generated_path: Path,
+    generated_report_path: str,
+) -> list[dict[str, Any]]:
+    source_lines = _normalized_line_text(source_path.read_bytes()).splitlines()
+    generated_lines = _normalized_line_text(generated_path.read_bytes()).splitlines()
+    source_line_spans = _line_spans(source_path, source_report_path)
+    generated_line_spans = _line_spans(generated_path, generated_report_path)
+    source_tokens_by_index = [
+        _source_map_line_tokens(line) for line in source_lines[: len(source_line_spans)]
+    ]
+    generated_tokens_by_index = [
+        _source_map_line_tokens(line)
+        for line in generated_lines[: len(generated_line_spans)]
+    ]
+    mappings = []
+    for generated_index, generated_tokens in enumerate(generated_tokens_by_index):
+        if len(generated_tokens) < 2:
+            continue
+        scores = [
+            (len(generated_tokens & source_tokens), source_index)
+            for source_index, source_tokens in enumerate(source_tokens_by_index)
+            if source_tokens
+        ]
+        if not scores:
+            continue
+        best_score = max(score for score, _source_index in scores)
+        if best_score < 2:
+            continue
+        best_source_indexes = [
+            source_index
+            for score, source_index in scores
+            if score == best_score
+        ]
+        if len(best_source_indexes) != 1:
+            continue
+        source_index = best_source_indexes[0]
+        mappings.append(
+            {
+                "source": source_line_spans[source_index].to_json(),
+                "generated": generated_line_spans[generated_index].to_json(),
+            }
+        )
+    return mappings
 
 
 def _artifact_report_path(path: Path, config: ProjectConfig) -> str:
@@ -4616,6 +4765,143 @@ def _scan_preprocessor_diagnostic_lines(
     return diagnostics
 
 
+def _unsupported_macro_form_diagnostic(
+    *,
+    relative_path: str,
+    line_number: int,
+    column: int,
+    source_backend: str,
+    reason: str,
+    form: str,
+    variant: str | None = None,
+) -> ProjectDiagnostic:
+    context = f" for variant {variant}" if variant else ""
+    return ProjectDiagnostic(
+        severity="warning",
+        code="project.scan.unsupported-macro-form",
+        message=(
+            f"Native macro form in {relative_path}:{line_number}{context} "
+            f"is not covered by project macro semantic planning for the "
+            f"{source_backend} frontend: {reason} ({form})."
+        ),
+        location=SourceLocation(
+            file=relative_path,
+            line=line_number,
+            column=column,
+            end_line=line_number,
+            end_column=column,
+        ),
+        source_backend=source_backend,
+        variant=variant,
+        missing_capabilities=["macro.native"],
+    )
+
+
+def _macro_form_label(directive: str, body: str) -> str:
+    if directive == "define":
+        body = _strip_preprocessor_line_comment(body)
+        function_like = FUNCTION_LIKE_DEFINE_RE.match(body)
+        if function_like:
+            return f"function-like define {function_like.group('name')}"
+        parts = body.strip().split(maxsplit=1)
+        if parts:
+            return f"object-like define {parts[0]}"
+        return "malformed define"
+    if directive == "undef":
+        parts = body.strip().split(maxsplit=1)
+        return f"undef {parts[0]}" if parts else "malformed undef"
+    return f"#{directive}"
+
+
+def _unsupported_macro_form_reason(
+    *,
+    directive: str,
+    body: str,
+    source_backend: str,
+) -> str | None:
+    if directive not in PROJECT_KNOWN_PREPROCESSOR_DIRECTIVES:
+        return "unknown preprocessor directive is preserved for backend-native handling"
+
+    supports_defines = _source_frontend_supports_lexer_keyword(source_backend, "defines")
+    if directive in {"define", "undef"} and not supports_defines:
+        return "source frontend does not accept project define forwarding"
+
+    if directive != "define":
+        return None
+
+    stripped = _strip_preprocessor_line_comment(body)
+    if not DEFINE_DIRECTIVE_RE.match(f"#define {stripped}"):
+        return "malformed define directive"
+
+    function_like = FUNCTION_LIKE_DEFINE_RE.match(stripped)
+    if function_like:
+        replacement = function_like.group("replacement")
+    else:
+        define_parts = stripped.split(None, 1)
+        replacement = define_parts[1] if len(define_parts) > 1 else ""
+    if "__VA_OPT__" in replacement:
+        return "__VA_OPT__ variadic expansion is not modeled by project macro planning"
+    if "#@" in replacement:
+        return "charizing macro operator is not modeled by project macro planning"
+    return None
+
+
+def _scan_native_macro_semantic_lines(
+    config: ProjectConfig,
+    lines: Sequence[str],
+    relative_path: str,
+    *,
+    source_backend: str,
+    seen: set[tuple[str, int, str, str, str | None]],
+    variant: str | None = None,
+) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    conditional_stack: list[_IncludeConditionalFrame] = []
+    for line_number, line in enumerate(lines, start=1):
+        directive_match = PREPROCESSOR_DIRECTIVE_RE.match(line)
+        if not directive_match:
+            continue
+
+        directive = directive_match.group("directive")
+        body = directive_match.group("body")
+        if directive in {"if", "ifdef", "ifndef", "elif", "else", "endif"}:
+            _apply_include_conditional_directive(
+                config,
+                conditional_stack,
+                directive,
+                body,
+            )
+            continue
+
+        if not _include_conditionals_active(conditional_stack):
+            continue
+
+        reason = _unsupported_macro_form_reason(
+            directive=directive,
+            body=body,
+            source_backend=source_backend,
+        )
+        if reason is None:
+            continue
+        form = _macro_form_label(directive, body)
+        key = (relative_path, line_number, directive, form, variant)
+        if key in seen:
+            continue
+        seen.add(key)
+        diagnostics.append(
+            _unsupported_macro_form_diagnostic(
+                relative_path=relative_path,
+                line_number=line_number,
+                column=max(1, line.find("#") + 1),
+                source_backend=source_backend,
+                reason=reason,
+                form=form,
+                variant=variant,
+            )
+        )
+    return diagnostics
+
+
 def _include_conditionals_active(stack: Sequence[_IncludeConditionalFrame]) -> bool:
     return all(frame.branch_active for frame in stack)
 
@@ -4806,7 +5092,9 @@ def _scan_resolved_include_dependencies(
     scanned_sources: set[str],
     define_shadowing_seen: set[tuple[str, int, str, str]],
     preprocessor_seen: set[tuple[str, int, str, str]],
+    macro_semantics_seen: set[tuple[str, int, str, str, str | None]],
     diagnostic_config: ProjectConfig,
+    source_backend: str,
     variant: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
     if resolved_path in include_stack:
@@ -4830,7 +5118,9 @@ def _scan_resolved_include_dependencies(
         scanned_sources=scanned_sources,
         define_shadowing_seen=define_shadowing_seen,
         preprocessor_seen=preprocessor_seen,
+        macro_semantics_seen=macro_semantics_seen,
         diagnostic_config=diagnostic_config,
+        source_backend=source_backend,
         variant=variant,
     )
 
@@ -4845,7 +5135,9 @@ def _scan_include_dependencies_for_source(
     scanned_sources: set[str],
     define_shadowing_seen: set[tuple[str, int, str, str]],
     preprocessor_seen: set[tuple[str, int, str, str]],
+    macro_semantics_seen: set[tuple[str, int, str, str, str | None]],
     diagnostic_config: ProjectConfig,
+    source_backend: str,
     variant: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
     dependencies: list[dict[str, Any]] = []
@@ -4885,6 +5177,16 @@ def _scan_include_dependencies_for_source(
             scan_lines,
             source_relative_path,
             seen=preprocessor_seen,
+            variant=variant,
+        )
+    )
+    diagnostics.extend(
+        _scan_native_macro_semantic_lines(
+            config,
+            scan_lines,
+            source_relative_path,
+            source_backend=source_backend,
+            seen=macro_semantics_seen,
             variant=variant,
         )
     )
@@ -4967,7 +5269,9 @@ def _scan_include_dependencies_for_source(
                             scanned_sources=scanned_sources,
                             define_shadowing_seen=define_shadowing_seen,
                             preprocessor_seen=preprocessor_seen,
+                            macro_semantics_seen=macro_semantics_seen,
                             diagnostic_config=diagnostic_config,
+                            source_backend=source_backend,
                             variant=variant,
                         )
                     )
@@ -5050,7 +5354,9 @@ def _scan_include_dependencies_for_source(
                     scanned_sources=scanned_sources,
                     define_shadowing_seen=define_shadowing_seen,
                     preprocessor_seen=preprocessor_seen,
+                    macro_semantics_seen=macro_semantics_seen,
                     diagnostic_config=diagnostic_config,
+                    source_backend=source_backend,
                     variant=variant,
                 )
             )
@@ -5061,12 +5367,16 @@ def _scan_include_dependencies_for_source(
 
 
 def _scan_include_dependencies(
-    config: ProjectConfig, unit_path: Path, relative_path: str
+    config: ProjectConfig,
+    unit_path: Path,
+    relative_path: str,
+    source_backend: str,
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
     dependencies: list[dict[str, Any]] = []
     diagnostics: list[ProjectDiagnostic] = []
     define_shadowing_seen: set[tuple[str, int, str, str]] = set()
     preprocessor_seen: set[tuple[str, int, str, str]] = set()
+    macro_semantics_seen: set[tuple[str, int, str, str, str | None]] = set()
     for variant, defines in _variant_jobs(config):
         scan_config = (
             replace(config, defines=defines) if variant is not None else config
@@ -5081,7 +5391,9 @@ def _scan_include_dependencies(
                 scanned_sources=set(),
                 define_shadowing_seen=define_shadowing_seen,
                 preprocessor_seen=preprocessor_seen,
+                macro_semantics_seen=macro_semantics_seen,
                 diagnostic_config=config,
+                source_backend=source_backend,
                 variant=variant,
             )
         )
@@ -6105,7 +6417,7 @@ def scan_project(
             continue
 
         include_dependencies, include_diagnostics = _scan_include_dependencies(
-            config, path, relative_path
+            config, path, relative_path, source_spec.name
         )
         diagnostics.extend(include_diagnostics)
         units.append(
@@ -6548,6 +6860,13 @@ def _artifact_source_map(
         output_path,
         artifact_path,
     )
+    if not line_mappings:
+        line_mappings = _derived_line_source_map_mappings(
+            unit.path,
+            unit.relative_path,
+            output_path,
+            artifact_path,
+        )
     mapping_granularity = "line" if line_mappings else "file"
     mappings = (
         line_mappings
@@ -6632,6 +6951,25 @@ def _artifact_source_remap(
     }
 
 
+def _attach_artifact_source_remap(
+    config: ProjectConfig,
+    target: str,
+    artifact: dict[str, Any],
+    output_path: Path,
+) -> None:
+    remap_path = _source_remap_path(output_path)
+    remap_payload = _source_remap_payload(artifact["sourceMap"])
+    _write_source_remap_sidecar(remap_path, remap_payload)
+    artifact["sourceRemap"] = _artifact_source_remap(
+        config,
+        target,
+        artifact["path"],
+        remap_path,
+        str(artifact["sourceMap"]["mappingGranularity"]),
+        len(remap_payload["mappings"]),
+    )
+
+
 def _webgl_split_stage_artifacts(
     config: ProjectConfig,
     unit: ProjectTranslationUnit,
@@ -6669,6 +7007,12 @@ def _webgl_split_stage_artifacts(
         stage_artifact["generatedSizeBytes"] = stage_path.stat().st_size
         stage_artifact["sourceMap"] = _artifact_source_map(
             config, unit, str(artifact["target"]), stage_path
+        )
+        _attach_artifact_source_remap(
+            config,
+            str(artifact["target"]),
+            stage_artifact,
+            stage_path,
         )
         stage_artifacts.append(stage_artifact)
 
@@ -7013,6 +7357,106 @@ def _translation_failure_missing_capabilities(
     return ["batch.translation"]
 
 
+def _translation_source_location_value(location: Any, *names: str) -> Any:
+    if isinstance(location, Mapping):
+        for name in names:
+            if name in location:
+                return location[name]
+        return None
+
+    for name in names:
+        if hasattr(location, name):
+            return getattr(location, name)
+    return None
+
+
+def _translation_source_location_int(value: Any, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        converted = int(value)
+    except (TypeError, ValueError):
+        return default
+    return converted if converted >= 0 else default
+
+
+def _translation_source_location_file(value: Any, unit: ProjectTranslationUnit) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return unit.relative_path
+
+    normalized = value.strip().replace("\\", "/")
+    if PureWindowsPath(value).is_absolute() or PurePosixPath(normalized).is_absolute():
+        return unit.relative_path
+    if any(part in {"", ".", ".."} for part in PurePosixPath(normalized).parts):
+        return unit.relative_path
+    return normalized
+
+
+def _translation_failure_location(
+    exc: Exception, unit: ProjectTranslationUnit
+) -> SourceLocation:
+    source_location = getattr(exc, "source_location", None)
+    if isinstance(source_location, SourceLocation):
+        file_name = _translation_source_location_file(source_location.file, unit)
+        if file_name == source_location.file:
+            return source_location
+        return replace(source_location, file=file_name)
+    if source_location is None:
+        return SourceLocation(file=unit.relative_path)
+
+    file_name = _translation_source_location_file(
+        _translation_source_location_value(source_location, "file"), unit
+    )
+
+    line = max(
+        1,
+        _translation_source_location_int(
+            _translation_source_location_value(source_location, "line"), 1
+        ),
+    )
+    column = max(
+        1,
+        _translation_source_location_int(
+            _translation_source_location_value(source_location, "column"), 1
+        ),
+    )
+    end_line = max(
+        line,
+        _translation_source_location_int(
+            _translation_source_location_value(source_location, "end_line", "endLine"),
+            line,
+        ),
+    )
+    end_column = max(
+        1,
+        _translation_source_location_int(
+            _translation_source_location_value(
+                source_location, "end_column", "endColumn"
+            ),
+            column,
+        ),
+    )
+    return SourceLocation(
+        file=file_name,
+        line=line,
+        column=column,
+        offset=_translation_source_location_int(
+            _translation_source_location_value(source_location, "offset"), 0
+        ),
+        length=_translation_source_location_int(
+            _translation_source_location_value(source_location, "length"), 0
+        ),
+        end_line=end_line,
+        end_column=end_column,
+        end_offset=_translation_source_location_int(
+            _translation_source_location_value(
+                source_location, "end_offset", "endOffset"
+            ),
+            0,
+        ),
+    )
+
+
 def translate_project(
     config_or_root: ProjectConfig | str | os.PathLike[str],
     *,
@@ -7186,18 +7630,8 @@ def translate_project(
                     )
                     if split_artifacts is not None:
                         artifact_records = split_artifacts
-                    if _is_crossgl_target(target):
-                        remap_path = _source_remap_path(output_path)
-                        remap_payload = _source_remap_payload(artifact["sourceMap"])
-                        _write_source_remap_sidecar(remap_path, remap_payload)
-                        artifact["sourceRemap"] = _artifact_source_remap(
-                            config,
-                            target,
-                            artifact["path"],
-                            remap_path,
-                            str(artifact["sourceMap"]["mappingGranularity"]),
-                            len(remap_payload["mappings"]),
-                        )
+                    else:
+                        _attach_artifact_source_remap(config, target, artifact, output_path)
                 except Exception as exc:  # noqa: BLE001
                     # Project translation reports per-artifact failures so one bad
                     # unit does not hide the rest of the repository's migration state.
@@ -7214,7 +7648,7 @@ def translate_project(
                             severity="error",
                             code=_translation_failure_code(exc, target),
                             message=failure_message,
-                            location=SourceLocation(file=unit.relative_path),
+                            location=_translation_failure_location(exc, unit),
                             target=target,
                             source_backend=unit.source_backend,
                             variant=variant,
@@ -7574,6 +8008,55 @@ def _source_map_line_preserving_mapping_reasons(
     ]
 
 
+def _source_map_derived_line_mapping_reasons(
+    prefix: str,
+    source_map: Mapping[str, Any],
+    source_path: Path,
+    source_report_path: str,
+    artifact_path: Path,
+    artifact_report_path: str,
+) -> list[str]:
+    if source_map.get("mappingGranularity") != "line":
+        return []
+    mappings = source_map.get("mappings")
+    if not isinstance(mappings, list):
+        return []
+    if _line_preserving_source_map_mappings(
+        source_path,
+        source_report_path,
+        artifact_path,
+        artifact_report_path,
+    ):
+        return []
+    expected_mappings = _derived_line_source_map_mappings(
+        source_path,
+        source_report_path,
+        artifact_path,
+        artifact_report_path,
+    )
+    if not expected_mappings:
+        return []
+    if mappings == expected_mappings:
+        return []
+    if len(mappings) != len(expected_mappings):
+        return [
+            f"{prefix}.mappings count must match current derived line count "
+            f"({_value_mismatch_context(len(expected_mappings), len(mappings))})"
+        ]
+    for mapping_index, expected_mapping in enumerate(expected_mappings):
+        mapping = mappings[mapping_index]
+        if not isinstance(mapping, Mapping) or dict(mapping) != expected_mapping:
+            return [
+                f"{prefix}.mappings[{mapping_index}] must match current "
+                "derived line span "
+                f"({_value_mismatch_context(expected_mapping, mapping)})"
+            ]
+    return [
+        f"{prefix}.mappings must match current derived line spans "
+        f"({_value_mismatch_context(expected_mappings, mappings)})"
+    ]
+
+
 def _source_map_file_span_validation_diagnostics(
     artifact: Mapping[str, Any],
     config: ProjectConfig,
@@ -7648,6 +8131,16 @@ def _source_map_file_span_validation_diagnostics(
                 artifact_report_path,
             )
         )
+        reasons.extend(
+            _source_map_derived_line_mapping_reasons(
+                "sourceMap",
+                source_map,
+                source_path,
+                source,
+                artifact_path,
+                artifact_report_path,
+            )
+        )
 
     if not reasons:
         return []
@@ -7656,7 +8149,10 @@ def _source_map_file_span_validation_diagnostics(
             severity="error",
             code=(
                 "project.validate.source-map-line-span-mismatch"
-                if any("line-preserving line" in reason for reason in reasons)
+                if any(
+                    "line-preserving line" in reason or "derived line" in reason
+                    for reason in reasons
+                )
                 else "project.validate.source-map-file-span-mismatch"
             ),
             message=(
@@ -12211,16 +12707,12 @@ def _runtime_loader_webgl_program_groups(
         package_path = adapter.get("packagePath")
         if not _is_non_empty_string(package_path):
             continue
-        source_remap = adapter.get("sourceRemap")
         binding_source_path = None
         binding_id = adapter.get("binding")
         if _is_non_empty_string(binding_id):
             binding_source_path = str(binding_id).split("|", 1)[0]
         source_group_path = (
-            source_remap.get("sourcePath")
-            if isinstance(source_remap, Mapping)
-            and _is_non_empty_string(source_remap.get("sourcePath"))
-            else binding_source_path
+            binding_source_path
             or adapter.get("sourcePath")
             or adapter.get("packagePath")
         )
@@ -19546,6 +20038,7 @@ def _current_include_dependency_scan_contract_reasons(
         include_config,
         unit_path,
         unit_path_value,
+        str(unit.get("sourceBackend") or ""),
     )
     current_keys = [
         key
@@ -19661,6 +20154,7 @@ def _current_include_scan_diagnostic_contract_reasons(
                 include_config,
                 unit_path,
                 unit_path_value,
+                str(unit.get("sourceBackend") or ""),
             )
         except (OSError, ValueError):
             continue
@@ -22995,13 +23489,6 @@ def _source_remap_contract_reasons(
         if require_closed_fields
         else []
     )
-    artifact_target = artifact.get("target")
-    if _is_non_empty_string(artifact_target) and not _is_crossgl_target(
-        artifact_target
-    ):
-        reasons.append(
-            f"{prefix} must be omitted unless artifacts[{index}].target is CrossGL"
-        )
     if source_remap.get("schemaVersion") != SOURCE_REMAP_SCHEMA_VERSION:
         reasons.append(f"{prefix}.schemaVersion must be 1")
 
@@ -23549,12 +24036,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 _source_remap_contract_reasons(
                     index,
                     artifact,
-                    required=(
-                        has_summary
-                        and status == "translated"
-                        and _is_non_empty_string(target)
-                        and _is_crossgl_target(target)
-                    ),
+                    required=has_summary and status == "translated",
                     require_closed_fields=has_summary,
                     declared_targets=(
                         declared_targets
