@@ -191,8 +191,8 @@ def translate(
                 raise ValueError("CrossGL parser not available for intermediate step")
             cgl_ast = cgl_spec.parse(intermediate_code)
             if source_spec.name == "opencl" and normalized_backend != "webgl":
-                validate_opencl_intermediate_for_target(cgl_ast, normalized_backend)
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
+                validate_opencl_intermediate_for_target(cgl_ast, normalized_backend)
             if source_spec.name == "cuda" and normalized_backend in {
                 "directx",
                 "metal",

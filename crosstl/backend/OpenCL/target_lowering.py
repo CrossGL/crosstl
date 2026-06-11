@@ -5,10 +5,17 @@ from typing import Tuple
 
 from crosstl.translator.ast import (
     ArrayType,
+    ArrayAccessNode,
+    AssignmentNode,
     AttributeNode,
+    BinaryOpNode,
+    BlockNode,
+    ExpressionStatementNode,
+    ForNode,
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
+    IfNode,
     LiteralNode,
     NamedType,
     PrimitiveType,
@@ -31,12 +38,15 @@ _TARGET_SCALAR_TYPE_ALIASES = {
     "f64": "double",
     "i32": "int",
     "u32": "uint",
+    "i64": "int64_t",
+    "u64": "uint64_t",
 }
 _STAGE_CONTROL_ATTRIBUTES = {"compute", "workgroup_size", "local_size"}
 _EVENT_LOCAL_MEMORY_BUILTINS = {
     "async_work_group_copy",
     "wait_group_events",
 }
+_DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
 _SYNTHETIC_BUILTIN_ALIASES = {
     "thread_id": "gl_GlobalInvocationID",
     "block_id": "gl_WorkGroupID",
@@ -170,6 +180,13 @@ def _collect_called_function_names(node):
     return calls
 
 
+def _collect_called_function_names_from_functions(functions):
+    called_names = set()
+    for function in functions:
+        called_names.update(_collect_called_function_names(function))
+    return called_names
+
+
 def _format_list(values):
     return ", ".join(sorted(set(values)))
 
@@ -180,13 +197,15 @@ def _opencl_target_contracts(cgl_ast):
         for function in getattr(cgl_ast, "functions", []) or []
         if isinstance(function, FunctionNode)
     ]
-    called_names = set()
-    for function in functions:
-        called_names.update(_collect_called_function_names(function))
+    for stage in getattr(cgl_ast, "stages", {}).values():
+        entry_point = getattr(stage, "entry_point", None)
+        if isinstance(entry_point, FunctionNode):
+            functions.append(entry_point)
+    called_names = _collect_called_function_names_from_functions(functions)
 
     contracts = []
     for function in functions:
-        if not _is_empty_nonvoid_function(function):
+        if not _is_empty_nonvoid_function(function) or function.name not in called_names:
             continue
         contracts.append(
             OpenCLTargetUnsupportedContract(
@@ -419,6 +438,11 @@ def _structured_buffer_type(parameter, writable=True):
 
 def _stage_local_variable(parameter):
     param_type = _clone_target_type(getattr(parameter, "param_type", None))
+    if isinstance(param_type, ArrayType) and param_type.size is None:
+        param_type = ArrayType(
+            param_type.element_type,
+            _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE,
+        )
     variable = VariableNode(
         parameter.name,
         param_type,
@@ -470,10 +494,280 @@ def _is_target_compute_function(function):
     )
 
 
+def _is_workgroup_resource_parameter(parameter):
+    return "workgroup" in _resource_qualifiers(parameter)
+
+
+def _workgroup_parameter_names(functions):
+    names = set()
+    for function in functions:
+        if not _is_target_compute_function(function):
+            continue
+        for parameter in getattr(function, "parameters", []) or []:
+            if _is_workgroup_resource_parameter(parameter):
+                names.add(parameter.name)
+    return names
+
+
+def _called_workgroup_pointer_parameters(functions, workgroup_names):
+    function_by_name = {function.name: function for function in functions}
+    parameter_keys = set()
+    for function in functions:
+        for child in function.walk():
+            if not isinstance(child, FunctionCallNode):
+                continue
+            callee_name = _function_call_name(child)
+            callee = function_by_name.get(callee_name)
+            if callee is None:
+                continue
+            parameters = getattr(callee, "parameters", []) or []
+            arguments = getattr(child, "arguments", getattr(child, "args", [])) or []
+            for index, argument in enumerate(arguments):
+                if index >= len(parameters):
+                    continue
+                if getattr(argument, "name", None) not in workgroup_names:
+                    continue
+                parameter = parameters[index]
+                if _is_pointer_named_type(getattr(parameter, "param_type", None)):
+                    parameter_keys.add((callee.name, index))
+    return parameter_keys
+
+
+def _specialize_workgroup_pointer_helpers(functions):
+    workgroup_names = _workgroup_parameter_names(functions)
+    if not workgroup_names:
+        return
+
+    parameter_keys = _called_workgroup_pointer_parameters(functions, workgroup_names)
+    if not parameter_keys:
+        return
+
+    for function in functions:
+        for index, parameter in enumerate(getattr(function, "parameters", []) or []):
+            if (function.name, index) not in parameter_keys:
+                continue
+            param_type = getattr(parameter, "param_type", None)
+            if not _is_pointer_named_type(param_type):
+                continue
+            parameter.param_type = ArrayType(
+                param_type.generic_args[0],
+                _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE,
+            )
+            qualifiers = list(getattr(parameter, "qualifiers", []) or [])
+            if "workgroup" not in {str(qualifier).lower() for qualifier in qualifiers}:
+                qualifiers.append("workgroup")
+            parameter.qualifiers = qualifiers
+
+
+def _prune_unused_empty_helpers(functions):
+    called_names = _collect_called_function_names_from_functions(functions)
+    return [
+        function
+        for function in functions
+        if not _is_empty_nonvoid_function(function) or function.name in called_names
+    ]
+
+
+def _is_call_statement(statement, builtin_name):
+    if not isinstance(statement, ExpressionStatementNode):
+        return False
+    expression = getattr(statement, "expression", None)
+    return (
+        isinstance(expression, FunctionCallNode)
+        and _function_call_name(expression) == builtin_name
+    )
+
+
+def _identifier(name):
+    return IdentifierNode(str(name))
+
+
+def _local_invocation_index():
+    return _identifier("lid")
+
+
+def _array_access_with_offset(array_expr, index_expr):
+    if (
+        isinstance(array_expr, BinaryOpNode)
+        and array_expr.operator == "+"
+        and isinstance(array_expr.left, IdentifierNode)
+    ):
+        return ArrayAccessNode(
+            array_expr.left,
+            BinaryOpNode(array_expr.right, "+", index_expr),
+        )
+    return ArrayAccessNode(array_expr, index_expr)
+
+
+def _lower_async_work_group_copy(statement):
+    expression = getattr(statement, "expression", None)
+    arguments = getattr(expression, "arguments", getattr(expression, "args", [])) or []
+    if len(arguments) < 3:
+        return statement
+
+    local_index = _local_invocation_index()
+    destination = arguments[0]
+    source = arguments[1]
+    count = arguments[2]
+    assignment = AssignmentNode(
+        ArrayAccessNode(destination, local_index),
+        _array_access_with_offset(source, local_index),
+    )
+    return IfNode(
+        BinaryOpNode(local_index, "<", count),
+        BlockNode([assignment]),
+    )
+
+
+def _event_token_name(argument):
+    name = getattr(argument, "name", None)
+    if name:
+        return name
+    operand = getattr(argument, "operand", None)
+    return getattr(operand, "name", None)
+
+
+def _collect_event_local_memory_tokens(statements):
+    names = set()
+    for statement in statements:
+        for child in statement.walk():
+            if not isinstance(child, FunctionCallNode):
+                continue
+            call_name = _function_call_name(child)
+            arguments = getattr(child, "arguments", getattr(child, "args", [])) or []
+            if call_name == "async_work_group_copy" and len(arguments) >= 4:
+                token_name = _event_token_name(arguments[3])
+                if token_name:
+                    names.add(token_name)
+            elif call_name == "wait_group_events":
+                for argument in arguments[1:]:
+                    token_name = _event_token_name(argument)
+                    if token_name:
+                        names.add(token_name)
+    return names
+
+
+def _normalize_opencl_event_local_memory_statement(statement, event_tokens):
+    if isinstance(statement, VariableNode) and statement.name in event_tokens:
+        return []
+    if _is_call_statement(statement, "wait_group_events"):
+        return []
+    if _is_call_statement(statement, "async_work_group_copy"):
+        return [_lower_async_work_group_copy(statement)]
+
+    if isinstance(statement, BlockNode):
+        _normalize_opencl_event_local_memory_statements(
+            statement.statements,
+            event_tokens,
+        )
+    elif isinstance(statement, IfNode):
+        _normalize_opencl_event_local_memory_branch(statement.then_branch, event_tokens)
+        if statement.else_branch is not None:
+            _normalize_opencl_event_local_memory_branch(
+                statement.else_branch,
+                event_tokens,
+            )
+    elif isinstance(statement, ForNode):
+        _normalize_opencl_event_local_memory_branch(statement.body, event_tokens)
+    return [statement]
+
+
+def _normalize_opencl_event_local_memory_branch(branch, event_tokens):
+    statements = getattr(branch, "statements", None)
+    if isinstance(statements, list):
+        _normalize_opencl_event_local_memory_statements(statements, event_tokens)
+
+
+def _normalize_opencl_event_local_memory_statements(statements, event_tokens):
+    normalized = []
+    for statement in list(statements):
+        normalized.extend(
+            _normalize_opencl_event_local_memory_statement(statement, event_tokens)
+        )
+    statements[:] = normalized
+
+
+def _normalize_opencl_event_local_memory(functions):
+    for function in functions:
+        statements = _function_statements(function)
+        if isinstance(statements, list):
+            event_tokens = _collect_event_local_memory_tokens(statements)
+            _normalize_opencl_event_local_memory_statements(statements, event_tokens)
+
+
+def _is_signed_int_type(type_node):
+    return isinstance(type_node, PrimitiveType) and type_node.name in {"i32", "int"}
+
+
+def _is_unsigned_int_type(type_node):
+    return isinstance(type_node, PrimitiveType) and type_node.name in {"u32", "uint"}
+
+
+def _collect_variable_types(statements):
+    variable_types = {}
+    for statement in statements:
+        for child in statement.walk():
+            if isinstance(child, VariableNode) and child.name:
+                variable_types.setdefault(child.name, getattr(child, "var_type", None))
+    return variable_types
+
+
+def _normalize_opencl_for_loop_counter_statement(statement, variable_types):
+    if isinstance(statement, ForNode):
+        init = getattr(statement, "init", None)
+        initial_value = getattr(init, "initial_value", None)
+        source_type = variable_types.get(getattr(initial_value, "name", None))
+        if (
+            isinstance(init, VariableNode)
+            and _is_signed_int_type(getattr(init, "var_type", None))
+            and _is_unsigned_int_type(source_type)
+        ):
+            init.var_type = source_type
+            init.vtype = source_type
+        _normalize_opencl_for_loop_counter_branch(statement.body, variable_types)
+    elif isinstance(statement, BlockNode):
+        _normalize_opencl_for_loop_counter_statements(
+            statement.statements,
+            variable_types,
+        )
+    elif isinstance(statement, IfNode):
+        _normalize_opencl_for_loop_counter_branch(statement.then_branch, variable_types)
+        if statement.else_branch is not None:
+            _normalize_opencl_for_loop_counter_branch(
+                statement.else_branch,
+                variable_types,
+            )
+
+
+def _normalize_opencl_for_loop_counter_branch(branch, variable_types):
+    statements = getattr(branch, "statements", None)
+    if isinstance(statements, list):
+        _normalize_opencl_for_loop_counter_statements(statements, variable_types)
+
+
+def _normalize_opencl_for_loop_counter_statements(statements, variable_types):
+    for statement in statements:
+        _normalize_opencl_for_loop_counter_statement(statement, variable_types)
+
+
+def _normalize_opencl_for_loop_counter_types(functions):
+    for function in functions:
+        statements = _function_statements(function)
+        if isinstance(statements, list):
+            _normalize_opencl_for_loop_counter_statements(
+                statements,
+                _collect_variable_types(statements),
+            )
+
+
 def normalize_opencl_intermediate_for_target(cgl_ast):
     """Lower OpenCL bridge compute parameters to neutral CrossGL resources."""
 
     functions = list(getattr(cgl_ast, "functions", []) or [])
+    _specialize_workgroup_pointer_helpers(functions)
+    _normalize_opencl_for_loop_counter_types(functions)
+    _normalize_opencl_event_local_memory(functions)
+    functions = _prune_unused_empty_helpers(functions)
     target_functions = []
     remaining_functions = []
 
