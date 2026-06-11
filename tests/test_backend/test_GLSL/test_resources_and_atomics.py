@@ -8134,13 +8134,13 @@ def test_codegen_nested_block_shadowed_value_type_does_not_leak_to_image_store()
 
 def test_codegen_control_flow_shadowed_value_types_do_not_leak_to_image_store():
     cases = [
-            (
-                "BranchShadowedScalarImageStore",
-                "void main(bool choose)",
-                "if (choose) {\n                    vec2 value = vec2(1.0, 2.0);\n                }",
-                "if (choose) {\n        float2 value = float2(1.0, 2.0);\n    }",
-                "if (main_choose_Args_choose) {\n        vec2 value = vec2(1.0, 2.0);\n    }",
-            ),
+        (
+            "BranchShadowedScalarImageStore",
+            "void main(bool choose)",
+            "if (choose) {\n                    vec2 value = vec2(1.0, 2.0);\n                }",
+            "if (choose) {\n        float2 value = float2(1.0, 2.0);\n    }",
+            "if (choose) {\n        vec2 value = vec2(1.0, 2.0);\n    }",
+        ),
         (
             "LoopShadowedScalarImageStore",
             "void main()",
@@ -8201,8 +8201,51 @@ def test_codegen_control_flow_shadowed_value_types_do_not_leak_to_image_store():
         assert "scalarImage.write(float4(value), uint2(int2(0, 0)));" in metal
 
         assert "layout(r32f, binding = 0) uniform image2D scalarImage;" in glsl
+        if main_signature == "void main(bool choose)":
+            assert re.search(
+                r"layout\(std140, binding = \d+\) uniform main_choose_Args",
+                glsl,
+            )
+            assert "bool choose;" in glsl
         assert glsl_body in glsl
         assert "imageStore(scalarImage, ivec2(0, 0), vec4(value));" in glsl
+
+
+def test_codegen_entrypoint_parameter_conflict_remap_reaches_control_flow():
+    crossgl = """
+    shader BranchShadowedScalarImageStoreCbufferConflict {
+        cbuffer Existing {
+            bool choose;
+        }
+        image2D scalarImage @r32f;
+
+        compute {
+            void main(bool choose) {
+                float value = 0.5;
+                if (choose) {
+                    vec2 value = vec2(1.0, 2.0);
+                }
+                imageStore(scalarImage, ivec2(0, 0), value);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "layout(std140, binding = 0) uniform Existing" in glsl
+    assert "    bool choose;" in glsl
+    assert "layout(std140, binding = 1) uniform main_choose_Args" in glsl
+    assert "    bool main_choose_Args_choose;" in glsl
+    assert (
+        "if (main_choose_Args_choose) {\n"
+        "        vec2 value = vec2(1.0, 2.0);\n"
+        "    }" in glsl
+    )
+    assert "imageStore(scalarImage, ivec2(0, 0), vec4(value));" in glsl
 
 
 def test_codegen_for_initializer_shadowed_value_type_does_not_leak_to_image_store():

@@ -1,4 +1,7 @@
+import os
 import re
+import shutil
+import subprocess
 from typing import List
 
 import pytest
@@ -259,6 +262,73 @@ def test_glsl_fragment_input_locations_lower_to_distinct_hlsl_semantics(tmp_path
     assert "float3 nearPoint: TEXCOORD0;" in generated_code
     assert "float3 farPoint: TEXCOORD1;" in generated_code
     assert ": location" not in generated_code
+    assert generated_code.count(": TEXCOORD0") == 1
+    assert generated_code.count(": TEXCOORD1") == 1
+
+
+def test_rust_gpu_vertex_plain_input_lowers_to_hlsl_semantic(tmp_path):
+    shader = """
+    use spirv_std::glam::{Vec2, Vec4};
+    use spirv_std::spirv;
+
+    #[spirv(vertex)]
+    pub fn main_vs(pos: Vec2, #[spirv(position)] builtin_pos: &mut Vec4) {
+        *builtin_pos = pos.extend(0.0).extend(1.0);
+    }
+    """
+    shader_path = tmp_path / "rust_gpu_stage_inputs.rs"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="rust",
+    )
+
+    assert (
+        "void VSMain(float2 pos : TEXCOORD0, "
+        "out float4 builtin_pos : SV_POSITION)" in generated_code
+    )
+    assert "void VSMain(float2 pos, out float4 builtin_pos : SV_POSITION)" not in (
+        generated_code
+    )
+
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        return
+
+    hlsl_path = tmp_path / "rust_gpu_stage_inputs.hlsl"
+    hlsl_path.write_text(generated_code)
+    result = subprocess.run(
+        [dxc, "-T", "vs_6_0", "-E", "VSMain", str(hlsl_path), "-Fo", os.devnull],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_directx_vertex_default_parameter_semantics_skip_declared_ranges():
+    shader = """
+    shader VertexPlainInputs {
+        vertex {
+            void main(
+                vec2 uv @ TEXCOORD0,
+                vec3 normal,
+                out vec4 position @ gl_Position
+            ) {
+                position = vec4(normal, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float2 uv : TEXCOORD0" in generated_code
+    assert "float3 normal : TEXCOORD1" in generated_code
+    assert "out float4 position : SV_POSITION" in generated_code
     assert generated_code.count(": TEXCOORD0") == 1
     assert generated_code.count(": TEXCOORD1") == 1
 
@@ -33755,6 +33825,49 @@ def test_hlsl_matrix_resize_constructor_lowers_nested_inverse_transpose():
     assert (
         "float3x3((transpose(__crossgl_inverse_float4_4(model)))[0].xyz"
         in generated_code
+    )
+
+
+def test_hlsl_vector_constructor_truncates_matrix_vector_result():
+    shader = """
+    shader MatrixVectorTruncation {
+        vertex {
+            struct VertexInput {
+                vec3 position;
+                vec3 normal;
+            };
+
+            struct VertexOutput {
+                vec3 worldPosition;
+                vec3 worldNormal;
+            };
+
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                mat4 model = mat4(1.0);
+                mat4 normalMatrix = mat4(1.0);
+                output.worldPosition = vec3(model * vec4(input.position, 1.0));
+                output.worldNormal = normalize(vec3(normalMatrix * vec4(input.normal, 1.0)));
+                return output;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "output.worldPosition = float3(mul(model, "
+        "float4(input.position, 1.0)).xyz);"
+    ) in generated_code
+    assert (
+        "output.worldNormal = normalize(float3(mul(normalMatrix, "
+        "float4(input.normal, 1.0)).xyz));"
+    ) in generated_code
+    assert "float3(mul(model, float4(input.position, 1.0)))" not in generated_code
+    assert (
+        "float3(mul(normalMatrix, float4(input.normal, 1.0)))"
+        not in generated_code
     )
 
 

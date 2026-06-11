@@ -218,8 +218,10 @@ class VulkanSPIRVCodeGen:
         self.function_nodes = {}
         self.function_nodes_by_name = {}
         self.function_signatures = {}
+        self.function_overloads = {}
         self.stage_local_functions = {}
         self.stage_local_function_signatures = {}
+        self.stage_local_function_overloads = {}
         self.stage_local_function_parameter_names = {}
         self.stage_local_function_image_access_requirements = {}
         self.stage_local_function_storage_buffer_access_requirements = {}
@@ -1350,7 +1352,9 @@ class VulkanSPIRVCodeGen:
                 and variable_type.type.base_type != result_type.type.base_type
             ):
                 loaded = self.load_from_variable(variable_id, variable_type)
-                return self.convert_value_to_type(loaded, result_type)
+                return self.convert_value_to_type(
+                    loaded, result_type, allow_vector_resize=True
+                )
             return self.load_from_variable(variable_id, result_type)
 
         variable_type = self.pointer_pointee_type(variable_id)
@@ -1370,6 +1374,7 @@ class VulkanSPIRVCodeGen:
         target_type: SpirvId,
         *,
         allow_vector_to_scalar: bool = False,
+        allow_vector_resize: bool = False,
     ) -> SpirvId:
         """Convert scalar values to a compatible scalar or vector target type."""
         target_type = self.ensure_registered_type(target_type)
@@ -1418,31 +1423,44 @@ class VulkanSPIRVCodeGen:
             return value_id
 
         if source_vector is not None:
-            if source_vector[1] != target_vector[1]:
+            if source_vector[1] != target_vector[1] and not allow_vector_resize:
                 return value_id
-            target_component_type = self.register_primitive_type(target_vector[0])
-            source_component_type = self.register_primitive_type(source_vector[0])
-            components = []
-            for index in range(source_vector[1]):
-                component = self.composite_extract(
-                    value_id, source_component_type, index
-                )
-                converted = self.convert_scalar_to_type(
-                    component, target_component_type
-                )
-                if (
-                    self.normalize_primitive_name(converted.type.base_type)
-                    != target_vector[0]
-                ):
-                    return value_id
-                components.append(converted)
-            return self.composite_construct(target_type, components)
+            converted = self.convert_vector_to_type(
+                value_id, source_vector, target_type, target_vector
+            )
+            return converted or value_id
 
         component_type = self.register_primitive_type(target_vector[0])
         converted = self.convert_scalar_to_type(value_id, component_type)
         if self.normalize_primitive_name(converted.type.base_type) != target_vector[0]:
             return value_id
         return self.splat_scalar_to_vector(converted, target_type)
+
+    def convert_vector_to_type(
+        self,
+        value_id: SpirvId,
+        source_vector: Tuple[str, int],
+        target_type: SpirvId,
+        target_vector: Tuple[str, int],
+    ) -> Optional[SpirvId]:
+        target_component_type = self.register_primitive_type(target_vector[0])
+        source_component_type = self.register_primitive_type(source_vector[0])
+        components = []
+        copied_components = min(source_vector[1], target_vector[1])
+        for index in range(copied_components):
+            component = self.composite_extract(value_id, source_component_type, index)
+            converted = self.convert_scalar_to_type(component, target_component_type)
+            if (
+                self.normalize_primitive_name(converted.type.base_type)
+                != target_vector[0]
+            ):
+                return None
+            components.append(converted)
+
+        while len(components) < target_vector[1]:
+            components.append(self.default_value_for_type(target_component_type))
+
+        return self.composite_construct(target_type, components)
 
     def value_has_type(self, value_id: SpirvId, target_type: SpirvId) -> bool:
         value_type = self.value_types.get(
@@ -1540,6 +1558,34 @@ class VulkanSPIRVCodeGen:
 
         return True
 
+    def scalar_type_can_initialize_complex_struct(self, type_id: SpirvId) -> bool:
+        type_name = self.normalize_primitive_name(type_id.type.base_type)
+        return type_name in {"float", "double"} | self.INTEGER_TYPE_NAMES
+
+    def convert_scalar_value_to_complex_struct_type(
+        self,
+        value_id: SpirvId,
+        source_type: SpirvId,
+        target_type: SpirvId,
+        target_members: List[Tuple[SpirvId, str]],
+    ) -> Optional[SpirvId]:
+        if not self.is_complex_struct_type(target_type, target_members):
+            return None
+        if not self.scalar_type_can_initialize_complex_struct(source_type):
+            return None
+
+        values = []
+        for index, (member_type, _) in enumerate(target_members):
+            if index == 0:
+                converted = self.convert_value_to_type(value_id, member_type)
+                if not self.value_has_type(converted, member_type):
+                    return None
+                values.append(converted)
+            else:
+                values.append(self.default_value_for_type(member_type))
+
+        return self.composite_construct(target_type, values)
+
     def convert_aggregate_value_to_type(
         self, value_id: SpirvId, source_type: SpirvId, target_type: SpirvId
     ) -> Optional[SpirvId]:
@@ -1552,6 +1598,13 @@ class VulkanSPIRVCodeGen:
         target_vector = self.vector_type_info_from_type(target_type)
         source_members = self.current_struct_members.get(source_type.type.base_type)
         target_members = self.current_struct_members.get(target_type.type.base_type)
+
+        if source_members is None and target_members is not None:
+            scalar_complex = self.convert_scalar_value_to_complex_struct_type(
+                value_id, source_type, target_type, target_members
+            )
+            if scalar_complex is not None:
+                return scalar_complex
 
         if source_vector is not None and target_members is not None:
             source_component_type, source_count = source_vector
@@ -1966,7 +2019,12 @@ class VulkanSPIRVCodeGen:
         return access
 
     def create_function(
-        self, name: str, return_type: SpirvId, param_types: List[SpirvId]
+        self,
+        name: str,
+        return_type: SpirvId,
+        param_types: List[SpirvId],
+        *,
+        register_global: bool = True,
     ) -> SpirvId:
         """Create a function declaration."""
         function_type = self.register_function_type(return_type, param_types)
@@ -1977,8 +2035,12 @@ class VulkanSPIRVCodeGen:
         )
 
         spirv_id = SpirvId(id_value, return_type.type, name)
-        self.functions[name] = spirv_id
-        self.function_signatures[name] = (return_type, param_types)
+        if register_global:
+            self.functions[name] = spirv_id
+            self.function_signatures[name] = (return_type, param_types)
+            self.function_overloads.setdefault(name, []).append(
+                (spirv_id, (return_type, param_types))
+            )
 
         return spirv_id
 
@@ -2030,8 +2092,132 @@ class VulkanSPIRVCodeGen:
             return
         self.stage_local_functions[key] = function_id
         self.stage_local_function_signatures[key] = (return_type, param_types)
+        self.stage_local_function_overloads.setdefault(key, []).append(
+            (function_id, (return_type, param_types))
+        )
 
-    def resolve_function_reference(self, function_name: str):
+    def function_reference_candidates(self, function_name: str):
+        candidates = []
+        seen = set()
+        if self.current_stage is not None:
+            key = self.stage_local_function_key(self.current_stage, function_name)
+            for candidate in self.stage_local_function_overloads.get(key, []):
+                function_id, _signature = candidate
+                if function_id.id in seen:
+                    continue
+                candidates.append(candidate)
+                seen.add(function_id.id)
+
+        for candidate in self.function_overloads.get(function_name, []):
+            function_id, _signature = candidate
+            if function_id.id in seen:
+                continue
+            candidates.append(candidate)
+            seen.add(function_id.id)
+        return candidates
+
+    def function_argument_type_match_score(
+        self, expected_type: SpirvId, actual_type: Optional[SpirvId]
+    ) -> Optional[int]:
+        if expected_type is None:
+            return 0 if actual_type is None else None
+        if actual_type is None:
+            return 0
+        if actual_type.id == expected_type.id:
+            return 16
+        if actual_type.type.base_type == expected_type.type.base_type:
+            return 14
+
+        expected_storage = expected_type.type.storage_class
+        actual_storage = actual_type.type.storage_class
+        if expected_storage is not None or actual_storage is not None:
+            if expected_storage != actual_storage:
+                return None
+            expected_pointee = self.pointer_type_pointee_type(expected_type)
+            actual_pointee = self.pointer_type_pointee_type(actual_type)
+            pointee_score = self.function_argument_type_match_score(
+                expected_pointee, actual_pointee
+            )
+            if pointee_score is None:
+                return None
+            return 8 + pointee_score
+
+        expected_name = self.normalize_signature_type_name(expected_type.type.base_type)
+        actual_name = self.normalize_signature_type_name(actual_type.type.base_type)
+        if expected_name is None or actual_name is None:
+            return 0
+        if expected_name == actual_name:
+            return 12
+
+        numeric_types = {"bool", "float", "double"} | self.INTEGER_TYPE_NAMES
+        expected_vector = self.vector_component_type_and_count(expected_name)
+        actual_vector = self.vector_component_type_and_count(actual_name)
+        if expected_vector is not None or actual_vector is not None:
+            if expected_vector is None:
+                return None
+            if actual_vector is None:
+                if (
+                    expected_vector[0] in numeric_types
+                    and actual_name in numeric_types
+                ):
+                    return 2
+                return None
+            if expected_vector[1] != actual_vector[1]:
+                return None
+            if (
+                expected_vector[0] in numeric_types
+                and actual_vector[0] in numeric_types
+            ):
+                return 7
+            return None
+
+        if expected_name in numeric_types and actual_name in numeric_types:
+            return 6
+        if self.scalar_or_vector_type_compatible(expected_name, actual_name):
+            return 1
+        return None
+
+    def function_call_match_score(
+        self, param_types: List[SpirvId], args: List[SpirvId]
+    ) -> Optional[int]:
+        if len(param_types) != len(args):
+            return None
+        score = 0
+        for expected_type, arg in zip(param_types, args):
+            actual_type = self.registered_value_type(arg)
+            arg_score = self.function_argument_type_match_score(
+                expected_type, actual_type
+            )
+            if arg_score is None:
+                return None
+            score += arg_score
+        return score
+
+    def select_function_reference_for_args(self, function_name: str, args: List[SpirvId]):
+        candidates = self.function_reference_candidates(function_name)
+        if not candidates:
+            return None
+
+        scored_candidates = []
+        for candidate in candidates:
+            _function_id, (_return_type, param_types) = candidate
+            score = self.function_call_match_score(param_types, args)
+            if score is not None:
+                scored_candidates.append((score, candidate))
+
+        if scored_candidates:
+            scored_candidates.sort(key=lambda item: item[0], reverse=True)
+            return scored_candidates[0][1]
+        return candidates[-1]
+
+    def resolve_function_reference(self, function_name: str, args: Optional[List] = None):
+        if args is not None:
+            function_reference = self.select_function_reference_for_args(
+                function_name, args
+            )
+            if function_reference is not None:
+                return function_reference
+
         if self.current_stage is not None:
             key = self.stage_local_function_key(self.current_stage, function_name)
             if key in self.stage_local_functions:
@@ -2046,8 +2232,8 @@ class VulkanSPIRVCodeGen:
             )
         return None
 
-    def resolve_function_signature(self, function_name: str):
-        function_reference = self.resolve_function_reference(function_name)
+    def resolve_function_signature(self, function_name: str, args: Optional[List] = None):
+        function_reference = self.resolve_function_reference(function_name, args)
         if function_reference is None:
             return None
         return function_reference[1]
@@ -3177,7 +3363,7 @@ class VulkanSPIRVCodeGen:
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         """Call a function with arguments."""
-        function_reference = self.resolve_function_reference(function_name)
+        function_reference = self.resolve_function_reference(function_name, args)
         if function_reference is None:
             return self.call_builtin_function(function_name, args)
 
@@ -14399,7 +14585,10 @@ class VulkanSPIRVCodeGen:
         previous_global_function = self.functions.get(function_node.name)
         previous_global_signature = self.function_signatures.get(function_node.name)
         function_id = self.create_function(
-            function_node.name, function_return_type, param_types
+            function_node.name,
+            function_return_type,
+            param_types,
+            register_global=stage is None,
         )
         if stage is not None:
             self.register_stage_local_function(

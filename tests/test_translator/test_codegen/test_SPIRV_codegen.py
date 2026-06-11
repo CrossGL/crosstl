@@ -1955,6 +1955,44 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "WARNING" not in spv_code
 
+    def test_complex_helper_call_converts_scalar_argument_to_parameter_struct(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ComplexScalarHelperCall {
+            struct complex64_t {
+                float real;
+                float imag;
+            }
+
+            compute {
+                complex64_t passComplex(complex64_t value) {
+                    return value;
+                }
+
+                void main() {
+                    float real = 1.0;
+                    complex64_t result = passComplex(real);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        complex_type = spirv_named_id(spv_code, "complex64_t")
+        assert re.search(
+            rf"(?P<arg>%\d+) = OpCompositeConstruct "
+            rf"{re.escape(complex_type)} %\d+ %\d+\n"
+            rf"%\d+ = OpFunctionCall {re.escape(complex_type)} %\d+ "
+            rf"(?P=arg)",
+            spv_code,
+        )
+        assert_spirv_function_calls_use_declared_parameter_types(spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_complex_helper_call_converts_vector_argument_to_parameter_struct(
         self, tmp_path
     ):
@@ -25711,6 +25749,39 @@ class TestVulkanSPIRVCodeGen:
         assert "OpFMul" in spv_code
         assert "WARNING" not in spv_code
 
+    def test_overloaded_user_function_calls_use_matching_parameter_types(self, tmp_path):
+        source_code = """
+        shader OverloadedLinearToSrgb {
+            float linearToSrgb(float c) {
+                return c + 1.0;
+            }
+
+            vec3 linearToSrgb(vec3 c) {
+                return vec3(linearToSrgb(c.r), linearToSrgb(c.g), linearToSrgb(c.b));
+            }
+
+            vec4 linearToSrgb(vec4 c) {
+                return vec4(linearToSrgb(c.rgb), c.a);
+            }
+
+            fragment {
+                vec4 main() {
+                    vec4 color = vec4(0.1, 0.2, 0.3, 1.0);
+                    return linearToSrgb(color);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("OpFunctionCall") == 5
+        assert_spirv_function_calls_use_declared_parameter_types(spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.0")
+
     def test_function_parameters_generate_opfunctionparameter(self):
         source_code = """
         shader FunctionParams {
@@ -27462,6 +27533,99 @@ class TestSpirvShaderValidation:
             spv_code,
         )
         assert store_value is not None
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_entry_point_builtin_vector_parameter_resizes_to_declared_width(
+        self, tmp_path
+    ):
+        source_code = """
+        shader BuiltinParameterResize {
+            compute {
+                void main(uvec2 id @ gl_GlobalInvocationID) {
+                    uvec2 copy = id;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        global_id = spirv_named_variable(
+            spv_code, "gl_GlobalInvocationID", storage_class="Input"
+        )
+        local_id = spirv_named_variable(spv_code, "id", storage_class="Function")
+        global_load = re.search(rf"(%\d+) = OpLoad %\d+ {global_id}", spv_code)
+        local_store = re.search(rf"OpStore {local_id} (%\d+)", spv_code)
+
+        assert global_load is not None
+        assert local_store is not None
+        assert local_store.group(1) != global_load.group(1)
+        assert re.search(
+            rf"{re.escape(local_store.group(1))} = OpCompositeConstruct %\d+ "
+            r"%\d+ %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_metal_matmul_style_uvec2_id_and_output_buffer_store_validate(
+        self, tmp_path
+    ):
+        source_code = """
+        shader main {
+            struct MatMulParams {
+                uint row_dim_x;
+                uint col_dim_x;
+                uint inner_dim;
+            }
+
+            compute {
+                @ stage_entry
+                void mat_mul_simple1(
+                    StructuredBuffer<float> A @buffer(0),
+                    StructuredBuffer<float> B @buffer(1),
+                    RWStructuredBuffer<float> X @buffer(2),
+                    constant MatMulParams& params @buffer(3),
+                    uvec2 id @gl_GlobalInvocationID
+                ) {
+                    const uint row_dim_x = params.row_dim_x;
+                    const uint col_dim_x = params.col_dim_x;
+                    const uint inner_dim = params.inner_dim;
+                    if (id.x < col_dim_x && id.y < row_dim_x) {
+                        const uint index = id.y * col_dim_x + id.x;
+                        float sum = 0;
+                        for (uint k = 0; k < inner_dim; (++k)) {
+                            const uint index_A = id.y * inner_dim + k;
+                            const uint index_B = k * col_dim_x + id.x;
+                            sum += buffer_load(A, index_A) * buffer_load(B, index_B);
+                        }
+                        buffer_store(X, index, sum);
+                    }
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        output_buffer = spirv_named_variable(spv_code, "X", storage_class="Uniform")
+        output_stores = [
+            access_id
+            for access_id, operands in re.findall(
+                r"(%\d+) = OpAccessChain %\d+ ([^\n]+)\nOpStore \1 %\d+",
+                spv_code,
+            )
+            if output_buffer in operands.split()
+        ]
+
+        assert output_stores
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)

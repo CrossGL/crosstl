@@ -45,6 +45,10 @@ from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default
 from tests.test_backend.test_SPIRV.test_codegen import (
     SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
 )
+from tests.test_translator.spirv_wgsl_contract import (
+    SPIRV_VERTEX_POSITION_OUTPUT_SOURCE,
+    assert_spirv_position_output_wgsl_contract,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -7531,30 +7535,7 @@ def test_translate_project_spirv_assembly_vertex_position_lowers_to_wgsl(tmp_pat
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "position.spvasm").write_text(
-        textwrap.dedent("""
-            ; SPIR-V
-            ; Version: 1.0
-            OpCapability Shader
-            OpMemoryModel Logical GLSL450
-            OpEntryPoint Vertex %main "main" %pos
-            OpName %main "main"
-            OpName %pos "gl_Position"
-            OpDecorate %pos BuiltIn Position
-            %void = OpTypeVoid
-            %fn = OpTypeFunction %void
-            %float = OpTypeFloat 32
-            %v4float = OpTypeVector %float 4
-            %ptr_output_v4float = OpTypePointer Output %v4float
-            %float_0 = OpConstant %float 0
-            %float_1 = OpConstant %float 1
-            %const_pos = OpConstantComposite %v4float %float_0 %float_0 %float_0 %float_1
-            %pos = OpVariable %ptr_output_v4float Output
-            %main = OpFunction %void None %fn
-            %entry = OpLabel
-            OpStore %pos %const_pos
-            OpReturn
-            OpFunctionEnd
-            """).lstrip(),
+        SPIRV_VERTEX_POSITION_OUTPUT_SOURCE.lstrip(),
         encoding="utf-8",
     )
 
@@ -7575,12 +7556,7 @@ def test_translate_project_spirv_assembly_vertex_position_lowers_to_wgsl(tmp_pat
     } == {("wgsl", "translated")}
 
     wgsl = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
-    assert "struct VertexOutput" in wgsl
-    assert "@builtin(position) position: vec4<f32>," in wgsl
-    assert "@vertex\nfn vertex_main() -> VertexOutput" in wgsl
-    assert "output.position = vec4<f32>(0, 0, 0, 1);" in wgsl
-    assert "return output;" in wgsl
-    assert "gl_Position" not in wgsl
+    assert_spirv_position_output_wgsl_contract(wgsl)
 
     if shutil.which("naga"):
         assert payload["validation"]["artifacts"][0]["status"] == "ok"
@@ -7859,8 +7835,13 @@ def test_translate_project_generates_metal_and_spirv_for_modular_mojo_vector_add
     assert artifacts_by_target["vulkan"]["status"] == "translated"
     assert metal_path.exists()
     assert spirv_path.exists()
-    assert "TileTensor<float_dtype, type_of(layout), MutAnyOrigin>" in metal
+    assert "kernel void vector_addition" in metal
+    assert "device float* lhs_tensor" in metal
+    assert "out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid];" in metal
+    assert "TileTensor" not in metal
     assert "; SPIR-V" in spirv
+    assert "OpEntryPoint GLCompute" in spirv
+    assert "WARNING" not in spirv
     assert "IdentifierNode(" not in metal
     assert "IdentifierNode(" not in spirv
 
@@ -11206,6 +11187,7 @@ def test_plain_metal_helper_call_scan_uses_indexed_excluded_spans(monkeypatch):
             "plain_helper",
             ["value"],
             (helper_start, helper_start + len("plain_helper")),
+            [],
         )
     ]
 
@@ -11247,9 +11229,43 @@ def test_plain_metal_helper_call_scan_starts_at_included_body_span():
             "plain_helper",
             ["value"],
             (helper_start, helper_start + len("plain_helper")),
+            [],
         )
     ]
     assert CountingSource.index_reads < len(function_source) * 4
+
+
+def test_plain_metal_helper_call_scan_reports_explicit_template_arguments():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    preprocessor = MetalPreprocessor()
+    source = textwrap.dedent("""
+        uint call_plain(uint value, uint gid) {
+            return plain_helper<float, uint, 7>(value, gid);
+        }
+        """)
+    function_start = source.find("uint call_plain")
+    body_start = source.find("{", function_start) + 1
+    body_end = source.find("}", body_start)
+
+    calls = project_pipeline._plain_template_helper_call_sites(
+        preprocessor,
+        source,
+        {"plain_helper": [object()]},
+        [],
+        [(body_start, body_end)],
+    )
+
+    helper_start = source.find("plain_helper")
+    helper_end = source.find("(", helper_start)
+    assert calls == [
+        (
+            "plain_helper",
+            ["value", "gid"],
+            (helper_start, helper_end),
+            ["float", "uint", "7"],
+        )
+    ]
 
 
 def test_plain_metal_template_replacement_scan_uses_indexed_included_spans(
@@ -15357,6 +15373,7 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
         "stage",
         "templateMaterialization",
     }
+    assert artifact["requiredCapabilities"] == []
     assert set(artifact["sourceHash"]) == project_pipeline.REPORT_HASH_FIELDS
     assert isinstance(artifact["sourceSizeBytes"], int)
     assert artifact["sourceSizeBytes"] == unit["sourceSizeBytes"]
@@ -37978,6 +37995,8 @@ def test_translate_project_cuda_pointer_parameters_lower_to_opengl_buffers(
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("opengl", "translated")}
+    assert payload["summary"]["sourceRemapMappingCount"] == 6
+    assert payload["artifacts"][0]["sourceRemap"]["mappingCount"] == 6
 
     output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
 
@@ -37985,6 +38004,9 @@ def test_translate_project_cuda_pointer_parameters_lower_to_opengl_buffers(
     assert "layout(std430, binding = 1) buffer BBuffer { float B[]; };" in output
     assert "layout(std430, binding = 2) buffer CBuffer { float C[]; };" in output
     assert "uniform vectorAdd_numElements_Args" in output
+    assert "int vectorAdd_numElements_Args_numElements;" in output
+    assert "if ((i < vectorAdd_numElements_Args_numElements))" in output
+    assert not re.search(r"(?<!_)\bnumElements\b(?!_)", output)
     assert "void main()" in output
     assert "void vectorAdd(float A[]" not in output
     assert "float A[], float B[]" not in output
