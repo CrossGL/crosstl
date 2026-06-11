@@ -6324,6 +6324,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             # Basic types
             "void": "void",
             "bool": "bool",
+            "string": "const char*",
             "i8": "char",
             "u8": "unsigned char",
             "i16": "short",

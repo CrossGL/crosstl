@@ -949,6 +949,7 @@ class TestCudaCodeGen:
         assert codegen.convert_crossgl_type_to_cuda("f32") == "float"
         assert codegen.convert_crossgl_type_to_cuda("f64") == "double"
         assert codegen.convert_crossgl_type_to_cuda("bool") == "bool"
+        assert codegen.convert_crossgl_type_to_cuda("string") == "const char*"
         assert codegen.convert_crossgl_type_to_cuda("void") == "void"
         assert (
             codegen.convert_crossgl_type_to_cuda("sampler2D") == "cudaTextureObject_t"
@@ -18072,7 +18073,7 @@ class TestCudaCodeGen:
         assert "i = 0;\n    i = (i + 1);\n    for" not in cuda_code
         assert "None)" not in cuda_code
 
-    def test_bool_string_and_char_literals_emit_cuda_syntax(self):
+    def test_bool_string_and_char_literals_emit_cuda_syntax(self, tmp_path):
         source_code = """
         shader TestShader {
             compute {
@@ -18103,12 +18104,15 @@ class TestCudaCodeGen:
 
         assert "bool enabled = true;" in cuda_code
         assert "bool disabled = false;" in cuda_code
-        assert 'string label = "debug";' in cuda_code
+        assert 'const char* label = "debug";' in cuda_code
         assert "char marker = 'x';" in cuda_code
         assert 'label = "active";' in cuda_code
         assert "marker = 'y';" in cuda_code
+        assert 'string label = "debug";' not in cuda_code
         assert "True" not in cuda_code
         assert "False" not in cuda_code
+        if shutil.which("nvcc"):
+            compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_inferred_let_declarations_emit_cuda_auto(self):
         source_code = """

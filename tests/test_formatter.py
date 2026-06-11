@@ -15,6 +15,7 @@ class TestShaderLanguage:
         assert ShaderLanguage.METAL.value == "metal"
         assert ShaderLanguage.SPIRV.value == "spirv"
         assert ShaderLanguage.MOJO.value == "mojo"
+        assert ShaderLanguage.WGSL.value == "wgsl"
         assert ShaderLanguage.UNKNOWN.value == "unknown"
 
 
@@ -66,6 +67,7 @@ class TestCodeFormatter:
         assert formatter.detect_language("shader.spvasm") == ShaderLanguage.SPIRV
         assert formatter.detect_language("shader.vulkan") == ShaderLanguage.SPIRV
         assert formatter.detect_language("shader.slangh") == ShaderLanguage.SLANG
+        assert formatter.detect_language("shader.wgsl") == ShaderLanguage.WGSL
         assert formatter.detect_language("shader.mojo") == ShaderLanguage.MOJO
         assert formatter.detect_language("shader.cuh") == ShaderLanguage.CUDA
         assert formatter.detect_language("shader.cuda") == ShaderLanguage.CUDA
@@ -104,12 +106,14 @@ class TestCodeFormatter:
         assert formatter.format_code("code", language="hlsl") == "clang_formatted"
         assert formatter.format_code("code", language="spirv") == "spirv_formatted"
 
-    def test_mojo_formatting_is_quiet_passthrough(self):
+    def test_mojo_and_wgsl_formatting_are_quiet_passthrough(self):
         formatter = CodeFormatter()
 
         with mock.patch("crosstl.formatter.logger.warning") as mock_warning:
             assert formatter.format_code("code", language=ShaderLanguage.MOJO) == "code"
             assert formatter.format_code("code", file_path="shader.mojo") == "code"
+            assert formatter.format_code("code", language=ShaderLanguage.WGSL) == "code"
+            assert formatter.format_code("code", file_path="shader.wgsl") == "code"
 
         mock_warning.assert_not_called()
 
@@ -259,12 +263,18 @@ def test_format_shader_code():
         assert format_shader_code("code", "msl") == "formatted_code"
         assert format_shader_code("code", "directx") == "formatted_code"
         assert format_shader_code("code", "dx") == "formatted_code"
+        assert format_shader_code("code", "dx11") == "formatted_code"
+        assert format_shader_code("code", "dx12") == "formatted_code"
+        assert format_shader_code("code", "d3d11") == "formatted_code"
+        assert format_shader_code("code", "d3d12") == "formatted_code"
         assert format_shader_code("code", "opengl") == "formatted_code"
         assert format_shader_code("code", "ogl") == "formatted_code"
         assert format_shader_code("code", "webgl") == "formatted_code"
         assert format_shader_code("code", "webgl2") == "formatted_code"
         assert format_shader_code("code", "essl") == "formatted_code"
         assert format_shader_code("code", "glsl-es") == "formatted_code"
+        assert format_shader_code("code", "wgsl") == "formatted_code"
+        assert format_shader_code("code", "webgpu") == "formatted_code"
         assert format_shader_code("code", "vulkan") == "formatted_code"
         assert format_shader_code("code", "rs") == "formatted_code"
         assert format_shader_code("code", "cu") == "formatted_code"
@@ -274,6 +284,7 @@ def test_format_shader_code():
         assert format_shader_code("code", "out.HLSL") == "formatted_code"
         assert format_shader_code("code", "shader.frag") == "formatted_code"
         assert format_shader_code("code", "shader.webgl.glsl") == "formatted_code"
+        assert format_shader_code("code", "shader.wgsl") == "formatted_code"
         assert format_shader_code("code", "shader.msl") == "formatted_code"
         assert format_shader_code("code", ".spvasm") == "formatted_code"
         assert format_shader_code("code", "kernel.cuda") == "formatted_code"
@@ -299,6 +310,11 @@ def test_format_shader_code():
         format_shader_code("code", "webgl", "output.webgl.glsl")
         mock_instance.format_code.assert_called_with(
             "code", ShaderLanguage.GLSL, "output.webgl.glsl"
+        )
+
+        format_shader_code("code", "wgsl", "output.wgsl")
+        mock_instance.format_code.assert_called_with(
+            "code", ShaderLanguage.WGSL, "output.wgsl"
         )
 
         format_shader_code("code", "vulkan", "output.spvasm")

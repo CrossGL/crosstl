@@ -1,4 +1,3 @@
-
 #version 450 core
 const float PI = 3.14159265359;
 const float EPSILON = 0.0001;

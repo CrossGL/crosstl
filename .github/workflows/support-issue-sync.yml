@@ -31,6 +31,7 @@ on:
       - ".github/workflows/translator-tests.yml"
       - ".github/workflows/pr-issue-links.yml"
       - "crosstl/backend/**"
+      - "crosstl/project/**"
       - "crosstl/translator/ast.py"
       - "crosstl/translator/codegen/**"
       - "crosstl/translator/lexer.py"

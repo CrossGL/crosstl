@@ -16,6 +16,8 @@ from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.slang_codegen import SlangCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
+from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
+from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
 
 FRAGMENT_SMOKE_SHADER = """
 shader ExternalValidatorSmoke {
@@ -66,6 +68,64 @@ shader ExternalValidatorWaveQuad {
             bool quadAll = QuadAll(allLane);
             outputValues[tid.x] = quadX + quadLane
                 + (quadAny ? 1u : 0u) + (quadAll ? 1u : 0u);
+        }
+    }
+}
+"""
+
+
+CROSSGL_WGSL_GRAPHICS_SHADER = """
+shader ExternalValidatorWGSLGraphics {
+    struct VSInput {
+        vec3 position @ POSITION;
+        vec2 uv @ TEXCOORD0;
+    };
+    struct VSOutput {
+        vec4 position @ gl_Position;
+        vec2 uv @ TEXCOORD0;
+    };
+    vertex {
+        VSOutput main(VSInput input) {
+            VSOutput output;
+            output.position = vec4(input.position, 1.0);
+            output.uv = input.uv;
+            return output;
+        }
+    }
+    fragment {
+        vec4 main(VSOutput input) @ gl_FragColor {
+            return vec4(input.uv, 0.0, 1.0);
+        }
+    }
+}
+"""
+
+
+CROSSGL_WGSL_RESOURCE_SHADER = """
+shader ExternalValidatorWGSLResource {
+    samplerCube envMap;
+    vec4 sampleEnv(samplerCube tex, vec3 direction) {
+        uint2 size = textureSize(tex, 0);
+        return textureLod(tex, direction + vec3(float(size.x) * 0.0), 1.0);
+    }
+    fragment {
+        vec4 main(vec3 normal @ NORMAL) @ gl_FragColor {
+            return sampleEnv(envMap, normal);
+        }
+    }
+}
+"""
+
+
+CROSSGL_WGSL_COMPUTE_SHADER = """
+shader ExternalValidatorWGSLCompute {
+    RWStructuredBuffer<float> outputValues;
+    compute {
+        layout(local_size_x = 4, local_size_y = 1, local_size_z = 1) in;
+        void main(uint3 gid @ gl_GlobalInvocationID) {
+            barrier();
+            outputValues[gid.x] = float(gid.x);
+            return;
         }
     }
 }
@@ -124,8 +184,6 @@ int builtin_spec_constant()
     return result;
 }
 """
-
-
 CROSSGL_TEXTURE_RESOURCE_FRAGMENT_SHADER = """
 shader ExternalValidatorTextureResources {
     sampler2D colorMap @register(t0);
@@ -1978,6 +2036,24 @@ def _run_validator_or_skip_unsupported_extension(
     assert result.returncode == 0, diagnostics
 
 
+@pytest.mark.parametrize(
+    "shader_source",
+    (
+        CROSSGL_WGSL_GRAPHICS_SHADER,
+        CROSSGL_WGSL_RESOURCE_SHADER,
+        CROSSGL_WGSL_COMPUTE_SHADER,
+    ),
+)
+def test_generated_wgsl_validates_with_naga(tmp_path, shader_source):
+    naga = _require_tool("naga")
+    ast = crosstl.translator.parse(shader_source)
+    generated = WGSLCodeGen().generate(ast)
+    source_path = tmp_path / "shader.wgsl"
+    source_path.write_text(generated, encoding="utf-8")
+
+    _run_validator([naga, "--input-kind", "wgsl", str(source_path)])
+
+
 def test_real_world_urp_hlsl_include_imports_to_parseable_crossgl():
     crossgl = _hlsl_to_crossgl(URP_TOON_LIGHTING_HLSL_INCLUDE)
 
@@ -2015,6 +2091,34 @@ def test_dxc_style_struct_constructors_import_to_parseable_crossgl():
     assert "struct MaterialSample" in crossgl
     assert "MaterialSample sample = MaterialSample(0.5, n);" in crossgl
     assert "return vec4(sample.normal * sample.roughness, 1);" in crossgl
+
+
+def test_generated_hlsl_vertex_compiles_with_dxc(tmp_path):
+    dxc = _require_tool("dxc")
+    shader_path = tmp_path / "validator_vertex_smoke.hlsl"
+    output_path = tmp_path / "validator_vertex_smoke.dxil"
+
+    shader_path.write_text(
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(CROSSGL_WGSL_GRAPHICS_SHADER),
+            "vertex",
+        ),
+        encoding="utf-8",
+    )
+
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "vs_6_0",
+            "-E",
+            "VSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
 
 
 def test_generated_hlsl_fragment_compiles_with_dxc(tmp_path):
@@ -3529,6 +3633,26 @@ def test_mixed_glsl_tessellation_multidimensional_patch_arrays_validate_with_gls
         shader_path.write_text(code, encoding="utf-8")
 
         _run_validator([glslang, "-S", stage_suffix, str(shader_path)])
+
+
+def test_generated_webgl_graphics_validate_with_glslangvalidator(tmp_path):
+    glslang = _require_tool("glslangValidator")
+    vertex_path = tmp_path / "webgl_graphics.vert"
+    fragment_path = tmp_path / "webgl_graphics.frag"
+
+    ast = crosstl.translator.parse(CROSSGL_WGSL_GRAPHICS_SHADER)
+    vertex_code = WebGLCodeGen().generate_program(ast, target_stage="vertex")
+    fragment_code = WebGLCodeGen().generate_program(ast, target_stage="fragment")
+
+    assert "#version 300 es" in vertex_code
+    assert "#version 300 es" in fragment_code
+    assert "layout(location = 5) out vec2 out_uv;" not in vertex_code
+    assert "layout(location = 5) in vec2 uv;" not in fragment_code
+    vertex_path.write_text(vertex_code, encoding="utf-8")
+    fragment_path.write_text(fragment_code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "vert", str(vertex_path)])
+    _run_validator([glslang, "-S", "frag", str(fragment_path)])
 
 
 def test_generated_glsl_stage_io_multidimensional_arrays_validate_with_glslangvalidator(

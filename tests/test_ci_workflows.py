@@ -27,6 +27,7 @@ TRANSLATOR_TEST_MATRIX_NAMES = {
     **BACKEND_TEST_MATRIX_NAMES,
     "hip": "hip",
     "webgl": "webgl",
+    "wgsl": "wgsl",
 }
 
 
@@ -1873,11 +1874,13 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
     assert '".github/workflows/translator-tests.yml"' in issue_sync
     required_path_filters = [
         '"crosstl/backend/**"',
+        '"crosstl/project/**"',
         '"crosstl/translator/ast.py"',
         '"crosstl/translator/codegen/**"',
         '"crosstl/translator/lexer.py"',
         '"crosstl/translator/parser.py"',
         '"crosstl/translator/validation.py"',
+        '"docs/source/project-porting.rst"',
         '"docs/source/support-matrix.rst"',
         '"examples/test.py"',
         '"tests/test_backend/**"',
@@ -1889,6 +1892,7 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
         '"tests/test_translator/test_ir_legacy_alias_contracts.py"',
         '"tests/test_translator/test_lexer.py"',
         '"tests/test_translator/test_parser.py"',
+        '"tests/test_translator/test_project_translation.py"',
         '"tests/test_translator/test_shader_validation.py"',
         '"tests/test_translator/test_translation_pipeline.py"',
     ]

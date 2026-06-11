@@ -14,42 +14,74 @@ Built-in targets
    * - Target
      - Backend name
      - Aliases
+     - Target aliases
+     - Target profiles
      - Output extension
    * - DirectX / HLSL
      - ``directx``
      - ``hlsl``, ``dx``
+     - ``dx11``, ``dx12``, ``d3d11``, ``d3d12``
+     - ``directx-11``, ``directx-12``
      - ``.hlsl``
    * - OpenGL / GLSL
      - ``opengl``
      - ``glsl``, ``ogl``
+     - n/a
+     - n/a
      - ``.glsl``
+   * - WebGL / GLSL ES
+     - ``webgl``
+     - ``webgl2``, ``essl``, ``glsl-es``
+     - n/a
+     - n/a
+     - ``.webgl.glsl``
+   * - WebGPU / WGSL
+     - ``wgsl``
+     - ``webgpu``
+     - n/a
+     - n/a
+     - ``.wgsl``
    * - Metal
      - ``metal``
-     - ``metal``
+     - ``metal``, ``msl``
+     - n/a
+     - n/a
      - ``.metal``
    * - Vulkan SPIR-V
      - ``vulkan``
      - ``spirv``, ``spv``
+     - n/a
+     - n/a
      - ``.spvasm``
    * - CUDA
      - ``cuda``
      - ``cu``
+     - n/a
+     - n/a
      - ``.cu``
    * - HIP
      - ``hip``
      - ``hip``
+     - n/a
+     - n/a
      - ``.hip``
    * - Mojo
      - ``mojo``
      - ``mojo``
+     - n/a
+     - n/a
      - ``.mojo``
    * - Rust
      - ``rust``
      - ``rust``, ``rs``
+     - n/a
+     - n/a
      - ``.rs``
    * - Slang
      - ``slang``
      - ``slang``
+     - n/a
+     - n/a
      - ``.slang``
 
 Built-in sources
@@ -102,6 +134,25 @@ Built-in sources
      - ``slang``
      - ``.slang``
      - Yes
+
+Target-only sources
+-------------------
+
+Some targets are intentionally output-only while their native source frontends
+are still under development.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Target
+     - Output extension
+     - Source input behavior
+   * - WebGL / GLSL ES
+     - ``.webgl.glsl``
+     - Rejected as target-only output; use ``.glsl`` or ``.cgl`` as input.
+   * - WebGPU / WGSL
+     - ``.wgsl``
+     - Rejected until a dedicated WGSL/WESL source frontend lands.
 
 Runtime discovery
 -----------------

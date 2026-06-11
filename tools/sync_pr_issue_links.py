@@ -89,6 +89,7 @@ SUPPORT_TRACEABILITY_OPT_OUTS = {
 SUPPORT_RELEVANT_PATH_PREFIXES = (
     ".github/workflows/",
     "crosstl/backend/",
+    "crosstl/project/",
     "crosstl/translator/codegen/",
     "support/",
     "tests/test_backend/",
@@ -101,6 +102,7 @@ SUPPORT_RELEVANT_PATHS = (
     "crosstl/translator/lexer.py",
     "crosstl/translator/parser.py",
     "crosstl/translator/validation.py",
+    "docs/source/project-porting.rst",
     "docs/source/support-matrix.rst",
     "examples/test.py",
     "pyproject.toml",
@@ -110,6 +112,7 @@ SUPPORT_RELEVANT_PATHS = (
     "tests/test_translator/test_ir_legacy_alias_contracts.py",
     "tests/test_translator/test_lexer.py",
     "tests/test_translator/test_parser.py",
+    "tests/test_translator/test_project_translation.py",
     "tests/test_translator/test_translation_pipeline.py",
 )
 SUPPORT_MATRIX_ARTIFACT_PATH = "support/generated/support-matrix.json"

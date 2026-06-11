@@ -3,10 +3,10 @@ from setuptools import find_namespace_packages, setup
 setup(
     name="crosstl",
     packages=find_namespace_packages(include=["crosstl*"]),
-    version="2.0.0",
+    version="2.0.1",
     author="CrossGL team",
     author_email="nripesh@crossgl.net",
-    description="CrossTL: Universal Programming Language and Translator",
+    description="CrossGL shader and compute translator",
     long_description=open("README.md", "r", -1, "UTF8").read(),
     long_description_content_type="text/markdown",
     url="https://crossgl.net/",

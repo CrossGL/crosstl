@@ -1,4 +1,3 @@
-
 #version 450 core
 const int MAX_PARTICLES = 4096;
 const int WORKGROUP_SIZE = 64;

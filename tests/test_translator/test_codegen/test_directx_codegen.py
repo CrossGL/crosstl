@@ -586,6 +586,64 @@ def test_directx_interpolation_builtins_reject_wrong_arity():
         generate_code(parse_code(tokenize_code(shader)))
 
 
+@pytest.mark.parametrize(
+    ("builtin", "args"),
+    [
+        ("interpolateAtSample", "color, sampleIndex"),
+        ("interpolateAtOffset", "color, offset"),
+        ("interpolateAtCentroid", "color"),
+    ],
+)
+def test_directx_interpolation_builtins_reject_non_fragment_stages(builtin, args):
+    shader = f"""
+    shader BadInterpolationStage {{
+        compute {{
+            void main() {{
+                vec4 color = vec4(1.0);
+                uint sampleIndex = 0u;
+                ivec2 offset = ivec2(0, 0);
+                vec4 interpolated = {builtin}({args});
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"DirectX compute stage cannot call {re.escape(builtin)}; "
+            r".*only valid in fragment/pixel stages"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_directx_interpolation_builtins_reject_transitive_non_fragment_stage_calls():
+    shader = """
+    shader BadTransitiveInterpolationStage {
+        vec4 sampleAtCentroid(vec4 color) {
+            return interpolateAtCentroid(color);
+        }
+
+        compute {
+            void main() {
+                vec4 interpolated = sampleAtCentroid(vec4(1.0));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"DirectX compute stage cannot call sampleAtCentroid; "
+            r"'sampleAtCentroid' reaches 'interpolateAtCentroid'.*"
+            r"only valid in fragment/pixel stages"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
 def test_directx_derivative_builtins_lower_to_hlsl_intrinsics():
     shader = """
     shader DerivativeBuiltins {
@@ -31296,6 +31354,34 @@ def test_directx_feedback_texture_helpers_validate_resources_and_shapes(body, ma
 
     with pytest.raises(ValueError, match=match):
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_directx_dx11_profile_rejects_shader_model_6_wave_intrinsics():
+    code = """
+    shader Dx11WaveIntrinsic {
+        compute {
+            uint main(uint value) {
+                return WaveActiveSum(value);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX profile dx11 does not support wave intrinsic "
+            "'WaveActiveSum'.*Shader Model 6.0"
+        ),
+    ):
+        HLSLCodeGen(target_profile="directx-11").generate(
+            crosstl.translator.parse(code)
+        )
+
+    generated = HLSLCodeGen(target_profile="directx-12").generate(
+        crosstl.translator.parse(code)
+    )
+    assert "WaveActiveSum(value)" in generated
 
 
 def test_directx_wave_active_sum_ballot_prefix_in_compute_expressions():

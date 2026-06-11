@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from inspect import Parameter, signature
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -11,6 +12,23 @@ def _normalize_backend_name(name: str) -> str:
     if not isinstance(name, str):
         raise TypeError(f"Backend name must be a string, got {type(name)}")
     return name.strip().lower()
+
+
+def _callable_accepts_keyword(callable_: Any, keyword: str) -> bool:
+    try:
+        parameters = signature(callable_).parameters
+    except (TypeError, ValueError):
+        return False
+
+    for parameter in parameters.values():
+        if parameter.kind is Parameter.VAR_KEYWORD:
+            return True
+        if parameter.name == keyword and parameter.kind in {
+            Parameter.POSITIONAL_OR_KEYWORD,
+            Parameter.KEYWORD_ONLY,
+        }:
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -24,6 +42,8 @@ class BackendSpec:
     format_backend: str | None = None
     source_name: str | None = None
     has_source_frontend: bool = True
+    target_aliases: Sequence[str] = ()
+    target_profiles: Sequence[str] = ()
 
     @property
     def source_registry_name(self) -> str | None:
@@ -58,6 +78,16 @@ class BackendRegistry:
                 if self._by_alias[alias_key] == name:
                     continue
                 raise ValueError(f"Backend alias '{alias_key}' already registered")
+            self._by_alias[alias_key] = name
+
+        for alias in spec.target_aliases:
+            alias_key = _normalize_backend_name(alias)
+            if alias_key in self._by_alias and not overwrite:
+                if self._by_alias[alias_key] == name:
+                    continue
+                raise ValueError(
+                    f"Backend target alias '{alias_key}' already registered"
+                )
             self._by_alias[alias_key] = name
 
         for extension in spec.file_extensions:
@@ -106,21 +136,51 @@ class BackendRegistry:
         """Return registered canonical backend names in sorted order."""
         return sorted(self._by_name.keys())
 
-    def source_backend_names(self) -> Sequence[str]:
-        """Return targets that also have native source frontends."""
+    def target_backend_names_with_source_frontends(self) -> Sequence[str]:
+        """Return target backends that also have native source frontends."""
         return sorted(
             name
             for name, spec in self._by_name.items()
             if spec.source_registry_name is not None
         )
 
+    def source_backend_names(self) -> Sequence[str]:
+        """Return target backends that also have native source frontends."""
+        return self.target_backend_names_with_source_frontends()
+
     def aliases(self) -> dict[str, str]:
         """Return a copy of the alias-to-backend mapping."""
         return dict(self._by_alias)
 
+    def target_profiles(self, name: str) -> Sequence[str]:
+        """Return advertised target profiles for a backend."""
+        spec = self.get(name)
+        if not spec:
+            return ()
+        return tuple(spec.target_profiles)
+
     def extensions(self) -> dict[str, str]:
         """Return a copy of the file-extension-to-backend mapping."""
         return dict(self._by_extension)
+
+    def get_codegen(self, name: str):
+        """Instantiate the code generator class for a registered backend."""
+        spec = self.get(name)
+        if not spec:
+            supported = ", ".join(self.names())
+            raise ValueError(
+                f"Unsupported backend '{name}'. Supported backends: {supported}"
+            )
+        key = _normalize_backend_name(name)
+        target_profile_names = {
+            _normalize_backend_name(profile)
+            for profile in (*spec.target_aliases, *spec.target_profiles)
+        }
+        if key in target_profile_names and _callable_accepts_keyword(
+            spec.codegen_class, "target_profile"
+        ):
+            return spec.codegen_class(target_profile=key)
+        return spec.codegen_class()
 
 
 BACKEND_REGISTRY = BackendRegistry()
@@ -148,7 +208,17 @@ def backend_names() -> Sequence[str]:
 
 def source_backend_names() -> Sequence[str]:
     """Return registered targets that also have native source frontends."""
-    return BACKEND_REGISTRY.source_backend_names()
+    return BACKEND_REGISTRY.target_backend_names_with_source_frontends()
+
+
+def target_backend_names_with_source_frontends() -> Sequence[str]:
+    """Return registered targets that also have native source frontends."""
+    return BACKEND_REGISTRY.target_backend_names_with_source_frontends()
+
+
+def target_profiles(name: str) -> Sequence[str]:
+    """Return advertised target profiles for a registered backend."""
+    return BACKEND_REGISTRY.target_profiles(name)
 
 
 def get_backend_extension(name: str) -> str | None:
@@ -161,10 +231,4 @@ def get_backend_extension(name: str) -> str | None:
 
 def get_codegen(name: str):
     """Instantiate the code generator class for a registered backend."""
-    spec = BACKEND_REGISTRY.get(name)
-    if not spec:
-        supported = ", ".join(backend_names())
-        raise ValueError(
-            f"Unsupported backend '{name}'. Supported backends: {supported}"
-        )
-    return spec.codegen_class()
+    return BACKEND_REGISTRY.get_codegen(name)

@@ -279,6 +279,7 @@ RUNTIME_ARTIFACT_MANIFEST_ARTIFACT_FIELDS = frozenset(
         "path",
         "target",
         "sourceBackend",
+        "stage",
         "variant",
         "defines",
         "sourceHash",
@@ -288,6 +289,7 @@ RUNTIME_ARTIFACT_MANIFEST_ARTIFACT_FIELDS = frozenset(
         "provenance",
         "sourceMap",
         "sourceRemap",
+        "hostInterface",
     )
 )
 RUNTIME_ARTIFACT_MANIFEST_RUNTIME_PLAN_FIELDS = frozenset(
@@ -345,11 +347,13 @@ RUNTIME_PACKAGE_ARTIFACT_FIELDS = frozenset(
         "packagePath",
         "target",
         "sourceBackend",
+        "stage",
         "variant",
         "defines",
         "hash",
         "sizeBytes",
         "sourceRemap",
+        "hostInterface",
     )
 )
 RUNTIME_PACKAGE_SOURCE_REMAP_FIELDS = frozenset(
@@ -444,6 +448,30 @@ RUNTIME_HOST_INTERFACE_ENTRY_POINT_FIELDS = frozenset(
 RUNTIME_HOST_INTERFACE_RESOURCE_FIELDS = frozenset(
     ("name", "kind", "type", "set", "binding", "access")
 )
+RUNTIME_WGSL_REFLECTION_PARSER = "wgsl-reflection"
+RUNTIME_WGSL_ENTRY_RE = re.compile(
+    r"@(?P<stage>vertex|fragment|compute)\b"
+    r"(?P<attributes>(?:\s+@\w+(?:\([^)]*\))?)*)"
+    r"\s+fn\s+(?P<name>[A-Za-z_]\w*)\s*\(",
+    re.MULTILINE,
+)
+RUNTIME_WGSL_RESOURCE_RE = re.compile(
+    r"@group\((?P<set>\d+)\)\s*"
+    r"@binding\((?P<binding>\d+)\)\s*"
+    r"var(?:<(?P<address>[^>]*)>)?\s+"
+    r"(?P<name>[A-Za-z_]\w*)\s*:\s*(?P<type>[^;]+);",
+    re.MULTILINE,
+)
+RUNTIME_WGSL_BOUND_RESOURCE_RE = re.compile(
+    r"@group\((?P<set>[^)]+)\)\s*"
+    r"@binding\((?P<binding>[^)]+)\)\s*"
+    r"var(?:<(?P<address>[^>]*)>)?\s+"
+    r"(?P<name>[A-Za-z_]\w*)\s*:\s*(?P<type>[^;]+);",
+    re.MULTILINE,
+)
+RUNTIME_WGSL_SYMBOLIC_RESOURCE_BINDING_DIAGNOSTIC = (
+    "project.runtime-package-inspection.host-interface-symbolic-resource-binding"
+)
 RUNTIME_PACKAGE_INSPECTION_BINDING_FIELDS = frozenset(
     (
         "id",
@@ -454,6 +482,7 @@ RUNTIME_PACKAGE_INSPECTION_BINDING_FIELDS = frozenset(
         "packagePath",
         "sourcePath",
         "sourceBackend",
+        "stage",
         "variant",
         "defines",
         "hash",
@@ -510,6 +539,7 @@ RUNTIME_ADAPTER_PLAN_ADAPTER_FIELDS = frozenset(
         "packagePath",
         "sourcePath",
         "sourceBackend",
+        "stage",
         "variant",
         "defines",
         "sourceRemap",
@@ -576,6 +606,7 @@ RUNTIME_LOADER_MANIFEST_LOAD_UNIT_FIELDS = frozenset(
         "packagePath",
         "sourcePath",
         "sourceBackend",
+        "stage",
         "variant",
         "defines",
         "sourceRemap",
@@ -588,7 +619,16 @@ RUNTIME_LOADER_MANIFEST_LOAD_UNIT_FIELDS = frozenset(
     )
 )
 RUNTIME_LOADER_MANIFEST_LOAD_STEP_FIELDS = frozenset(
-    ("kind", "message", "target", "packagePath", "tools", "hostInterfaceStatus")
+    (
+        "kind",
+        "message",
+        "target",
+        "packagePath",
+        "tools",
+        "command",
+        "hostInterfaceStatus",
+        "metadata",
+    )
 )
 RUNTIME_HOST_LOADER_SCAFFOLDS_FIELDS = frozenset(
     (
@@ -1057,6 +1097,7 @@ REPORT_ARTIFACT_FIELDS = frozenset(
         "source",
         "sourceBackend",
         "target",
+        "stage",
         "path",
         "status",
         "defines",
@@ -1073,6 +1114,13 @@ REPORT_ARTIFACT_FIELDS = frozenset(
         "sourceRemap",
     )
 )
+WEBGL_PROJECT_STAGE_LABEL_BY_GLSLANG = {
+    "vert": "vertex",
+    "frag": "fragment",
+}
+WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL = {
+    label: stage for stage, label in WEBGL_PROJECT_STAGE_LABEL_BY_GLSLANG.items()
+}
 REPORT_ARTIFACT_DEFINE_PROCESSING_FIELDS = frozenset(
     ("status", "frontend", "supportsDefines", "defineCount")
 )
@@ -1181,6 +1229,7 @@ VALIDATION_ARTIFACT_FIELDS = frozenset(
         "path",
         "exists",
         "status",
+        "stage",
         "variant",
         "sourceBackend",
         "sourceHashStatus",
@@ -1209,6 +1258,7 @@ VALIDATION_TOOLCHAIN_RUN_FIELDS = frozenset(
         "source",
         "target",
         "path",
+        "stage",
         "variant",
         "sourceBackend",
         "command",
@@ -1272,9 +1322,11 @@ RUNTIME_REFERENCE_FILE_SIZE_LIMIT = 1_000_000
 RUNTIME_REFERENCE_EXTENSIONS = frozenset(
     (
         ".c",
+        ".cjs",
         ".cc",
         ".cmake",
         ".cpp",
+        ".cts",
         ".cuh",
         ".cu",
         ".cxx",
@@ -1283,13 +1335,17 @@ RUNTIME_REFERENCE_EXTENSIONS = frozenset(
         ".hip",
         ".hpp",
         ".hxx",
+        ".jsx",
         ".js",
         ".m",
         ".mm",
+        ".mjs",
+        ".mts",
         ".py",
         ".rs",
         ".swift",
         ".ts",
+        ".tsx",
     )
 )
 RUNTIME_REFERENCE_FILENAMES = frozenset(
@@ -1308,6 +1364,21 @@ RUNTIME_REFERENCE_FILENAMES = frozenset(
         "pyproject.toml",
     )
 )
+RUNTIME_REFERENCE_BUILD_EXTENSIONS = frozenset(
+    (
+        ".cmake",
+        ".props",
+        ".targets",
+        ".vcxproj",
+    )
+)
+TARGET_ONLY_UNSUPPORTED_SOURCE_ARTIFACT_EXTENSIONS = (
+    ".wgsl",
+    ".wesl",
+    ".webgl.glsl",
+    ".webgl.glsl.json",
+)
+RUNTIME_REFERENCE_NON_TARGET_BACKENDS = frozenset(("opencl",))
 RUNTIME_REFERENCE_RULES = (
     (
         "cuda",
@@ -1320,7 +1391,7 @@ RUNTIME_REFERENCE_RULES = (
         "runtime-api",
         re.compile(
             r"\b(cuda(?:DeviceSynchronize|Free|GetDevice|LaunchKernel|Malloc|"
-            r"Memcpy|SetDevice))\b"
+            r"Memcpy(?:Async)?|SetDevice))\b"
         ),
         None,
     ),
@@ -1338,7 +1409,7 @@ RUNTIME_REFERENCE_RULES = (
         "runtime-api",
         re.compile(
             r"\b(hip(?:DeviceSynchronize|Free|GetDevice|LaunchKernel|Malloc|"
-            r"Memcpy|SetDevice))\b"
+            r"Memcpy(?:Async)?|SetDevice))\b"
         ),
         None,
     ),
@@ -1349,6 +1420,31 @@ RUNTIME_REFERENCE_RULES = (
         "hip-build-system",
     ),
     (
+        "opencl",
+        "runtime-api",
+        re.compile(
+            r"\b(cl(?:BuildProgram|CompileProgram|LinkProgram|"
+            r"Create(?:Buffer|CommandQueue(?:WithProperties)?|Context(?:FromType)?|"
+            r"Kernel|ProgramWith(?:Binary|BuiltInKernels|IL|Source))|"
+            r"Enqueue(?:NDRangeKernel|ReadBuffer(?:Rect)?|WriteBuffer(?:Rect)?)|"
+            r"Finish|Flush|Get(?:DeviceIDs|DeviceInfo|PlatformIDs|PlatformInfo|"
+            r"Program(?:BuildInfo|Info))|"
+            r"Release(?:CommandQueue|Context|Kernel|MemObject|Program)|"
+            r"SetKernelArg|WaitForEvents))\b"
+        ),
+        None,
+    ),
+    (
+        "opencl",
+        "build-system",
+        re.compile(
+            r"(?<!\w)(?:find_package\s*\(\s*OpenCL\b|OpenCL::OpenCL\b|"
+            r"-lOpenCL\b|OpenCL\.lib\b)",
+            re.IGNORECASE,
+        ),
+        "opencl-build-system",
+    ),
+    (
         "metal",
         "runtime-api",
         re.compile(r"\b(MTL(?:CreateSystemDefaultDevice|[A-Za-z_][A-Za-z0-9_]*))\b"),
@@ -1356,20 +1452,98 @@ RUNTIME_REFERENCE_RULES = (
     ),
     (
         "metal",
+        "runtime-api",
+        re.compile(r"\b(MTK(?:View|ViewDelegate|TextureLoader))\b"),
+        None,
+    ),
+    (
+        "metal",
+        "runtime-api",
+        re.compile(
+            r"\b(?:device|mtlDevice|metalDevice|commandQueue|queue|library|"
+            r"commandBuffer|encoder|renderEncoder|computeEncoder)\s*[!?]?\."
+            r"(make(?:DefaultLibrary|Library|Function|CommandQueue|CommandBuffer|"
+            r"RenderPipelineState|ComputePipelineState|Buffer|Texture|"
+            r"RenderCommandEncoder|ComputeCommandEncoder)|"
+            r"set(?:RenderPipelineState|ComputePipelineState|VertexBuffer|"
+            r"FragmentTexture|FragmentSamplerState|Buffer)|dispatchThreadgroups|"
+            r"draw(?:Primitives|IndexedPrimitives)|endEncoding|commit)(?=\s*\()"
+        ),
+        None,
+    ),
+    (
+        "metal",
         "build-system",
-        re.compile(r"\b(?:Metal(?:Kit)?\.framework|-framework\s+Metal(?:Kit)?)\b"),
+        re.compile(r"(?<!\w)(?:Metal(?:Kit)?\.framework|-framework\s+Metal(?:Kit)?)\b"),
         "metal-build-system",
     ),
     (
         "directx",
         "runtime-api",
-        re.compile(r"\b((?:D3D12|ID3D12|D3DCompile)[A-Za-z0-9_]*)\b"),
+        re.compile(
+            r"\b((?:D3D11|D3D12|ID3D11|ID3D12|D3DCompile|"
+            r"IDXGI|DXGI_|CreateDXGIFactory)[A-Za-z0-9_]*)\b"
+        ),
+        None,
+    ),
+    (
+        "directx",
+        "runtime-api",
+        re.compile(
+            r"\b((?:DxcCreateInstance|DxcBuffer|"
+            r"IDxc(?:Blob(?:Encoding)?|Compiler[0-9]*|IncludeHandler|"
+            r"Library|OperationResult|Result|Utils)|"
+            r"CLSID_Dxc[A-Za-z0-9_]*|IID_IDxc[A-Za-z0-9_]*))\b"
+        ),
+        None,
+    ),
+    (
+        "directx",
+        "runtime-api",
+        re.compile(
+            r"\b(?:m_)?(?:d3d11Device|d3dDevice|device|graphicsDevice|"
+            r"rendererDevice|context|deviceContext|immediateContext|"
+            r"deferredContext|d3dContext)\s*(?:->|\.)"
+            r"(Create(?:VertexShader|PixelShader|GeometryShader|HullShader|"
+            r"DomainShader|ComputeShader|InputLayout|Buffer|Texture[123]D|"
+            r"ShaderResourceView|RenderTargetView|DepthStencilView|"
+            r"UnorderedAccessView|SamplerState|BlendState|RasterizerState|"
+            r"DepthStencilState)|"
+            r"(?:VS|PS|GS|HS|DS|CS)Set(?:Shader|ShaderResources|Samplers|"
+            r"ConstantBuffers)|"
+            r"IASet(?:InputLayout|VertexBuffers|IndexBuffer|PrimitiveTopology)|"
+            r"OMSet(?:RenderTargets|BlendState|DepthStencilState)|"
+            r"RSSet(?:State|Viewports|ScissorRects)|"
+            r"UpdateSubresource|Map|Unmap|Draw(?:Indexed)?(?:Instanced)?|"
+            r"Dispatch)(?=\s*\()"
+        ),
+        None,
+    ),
+    (
+        "directx",
+        "runtime-api",
+        re.compile(
+            r"\b(?:m_)?(?:d3d12Device|device|graphicsDevice|commandList|"
+            r"command_list|cmdList|cmd_list|graphicsCommandList|"
+            r"computeCommandList)\s*(?:->|\.)"
+            r"(Create(?:RootSignature|GraphicsPipelineState|ComputePipelineState)|"
+            r"Set(?:PipelineState|GraphicsRootSignature|ComputeRootSignature|"
+            r"GraphicsRoot(?:DescriptorTable|ConstantBufferView|ShaderResourceView|"
+            r"UnorderedAccessView|32BitConstants?)|"
+            r"ComputeRoot(?:DescriptorTable|ConstantBufferView|ShaderResourceView|"
+            r"UnorderedAccessView|32BitConstants?))|"
+            r"IASet(?:VertexBuffers|IndexBuffer|PrimitiveTopology)|"
+            r"Draw(?:Indexed)?Instanced|Dispatch)(?=\s*\()"
+        ),
         None,
     ),
     (
         "directx",
         "build-system",
-        re.compile(r"\b(?:d3d12|dxgi|dxcompiler)\.lib\b", re.IGNORECASE),
+        re.compile(
+            r"\b(?:d3d11|d3d12|d3dcompiler|dxgi|dxcompiler)\.lib\b",
+            re.IGNORECASE,
+        ),
         "directx-build-system",
     ),
     (
@@ -1380,16 +1554,41 @@ RUNTIME_REFERENCE_RULES = (
     ),
     (
         "vulkan",
+        "runtime-api",
+        re.compile(
+            r"(?<!\w)(((?:ash::)?vk::(?:raii::)?|"
+            r"vulkano::(?:[a-z_]+::){1,4})"
+            r"[A-Z][A-Za-z0-9_]*CreateInfo)\b"
+        ),
+        None,
+    ),
+    (
+        "vulkan",
         "build-system",
-        re.compile(r"\b(?:find_package\s*\(\s*Vulkan|Vulkan::Vulkan)\b"),
+        re.compile(r"(?<!\w)(?:find_package\s*\(\s*Vulkan|Vulkan::Vulkan|-lvulkan)\b"),
         "vulkan-build-system",
     ),
     (
         "opengl",
         "runtime-api",
         re.compile(
-            r"\b(gl(?:BindBuffer|CompileShader|CreateProgram|CreateShader|"
-            r"DispatchCompute|GetUniformLocation|ShaderSource|UseProgram)[A-Za-z0-9_]*)\b"
+            r"\b(gl(?:ActiveTexture|AttachShader|Bind(?:Buffer|Texture|VertexArray)|"
+            r"BufferData|CompileShader|CreateProgram|CreateShader|DeleteShader|"
+            r"DispatchCompute|Draw(?:Arrays|Elements)|EnableVertexAttribArray|"
+            r"Gen(?:Buffers|Textures|VertexArrays)|GetUniformLocation|LinkProgram|"
+            r"ShaderSource|Tex(?:Image2D|Parameteri)|Uniform(?:Matrix[2-4]fv|"
+            r"[1-4][fi](?:v)?)|UseProgram|VertexAttribPointer)[A-Za-z0-9_]*)\b"
+        ),
+        None,
+    ),
+    (
+        "opengl",
+        "runtime-api",
+        re.compile(
+            r"(?<![\w.'\"])((?:gladLoadGL(?:Loader)?|glewInit|"
+            r"glfw(?:GetProcAddress|MakeContextCurrent|SwapBuffers)|"
+            r"SDL_GL_(?:CreateContext|MakeCurrent|SwapWindow|GetProcAddress)|"
+            r"egl(?:CreateContext|GetProcAddress|MakeCurrent|SwapBuffers)))(?!\w)"
         ),
         None,
     ),
@@ -1402,14 +1601,153 @@ RUNTIME_REFERENCE_RULES = (
     (
         "webgl",
         "runtime-api",
-        re.compile(r"\b(WebGL2RenderingContext|WebGLRenderingContext|createShader)\b"),
+        re.compile(r"\b(WebGL2RenderingContext|WebGLRenderingContext)\b"),
+        None,
+    ),
+    (
+        "webgl",
+        "runtime-api",
+        re.compile(r"(?<=\.)(getContext)(?=\s*\(\s*['\"]webgl2?['\"]\s*(?:,|\)))"),
+        None,
+    ),
+    (
+        "webgl",
+        "runtime-api",
+        re.compile(
+            r"\b(?:gl|ctx|context|webgl|webgl2)\."
+            r"(activeTexture|attachShader|bindBuffer|bindTexture|bindVertexArray|"
+            r"bufferData|compileShader|createBuffer|createProgram|createShader|"
+            r"createTexture|createVertexArray|drawArrays|drawElements|"
+            r"enableVertexAttribArray|getAttribLocation|getProgramInfoLog|"
+            r"getProgramParameter|getShaderInfoLog|getShaderParameter|linkProgram|"
+            r"shaderSource|texImage2D|texParameteri|"
+            r"uniform(?:[1234][fi]v?|Matrix[234]fv)|useProgram|"
+            r"vertexAttribPointer)(?=\s*\()"
+        ),
         None,
     ),
     (
         "webgl",
         "build-system",
-        re.compile(r'"(?:@webgpu/types|webgl|three)"'),
+        re.compile(r'"(?:webgl|three)"'),
         "webgl-build-system",
+    ),
+    (
+        "wgsl",
+        "runtime-api",
+        re.compile(
+            r"(?<!\w)(navigator\.gpu|GPU(?:Adapter|BindGroup(?:Layout)?|CanvasContext|"
+            r"CommandEncoder|ComputePipeline|Device|PipelineLayout|Queue|"
+            r"RenderPipeline|ShaderModule)|create(?:BindGroup(?:Layout)?|"
+            r"PipelineLayout|ShaderModule)|setBindGroup|wgpu::(?:BindGroup"
+            r"(?:Layout)?Descriptor|PipelineLayoutDescriptor|ShaderModuleDescriptor|"
+            r"ShaderSourceWGSL|include_wgsl!)|(?<=\.)set_bind_group)(?!\w)"
+        ),
+        None,
+    ),
+    (
+        "wgsl",
+        "runtime-api",
+        re.compile(
+            r"(?<=navigator\.gpu\.)(getPreferredCanvasFormat|requestAdapter)(?=\s*\()"
+        ),
+        None,
+    ),
+    (
+        "wgsl",
+        "runtime-api",
+        re.compile(
+            r"\b(?:adapter|gpuAdapter|instance|device|gpuDevice|queue|gpuQueue|"
+            r"encoder|commandEncoder|pass|passEncoder|renderPass|"
+            r"renderPassEncoder|computePass|computePassEncoder)\s*(?:->|\.)"
+            r"(Request(?:Adapter|Device)|GetQueue|Create(?:BindGroup(?:Layout)?|"
+            r"PipelineLayout|ShaderModule|Buffer|Texture|Sampler|CommandEncoder|"
+            r"RenderPipeline|ComputePipeline)|Begin(?:RenderPass|ComputePass)|"
+            r"Set(?:BindGroup|Pipeline|VertexBuffer|IndexBuffer)|Draw(?:Indexed)?|"
+            r"DispatchWorkgroups|End|Finish|Submit)(?=\s*\()"
+        ),
+        None,
+    ),
+    (
+        "wgsl",
+        "runtime-api",
+        re.compile(
+            r"(?<!navigator\.)\b(?:adapter|gpuAdapter|gpu|device|gpuDevice|"
+            r"context|gpuContext|"
+            r"queue|gpuQueue|encoder|commandEncoder|pass|passEncoder|"
+            r"renderPass|renderPassEncoder|computePass|computePassEncoder)\."
+            r"(request(?:Adapter|Device)|configure|getCurrentTexture|"
+            r"create(?:Buffer|Texture|CommandEncoder|RenderPipeline(?:Async)?|"
+            r"ComputePipeline(?:Async)?)|writeBuffer|begin(?:RenderPass|"
+            r"ComputePass)|set(?:Pipeline|VertexBuffer|IndexBuffer)|"
+            r"draw(?:Indexed)?|dispatchWorkgroups|end|finish|submit)(?=\s*\()"
+        ),
+        None,
+    ),
+    (
+        "wgsl",
+        "runtime-api",
+        re.compile(
+            r"\b(?:device|command_encoder|pass_encoder|"
+            r"render_pass|render_pass_encoder|compute_pass|compute_pass_encoder)\."
+            r"(create_(?:render_pipeline|compute_pipeline|shader_module|"
+            r"bind_group(?:_layout)?|pipeline_layout|command_encoder|buffer|"
+            r"texture|sampler)|begin_(?:render_pass|compute_pass)|"
+            r"set_(?:pipeline|vertex_buffer|index_buffer)|draw(?:_indexed)?|"
+            r"dispatch_workgroups|finish|submit)(?=\s*\()"
+        ),
+        None,
+    ),
+    (
+        "wgsl",
+        "runtime-api",
+        re.compile(
+            r"\b(GPU(?:BufferUsage|TextureUsage|ShaderStage|RenderPassEncoder|"
+            r"ComputePassEncoder|TextureView))\b"
+        ),
+        None,
+    ),
+    (
+        "wgsl",
+        "runtime-api",
+        re.compile(
+            r"\b(wgpu::(?:RenderPipelineDescriptor|ComputePipelineDescriptor|"
+            r"CommandEncoderDescriptor|BufferDescriptor|TextureDescriptor|"
+            r"RenderPassDescriptor|ComputePassDescriptor|VertexBufferLayout|"
+            r"VertexState|FragmentState|PrimitiveState|MultisampleState|"
+            r"ColorTargetState))\b"
+        ),
+        None,
+    ),
+    (
+        "wgsl",
+        "runtime-api",
+        re.compile(
+            r"\b((?:WGPU(?:Adapter|BindGroup(?:Layout)?|Buffer|Command(?:Buffer|Encoder)|"
+            r"Compute(?:PassEncoder|Pipeline)|Device|Instance|PipelineLayout|Queue|"
+            r"Render(?:PassEncoder|Pipeline)|Sampler|ShaderModule|Surface|"
+            r"Texture(?:View)?|(?:BindGroup(?:Layout)?|CommandEncoder|"
+            r"ComputePipeline|Device|PipelineLayout|RenderPass|RenderPipeline|"
+            r"Sampler|ShaderModule|Surface|Texture(?:View)?)Descriptor|"
+            r"ShaderSourceWGSL)|wgpu(?:CreateInstance|InstanceRequestAdapter|"
+            r"AdapterRequestDevice|DeviceCreate(?:BindGroup(?:Layout)?|Buffer|"
+            r"CommandEncoder|ComputePipeline|PipelineLayout|RenderPipeline|Sampler|"
+            r"ShaderModule|Texture)|CommandEncoderBegin(?:ComputePass|RenderPass)|"
+            r"RenderPassEncoderSet(?:BindGroup|Pipeline|VertexBuffer)|"
+            r"RenderPassEncoderDraw(?:Indexed)?|ComputePassEncoderDispatchWorkgroups|"
+            r"QueueSubmit)))\b"
+        ),
+        None,
+    ),
+    (
+        "wgsl",
+        "build-system",
+        re.compile(
+            r"(?<![\w@/-])(?:\"(?:@webgpu/[^\"]+|gpuweb|webgpu(?:-[^\"]+)?|"
+            r"wgpu)\"|^\s*wgpu\s*=|find_package\s*\(\s*Dawn\b|"
+            r"(?:dawn::)?webgpu_dawn\b|webgpu_(?:cpp|glfw)\b)"
+        ),
+        "wgsl-build-system",
     ),
 )
 REPORT_PACKAGE_NAME = "crosstl"
@@ -1452,6 +1790,8 @@ TOOLCHAIN_BY_BACKEND = {
     "rust": ("rustc",),
     "slang": ("slangc",),
     "vulkan": ("spirv-val", "spirv-as"),
+    "webgl": ("glslangValidator",),
+    "wgsl": ("naga",),
 }
 TOOLCHAIN_AVAILABILITY_COMMANDS = {
     "cuda": ("nvcc", "--version"),
@@ -1461,7 +1801,29 @@ TOOLCHAIN_AVAILABILITY_COMMANDS = {
     "mojo": ("mojo", "--version"),
     "rust": ("rustc", "--version"),
     "slang": ("slangc", "--version"),
+    "wgsl": ("naga", "--version"),
 }
+DIRECTX_DXC_LIBRARY_ATTRIBUTES = frozenset(
+    (
+        "raygeneration",
+        "intersection",
+        "closesthit",
+        "anyhit",
+        "miss",
+        "callable",
+    )
+)
+DIRECTX_DXC_ENTRY_PROFILES = (
+    ("VSMain", "vs_6_0"),
+    ("PSMain", "ps_6_0"),
+    ("CSMain", "cs_6_0"),
+    ("GSMain", "gs_6_0"),
+    ("HSMain", "hs_6_0"),
+    ("DSMain", "ds_6_0"),
+    ("ASMain", "as_6_5"),
+    ("MSMain", "ms_6_5"),
+)
+DIRECTX_DXC_DEFAULT_ENTRY_PROFILE = ("VSMain", "vs_6_0")
 TOOLCHAIN_SMOKE_TIMEOUT_SECONDS = 30
 TOOLCHAIN_TIMEOUT_RETURNCODE = 124
 RUNTIME_ADAPTER_CATALOG = {
@@ -1558,7 +1920,7 @@ RUNTIME_ADAPTER_CATALOG = {
     "vulkan": {
         "adapterKind": "vulkan-shader-adapter",
         "artifactFormat": "Vulkan-targeted shader source",
-        "requiredTools": ["glslangValidator", "spirv-val"],
+        "requiredTools": ["spirv-val", "spirv-as"],
         "loaderResponsibilities": [
             "Compile the packaged artifact to SPIR-V for the target environment.",
             "Create shader modules and bind descriptor layouts in the existing Vulkan code.",
@@ -1567,10 +1929,19 @@ RUNTIME_ADAPTER_CATALOG = {
     "webgl": {
         "adapterKind": "webgl-glsl-adapter",
         "artifactFormat": "GLSL ES source",
-        "requiredTools": [],
+        "requiredTools": ["glslangValidator"],
         "loaderResponsibilities": [
             "Load the packaged GLSL ES artifact with the existing WebGL shader creation path.",
             "Bind uniforms, buffers, textures, and draw or dispatch state in JavaScript.",
+        ],
+    },
+    "wgsl": {
+        "adapterKind": "webgpu-wgsl-adapter",
+        "artifactFormat": "WGSL source",
+        "requiredTools": ["naga"],
+        "loaderResponsibilities": [
+            "Load the packaged WGSL artifact into the WebGPU shader-module creation path.",
+            "Bind WebGPU pipeline layouts, bind groups, and dispatch or draw state in host code.",
         ],
     },
 }
@@ -2376,9 +2747,17 @@ def _skipped_counts_by_extension(
         path = record.get("path")
         if not _is_non_empty_string(path):
             continue
-        extension = _extension_rollup_key(Path(path).suffix.lower())
+        extension = _extension_rollup_key(_skipped_source_extension(path))
         counts[extension] = counts.get(extension, 0) + 1
     return dict(sorted(counts.items()))
+
+
+def _skipped_source_extension(path: str) -> str:
+    filename = PurePosixPath(path.replace("\\", "/")).name.lower()
+    for extension in TARGET_ONLY_UNSUPPORTED_SOURCE_ARTIFACT_EXTENSIONS:
+        if filename.endswith(extension):
+            return extension
+    return Path(path).suffix.lower()
 
 
 def _skipped_counts_by_source_override(
@@ -5384,6 +5763,10 @@ def _iter_scan_candidates(config: ProjectConfig) -> list[Path]:
     )
     if not explicit_include_patterns:
         include_patterns = [f"**/*{extension}" for extension in known_extensions]
+        include_patterns.extend(
+            f"**/*{extension}"
+            for extension in TARGET_ONLY_UNSUPPORTED_SOURCE_ARTIFACT_EXTENSIONS
+        )
         include_patterns.extend(source_override_patterns)
 
     candidates: set[Path] = set()
@@ -5609,6 +5992,37 @@ def _artifact_target_extension(target: str) -> str:
     return get_backend_extension(normalized_target) or ".out"
 
 
+def _artifact_path_extension(path: str | os.PathLike[str]) -> str:
+    filename = PurePosixPath(str(path).replace("\\", "/")).name
+    return "".join(PurePosixPath(filename).suffixes).lower()
+
+
+def _artifact_path_matches_target_extension(
+    path: str | os.PathLike[str], target: str
+) -> bool:
+    return (
+        PurePosixPath(str(path).replace("\\", "/"))
+        .name.lower()
+        .endswith(_artifact_target_extension(target).lower())
+    )
+
+
+def _webgl_stage_path(path: Path, stage: str) -> Path:
+    suffix = _artifact_target_extension("webgl")
+    name = path.name
+    if name.lower().endswith(suffix):
+        base = name[: -len(suffix)]
+        return path.with_name(f"{base}.{stage}{suffix}")
+    return path.with_name(f"{path.stem}.{stage}{path.suffix}")
+
+
+def _webgl_stage_relative_path(relative_path: Path, stage_label: str) -> Path:
+    stage = WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL.get(stage_label)
+    if stage is None:
+        return relative_path
+    return _webgl_stage_path(relative_path, stage)
+
+
 def _variant_jobs(
     config: ProjectConfig,
 ) -> list[tuple[str | None, dict[str, str]]]:
@@ -5683,7 +6097,6 @@ def _artifact_matrix_report(
         "targetCount": len(normalized_targets),
         "variantCount": variant_count,
         "variantMode": "named" if variant_count else "none",
-        "expectedArtifactCount": len(units) * len(normalized_targets) * variant_factor,
     }
     artifact_identities = {
         identity
@@ -5694,27 +6107,16 @@ def _artifact_matrix_report(
     }
     preserve_source_suffix = _artifact_source_suffix_pairs(units, normalized_targets)
     variant_names: list[str | None] = sorted(variants) if variants else [None]
-    expected_identities = {
-        identity
-        for unit in units
-        for target in normalized_targets
-        for variant in variant_names
-        for identity in (
-            _expected_artifact_identity(
-                config.root,
-                config.output_path,
-                unit.relative_path,
-                target,
-                variant,
-                preserve_source_suffix=(
-                    unit.relative_path,
-                    target,
-                )
-                in preserve_source_suffix,
-            ),
-        )
-        if identity is not None
-    }
+    expected_identities = _expected_artifact_identities(
+        config.root,
+        config.output_path,
+        units,
+        normalized_targets,
+        variant_names,
+        preserve_source_suffix,
+        artifacts=artifacts,
+    )
+    payload["expectedArtifactCount"] = len(expected_identities)
     missing_identities = expected_identities - artifact_identities
     extra_identities = artifact_identities - expected_identities
     source_backend_by_identity = _artifact_matrix_source_backend_by_identity(
@@ -5995,6 +6397,56 @@ def _artifact_source_remap(
     }
 
 
+def _webgl_split_stage_artifacts(
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    artifact: Mapping[str, Any],
+    output_path: Path,
+) -> list[dict[str, Any]] | None:
+    if artifact.get("target") != "webgl":
+        return None
+
+    stages = _glslang_guarded_stages(output_path)
+    if len(stages) <= 1:
+        return None
+
+    try:
+        source = output_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+    stage_artifacts = []
+    for stage in stages:
+        stage_label = WEBGL_PROJECT_STAGE_LABEL_BY_GLSLANG.get(stage)
+        macro = GLSLANG_GUARD_MACRO_BY_STAGE.get(stage)
+        if stage_label is None or macro is None:
+            continue
+        stage_source = _filter_glslang_guarded_stage_source(source, macro)
+        if not stage_source.strip():
+            continue
+
+        stage_path = _webgl_stage_path(output_path, stage)
+        stage_path.write_text(stage_source, encoding="utf-8", newline="")
+        stage_artifact = dict(artifact)
+        stage_artifact["stage"] = stage_label
+        stage_artifact["path"] = _artifact_report_path(stage_path, config)
+        stage_artifact["generatedHash"] = _source_hash(stage_path)
+        stage_artifact["generatedSizeBytes"] = stage_path.stat().st_size
+        stage_artifact["sourceMap"] = _artifact_source_map(
+            config, unit, str(artifact["target"]), stage_path
+        )
+        stage_artifacts.append(stage_artifact)
+
+    if len(stage_artifacts) <= 1:
+        return None
+
+    try:
+        output_path.unlink()
+    except OSError:
+        pass
+    return stage_artifacts
+
+
 def _unsupported_mapping_field_reasons(
     prefix: str, value: Mapping[str, Any], allowed_fields: frozenset[str]
 ) -> list[str]:
@@ -6089,14 +6541,19 @@ def _compiler_source_remap_payload_reasons(payload: Any) -> list[str]:
 
 
 def _is_runtime_reference_candidate(path: Path) -> bool:
+    suffix = path.suffix.lower()
     return (
         path.name in RUNTIME_REFERENCE_FILENAMES
-        or path.suffix.lower() in RUNTIME_REFERENCE_EXTENSIONS
+        or suffix in RUNTIME_REFERENCE_EXTENSIONS
+        or suffix in RUNTIME_REFERENCE_BUILD_EXTENSIONS
     )
 
 
 def _is_runtime_build_reference_candidate(path: Path) -> bool:
-    return path.name in RUNTIME_REFERENCE_FILENAMES or path.suffix.lower() == ".cmake"
+    return (
+        path.name in RUNTIME_REFERENCE_FILENAMES
+        or path.suffix.lower() in RUNTIME_REFERENCE_BUILD_EXTENSIONS
+    )
 
 
 def _iter_runtime_reference_candidates(config: ProjectConfig) -> list[Path]:
@@ -6430,6 +6887,7 @@ def translate_project(
                     )
                     artifacts.append(artifact)
                     continue
+                artifact_records = [artifact]
                 try:
                     output_path.parent.mkdir(parents=True, exist_ok=True)
                     translate(
@@ -6446,6 +6904,11 @@ def translate_project(
                     artifact["sourceMap"] = _artifact_source_map(
                         config, unit, target, output_path
                     )
+                    split_artifacts = _webgl_split_stage_artifacts(
+                        config, unit, artifact, output_path
+                    )
+                    if split_artifacts is not None:
+                        artifact_records = split_artifacts
                     if _is_crossgl_target(target):
                         remap_path = _source_remap_path(output_path)
                         remap_payload = _source_remap_payload(artifact["sourceMap"])
@@ -6467,6 +6930,7 @@ def translate_project(
                     artifact.pop("generatedSizeBytes", None)
                     artifact.pop("sourceMap", None)
                     artifact.pop("sourceRemap", None)
+                    artifact_records = [artifact]
                     diagnostics.append(
                         ProjectDiagnostic(
                             severity="error",
@@ -6481,7 +6945,7 @@ def translate_project(
                             ),
                         )
                     )
-                artifacts.append(artifact)
+                artifacts.extend(artifact_records)
 
     validation = (
         _validate_artifacts(artifacts, selected_targets, config)
@@ -7375,6 +7839,8 @@ def _validate_artifacts(
             artifact_check["variant"] = artifact["variant"]
         if artifact.get("sourceBackend") is not None:
             artifact_check["sourceBackend"] = artifact["sourceBackend"]
+        if artifact.get("stage") is not None:
+            artifact_check["stage"] = artifact["stage"]
         artifact_checks.append(artifact_check)
 
     for toolchain in toolchains:
@@ -8306,13 +8772,60 @@ def _runtime_manifest_artifact_id(artifact: Mapping[str, Any]) -> str:
     )
 
 
-def _runtime_manifest_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
+def _runtime_manifest_source_host_interface(
+    root_path: Path | None, artifact: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    if root_path is None:
+        return None
+    source = artifact.get("source")
+    source_backend = artifact.get("sourceBackend")
+    if not (
+        _is_non_empty_string(source)
+        and _is_report_identity_path(source)
+        and _is_non_empty_string(source_backend)
+    ):
+        return None
+
+    try:
+        register_default_sources()
+        parser_name = SOURCE_REGISTRY.resolve_name(str(source_backend))
+        source_spec = SOURCE_REGISTRY.get(parser_name)
+    except Exception:
+        return None
+
+    source_path = (root_path / str(source)).resolve()
+    if not _is_relative_to(source_path, root_path) or not source_path.is_file():
+        return None
+
+    try:
+        ast = source_spec.parse(
+            source_path.read_text(encoding="utf-8"),
+            file_path=str(source_path),
+        )
+    except Exception:
+        return None
+
+    host_interface = _runtime_host_interface_from_ast(
+        ast, parser=parser_name or "", source="source-artifact"
+    )
+    if host_interface["entryPointCount"] == 0 and host_interface["resourceCount"] == 0:
+        return None
+    target = artifact.get("target")
+    if _is_non_empty_string(target) and _normalized_targets([str(target)])[0] == "wgsl":
+        host_interface = _runtime_host_interface_for_wgsl_target(host_interface)
+    return host_interface
+
+
+def _runtime_manifest_artifact(
+    artifact: Mapping[str, Any], *, root_path: Path | None = None
+) -> dict[str, Any]:
     payload = {
         "id": _runtime_manifest_artifact_id(artifact),
         "source": artifact.get("source"),
         "path": artifact.get("path"),
         "target": artifact.get("target"),
         "sourceBackend": artifact.get("sourceBackend"),
+        "stage": artifact.get("stage"),
         "variant": artifact.get("variant"),
         "defines": (
             dict(artifact.get("defines"))
@@ -8338,6 +8851,7 @@ def _runtime_manifest_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
             if isinstance(artifact.get("sourceRemap"), Mapping)
             else None
         ),
+        "hostInterface": _runtime_manifest_source_host_interface(root_path, artifact),
     }
     return payload
 
@@ -8444,8 +8958,12 @@ def build_runtime_artifact_manifest(
     runtime_plan_payload = _runtime_manifest_runtime_plan(runtime_plan)
     runtime_reference_count = runtime_plan_payload["runtimeReferenceCount"]
     source_map_rollups = _source_map_rollups(translated_artifacts)
+    root_path = None
+    if _is_non_empty_string(project_payload.get("root")):
+        root_path = Path(str(project_payload["root"])).resolve()
     manifest_artifacts = [
-        _runtime_manifest_artifact(artifact) for artifact in translated_artifacts
+        _runtime_manifest_artifact(artifact, root_path=root_path)
+        for artifact in translated_artifacts
     ]
     return {
         "schemaVersion": REPORT_SCHEMA_VERSION,
@@ -8854,6 +9372,7 @@ def _runtime_package_artifact_payload(
         "packagePath": package_path if status == "packaged" else None,
         "target": artifact.get("target"),
         "sourceBackend": artifact.get("sourceBackend"),
+        "stage": artifact.get("stage"),
         "variant": artifact.get("variant"),
         "defines": (
             dict(artifact.get("defines"))
@@ -8863,6 +9382,11 @@ def _runtime_package_artifact_payload(
         "hash": artifact.get("hash"),
         "sizeBytes": artifact.get("sizeBytes"),
         "sourceRemap": source_remap_payload,
+        "hostInterface": (
+            dict(artifact.get("hostInterface"))
+            if isinstance(artifact.get("hostInterface"), Mapping)
+            else None
+        ),
     }
     return payload, diagnostics
 
@@ -8993,6 +9517,7 @@ def build_runtime_package(
                     "packagePath": None,
                     "target": artifact.get("target"),
                     "sourceBackend": artifact.get("sourceBackend"),
+                    "stage": artifact.get("stage"),
                     "variant": artifact.get("variant"),
                     "defines": (
                         dict(artifact.get("defines"))
@@ -9002,6 +9527,11 @@ def build_runtime_package(
                     "hash": artifact.get("hash"),
                     "sizeBytes": artifact.get("sizeBytes"),
                     "sourceRemap": None,
+                    "hostInterface": (
+                        dict(artifact.get("hostInterface"))
+                        if isinstance(artifact.get("hostInterface"), Mapping)
+                        else None
+                    ),
                 }
             )
 
@@ -9891,18 +10421,179 @@ def _runtime_host_interface_resources(ast: Any) -> list[dict[str, Any]]:
     return resources
 
 
-def _runtime_host_interface_from_ast(ast: Any, parser: str) -> dict[str, Any]:
+def _runtime_host_interface_from_ast(
+    ast: Any, parser: str, *, source: str = "package-artifact"
+) -> dict[str, Any]:
     entry_points = _runtime_host_interface_entry_points(ast)
     resources = _runtime_host_interface_resources(ast)
     return {
         "status": "ready",
-        "source": "package-artifact",
+        "source": source,
         "parser": parser,
         "entryPointCount": len(entry_points),
         "resourceCount": len(resources),
         "entryPoints": entry_points,
         "resources": resources,
         "diagnostics": [],
+    }
+
+
+def _runtime_host_interface_for_wgsl_target(
+    host_interface: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = dict(host_interface)
+    stage_counts: Counter[str] = Counter()
+    entry_points = []
+    for entry_point in _record_sequence(payload.get("entryPoints")):
+        if not isinstance(entry_point, Mapping):
+            continue
+        entry_payload = dict(entry_point)
+        stage = _runtime_host_interface_stage_name(entry_payload.get("stage"))
+        if stage in {"vertex", "fragment", "compute"}:
+            stage_index = stage_counts[stage]
+            stage_counts[stage] += 1
+            entry_name = f"{stage}_main"
+            if stage_index:
+                entry_name = f"{entry_name}_{stage_index}"
+            entry_payload["name"] = entry_name
+            entry_payload["stage"] = stage
+        entry_points.append(entry_payload)
+    payload["entryPoints"] = entry_points
+    payload["entryPointCount"] = len(entry_points)
+    return payload
+
+
+def _runtime_wgsl_reflect_entry_points(code: str) -> list[dict[str, Any]]:
+    entry_points = []
+    for match in RUNTIME_WGSL_ENTRY_RE.finditer(code):
+        entry_points.append(
+            {
+                "name": match.group("name"),
+                "stage": match.group("stage"),
+                "executionConfig": {},
+            }
+        )
+    return entry_points
+
+
+def _runtime_wgsl_resource_kind(
+    address_space: str | None, type_name: str
+) -> tuple[str | None, str | None]:
+    address_parts = [
+        part.strip().lower()
+        for part in (address_space or "").split(",")
+        if part.strip()
+    ]
+    address_kind = address_parts[0] if address_parts else None
+    access = address_parts[1] if len(address_parts) > 1 else None
+    lowered_type = type_name.strip().lower()
+    if address_kind == "uniform":
+        return "uniform", "read"
+    if address_kind == "storage":
+        return "buffer", access or "read"
+    if lowered_type.startswith("texture_storage_"):
+        return "storage-texture", None
+    if lowered_type.startswith("texture_"):
+        return "texture", None
+    if lowered_type in {"sampler", "sampler_comparison"}:
+        return "sampler", None
+    return None, None
+
+
+def _runtime_wgsl_reflect_resources(code: str) -> list[dict[str, Any]]:
+    resources = []
+    for match in RUNTIME_WGSL_RESOURCE_RE.finditer(code):
+        type_name = match.group("type").strip()
+        kind, access = _runtime_wgsl_resource_kind(match.group("address"), type_name)
+        if kind is None:
+            continue
+        resources.append(
+            {
+                "name": match.group("name"),
+                "kind": kind,
+                "type": type_name,
+                "set": int(match.group("set")),
+                "binding": int(match.group("binding")),
+                "access": access,
+            }
+        )
+    return resources
+
+
+def _runtime_wgsl_symbolic_resource_binding_diagnostics(code: str) -> list[str]:
+    has_symbolic_resource_binding = False
+    for match in RUNTIME_WGSL_BOUND_RESOURCE_RE.finditer(code):
+        group = match.group("set").strip()
+        binding = match.group("binding").strip()
+        if group.isdigit() and binding.isdigit():
+            continue
+        type_name = match.group("type").strip()
+        kind, _ = _runtime_wgsl_resource_kind(match.group("address"), type_name)
+        if kind is not None:
+            has_symbolic_resource_binding = True
+    if has_symbolic_resource_binding:
+        return [RUNTIME_WGSL_SYMBOLIC_RESOURCE_BINDING_DIAGNOSTIC]
+    return []
+
+
+def _runtime_host_interface_from_wgsl_source(
+    code: str,
+    *,
+    parser: str = RUNTIME_WGSL_REFLECTION_PARSER,
+    source: str = "package-artifact",
+) -> dict[str, Any]:
+    entry_points = _runtime_wgsl_reflect_entry_points(code)
+    resources = _runtime_wgsl_reflect_resources(code)
+    diagnostics = _runtime_wgsl_symbolic_resource_binding_diagnostics(code)
+    return {
+        "status": "unavailable" if diagnostics else "ready",
+        "source": source,
+        "parser": parser,
+        "entryPointCount": len(entry_points),
+        "resourceCount": len(resources),
+        "entryPoints": entry_points,
+        "resources": resources,
+        "diagnostics": diagnostics,
+    }
+
+
+def _runtime_package_inspection_parser_name(target_name: str) -> str | None:
+    if not target_name:
+        return None
+    if target_name == "webgl":
+        return "opengl"
+    return SOURCE_REGISTRY.resolve_name(target_name)
+
+
+def _runtime_package_artifact_host_interface(
+    artifact: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    host_interface = artifact.get("hostInterface")
+    if not isinstance(host_interface, Mapping):
+        return None
+    if host_interface.get("status") != "ready":
+        return None
+    return {
+        "status": host_interface.get("status"),
+        "source": host_interface.get("source"),
+        "parser": host_interface.get("parser"),
+        "entryPointCount": host_interface.get("entryPointCount", 0),
+        "resourceCount": host_interface.get("resourceCount", 0),
+        "entryPoints": [
+            dict(entry_point)
+            for entry_point in _record_sequence(host_interface.get("entryPoints"))
+            if isinstance(entry_point, Mapping)
+        ],
+        "resources": [
+            dict(resource)
+            for resource in _record_sequence(host_interface.get("resources"))
+            if isinstance(resource, Mapping)
+        ],
+        "diagnostics": [
+            diagnostic
+            for diagnostic in _record_sequence(host_interface.get("diagnostics"))
+            if _is_non_empty_string(diagnostic)
+        ],
     }
 
 
@@ -9918,7 +10609,7 @@ def _runtime_package_inspection_host_interface(
     source_spec = None
     try:
         register_default_sources()
-        parser_name = SOURCE_REGISTRY.resolve_name(target_name) if target_name else None
+        parser_name = _runtime_package_inspection_parser_name(target_name)
         source_spec = SOURCE_REGISTRY.get(parser_name) if parser_name else None
     except Exception:
         parser_name = None
@@ -9932,7 +10623,56 @@ def _runtime_package_inspection_host_interface(
                 "project.runtime-package-inspection.host-interface-artifact-not-ready",
             ),
         )
+    package_relative_path = artifact.get("packagePath")
+    if target_name == "wgsl":
+        if not _is_non_empty_string(package_relative_path):
+            return _runtime_host_interface_empty(
+                "not-inspected",
+                parser=RUNTIME_WGSL_REFLECTION_PARSER,
+                diagnostics=(
+                    "project.runtime-package-inspection.host-interface-artifact-not-ready",
+                ),
+            )
+        artifact_path = (package_root / package_relative_path).resolve()
+        if (
+            not _is_relative_to(artifact_path, package_root)
+            or not artifact_path.is_file()
+        ):
+            return _runtime_host_interface_empty(
+                "not-inspected",
+                parser=RUNTIME_WGSL_REFLECTION_PARSER,
+                diagnostics=(
+                    "project.runtime-package-inspection.host-interface-artifact-not-ready",
+                ),
+            )
+        try:
+            host_interface = _runtime_host_interface_from_wgsl_source(
+                artifact_path.read_text(encoding="utf-8", errors="replace")
+            )
+        except OSError:
+            return _runtime_host_interface_empty(
+                "not-inspected",
+                parser=RUNTIME_WGSL_REFLECTION_PARSER,
+                diagnostics=(
+                    "project.runtime-package-inspection.host-interface-artifact-not-ready",
+                ),
+            )
+        if (
+            host_interface["entryPointCount"] == 0
+            and host_interface["resourceCount"] == 0
+        ):
+            return _runtime_host_interface_empty(
+                "unavailable",
+                parser=RUNTIME_WGSL_REFLECTION_PARSER,
+                diagnostics=(
+                    "project.runtime-package-inspection.host-interface-empty",
+                ),
+            )
+        return host_interface
     if source_spec is None:
+        source_host_interface = _runtime_package_artifact_host_interface(artifact)
+        if source_host_interface is not None:
+            return source_host_interface
         return _runtime_host_interface_empty(
             "unavailable",
             diagnostics=(
@@ -9940,7 +10680,6 @@ def _runtime_package_inspection_host_interface(
             ),
         )
 
-    package_relative_path = artifact.get("packagePath")
     if not _is_non_empty_string(package_relative_path):
         return _runtime_host_interface_empty(
             "not-inspected",
@@ -10023,6 +10762,7 @@ def _runtime_package_inspection_binding(
         "packagePath": artifact.get("packagePath"),
         "sourcePath": artifact.get("sourcePath"),
         "sourceBackend": artifact.get("sourceBackend"),
+        "stage": artifact.get("stage"),
         "variant": artifact.get("variant"),
         "defines": (
             dict(artifact.get("defines"))
@@ -10241,6 +10981,7 @@ def _runtime_adapter_entry(binding: Mapping[str, Any]) -> dict[str, Any]:
         "packagePath": binding.get("packagePath"),
         "sourcePath": binding.get("sourcePath"),
         "sourceBackend": binding.get("sourceBackend"),
+        "stage": binding.get("stage"),
         "variant": binding.get("variant"),
         "defines": (
             dict(binding.get("defines"))
@@ -10500,8 +11241,323 @@ def plan_runtime_adapters(
     }
 
 
+def _runtime_loader_metadata_source(
+    path: Any, field: str = "packagePath"
+) -> dict[str, Any]:
+    return {"field": field, "path": path}
+
+
+def _runtime_loader_metadata_slug(value: Any, fallback: str) -> str:
+    text = value if isinstance(value, str) else ""
+    text = text.strip().lower()
+    text = re.sub(r"[^a-z0-9._-]+", "-", text)
+    text = re.sub(r"-+", "-", text).strip(".-_")
+    text = re.sub(r"-+\.", ".", text)
+    return text or fallback
+
+
+def _runtime_loader_webgl_shader_type(stage: Any) -> str | None:
+    if not _is_non_empty_string(stage):
+        return None
+    return {
+        "vertex": "VERTEX_SHADER",
+        "fragment": "FRAGMENT_SHADER",
+    }.get(str(stage).lower())
+
+
+def _runtime_loader_webgl_program_groups(
+    adapters: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    grouped: dict[
+        tuple[Any, Any, tuple[tuple[str, str], ...]], list[Mapping[str, Any]]
+    ] = {}
+    for adapter in adapters:
+        target = adapter.get("target")
+        if not _is_non_empty_string(target):
+            continue
+        normalized_target = _normalized_targets([str(target)])[0]
+        if normalized_target != "webgl":
+            continue
+        package_path = adapter.get("packagePath")
+        if not _is_non_empty_string(package_path):
+            continue
+        source_remap = adapter.get("sourceRemap")
+        binding_source_path = None
+        binding_id = adapter.get("binding")
+        if _is_non_empty_string(binding_id):
+            binding_source_path = str(binding_id).split("|", 1)[0]
+        source_group_path = (
+            source_remap.get("sourcePath")
+            if isinstance(source_remap, Mapping)
+            and _is_non_empty_string(source_remap.get("sourcePath"))
+            else binding_source_path
+            or adapter.get("sourcePath")
+            or adapter.get("packagePath")
+        )
+        defines = (
+            dict(adapter.get("defines"))
+            if isinstance(adapter.get("defines"), Mapping)
+            else {}
+        )
+        key = (
+            source_group_path,
+            adapter.get("variant"),
+            tuple(sorted((str(key), str(value)) for key, value in defines.items())),
+        )
+        grouped.setdefault(key, []).append(adapter)
+
+    groups_by_package_path: dict[str, dict[str, Any]] = {}
+    stage_order = {"vertex": 0, "fragment": 1}
+    for key, group_adapters in grouped.items():
+        source_path, variant, defines_key = key
+        group_key = json.dumps(
+            {
+                "sourcePath": source_path,
+                "variant": variant,
+                "defines": list(defines_key),
+                "packagePaths": [
+                    adapter.get("packagePath") for adapter in group_adapters
+                ],
+            },
+            sort_keys=True,
+        )
+        group_hash = hashlib.sha256(group_key.encode("utf-8")).hexdigest()[:12]
+        group_slug = _runtime_loader_metadata_slug(source_path, "program")
+        stages = []
+        for adapter in sorted(
+            group_adapters,
+            key=lambda item: (
+                stage_order.get(str(item.get("stage")).lower(), 99),
+                str(item.get("packagePath") or ""),
+            ),
+        ):
+            stage = adapter.get("stage")
+            package_path = adapter.get("packagePath")
+            if not _is_non_empty_string(package_path):
+                continue
+            stages.append(
+                {
+                    "stage": stage,
+                    "packagePath": package_path,
+                    "shaderType": _runtime_loader_webgl_shader_type(stage),
+                }
+            )
+        group_payload = {
+            "id": f"webgl-program:{group_slug}:{group_hash}",
+            "sourcePath": source_path,
+            "variant": variant,
+            "defines": dict(defines_key),
+            "stages": stages,
+            "apiCalls": [
+                "WebGLRenderingContext.attachShader",
+                "WebGLRenderingContext.linkProgram",
+            ],
+        }
+        for adapter in group_adapters:
+            package_path = adapter.get("packagePath")
+            if _is_non_empty_string(package_path):
+                groups_by_package_path[str(package_path)] = group_payload
+    return groups_by_package_path
+
+
+def _runtime_loader_host_entry_points(
+    adapter: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    host_interface = adapter.get("hostInterface")
+    if not isinstance(host_interface, Mapping):
+        return []
+    entry_points = []
+    for entry_point in _record_sequence(host_interface.get("entryPoints")):
+        if not isinstance(entry_point, Mapping):
+            continue
+        entry_points.append(
+            {
+                "name": entry_point.get("name"),
+                "stage": entry_point.get("stage"),
+                "executionConfig": (
+                    dict(entry_point.get("executionConfig"))
+                    if isinstance(entry_point.get("executionConfig"), Mapping)
+                    else {}
+                ),
+            }
+        )
+    return entry_points
+
+
+def _runtime_loader_package_artifact_path(
+    package_path: Any, package_root: Path | None
+) -> Path:
+    artifact_path = Path(str(package_path))
+    if package_root is not None and not artifact_path.is_absolute():
+        return package_root / artifact_path
+    return artifact_path
+
+
+def _runtime_loader_directx_entry_profiles(
+    adapter: Mapping[str, Any],
+    *,
+    package_root: Path | None = None,
+) -> tuple[tuple[str, str], ...] | None:
+    package_path = adapter.get("packagePath")
+    if not _is_non_empty_string(package_path):
+        return (DIRECTX_DXC_DEFAULT_ENTRY_PROFILE,)
+    return _directx_dxc_entry_profiles(
+        _runtime_loader_package_artifact_path(package_path, package_root)
+    )
+
+
+def _runtime_loader_directx_entry_profile_metadata(
+    adapter: Mapping[str, Any],
+    *,
+    package_root: Path | None = None,
+) -> list[dict[str, Any]]:
+    entry_profiles = _runtime_loader_directx_entry_profiles(
+        adapter, package_root=package_root
+    )
+    if entry_profiles is None:
+        return [{"entry": None, "profile": "lib_6_3"}]
+    return [{"entry": entry, "profile": profile} for entry, profile in entry_profiles]
+
+
+def _runtime_loader_directx_commands(
+    adapter: Mapping[str, Any],
+    tools: Sequence[str],
+    *,
+    package_root: Path | None = None,
+) -> list[list[str]]:
+    package_path = adapter.get("packagePath")
+    if not _is_non_empty_string(package_path) or not tools:
+        return []
+    command_path = Path(str(package_path))
+    entry_profiles = _runtime_loader_directx_entry_profiles(
+        adapter, package_root=package_root
+    )
+    tool = tools[0]
+    if entry_profiles is None:
+        return [[tool, "-T", "lib_6_3", str(command_path), "-Fo", os.devnull]]
+    return [
+        _directx_dxc_entry_smoke_command(tool, command_path, entry, profile)
+        for entry, profile in entry_profiles
+    ]
+
+
+def _runtime_loader_target_load_metadata(
+    adapter: Mapping[str, Any],
+    webgl_program_groups: Mapping[str, Mapping[str, Any]],
+    *,
+    package_root: Path | None = None,
+) -> dict[str, Any]:
+    target = adapter.get("target")
+    package_path = adapter.get("packagePath")
+    if not _is_non_empty_string(target) or not _is_non_empty_string(package_path):
+        return {}
+    normalized_target = _normalized_targets([str(target)])[0]
+    if normalized_target == "wgsl":
+        return {
+            "runtime": "webgpu",
+            "apiCalls": ["GPUDevice.createShaderModule"],
+            "source": _runtime_loader_metadata_source(package_path),
+            "shaderModuleDescriptor": {
+                "code": _runtime_loader_metadata_source(package_path)
+            },
+            "entryPoints": _runtime_loader_host_entry_points(adapter),
+        }
+    if normalized_target == "webgl":
+        stage = adapter.get("stage")
+        metadata: dict[str, Any] = {
+            "runtime": "webgl",
+            "apiCalls": [
+                "WebGLRenderingContext.createShader",
+                "WebGLRenderingContext.shaderSource",
+                "WebGLRenderingContext.compileShader",
+            ],
+            "source": _runtime_loader_metadata_source(package_path),
+            "stage": stage,
+            "shaderType": _runtime_loader_webgl_shader_type(stage),
+        }
+        program_group = webgl_program_groups.get(str(package_path))
+        if isinstance(program_group, Mapping):
+            metadata["programGroup"] = dict(program_group)
+        return metadata
+    if normalized_target == "directx":
+        return {
+            "runtime": "directx",
+            "artifactFormat": adapter.get("artifactFormat"),
+            "compiler": "dxc",
+            "targetProfiles": ["directx-11", "directx-12"],
+            "source": _runtime_loader_metadata_source(package_path),
+            "entryProfiles": _runtime_loader_directx_entry_profile_metadata(
+                adapter, package_root=package_root
+            ),
+        }
+    return {}
+
+
+def _runtime_loader_validation_command_input_metadata(
+    adapter: Mapping[str, Any],
+    *,
+    package_root: Path | None = None,
+) -> dict[str, Any]:
+    target = adapter.get("target")
+    package_path = adapter.get("packagePath")
+    if not _is_non_empty_string(target) or not _is_non_empty_string(package_path):
+        return {}
+    normalized_target = _normalized_targets([str(target)])[0]
+    if normalized_target in {"opengl", "webgl"}:
+        stage = None
+        stage_label = adapter.get("stage")
+        if _is_non_empty_string(stage_label):
+            stage = WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL.get(str(stage_label))
+        if stage is None:
+            artifact_path = Path(str(package_path))
+            if package_root is not None and not artifact_path.is_absolute():
+                artifact_path = package_root / artifact_path
+            stage = _glslang_stage(artifact_path, adapter)
+        return {
+            "mode": "stdin",
+            "source": _runtime_loader_metadata_source(package_path),
+            "stage": stage,
+        }
+    if normalized_target == "wgsl":
+        return {
+            "mode": "path",
+            "source": _runtime_loader_metadata_source(package_path),
+            "language": "wgsl",
+        }
+    if normalized_target == "directx":
+        tools = TOOLCHAIN_BY_BACKEND.get(normalized_target, ())
+        commands = _runtime_loader_directx_commands(
+            adapter, tools, package_root=package_root
+        )
+        entry_profiles = _runtime_loader_directx_entry_profile_metadata(
+            adapter, package_root=package_root
+        )
+        metadata: dict[str, Any] = {
+            "mode": "path",
+            "source": _runtime_loader_metadata_source(package_path),
+            "language": "hlsl",
+            "compiler": tools[0] if tools else "dxc",
+            "entryProfiles": entry_profiles,
+            "commands": commands,
+        }
+        if entry_profiles:
+            first_profile = entry_profiles[0]
+            if _is_non_empty_string(first_profile.get("entry")):
+                metadata["entryPoint"] = first_profile.get("entry")
+            if _is_non_empty_string(first_profile.get("profile")):
+                metadata["shaderModel"] = first_profile.get("profile")
+        return metadata
+    return {
+        "mode": "path",
+        "source": _runtime_loader_metadata_source(package_path),
+    }
+
+
 def _runtime_loader_manifest_load_steps(
     adapter: Mapping[str, Any],
+    *,
+    package_root: Path | None = None,
+    target_metadata: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     package_path = adapter.get("packagePath")
     target = adapter.get("target")
@@ -10515,7 +11571,9 @@ def _runtime_loader_manifest_load_steps(
             "target": target,
             "packagePath": package_path,
             "tools": [],
+            "command": None,
             "hostInterfaceStatus": None,
+            "metadata": dict(target_metadata) if target_metadata else {},
         }
     ]
     source_remap = adapter.get("sourceRemap")
@@ -10533,7 +11591,14 @@ def _runtime_loader_manifest_load_steps(
                 "target": target,
                 "packagePath": source_remap.get("packagePath"),
                 "tools": [],
+                "command": None,
                 "hostInterfaceStatus": None,
+                "metadata": {
+                    "source": {
+                        "field": "sourceRemap.packagePath",
+                        "path": source_remap.get("packagePath"),
+                    }
+                },
             }
         )
 
@@ -10554,7 +11619,14 @@ def _runtime_loader_manifest_load_steps(
                 "target": target,
                 "packagePath": package_path,
                 "tools": [],
+                "command": None,
                 "hostInterfaceStatus": interface_status,
+                "metadata": {
+                    "hostInterface": {
+                        "entryPointCount": host_interface.get("entryPointCount", 0),
+                        "resourceCount": host_interface.get("resourceCount", 0),
+                    }
+                },
             }
         )
 
@@ -10574,10 +11646,68 @@ def _runtime_loader_manifest_load_steps(
                 "target": target,
                 "packagePath": package_path,
                 "tools": required_tools,
+                "command": _runtime_loader_validation_command(
+                    adapter, package_root=package_root
+                ),
                 "hostInterfaceStatus": interface_status,
+                "metadata": {
+                    "commandInput": _runtime_loader_validation_command_input_metadata(
+                        adapter, package_root=package_root
+                    )
+                },
             }
         )
     return steps
+
+
+def _runtime_loader_validation_command(
+    adapter: Mapping[str, Any],
+    *,
+    package_root: Path | None = None,
+) -> list[str] | None:
+    target = adapter.get("target")
+    package_path = adapter.get("packagePath")
+    if not _is_non_empty_string(target) or not _is_non_empty_string(package_path):
+        return None
+
+    normalized_target = _normalized_targets([str(target)])[0]
+    tools = TOOLCHAIN_BY_BACKEND.get(normalized_target)
+    if not tools:
+        availability_command = TOOLCHAIN_AVAILABILITY_COMMANDS.get(normalized_target)
+        return list(availability_command) if availability_command is not None else None
+
+    if normalized_target in {"opengl", "webgl"}:
+        stage = None
+        stage_label = adapter.get("stage")
+        if _is_non_empty_string(stage_label):
+            stage = WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL.get(str(stage_label))
+        if stage is None:
+            artifact_path = Path(str(package_path))
+            if package_root is not None and not artifact_path.is_absolute():
+                artifact_path = package_root / artifact_path
+            stage = _glslang_stage(artifact_path, adapter)
+        return [tools[0], "--stdin", "-S", stage]
+
+    if normalized_target == "wgsl":
+        return [tools[0], "--input-kind", "wgsl", str(package_path)]
+
+    if normalized_target == "directx":
+        commands = _runtime_loader_directx_commands(
+            adapter, tools, package_root=package_root
+        )
+        return commands[0] if commands else None
+
+    smoke_command = _toolchain_smoke_command(
+        normalized_target,
+        tools,
+        Path(str(package_path)),
+        artifact=adapter,
+    )
+    if smoke_command is not None:
+        return smoke_command[0]
+
+    availability_command = TOOLCHAIN_AVAILABILITY_COMMANDS.get(normalized_target)
+    return list(availability_command) if availability_command is not None else None
 
 
 def _runtime_loader_manifest_blockers(
@@ -10593,7 +11723,11 @@ def _runtime_loader_manifest_blockers(
 
 
 def _runtime_loader_manifest_load_unit(
-    adapter: Mapping[str, Any], actions: Sequence[Mapping[str, Any]]
+    adapter: Mapping[str, Any],
+    actions: Sequence[Mapping[str, Any]],
+    *,
+    package_root: Path | None = None,
+    webgl_program_groups: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     blockers = _runtime_loader_manifest_blockers(adapter, actions)
     host_interface = adapter.get("hostInterface")
@@ -10619,6 +11753,7 @@ def _runtime_loader_manifest_load_unit(
         "packagePath": adapter.get("packagePath"),
         "sourcePath": adapter.get("sourcePath"),
         "sourceBackend": adapter.get("sourceBackend"),
+        "stage": adapter.get("stage"),
         "variant": adapter.get("variant"),
         "defines": (
             dict(adapter.get("defines"))
@@ -10650,7 +11785,15 @@ def _runtime_loader_manifest_load_unit(
             for responsibility in _record_sequence(adapter.get("hostResponsibilities"))
             if _is_non_empty_string(responsibility)
         ],
-        "loadSteps": _runtime_loader_manifest_load_steps(adapter),
+        "loadSteps": _runtime_loader_manifest_load_steps(
+            adapter,
+            package_root=package_root,
+            target_metadata=_runtime_loader_target_load_metadata(
+                adapter,
+                webgl_program_groups or {},
+                package_root=package_root,
+            ),
+        ),
         "blockers": blockers,
         "validation": validation,
     }
@@ -10719,8 +11862,18 @@ def build_runtime_loader_manifest(
         for target in _record_sequence(adapter_plan.get("targets"))
         if isinstance(target, Mapping)
     ]
+    package_root = None
+    if _is_non_empty_string(adapter_plan.get("packageRoot")):
+        package_root = Path(str(adapter_plan["packageRoot"])).resolve()
+    webgl_program_groups = _runtime_loader_webgl_program_groups(adapters)
     load_units = [
-        _runtime_loader_manifest_load_unit(adapter, actions) for adapter in adapters
+        _runtime_loader_manifest_load_unit(
+            adapter,
+            actions,
+            package_root=package_root,
+            webgl_program_groups=webgl_program_groups,
+        )
+        for adapter in adapters
     ]
     ready_load_unit_count = sum(
         1 for load_unit in load_units if not load_unit.get("blockers")
@@ -13564,7 +14717,9 @@ def _inspection_artifact_matrix_summary(
                 break
         if matrix_source == "derived" or not isinstance(project, Mapping):
             return {"available": False}
-        artifact_matrix = _expected_artifact_matrix_metadata(project, units)
+        artifact_matrix = _expected_artifact_matrix_metadata(
+            project, units, artifact_records
+        )
         matrix_source = "derived"
     else:  # pragma: no cover - loop always returns or breaks within two attempts
         return {"available": False}
@@ -13669,6 +14824,7 @@ def _inspection_validation_artifact(artifact: Any) -> dict[str, Any] | None:
         "sourceBackend": artifact.get("sourceBackend"),
         "target": artifact.get("target"),
         "path": artifact.get("path"),
+        "stage": artifact.get("stage"),
         "status": artifact.get("status"),
         "exists": artifact.get("exists"),
         "sourceHashStatus": artifact.get("sourceHashStatus"),
@@ -13692,6 +14848,7 @@ def _inspection_validation_toolchain_run(run: Any) -> dict[str, Any] | None:
         "sourceBackend": run.get("sourceBackend"),
         "target": run.get("target"),
         "path": run.get("path"),
+        "stage": run.get("stage"),
         "checkKind": run.get("checkKind"),
         "status": run.get("status"),
         "returncode": run.get("returncode"),
@@ -13743,25 +14900,15 @@ def _inspection_artifact_matrix_identity_sets(
     project_output_path = _project_output_path(root_path, output_dir).resolve()
     variant_names: list[str | None] = sorted(variants) if variants else [None]
     preserve_source_suffix = _artifact_source_suffix_pairs(units, targets)
-    expected_identities = set()
-    for unit in units:
-        if not isinstance(unit, Mapping):
-            continue
-        source = unit.get("path")
-        if not (_is_non_empty_string(source) and _is_report_identity_path(source)):
-            continue
-        for target in _normalized_targets(targets):
-            for variant in variant_names:
-                identity = _expected_artifact_identity(
-                    root_path,
-                    project_output_path,
-                    source,
-                    target,
-                    variant,
-                    preserve_source_suffix=(source, target) in preserve_source_suffix,
-                )
-                if identity is not None:
-                    expected_identities.add(identity)
+    expected_identities = _expected_artifact_identities(
+        root_path,
+        project_output_path,
+        units,
+        _normalized_targets(targets),
+        variant_names,
+        preserve_source_suffix,
+        artifacts=artifact_records,
+    )
 
     emitted_identities = {
         identity
@@ -16002,6 +17149,7 @@ def _expected_artifact_identity(
     variant: str | None,
     *,
     preserve_source_suffix: bool = False,
+    stage: str | None = None,
 ) -> ArtifactIdentity | None:
     normalized_target = _normalized_targets([target])[0]
     output_base = project_output_path / normalized_target
@@ -16012,10 +17160,84 @@ def _expected_artifact_identity(
         normalized_target,
         preserve_source_suffix=preserve_source_suffix,
     )
+    if normalized_target == "webgl" and stage in WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL:
+        expected_relative = _webgl_stage_relative_path(expected_relative, stage)
     expected_path = (output_base / expected_relative).resolve()
     if not _is_relative_to(expected_path, root_path):
         return None
     return source, normalized_target, _relpath(expected_path, root_path), variant
+
+
+def _artifact_variant_identity(record: Mapping[str, Any]) -> str | None:
+    variant = record.get("variant")
+    if "variant" not in record:
+        return None
+    return variant if _is_non_empty_string(variant) else ""
+
+
+def _webgl_expected_stages_from_artifacts(
+    artifacts: Sequence[Mapping[str, Any]],
+    source: str,
+    target: str,
+    variant: str | None,
+) -> tuple[str | None, ...]:
+    if target != "webgl":
+        return (None,)
+
+    stages = {
+        artifact.get("stage")
+        for artifact in artifacts
+        if isinstance(artifact, Mapping)
+        and artifact.get("source") == source
+        and _is_non_empty_string(artifact.get("target"))
+        and _normalized_targets([str(artifact["target"])])[0] == target
+        and _artifact_variant_identity(artifact) == variant
+        and artifact.get("stage") in WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL
+    }
+    if not stages:
+        return (None,)
+    return tuple(
+        sorted(stages, key=lambda stage: WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL[stage])
+    )
+
+
+def _expected_artifact_identities(
+    root_path: Path,
+    project_output_path: Path,
+    units: Sequence[Any],
+    targets: Sequence[str],
+    variants: Sequence[str | None],
+    preserve_source_suffix: set[tuple[str, str]],
+    *,
+    artifacts: Sequence[Mapping[str, Any]] = (),
+) -> set[ArtifactIdentity]:
+    expected_identities = set()
+    for unit in units:
+        source = (
+            unit.relative_path
+            if isinstance(unit, ProjectTranslationUnit)
+            else unit.get("path") if isinstance(unit, Mapping) else None
+        )
+        if not (_is_non_empty_string(source) and _is_report_identity_path(source)):
+            continue
+        for target in _normalized_targets(targets):
+            for variant in variants:
+                for stage in _webgl_expected_stages_from_artifacts(
+                    artifacts, source, target, variant
+                ):
+                    identity = _expected_artifact_identity(
+                        root_path,
+                        project_output_path,
+                        source,
+                        target,
+                        variant,
+                        preserve_source_suffix=(source, target)
+                        in preserve_source_suffix,
+                        stage=stage,
+                    )
+                    if identity is not None:
+                        expected_identities.add(identity)
+    return expected_identities
 
 
 def _artifact_matrix_contract_reasons(
@@ -16058,6 +17280,15 @@ def _artifact_matrix_contract_reasons(
         for identity in (_artifact_identity(artifact),)
         if identity is not None
     }
+    expected_identities = _expected_artifact_identities(
+        root_path,
+        project_output_path,
+        units,
+        normalized_targets,
+        variant_names,
+        preserve_source_suffix,
+        artifacts=[artifact for artifact in artifacts if isinstance(artifact, Mapping)],
+    )
     reasons = []
     for unit_index, unit in enumerate(units):
         if not isinstance(unit, Mapping):
@@ -16067,15 +17298,15 @@ def _artifact_matrix_contract_reasons(
             continue
         for target in normalized_targets:
             for variant in variant_names:
-                identity = _expected_artifact_identity(
-                    root_path,
-                    project_output_path,
-                    source,
-                    target,
-                    variant,
-                    preserve_source_suffix=(source, target) in preserve_source_suffix,
-                )
-                if identity is not None and identity not in artifact_identities:
+                for identity in (
+                    expected
+                    for expected in expected_identities
+                    if expected[0] == source
+                    and expected[1] == target
+                    and expected[3] == variant
+                ):
+                    if identity in artifact_identities:
+                        continue
                     suffix = f" target {target}"
                     if variant is not None:
                         suffix = f"{suffix} variant {variant}"
@@ -16089,6 +17320,7 @@ def _artifact_matrix_contract_reasons(
 def _expected_artifact_matrix_metadata(
     project: Mapping[str, Any],
     units: Any,
+    artifacts: Any = None,
 ) -> dict[str, Any] | None:
     if not isinstance(units, list):
         return None
@@ -16108,12 +17340,34 @@ def _expected_artifact_matrix_metadata(
     variant_count = len(variants)
     variant_factor = variant_count if variant_count else 1
     normalized_targets = _normalized_targets(targets)
+    expected_artifact_count = len(units) * len(normalized_targets) * variant_factor
+    root = project.get("root")
+    output_dir = project.get("outputDir")
+    if _is_non_empty_string(root) and _is_non_empty_string(output_dir):
+        root_path = Path(root).resolve()
+        project_output_path = _project_output_path(root_path, output_dir).resolve()
+        variant_names: list[str | None] = sorted(variants) if variants else [None]
+        expected_artifact_count = len(
+            _expected_artifact_identities(
+                root_path,
+                project_output_path,
+                units,
+                normalized_targets,
+                variant_names,
+                _artifact_source_suffix_pairs(units, normalized_targets),
+                artifacts=[
+                    artifact
+                    for artifact in _record_sequence(artifacts)
+                    if isinstance(artifact, Mapping)
+                ],
+            )
+        )
     return {
         "unitCount": len(units),
         "targetCount": len(normalized_targets),
         "variantCount": variant_count,
         "variantMode": "named" if variant_count else "none",
-        "expectedArtifactCount": len(units) * len(normalized_targets) * variant_factor,
+        "expectedArtifactCount": expected_artifact_count,
     }
 
 
@@ -16130,7 +17384,7 @@ def _artifact_matrix_metadata_contract_reasons(
     if not isinstance(artifact_matrix, Mapping):
         return ["artifactMatrix must be an object"]
 
-    expected = _expected_artifact_matrix_metadata(project, units)
+    expected = _expected_artifact_matrix_metadata(project, units, artifacts)
     if expected is None:
         return []
 
@@ -16240,6 +17494,41 @@ def _duplicate_identity_contract_reasons(
             continue
         reasons.append(
             f"{prefix}[{index}] duplicates {prefix}[{previous_index}] identity"
+        )
+    return reasons
+
+
+def _toolchain_run_identity(record: Mapping[str, Any]) -> tuple[Any, ...] | None:
+    artifact_identity = _artifact_identity(record)
+    command = record.get("command")
+    check_kind = record.get("checkKind")
+    if artifact_identity is None or not isinstance(command, list):
+        return None
+    return (
+        artifact_identity,
+        tuple(command),
+        check_kind,
+    )
+
+
+def _duplicate_toolchain_run_identity_contract_reasons(
+    records: Sequence[Any],
+) -> list[str]:
+    reasons = []
+    identities: dict[tuple[Any, ...], int] = {}
+    for index, record in enumerate(records):
+        if not isinstance(record, Mapping):
+            continue
+        identity = _toolchain_run_identity(record)
+        if identity is None:
+            continue
+        previous_index = identities.get(identity)
+        if previous_index is None:
+            identities[identity] = index
+            continue
+        reasons.append(
+            "validation.toolchainRuns[{}] duplicates "
+            "validation.toolchainRuns[{}] identity".format(index, previous_index)
         )
     return reasons
 
@@ -19002,23 +20291,24 @@ def _toolchain_run_contract_reasons(
             artifact_path = Path(str(path))
             if root_path is not None and not artifact_path.is_absolute():
                 artifact_path = (root_path / artifact_path).resolve()
-            smoke_command = _toolchain_smoke_command(
+            smoke_commands = _toolchain_smoke_commands(
                 normalized_target,
                 configured_tools,
                 artifact_path,
                 artifact=referenced_artifact[1] if referenced_artifact else run,
             )
-            if smoke_command is not None:
-                expected_command, expected_check_kind = smoke_command
-                if check_kind != expected_check_kind:
+            if smoke_commands:
+                expected_check_kinds = {kind for _command, kind in smoke_commands}
+                if check_kind not in expected_check_kinds:
+                    expected_check_kind = smoke_commands[0][1]
                     reasons.append(
                         f"{prefix}.checkKind must be {expected_check_kind} "
                         f"for target {normalized_target}"
                     )
-                elif command != expected_command:
+                elif (command, check_kind) not in smoke_commands:
                     check_label = (
                         "tool availability"
-                        if expected_check_kind == "tool-availability"
+                        if check_kind == "tool-availability"
                         else "artifact"
                     )
                     reasons.append(
@@ -19210,9 +20500,7 @@ def _validation_contract_reasons(
                     )
                 )
             reasons.extend(
-                _duplicate_identity_contract_reasons(
-                    "validation.toolchainRuns", toolchain_runs
-                )
+                _duplicate_toolchain_run_identity_contract_reasons(toolchain_runs)
             )
             if require_validation:
                 reasons.extend(
@@ -19568,10 +20856,13 @@ def _runtime_reference_contract_reasons(prefix: str, reference: Any) -> list[str
         reasons.append(f"{prefix}.backend must be a string")
     else:
         normalized_backend = _normalized_targets([backend])
+        allowed_runtime_backends = (
+            set(_supported_target_names()) | RUNTIME_REFERENCE_NON_TARGET_BACKENDS
+        )
         if (
             len(normalized_backend) != 1
             or normalized_backend[0] != backend
-            or backend not in _supported_target_names()
+            or backend not in allowed_runtime_backends
         ):
             reasons.append(f"{prefix}.backend must be a normalized backend name")
 
@@ -20833,12 +22124,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         f"artifacts[{index}].path must be under "
                         "project.outputDir target/variant directory"
                     )
-                elif Path(path).suffix.lower() != _artifact_target_extension(target):
+                elif not _artifact_path_matches_target_extension(path, target):
                     expected_extension = _artifact_target_extension(target)
+                    actual_extension = _artifact_path_extension(path)
                     reasons.append(
                         f"artifacts[{index}].path suffix must match "
                         f"artifacts[{index}].target "
-                        f"({_value_mismatch_context(expected_extension, Path(path).suffix.lower())})"
+                        f"({_value_mismatch_context(expected_extension, actual_extension)})"
                     )
                 elif _is_non_empty_string(source) and _is_report_identity_path(source):
                     normalized_target = _normalized_targets([target])[0]
@@ -20848,6 +22140,12 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         preserve_source_suffix=(source, normalized_target)
                         in preserve_source_suffix,
                     )
+                    if normalized_target == "webgl" and _is_non_empty_string(
+                        artifact.get("stage")
+                    ):
+                        expected_relative = _webgl_stage_relative_path(
+                            expected_relative, str(artifact["stage"])
+                        )
                     expected_path = (expected_output_base / expected_relative).resolve()
                     if (root_path / path).resolve() != expected_path:
                         reasons.append(
@@ -20927,6 +22225,27 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     f"artifacts[{index}].variant must be recorded "
                     "when project.variants is non-empty"
                 )
+            if "stage" in artifact:
+                stage = artifact.get("stage")
+                normalized_target = (
+                    _normalized_targets([target])[0]
+                    if _is_non_empty_string(target)
+                    else None
+                )
+                if not _is_non_empty_string(stage):
+                    reasons.append(f"artifacts[{index}].stage must be a string")
+                elif normalized_target != "webgl":
+                    reasons.append(
+                        f"artifacts[{index}].stage is only supported for webgl artifacts"
+                    )
+                elif stage not in WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL:
+                    reasons.append(
+                        _allowed_value_reason(
+                            f"artifacts[{index}].stage",
+                            frozenset(WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL),
+                            stage,
+                        )
+                    )
             if isinstance(project, Mapping):
                 reasons.extend(
                     _artifact_defines_contract_reasons(
@@ -21239,57 +22558,88 @@ def _run_toolchain_smoke(
             continue
         if not artifact_path.is_file():
             continue
-        smoke_command = _toolchain_smoke_command(
+        smoke_commands = _toolchain_smoke_commands(
             target, tools, artifact_path, artifact=artifact
         )
-        if smoke_command is None:
-            continue
-        command, check_kind = smoke_command
-        if not command or not shutil.which(command[0]):
-            continue
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=str(root),
-                input=(
-                    artifact_path.read_text(encoding="utf-8", errors="replace")
+        for command, check_kind in smoke_commands:
+            if not command or not shutil.which(command[0]):
+                continue
+            try:
+                stdin = (
+                    _toolchain_smoke_stdin(target, command, artifact_path)
                     if "--stdin" in command
                     else None
-                ),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=TOOLCHAIN_SMOKE_TIMEOUT_SECONDS,
-            )
-            returncode = completed.returncode
-            stdout = _toolchain_output_text(completed.stdout)
-            stderr = _toolchain_output_text(completed.stderr)
-        except subprocess.TimeoutExpired as exc:
-            returncode = TOOLCHAIN_TIMEOUT_RETURNCODE
-            stdout = _toolchain_output_text(getattr(exc, "stdout", None))
-            stderr = _toolchain_output_text(getattr(exc, "stderr", None))
-            timeout_message = (
-                "Validation toolchain timed out after "
-                f"{TOOLCHAIN_SMOKE_TIMEOUT_SECONDS} seconds."
-            )
-            stderr = f"{stderr.rstrip()}\n{timeout_message}".strip()
-        run = {
-            "source": str(artifact.get("source", "")),
-            "target": target,
-            "path": str(artifact["path"]),
-            "command": command,
-            "checkKind": check_kind,
-            "returncode": returncode,
-            "status": "ok" if returncode == 0 else "failed",
-            "stdout": stdout[-4000:],
-            "stderr": stderr[-4000:],
-        }
-        if _is_non_empty_string(artifact.get("sourceBackend")):
-            run["sourceBackend"] = artifact["sourceBackend"]
-        if artifact.get("variant") is not None:
-            run["variant"] = artifact["variant"]
-        runs.append(run)
+                )
+                completed = subprocess.run(
+                    command,
+                    cwd=str(root),
+                    input=stdin,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=TOOLCHAIN_SMOKE_TIMEOUT_SECONDS,
+                )
+                returncode = completed.returncode
+                stdout = _toolchain_output_text(completed.stdout)
+                stderr = _toolchain_output_text(completed.stderr)
+            except subprocess.TimeoutExpired as exc:
+                returncode = TOOLCHAIN_TIMEOUT_RETURNCODE
+                stdout = _toolchain_output_text(getattr(exc, "stdout", None))
+                stderr = _toolchain_output_text(getattr(exc, "stderr", None))
+                timeout_message = (
+                    "Validation toolchain timed out after "
+                    f"{TOOLCHAIN_SMOKE_TIMEOUT_SECONDS} seconds."
+                )
+                stderr = f"{stderr.rstrip()}\n{timeout_message}".strip()
+            run = {
+                "source": str(artifact.get("source", "")),
+                "target": target,
+                "path": str(artifact["path"]),
+                "command": command,
+                "checkKind": check_kind,
+                "returncode": returncode,
+                "status": "ok" if returncode == 0 else "failed",
+                "stdout": stdout[-4000:],
+                "stderr": stderr[-4000:],
+            }
+            if _is_non_empty_string(artifact.get("sourceBackend")):
+                run["sourceBackend"] = artifact["sourceBackend"]
+            if _is_non_empty_string(artifact.get("stage")):
+                run["stage"] = artifact["stage"]
+            if artifact.get("variant") is not None:
+                run["variant"] = artifact["variant"]
+            runs.append(run)
     return runs
+
+
+def _toolchain_smoke_commands(
+    target: str,
+    tools: Sequence[str],
+    artifact_path: Path,
+    *,
+    artifact: Mapping[str, Any] | None = None,
+) -> list[tuple[list[str], str]]:
+    if target == "directx":
+        return [
+            (command, "artifact")
+            for command in _directx_dxc_smoke_commands(tools[0], artifact_path)
+        ]
+    if target in {"opengl", "webgl"}:
+        source_stage = _glslang_source_stage(artifact)
+        stages = (
+            (source_stage,) if source_stage else _glslang_guarded_stages(artifact_path)
+        )
+        if stages:
+            return [
+                ([tools[0], "--stdin", "-S", stage], "artifact") for stage in stages
+            ]
+    smoke_command = _toolchain_smoke_command(
+        target,
+        tools,
+        artifact_path,
+        artifact=artifact,
+    )
+    return [] if smoke_command is None else [smoke_command]
 
 
 def _toolchain_smoke_command(
@@ -21299,7 +22649,9 @@ def _toolchain_smoke_command(
     *,
     artifact: Mapping[str, Any] | None = None,
 ) -> tuple[list[str], str] | None:
-    if target == "opengl":
+    if target == "directx":
+        return _directx_dxc_smoke_command(tools[0], artifact_path), "artifact"
+    if target in {"opengl", "webgl"}:
         return (
             [tools[0], "--stdin", "-S", _glslang_stage(artifact_path, artifact)],
             "artifact",
@@ -21308,10 +22660,119 @@ def _toolchain_smoke_command(
         if artifact_path.suffix.lower() == ".spvasm" and len(tools) > 1:
             return [tools[1], str(artifact_path), "-o", os.devnull], "artifact"
         return [tools[0], str(artifact_path)], "artifact"
+    if target == "wgsl":
+        return [tools[0], "--input-kind", "wgsl", str(artifact_path)], "artifact"
     availability_command = TOOLCHAIN_AVAILABILITY_COMMANDS.get(target)
     if availability_command is None:
         return None
     return list(availability_command), "tool-availability"
+
+
+def _toolchain_smoke_stdin(target: str, command: Sequence[str], artifact_path: Path):
+    source = artifact_path.read_text(encoding="utf-8", errors="replace")
+    if target not in {"opengl", "webgl"}:
+        return source
+    macro = _glslang_guard_macro_for_command(command)
+    if macro is None or not _glslang_source_uses_guard(source, macro):
+        return source
+    return _filter_glslang_guarded_stage_source(source, macro)
+
+
+def _glslang_guard_macro_for_command(command: Sequence[str]) -> str | None:
+    try:
+        stage = command[command.index("-S") + 1]
+    except (ValueError, IndexError):
+        return None
+    return GLSLANG_GUARD_MACRO_BY_STAGE.get(stage)
+
+
+def _glslang_source_uses_guard(source: str, macro: str) -> bool:
+    return any(
+        match.group(1).upper() == macro
+        for match in GLSLANG_STAGE_GUARD_RE.finditer(source)
+    )
+
+
+def _filter_glslang_guarded_stage_source(source: str, macro: str) -> str:
+    output = []
+    stage_guard_stack = []
+    for line in source.splitlines(keepends=True):
+        guard_match = GLSLANG_STAGE_GUARD_LINE_RE.match(line)
+        if guard_match:
+            stage_guard_stack.append(guard_match.group(1).upper() == macro)
+            continue
+        if stage_guard_stack and GLSLANG_PREPROCESSOR_ELSE_RE.match(line):
+            stage_guard_stack[-1] = not stage_guard_stack[-1]
+            continue
+        if stage_guard_stack and GLSLANG_PREPROCESSOR_ENDIF_RE.match(line):
+            stage_guard_stack.pop()
+            continue
+        if all(stage_guard_stack):
+            output.append(line)
+    return "".join(output)
+
+
+def _directx_dxc_smoke_command(tool: str, artifact_path: Path) -> list[str]:
+    return _directx_dxc_smoke_commands(tool, artifact_path)[0]
+
+
+def _directx_dxc_smoke_commands(tool: str, artifact_path: Path) -> list[list[str]]:
+    entry_profiles = _directx_dxc_entry_profiles(artifact_path)
+    if entry_profiles is None:
+        return [[tool, "-T", "lib_6_3", str(artifact_path), "-Fo", os.devnull]]
+
+    return [
+        _directx_dxc_entry_smoke_command(tool, artifact_path, entry, profile)
+        for entry, profile in entry_profiles
+    ]
+
+
+def _directx_dxc_entry_smoke_command(
+    tool: str, artifact_path: Path, entry: str, profile: str
+) -> list[str]:
+    return [
+        tool,
+        "-T",
+        profile,
+        "-E",
+        entry,
+        str(artifact_path),
+        "-Fo",
+        os.devnull,
+    ]
+
+
+def _directx_dxc_entry_profile(artifact_path: Path) -> tuple[str, str] | None:
+    entry_profiles = _directx_dxc_entry_profiles(artifact_path)
+    if entry_profiles is None:
+        return None
+    return entry_profiles[0]
+
+
+def _directx_dxc_entry_profiles(
+    artifact_path: Path,
+) -> tuple[tuple[str, str], ...] | None:
+    try:
+        source = artifact_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return (DIRECTX_DXC_DEFAULT_ENTRY_PROFILE,)
+
+    lowered = source.lower()
+    if any(
+        f'[shader("{attribute}")]' in lowered
+        for attribute in DIRECTX_DXC_LIBRARY_ATTRIBUTES
+    ):
+        return None
+
+    matches = []
+    for entry, profile in DIRECTX_DXC_ENTRY_PROFILES:
+        match = re.search(rf"\b{re.escape(entry)}\s*\(", source)
+        if match:
+            matches.append((match.start(), entry, profile))
+    if not matches:
+        return (DIRECTX_DXC_DEFAULT_ENTRY_PROFILE,)
+
+    return tuple((entry, profile) for _position, entry, profile in sorted(matches))
 
 
 GLSLANG_STAGE_BY_SUFFIX = {
@@ -21379,6 +22840,9 @@ GLSLANG_STAGE_BY_GUARD_MACRO = {
     "GL_MISS_SHADER_EXT": "rmiss",
     "GL_CALLABLE_SHADER_EXT": "rcall",
 }
+GLSLANG_GUARD_MACRO_BY_STAGE = {
+    stage: macro for macro, stage in GLSLANG_STAGE_BY_GUARD_MACRO.items()
+}
 GLSLANG_GENERATED_STAGE_COMMENT_RE = re.compile(
     r"^\s*//\s*([A-Za-z_ -]+)\s+Shader\b",
     re.IGNORECASE | re.MULTILINE,
@@ -21387,6 +22851,12 @@ GLSLANG_STAGE_GUARD_RE = re.compile(
     r"^\s*#\s*(?:if|ifdef)\s+" r"(GL_[A-Z0-9_]+(?:_SHADER|_SHADER_EXT))\b",
     re.IGNORECASE | re.MULTILINE,
 )
+GLSLANG_STAGE_GUARD_LINE_RE = re.compile(
+    r"^\s*#\s*(?:if|ifdef)\s+(GL_[A-Z0-9_]+(?:_SHADER|_SHADER_EXT))\b",
+    re.IGNORECASE,
+)
+GLSLANG_PREPROCESSOR_ELSE_RE = re.compile(r"^\s*#\s*else\b", re.IGNORECASE)
+GLSLANG_PREPROCESSOR_ENDIF_RE = re.compile(r"^\s*#\s*endif\b", re.IGNORECASE)
 GLSLANG_GLOBAL_STAGE_IO_RE = re.compile(
     r"^\s*"
     r"(?:layout\s*\([^;\n]*\)\s*)?"
@@ -21418,9 +22888,13 @@ def _glslang_stage(
 
     if "local_size_" in source or "gl_globalinvocationid" in source:
         return "comp"
-    if "gl_position" in source:
+    if "gl_position" in source or "vertex shader" in source:
         return "vert"
-    if "gl_fragcoord" in source or "gl_fragcolor" in source:
+    if (
+        "gl_fragcoord" in source
+        or "gl_fragcolor" in source
+        or "fragment shader" in source
+    ):
         return "frag"
     stage_io_directions = _glslang_global_stage_io_directions(source)
     if "in" in stage_io_directions:
@@ -21443,6 +22917,22 @@ def _glslang_stage_from_generated_source(source: str) -> str | None:
             return stage
 
     return None
+
+
+def _glslang_guarded_stages(artifact_path: Path) -> tuple[str, ...]:
+    try:
+        source = artifact_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ()
+
+    stages = []
+    seen = set()
+    for match in GLSLANG_STAGE_GUARD_RE.finditer(source):
+        stage = GLSLANG_STAGE_BY_GUARD_MACRO.get(match.group(1).upper())
+        if stage is not None and stage not in seen:
+            stages.append(stage)
+            seen.add(stage)
+    return tuple(stages)
 
 
 def _glslang_global_stage_io_directions(source: str) -> set[str]:

@@ -8,6 +8,8 @@ These pages document the behavior of individual translation backends.
 
    directx
    glsl
+   webgl
+   wgsl
    cuda
    hip
    metal

@@ -16950,9 +16950,9 @@ def test_struct_resource_members_lower_to_global_slang_resources(tmp_path):
 
     material_struct = generated_code.split("struct Material", 1)[1].split("};", 1)[0]
     assert "Sampler2D<float4> albedoMap;" not in material_struct
-    assert "Sampler2D<float4> albedoMap" in generated_code
+    assert "Sampler2D<float4> Material_albedoMap" in generated_code
     assert "Material material = globals.materials[0];" in generated_code
-    assert "return albedoMap.Sample(uv) * float4(material.albedo, 1.0);" in (
+    assert "return Material_albedoMap.Sample(uv) * float4(material.albedo, 1.0);" in (
         generated_code
     )
     assert "material.albedoMap" not in generated_code
@@ -19715,6 +19715,37 @@ def test_slangc_smoke_compiles_generated_resource_query_helpers_if_available(
     compile_generated_slang(generated_code, tmp_path, "compute")
 
 
+def test_slang_texture_size_casts_int_vector_query_for_float_arithmetic(tmp_path):
+    code = """
+    shader SlangTextureSizeFloatArithmetic {
+        sampler2D shadowMap @register(t0);
+        image2D outputImage @rgba32f @register(u0);
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main() {
+                vec2 texelSize = 1.0 / textureSize(shadowMap, 0);
+                imageStore(outputImage, ivec2(0, 0), vec4(texelSize, 0.0, 1.0));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "unsupported Slang resource query" not in generated_code
+    assert (
+        "float2 texelSize = 1.0 / float2(cgl_textureSize_sampler2D(shadowMap, 0));"
+        in generated_code
+    )
+    assert "int2 cgl_textureSize_sampler2D(Sampler2D<float4> tex, uint mipLevel)" in (
+        generated_code
+    )
+    assert "textureSize(" not in generated_code
+
+    compile_generated_slang(generated_code, tmp_path, "compute")
+
+
 def test_storage_image_load_store_emit_slang_subscript_access():
     code = """
     shader Resources {
@@ -21357,6 +21388,40 @@ def test_texture_query_image_size_on_storage_images():
     assert "cgl_imageSize" in generated_code
     assert "imageSize(" not in generated_code
     assert "GetDimensions" in generated_code
+
+
+def test_lowered_struct_resource_names_do_not_shadow_stage_images():
+    code = """
+    struct EnvironmentData {
+        samplerCube irradiance_map;
+    };
+
+    shader StructResourceImageNameCollision {
+        EnvironmentData environment;
+
+        compute {
+            uniform layout(rgba16f) imageCube irradiance_map;
+
+            void main() {
+                ivec2 size = imageSize(irradiance_map);
+                vec3 dir = vec3(1.0, 0.0, 0.0);
+                vec4 sample = texture(environment.irradiance_map, dir);
+                imageStore(irradiance_map, ivec3(0, 0, 0), sample);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "SamplerCube<float4> EnvironmentData_irradiance_map" in generated_code
+    assert "SamplerCube<float4> irradiance_map" not in generated_code
+    assert "RWTexture2DArray<float4> irradiance_map" in generated_code
+    assert "cgl_imageSize" in generated_code
+    assert "cgl_imageSize_imageCube(irradiance_map)" in generated_code
+    assert "EnvironmentData_irradiance_map.Sample(dir)" in generated_code
+    assert "imageSize(" not in generated_code
+    assert "unsupported Slang" not in generated_code
 
 
 def test_basic_texture_sampling_with_bias_lod_grad():

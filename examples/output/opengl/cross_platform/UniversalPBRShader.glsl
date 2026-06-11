@@ -1,4 +1,3 @@
-
 #version 450 core
 const float PI = 3.14159265359;
 const float EPSILON = 0.0001;
@@ -177,7 +176,7 @@ float calculateShadow(sampler2D shadow_map, vec4 frag_pos_light_space,
     return 0.0;
   }
   float shadow = 0.0;
-  vec2 texel_size = (1.0 / textureSize(shadow_map, 0));
+  vec2 texel_size = (1.0 / vec2(textureSize(shadow_map, 0)));
   for (int x = (-1); (x <= 1); (++x)) {
     for (int y = (-1); (y <= 1); (++y)) {
       float pcf_depth =

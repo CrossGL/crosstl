@@ -169,6 +169,35 @@ SIMPLE_CROSSL = textwrap.dedent("""
     }
     """).strip()
 
+DIRECTX_GRAPHICS_CROSSL = textwrap.dedent("""
+    shader ProjectDirectXGraphics {
+        struct VSInput {
+            vec3 position @ POSITION;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.position = vec4(input.position, 1.0);
+                output.uv = input.uv;
+                return output;
+            }
+        }
+
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                return vec4(input.uv, 0.0, 1.0);
+            }
+        }
+    }
+    """).strip()
+
 GLSL_FRAGMENT_INVOCATION_DENSITY_SOURCE = textwrap.dedent("""
     #version 450 core
     #extension GL_EXT_fragment_invocation_density : require
@@ -1124,39 +1153,92 @@ def test_scan_project_reports_extensionless_unsupported_sources(tmp_path):
     )
 
 
-def test_scan_project_skips_known_unsupported_source_artifacts(tmp_path):
+@pytest.mark.parametrize("explicit_include", (False, True))
+def test_scan_project_skips_known_unsupported_source_artifacts(
+    tmp_path,
+    explicit_include,
+):
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "crosstl.toml").write_text(
-        textwrap.dedent("""
-            [project]
-            include = ["**/*"]
-            exclude = []
-            """).strip(),
-        encoding="utf-8",
-    )
+    if explicit_include:
+        (repo / "crosstl.toml").write_text(
+            textwrap.dedent("""
+                [project]
+                include = ["**/*"]
+                exclude = []
+                """).strip(),
+            encoding="utf-8",
+        )
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
     (repo / "compiled.spv").write_bytes(b"\x03\x02#shader-binary")
     (repo / "future.wgsl").write_text("@compute fn main() {}\n", encoding="utf-8")
+    (repo / "future.wesl").write_text("@compute fn main() {}\n", encoding="utf-8")
+    (repo / "generated.webgl.glsl").write_text(
+        "#version 300 es\nvoid main() {}\n",
+        encoding="utf-8",
+    )
+    (repo / "generated.webgl.glsl.json").write_text(
+        '{"stage": "fragment"}\n',
+        encoding="utf-8",
+    )
 
     config = load_project_config(repo)
     scan = scan_project(config)
     payload = scan.to_report(targets=["cgl"]).to_json()
 
-    assert [unit.relative_path for unit in scan.units] == ["simple.cgl"]
-    assert scan.skipped == [
-        {"path": "compiled.spv", "reason": "unsupported-extension"},
+    expected_skipped = [
+        {"path": "future.wesl", "reason": "unsupported-extension"},
         {"path": "future.wgsl", "reason": "unsupported-extension"},
+        {"path": "generated.webgl.glsl", "reason": "unsupported-extension"},
+        {"path": "generated.webgl.glsl.json", "reason": "unsupported-extension"},
     ]
-    assert payload["summary"]["skippedByReason"] == {"unsupported-extension": 2}
-    assert payload["summary"]["skippedByExtension"] == {".spv": 1, ".wgsl": 1}
+    if explicit_include:
+        expected_skipped.insert(
+            0,
+            {"path": "compiled.spv", "reason": "unsupported-extension"},
+        )
+    expected_skipped_by_extension = {
+        ".webgl.glsl": 1,
+        ".webgl.glsl.json": 1,
+        ".wesl": 1,
+        ".wgsl": 1,
+    }
+    if explicit_include:
+        expected_skipped_by_extension[".spv"] = 1
+
+    assert [unit.relative_path for unit in scan.units] == ["simple.cgl"]
+    assert scan.skipped == expected_skipped
+    assert payload["summary"]["skippedByReason"] == {
+        "unsupported-extension": len(expected_skipped),
+    }
+    assert payload["summary"]["skippedByExtension"] == expected_skipped_by_extension
     diagnostics_by_file = {
         diagnostic.location.file: diagnostic for diagnostic in scan.diagnostics
     }
-    assert diagnostics_by_file["compiled.spv"].code == "project.scan.unsupported-source"
-    assert "Binary SPIR-V input files" in diagnostics_by_file["compiled.spv"].message
+    if explicit_include:
+        assert (
+            diagnostics_by_file["compiled.spv"].code
+            == "project.scan.unsupported-source"
+        )
+        assert (
+            "Binary SPIR-V input files" in diagnostics_by_file["compiled.spv"].message
+        )
     assert diagnostics_by_file["future.wgsl"].code == "project.scan.unsupported-source"
     assert "WGSL/WebGPU source files" in diagnostics_by_file["future.wgsl"].message
+    assert diagnostics_by_file["future.wesl"].code == "project.scan.unsupported-source"
+    assert "WGSL/WebGPU source files" in diagnostics_by_file["future.wesl"].message
+    assert (
+        diagnostics_by_file["generated.webgl.glsl"].code
+        == "project.scan.unsupported-source"
+    )
+    assert "WebGL target files" in diagnostics_by_file["generated.webgl.glsl"].message
+    assert (
+        diagnostics_by_file["generated.webgl.glsl.json"].code
+        == "project.scan.unsupported-source"
+    )
+    assert (
+        "WebGL target files" in diagnostics_by_file["generated.webgl.glsl.json"].message
+    )
 
 
 def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units(tmp_path):
@@ -1547,6 +1629,121 @@ def test_scan_report_records_runtime_reference_evidence(tmp_path):
     ]
 
 
+def test_scan_report_records_cuda_hip_async_memcpy_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "CMakeLists.txt").write_text(
+        textwrap.dedent("""
+            cmake_minimum_required(VERSION 3.27)
+            find_package(CUDAToolkit REQUIRED)
+            find_package(HIP REQUIRED)
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            void copy_async(void* dst, const void* src, size_t bytes) {
+              cudaMemcpyAsync(dst, src, bytes, cudaMemcpyHostToDevice, cuda_stream);
+              hipMemcpyAsync(dst, src, bytes, hipMemcpyHostToDevice, hip_stream);
+              cudaMemcpyAsyncHelper();
+              hipMemcpyAsyncBytes = bytes;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 4
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"cuda": 2, "hip": 2}
+    assert payload["migration"]["runtimeReferencesByKind"] == {
+        "build-system": 2,
+        "runtime-api": 2,
+    }
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "CMakeLists.txt": 2,
+        "host.cpp": 2,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("CMakeLists.txt", "cuda", "build-system", "cuda-build-system"),
+        ("CMakeLists.txt", "hip", "build-system", "hip-build-system"),
+        ("host.cpp", "cuda", "runtime-api", "cudaMemcpyAsync"),
+        ("host.cpp", "hip", "runtime-api", "hipMemcpyAsync"),
+    ]
+
+
+def test_scan_report_records_opencl_host_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "CMakeLists.txt").write_text(
+        textwrap.dedent("""
+            find_package(OpenCL REQUIRED)
+            target_link_libraries(engine PRIVATE OpenCL::OpenCL)
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            void enqueue_opencl(cl_context context, cl_command_queue queue) {
+              clGetPlatformIDs(0, nullptr, nullptr);
+              cl_program program = clCreateProgramWithSource(
+                context, 1, &source, nullptr, nullptr);
+              clBuildProgram(program, 0, nullptr, nullptr, nullptr, nullptr);
+              clSetKernelArg(kernel, 0, sizeof(buffer), &buffer);
+              clEnqueueNDRangeKernel(queue, kernel, 1, nullptr, global, local,
+                                     0, nullptr, nullptr);
+              clFinish(queue);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.cpp").write_text(
+        textwrap.dedent("""
+            void helper() {
+              clBuildProgramHelper();
+              auto clFinishTime = 0;
+              auto myclGetPlatformIDs = 1;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 8
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"opencl": 8}
+    assert payload["migration"]["runtimeReferencesByKind"] == {
+        "build-system": 2,
+        "runtime-api": 6,
+    }
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "CMakeLists.txt": 2,
+        "host.cpp": 6,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("CMakeLists.txt", "opencl", "build-system", "opencl-build-system"),
+        ("CMakeLists.txt", "opencl", "build-system", "opencl-build-system"),
+        ("host.cpp", "opencl", "runtime-api", "clGetPlatformIDs"),
+        ("host.cpp", "opencl", "runtime-api", "clCreateProgramWithSource"),
+        ("host.cpp", "opencl", "runtime-api", "clBuildProgram"),
+        ("host.cpp", "opencl", "runtime-api", "clSetKernelArg"),
+        ("host.cpp", "opencl", "runtime-api", "clEnqueueNDRangeKernel"),
+        ("host.cpp", "opencl", "runtime-api", "clFinish"),
+    ]
+
+    report_path = repo / "opencl-runtime-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+    assert validate_project_report(report_path)["success"] is True
+
+
 def test_scan_report_records_build_system_runtime_reference(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1574,6 +1771,1186 @@ def test_scan_report_records_build_system_runtime_reference(tmp_path):
             "kind": "build-system",
             "symbol": "vulkan-build-system",
         }
+    ]
+
+
+def test_scan_report_records_metal_framework_linker_runtime_reference(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "Makefile").write_text(
+        "LDFLAGS += -framework MetalKit\n",
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["metal"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 1
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"metal": 1}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"build-system": 1}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"Makefile": 1}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [("Makefile", "metal", "build-system", "metal-build-system")]
+
+
+def test_scan_report_records_metal_host_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "Host.swift").write_text(
+        textwrap.dedent("""
+            import Metal
+
+            func render(device: MTLDevice, descriptor: MTLRenderPassDescriptor) throws {
+              let queue = device.makeCommandQueue()
+              let library = device.makeDefaultLibrary()
+              let function = library!.makeFunction(name: "main0")
+              let pipeline = try device.makeRenderPipelineState(
+                descriptor: pipelineDescriptor)
+              let commandBuffer = queue!.makeCommandBuffer()
+              let encoder = commandBuffer!.makeRenderCommandEncoder(
+                descriptor: descriptor)
+              encoder!.setRenderPipelineState(pipeline)
+              encoder!.setVertexBuffer(buffer, offset: 0, index: 0)
+              encoder!.drawPrimitives(
+                type: .triangle, vertexStart: 0, vertexCount: 3)
+              encoder!.endEncoding()
+              commandBuffer!.commit()
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "NearMiss.swift").write_text(
+        textwrap.dedent("""
+            func helper(builder: Builder) {
+              builder.makeRenderPipeline()
+              makeCommandQueue()
+              let commit = false
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["metal"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 13
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"metal": 13}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 13}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"Host.swift": 13}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("Host.swift", "metal", "runtime-api", "MTLDevice"),
+        ("Host.swift", "metal", "runtime-api", "MTLRenderPassDescriptor"),
+        ("Host.swift", "metal", "runtime-api", "makeCommandQueue"),
+        ("Host.swift", "metal", "runtime-api", "makeDefaultLibrary"),
+        ("Host.swift", "metal", "runtime-api", "makeFunction"),
+        ("Host.swift", "metal", "runtime-api", "makeRenderPipelineState"),
+        ("Host.swift", "metal", "runtime-api", "makeCommandBuffer"),
+        ("Host.swift", "metal", "runtime-api", "makeRenderCommandEncoder"),
+        ("Host.swift", "metal", "runtime-api", "setRenderPipelineState"),
+        ("Host.swift", "metal", "runtime-api", "setVertexBuffer"),
+        ("Host.swift", "metal", "runtime-api", "drawPrimitives"),
+        ("Host.swift", "metal", "runtime-api", "endEncoding"),
+        ("Host.swift", "metal", "runtime-api", "commit"),
+    ]
+
+
+def test_scan_report_records_metal_kit_host_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "Host.swift").write_text(
+        textwrap.dedent("""
+            import MetalKit
+
+            final class Renderer: NSObject, MTKViewDelegate {
+              func draw(in view: MTKView) {
+                _ = MTKTextureLoader(device: view.device!)
+                _ = MTLCreateSystemDefaultDevice()
+              }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "NearMiss.swift").write_text(
+        textwrap.dedent("""
+            let theme = "MetalKitten"
+            let appSpecific = "MTKWidget"
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "Renderer.m").write_text(
+        textwrap.dedent("""
+            #import <MetalKit/MetalKit.h>
+
+            @interface Renderer : NSObject <MTKViewDelegate>
+            - (void)drawInMTKView:(MTKView *)view;
+            @end
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["metal"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 6
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"metal": 6}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 6}
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "Host.swift": 4,
+        "Renderer.m": 2,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("Host.swift", "metal", "runtime-api", "MTKViewDelegate"),
+        ("Host.swift", "metal", "runtime-api", "MTKView"),
+        ("Host.swift", "metal", "runtime-api", "MTKTextureLoader"),
+        ("Host.swift", "metal", "runtime-api", "MTLCreateSystemDefaultDevice"),
+        ("Renderer.m", "metal", "runtime-api", "MTKViewDelegate"),
+        ("Renderer.m", "metal", "runtime-api", "MTKView"),
+    ]
+
+
+def test_scan_report_records_vulkan_loader_linker_runtime_reference(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "Makefile").write_text(
+        "LDLIBS += -lvulkan\n",
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["vulkan"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 1
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"vulkan": 1}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"build-system": 1}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"Makefile": 1}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [("Makefile", "vulkan", "build-system", "vulkan-build-system")]
+
+
+def test_scan_report_records_vulkan_namespace_create_info_runtime_reference(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.rs").write_text(
+        textwrap.dedent("""
+            fn configure() {
+                let shader = vk::ShaderModuleCreateInfo::default();
+                let pipeline = ash::vk::PipelineLayoutCreateInfo::default();
+                let instance = vulkano::instance::InstanceCreateInfo::default();
+                let slang_attr = "[[vk::binding(0, 0)]]";
+                let not_host_runtime = "vk::Literal<vk::integral_constant<uint, 8>>";
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["vulkan"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 3
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"vulkan": 3}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 3}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.rs": 3}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.rs", "vulkan", "runtime-api", "vk::ShaderModuleCreateInfo"),
+        ("host.rs", "vulkan", "runtime-api", "ash::vk::PipelineLayoutCreateInfo"),
+        ("host.rs", "vulkan", "runtime-api", "vulkano::instance::InstanceCreateInfo"),
+    ]
+
+
+def test_scan_report_records_webgl_host_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.ts").write_text(
+        textwrap.dedent("""
+            function render(canvas, vertices, image) {
+              const gl: WebGL2RenderingContext = canvas.getContext("webgl2");
+              const shader = gl.createShader(gl.VERTEX_SHADER);
+              gl.shaderSource(shader, source);
+              gl.compileShader(shader);
+              const program = gl.createProgram();
+              gl.attachShader(program, shader);
+              gl.linkProgram(program);
+              gl.useProgram(program);
+              const buffer = gl.createBuffer();
+              gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+              gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+              gl.enableVertexAttribArray(0);
+              gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+              const texture = gl.createTexture();
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, texture);
+              gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+              const vao = gl.createVertexArray();
+              gl.bindVertexArray(vao);
+              gl.drawElements(gl.TRIANGLES, 3, gl.UNSIGNED_SHORT, 0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.js").write_text(
+        textwrap.dedent("""
+            function createShader() {}
+            renderer.createProgram();
+            glish.createShader();
+            contextual.createProgram();
+            canvas.getContext("2d");
+            renderPass.getContext("webgl2Extra");
+            gl.createTextureHandle();
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["webgl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 22
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"webgl": 22}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 22}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.ts": 22}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.ts", "webgl", "runtime-api", "WebGL2RenderingContext"),
+        ("host.ts", "webgl", "runtime-api", "getContext"),
+        ("host.ts", "webgl", "runtime-api", "createShader"),
+        ("host.ts", "webgl", "runtime-api", "shaderSource"),
+        ("host.ts", "webgl", "runtime-api", "compileShader"),
+        ("host.ts", "webgl", "runtime-api", "createProgram"),
+        ("host.ts", "webgl", "runtime-api", "attachShader"),
+        ("host.ts", "webgl", "runtime-api", "linkProgram"),
+        ("host.ts", "webgl", "runtime-api", "useProgram"),
+        ("host.ts", "webgl", "runtime-api", "createBuffer"),
+        ("host.ts", "webgl", "runtime-api", "bindBuffer"),
+        ("host.ts", "webgl", "runtime-api", "bufferData"),
+        ("host.ts", "webgl", "runtime-api", "enableVertexAttribArray"),
+        ("host.ts", "webgl", "runtime-api", "vertexAttribPointer"),
+        ("host.ts", "webgl", "runtime-api", "createTexture"),
+        ("host.ts", "webgl", "runtime-api", "activeTexture"),
+        ("host.ts", "webgl", "runtime-api", "bindTexture"),
+        ("host.ts", "webgl", "runtime-api", "texImage2D"),
+        ("host.ts", "webgl", "runtime-api", "texParameteri"),
+        ("host.ts", "webgl", "runtime-api", "createVertexArray"),
+        ("host.ts", "webgl", "runtime-api", "bindVertexArray"),
+        ("host.ts", "webgl", "runtime-api", "drawElements"),
+    ]
+
+
+def test_scan_report_records_opengl_host_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            void render(GLuint program, GLuint vertexShader, GLuint texture) {
+              glGenVertexArrays(1, &vao);
+              glBindVertexArray(vao);
+              glGenBuffers(1, &buffer);
+              glBindBuffer(GL_ARRAY_BUFFER, buffer);
+              glBufferData(GL_ARRAY_BUFFER, size, data, GL_STATIC_DRAW);
+              glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+              glEnableVertexAttribArray(0);
+              glAttachShader(program, vertexShader);
+              glLinkProgram(program);
+              glDeleteShader(vertexShader);
+              glUseProgram(program);
+              glUniformMatrix4fv(location, 1, GL_FALSE, matrix);
+              glActiveTexture(GL_TEXTURE0);
+              glBindTexture(GL_TEXTURE_2D, texture);
+              glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
+                           GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+              glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+              glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, nullptr);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.cpp").write_text(
+        textwrap.dedent("""
+            void helper() {
+              auto glBind = 0;
+              glCreatePipeline();
+              notglDrawElements();
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 17
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"opengl": 17}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 17}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.cpp": 17}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.cpp", "opengl", "runtime-api", "glGenVertexArrays"),
+        ("host.cpp", "opengl", "runtime-api", "glBindVertexArray"),
+        ("host.cpp", "opengl", "runtime-api", "glGenBuffers"),
+        ("host.cpp", "opengl", "runtime-api", "glBindBuffer"),
+        ("host.cpp", "opengl", "runtime-api", "glBufferData"),
+        ("host.cpp", "opengl", "runtime-api", "glVertexAttribPointer"),
+        ("host.cpp", "opengl", "runtime-api", "glEnableVertexAttribArray"),
+        ("host.cpp", "opengl", "runtime-api", "glAttachShader"),
+        ("host.cpp", "opengl", "runtime-api", "glLinkProgram"),
+        ("host.cpp", "opengl", "runtime-api", "glDeleteShader"),
+        ("host.cpp", "opengl", "runtime-api", "glUseProgram"),
+        ("host.cpp", "opengl", "runtime-api", "glUniformMatrix4fv"),
+        ("host.cpp", "opengl", "runtime-api", "glActiveTexture"),
+        ("host.cpp", "opengl", "runtime-api", "glBindTexture"),
+        ("host.cpp", "opengl", "runtime-api", "glTexImage2D"),
+        ("host.cpp", "opengl", "runtime-api", "glTexParameteri"),
+        ("host.cpp", "opengl", "runtime-api", "glDrawElements"),
+    ]
+
+
+def test_scan_report_records_opengl_context_loader_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            void create_context() {
+              glfwMakeContextCurrent(window);
+              gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
+              glewInit();
+              SDL_GL_CreateContext(window);
+              SDL_GL_MakeCurrent(window, context);
+              SDL_GL_SwapWindow(window);
+              eglCreateContext(display, config, EGL_NO_CONTEXT, attrs);
+              eglMakeCurrent(display, surface, surface, context);
+              eglSwapBuffers(display, surface);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.cpp").write_text(
+        textwrap.dedent("""
+            void helper() {
+              glfwCreateWindow(800, 600, "app", nullptr, nullptr);
+              glfwInit();
+              glfwPollEvents();
+              glfwMakeContextCurrentLater(window);
+              renderer.SDL_GL_SwapWindow();
+              eglCreateContextual();
+              gladLoadGLLoaderEx();
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 10
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"opengl": 10}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 10}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.cpp": 10}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.cpp", "opengl", "runtime-api", "glfwMakeContextCurrent"),
+        ("host.cpp", "opengl", "runtime-api", "gladLoadGLLoader"),
+        ("host.cpp", "opengl", "runtime-api", "glfwGetProcAddress"),
+        ("host.cpp", "opengl", "runtime-api", "glewInit"),
+        ("host.cpp", "opengl", "runtime-api", "SDL_GL_CreateContext"),
+        ("host.cpp", "opengl", "runtime-api", "SDL_GL_MakeCurrent"),
+        ("host.cpp", "opengl", "runtime-api", "SDL_GL_SwapWindow"),
+        ("host.cpp", "opengl", "runtime-api", "eglCreateContext"),
+        ("host.cpp", "opengl", "runtime-api", "eglMakeCurrent"),
+        ("host.cpp", "opengl", "runtime-api", "eglSwapBuffers"),
+    ]
+
+
+def test_scan_report_records_web_runtime_references_in_module_extensions(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "app.tsx").write_text(
+        "const device: GPUDevice = getDevice();\n",
+        encoding="utf-8",
+    )
+    (repo / "component.jsx").write_text(
+        'const gl = canvas.getContext("webgl2");\n',
+        encoding="utf-8",
+    )
+    (repo / "config.cts").write_text(
+        "const stage = GPUShaderStage.COMPUTE;\n",
+        encoding="utf-8",
+    )
+    (repo / "legacy.cjs").write_text(
+        "webgl2.drawArrays(webgl2.TRIANGLES, 0, 3);\n",
+        encoding="utf-8",
+    )
+    (repo / "module.mjs").write_text(
+        "ctx.createShader(ctx.VERTEX_SHADER);\n",
+        encoding="utf-8",
+    )
+    (repo / "worker.mts").write_text(
+        "await navigator.gpu.requestAdapter();\n",
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 7
+    assert payload["migration"]["runtimeReferencesByBackend"] == {
+        "webgl": 3,
+        "wgsl": 4,
+    }
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 7}
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "app.tsx": 1,
+        "component.jsx": 1,
+        "config.cts": 1,
+        "legacy.cjs": 1,
+        "module.mjs": 1,
+        "worker.mts": 2,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("app.tsx", "wgsl", "runtime-api", "GPUDevice"),
+        ("component.jsx", "webgl", "runtime-api", "getContext"),
+        ("config.cts", "wgsl", "runtime-api", "GPUShaderStage"),
+        ("legacy.cjs", "webgl", "runtime-api", "drawArrays"),
+        ("module.mjs", "webgl", "runtime-api", "createShader"),
+        ("worker.mts", "wgsl", "runtime-api", "navigator.gpu"),
+        ("worker.mts", "wgsl", "runtime-api", "requestAdapter"),
+    ]
+
+
+def test_scan_report_records_directx_11_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            void configure(ID3D11Device* device) {
+              D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
+                                nullptr, 0, D3D11_SDK_VERSION, &device,
+                                nullptr, nullptr);
+              device->CreateVertexShader(vsBytecode, vsSize, nullptr, &vertexShader);
+              device->CreatePixelShader(psBytecode, psSize, nullptr, &pixelShader);
+              context->VSSetShader(vertexShader, nullptr, 0);
+              context->PSSetShaderResources(0, 1, &diffuseSrv);
+              context->OMSetRenderTargets(1, &rtv, dsv);
+              context->DrawIndexed(indexCount, 0, 0);
+              context->Dispatch(groupsX, groupsY, 1);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.cpp").write_text(
+        textwrap.dedent("""
+            void helper() {
+              builder.CreateVertexShaderPermutation(desc);
+              contextFactory.VSSetShaderDefaults(shader);
+              m_context->PSSetShaderResourcesCache(cache);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "CMakeLists.txt").write_text(
+        textwrap.dedent("""
+            target_link_libraries(game PRIVATE d3d11.lib d3dcompiler.lib)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["directx"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 12
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"directx": 12}
+    assert payload["migration"]["runtimeReferencesByKind"] == {
+        "build-system": 2,
+        "runtime-api": 10,
+    }
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "CMakeLists.txt": 2,
+        "host.cpp": 10,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("CMakeLists.txt", "directx", "build-system", "directx-build-system"),
+        ("CMakeLists.txt", "directx", "build-system", "directx-build-system"),
+        ("host.cpp", "directx", "runtime-api", "ID3D11Device"),
+        ("host.cpp", "directx", "runtime-api", "D3D11CreateDevice"),
+        ("host.cpp", "directx", "runtime-api", "D3D11_SDK_VERSION"),
+        ("host.cpp", "directx", "runtime-api", "CreateVertexShader"),
+        ("host.cpp", "directx", "runtime-api", "CreatePixelShader"),
+        ("host.cpp", "directx", "runtime-api", "VSSetShader"),
+        ("host.cpp", "directx", "runtime-api", "PSSetShaderResources"),
+        ("host.cpp", "directx", "runtime-api", "OMSetRenderTargets"),
+        ("host.cpp", "directx", "runtime-api", "DrawIndexed"),
+        ("host.cpp", "directx", "runtime-api", "Dispatch"),
+    ]
+
+
+def test_scan_report_records_visual_studio_msbuild_directx_build_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "app.vcxproj").write_text(
+        "<AdditionalDependencies>d3d12.lib</AdditionalDependencies>\n",
+        encoding="utf-8",
+    )
+    (repo / "common.props").write_text(
+        "<AdditionalDependencies>dxgi.lib</AdditionalDependencies>\n",
+        encoding="utf-8",
+    )
+    (repo / "shaders.targets").write_text(
+        "<AdditionalDependencies>dxcompiler.lib</AdditionalDependencies>\n",
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["directx"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 3
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"directx": 3}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"build-system": 3}
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "app.vcxproj": 1,
+        "common.props": 1,
+        "shaders.targets": 1,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("app.vcxproj", "directx", "build-system", "directx-build-system"),
+        ("common.props", "directx", "build-system", "directx-build-system"),
+        ("shaders.targets", "directx", "build-system", "directx-build-system"),
+    ]
+
+
+def test_scan_report_records_directx_dxgi_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            void recreate_swapchain(IDXGIFactory2* factory, IDXGISwapChain1* swapChain) {
+              DXGI_SWAP_CHAIN_DESC1 desc{};
+              CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["directx"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 4
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"directx": 4}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 4}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.cpp": 4}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.cpp", "directx", "runtime-api", "IDXGIFactory2"),
+        ("host.cpp", "directx", "runtime-api", "IDXGISwapChain1"),
+        ("host.cpp", "directx", "runtime-api", "DXGI_SWAP_CHAIN_DESC1"),
+        ("host.cpp", "directx", "runtime-api", "CreateDXGIFactory2"),
+    ]
+
+
+def test_scan_report_records_directx_d3d12_pipeline_command_list_runtime_references(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            void build_pipeline() {
+              ThrowIfFailed(m_device->CreateRootSignature(
+                  0, blob->GetBufferPointer(), blob->GetBufferSize(),
+                  IID_PPV_ARGS(&rootSignature)));
+              ThrowIfFailed(m_device->CreateGraphicsPipelineState(
+                  &psoDesc, IID_PPV_ARGS(&pipelineState)));
+              m_commandList->SetPipelineState(pipelineState.Get());
+              m_commandList->SetGraphicsRootSignature(rootSignature.Get());
+              m_commandList->SetGraphicsRootDescriptorTable(0, heapStart);
+              m_commandList->IASetVertexBuffers(0, 1, &vbv);
+              m_commandList->DrawInstanced(3, 1, 0, 0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.cpp").write_text(
+        textwrap.dedent("""
+            void helper() {
+              builder.CreateGraphicsPipelineState(desc);
+              commandListFactory.SetPipelineStateCache(cache);
+              m_commandList->SetPipelineStateCache(cache);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["directx"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 7
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"directx": 7}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 7}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.cpp": 7}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.cpp", "directx", "runtime-api", "CreateRootSignature"),
+        ("host.cpp", "directx", "runtime-api", "CreateGraphicsPipelineState"),
+        ("host.cpp", "directx", "runtime-api", "SetPipelineState"),
+        ("host.cpp", "directx", "runtime-api", "SetGraphicsRootSignature"),
+        ("host.cpp", "directx", "runtime-api", "SetGraphicsRootDescriptorTable"),
+        ("host.cpp", "directx", "runtime-api", "IASetVertexBuffers"),
+        ("host.cpp", "directx", "runtime-api", "DrawInstanced"),
+    ]
+
+
+def test_scan_report_records_directx_dxc_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "CMakeLists.txt").write_text(
+        "target_link_libraries(engine PRIVATE dxcompiler.lib)\n",
+        encoding="utf-8",
+    )
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            #include <dxcapi.h>
+
+            void compile_shader() {
+              Microsoft::WRL::ComPtr<IDxcUtils> utils;
+              Microsoft::WRL::ComPtr<IDxcCompiler3> compiler;
+              DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils));
+              DxcBuffer sourceBuffer{};
+              compiler->Compile(&sourceBuffer, arguments, argCount, nullptr,
+                                IID_PPV_ARGS(result.GetAddressOf()));
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.cpp").write_text(
+        textwrap.dedent("""
+            void helper() {
+              auto IDxCompiler = 0;
+              auto DxcBufferBytes = 0;
+              auto IDXCompiler3 = 0;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["directx"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 6
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"directx": 6}
+    assert payload["migration"]["runtimeReferencesByKind"] == {
+        "build-system": 1,
+        "runtime-api": 5,
+    }
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "CMakeLists.txt": 1,
+        "host.cpp": 5,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("CMakeLists.txt", "directx", "build-system", "directx-build-system"),
+        ("host.cpp", "directx", "runtime-api", "IDxcUtils"),
+        ("host.cpp", "directx", "runtime-api", "IDxcCompiler3"),
+        ("host.cpp", "directx", "runtime-api", "DxcCreateInstance"),
+        ("host.cpp", "directx", "runtime-api", "CLSID_DxcUtils"),
+        ("host.cpp", "directx", "runtime-api", "DxcBuffer"),
+    ]
+
+
+def test_scan_report_records_webgpu_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.ts").write_text(
+        textwrap.dedent("""
+            async function configure(device: GPUDevice) {
+              const shaderModule = device.createShaderModule({ code });
+              const format = navigator.gpu.getPreferredCanvasFormat();
+              await navigator.gpu.requestAdapter();
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "package.json").write_text(
+        json.dumps({"devDependencies": {"@webgpu/types": "latest"}}),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 7
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 7}
+    assert payload["migration"]["runtimeReferencesByKind"] == {
+        "build-system": 1,
+        "runtime-api": 6,
+    }
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "host.ts": 6,
+        "package.json": 1,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.ts", "wgsl", "runtime-api", "GPUDevice"),
+        ("host.ts", "wgsl", "runtime-api", "createShaderModule"),
+        ("host.ts", "wgsl", "runtime-api", "navigator.gpu"),
+        ("host.ts", "wgsl", "runtime-api", "getPreferredCanvasFormat"),
+        ("host.ts", "wgsl", "runtime-api", "navigator.gpu"),
+        ("host.ts", "wgsl", "runtime-api", "requestAdapter"),
+        ("package.json", "wgsl", "build-system", "wgsl-build-system"),
+    ]
+
+
+def test_scan_report_records_webgpu_bind_group_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.ts").write_text(
+        textwrap.dedent("""
+            export function bind(device, pass) {
+              const layout = device.createBindGroupLayout({ entries: [] });
+              const bindGroup = device.createBindGroup({ layout, entries: [] });
+              const pipelineLayout = device.createPipelineLayout({
+                bindGroupLayouts: [layout],
+              });
+              pass.setBindGroup(0, bindGroup);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 4
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 4}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 4}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.ts": 4}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.ts", "wgsl", "runtime-api", "createBindGroupLayout"),
+        ("host.ts", "wgsl", "runtime-api", "createBindGroup"),
+        ("host.ts", "wgsl", "runtime-api", "createPipelineLayout"),
+        ("host.ts", "wgsl", "runtime-api", "setBindGroup"),
+    ]
+
+
+def test_scan_report_records_webgpu_pipeline_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.ts").write_text(
+        textwrap.dedent("""
+            function render(
+              device: GPUDevice,
+              context: GPUCanvasContext,
+              pass: GPURenderPassEncoder,
+            ) {
+              const usage = GPUBufferUsage.VERTEX |
+                GPUTextureUsage.RENDER_ATTACHMENT;
+              context.configure({ device, format });
+              const vertexBuffer = device.createBuffer({ size, usage });
+              const texture = device.createTexture({ size, format, usage });
+              const pipeline = device.createRenderPipeline(descriptor);
+              const encoder = device.createCommandEncoder();
+              const renderPass = encoder.beginRenderPass(renderPassDescriptor);
+              renderPass.setPipeline(pipeline);
+              renderPass.setVertexBuffer(0, vertexBuffer);
+              renderPass.draw(3);
+              renderPass.end();
+              const commandBuffer = encoder.finish();
+              device.queue.submit([commandBuffer]);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.ts").write_text(
+        textwrap.dedent("""
+            renderer.createRenderPipeline();
+            helper.createBuffer();
+            passenger.draw();
+            const GPUBufferUsageBytes = 0;
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 17
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 17}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 17}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.ts": 17}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.ts", "wgsl", "runtime-api", "GPUDevice"),
+        ("host.ts", "wgsl", "runtime-api", "GPUCanvasContext"),
+        ("host.ts", "wgsl", "runtime-api", "GPURenderPassEncoder"),
+        ("host.ts", "wgsl", "runtime-api", "GPUBufferUsage"),
+        ("host.ts", "wgsl", "runtime-api", "GPUTextureUsage"),
+        ("host.ts", "wgsl", "runtime-api", "configure"),
+        ("host.ts", "wgsl", "runtime-api", "createBuffer"),
+        ("host.ts", "wgsl", "runtime-api", "createTexture"),
+        ("host.ts", "wgsl", "runtime-api", "createRenderPipeline"),
+        ("host.ts", "wgsl", "runtime-api", "createCommandEncoder"),
+        ("host.ts", "wgsl", "runtime-api", "beginRenderPass"),
+        ("host.ts", "wgsl", "runtime-api", "setPipeline"),
+        ("host.ts", "wgsl", "runtime-api", "setVertexBuffer"),
+        ("host.ts", "wgsl", "runtime-api", "draw"),
+        ("host.ts", "wgsl", "runtime-api", "end"),
+        ("host.ts", "wgsl", "runtime-api", "finish"),
+        ("host.ts", "wgsl", "runtime-api", "submit"),
+    ]
+
+
+def test_scan_report_records_webgpu_pass_encoder_alias_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.ts").write_text(
+        textwrap.dedent("""
+            function encode(passEncoder, renderPassEncoder, computePassEncoder) {
+              passEncoder.setPipeline(pipeline);
+              passEncoder.draw(3);
+              renderPassEncoder.setVertexBuffer(0, vertexBuffer);
+              computePassEncoder.dispatchWorkgroups(8);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.ts").write_text(
+        textwrap.dedent("""
+            otherPassEncoder.setPipeline(pipeline);
+            passEncoder.setPipelineLater(pipeline);
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 4
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 4}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 4}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.ts": 4}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.ts", "wgsl", "runtime-api", "setPipeline"),
+        ("host.ts", "wgsl", "runtime-api", "draw"),
+        ("host.ts", "wgsl", "runtime-api", "setVertexBuffer"),
+        ("host.ts", "wgsl", "runtime-api", "dispatchWorkgroups"),
+    ]
+
+
+def test_scan_report_records_rust_wgpu_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.rs").write_text(
+        textwrap.dedent("""
+            fn bind(device: &wgpu::Device, pass: &mut wgpu::RenderPass<'_>) {
+                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: None,
+                    source: wgpu::include_wgsl!("shader.wgsl").source,
+                });
+                let layout = device.create_bind_group_layout(
+                    &wgpu::BindGroupLayoutDescriptor {
+                        entries: &[],
+                        label: None,
+                    },
+                );
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    layout: &layout,
+                    entries: &[],
+                    label: None,
+                });
+                let pipeline_layout = device.create_pipeline_layout(
+                    &wgpu::PipelineLayoutDescriptor {
+                        bind_group_layouts: &[&layout],
+                        push_constant_ranges: &[],
+                        label: None,
+                    },
+                );
+                pass.set_bind_group(0, &bind_group, &[]);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.rs").write_text(
+        textwrap.dedent("""
+            fn helper(render_pass: &mut Pass) {
+                let descriptor = other::ShaderModuleDescriptor;
+                let layout = not_wgpu::BindGroupLayoutDescriptor;
+                let source = include_str!("shader.wgsl");
+                render_pass.set_bind_group_layout(0);
+                let set_bind_group = false;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 10
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 10}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 10}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.rs": 10}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.rs", "wgsl", "runtime-api", "wgpu::ShaderModuleDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "create_shader_module"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::include_wgsl!"),
+        ("host.rs", "wgsl", "runtime-api", "create_bind_group_layout"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::BindGroupLayoutDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::BindGroupDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "create_bind_group"),
+        ("host.rs", "wgsl", "runtime-api", "create_pipeline_layout"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::PipelineLayoutDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "set_bind_group"),
+    ]
+
+
+def test_scan_report_records_rust_wgpu_pipeline_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.rs").write_text(
+        textwrap.dedent("""
+            fn render(device: &wgpu::Device, queue: &wgpu::Queue) {
+                let pipeline = device.create_render_pipeline(
+                    &wgpu::RenderPipelineDescriptor::default(),
+                );
+                let compute = device.create_compute_pipeline(
+                    &wgpu::ComputePipelineDescriptor::default(),
+                );
+                let command_encoder = device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: None },
+                );
+                let buffer = device.create_buffer(
+                    &wgpu::BufferDescriptor { label: None },
+                );
+                let texture = device.create_texture(
+                    &wgpu::TextureDescriptor { label: None },
+                );
+                let mut render_pass = command_encoder.begin_render_pass(
+                    &wgpu::RenderPassDescriptor::default(),
+                );
+                let mut compute_pass = command_encoder.begin_compute_pass(
+                    &wgpu::ComputePassDescriptor::default(),
+                );
+                render_pass.set_pipeline(&pipeline);
+                render_pass.set_vertex_buffer(0, buffer.slice(..));
+                render_pass.set_index_buffer(buffer.slice(..), wgpu::IndexFormat::Uint16);
+                render_pass.draw(0..3, 0..1);
+                render_pass.draw_indexed(0..3, 0, 0..1);
+                compute_pass.dispatch_workgroups(1, 1, 1);
+                queue.submit(Some(command_encoder.finish()));
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.rs").write_text(
+        textwrap.dedent("""
+            fn helper(other: Other, passenger: Passenger) {
+                other.create_render_pipeline();
+                passenger.draw();
+                let RenderPipelineDescriptorBytes = 0;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 22
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 22}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 22}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.rs": 22}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.rs", "wgsl", "runtime-api", "create_render_pipeline"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::RenderPipelineDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "create_compute_pipeline"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::ComputePipelineDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "create_command_encoder"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::CommandEncoderDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "create_buffer"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::BufferDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "create_texture"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::TextureDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "begin_render_pass"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::RenderPassDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "begin_compute_pass"),
+        ("host.rs", "wgsl", "runtime-api", "wgpu::ComputePassDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "set_pipeline"),
+        ("host.rs", "wgsl", "runtime-api", "set_vertex_buffer"),
+        ("host.rs", "wgsl", "runtime-api", "set_index_buffer"),
+        ("host.rs", "wgsl", "runtime-api", "draw"),
+        ("host.rs", "wgsl", "runtime-api", "draw_indexed"),
+        ("host.rs", "wgsl", "runtime-api", "dispatch_workgroups"),
+        ("host.rs", "wgsl", "runtime-api", "submit"),
+        ("host.rs", "wgsl", "runtime-api", "finish"),
+    ]
+
+
+def test_scan_report_records_native_webgpu_dawn_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "CMakeLists.txt").write_text(
+        textwrap.dedent("""
+            find_package(Dawn REQUIRED)
+            target_link_libraries(app PRIVATE dawn::webgpu_dawn)
+            target_link_libraries(app PRIVATE webgpu_cpp webgpu_glfw)
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "Cargo.toml").write_text(
+        textwrap.dedent("""
+            [dependencies]
+            wgpu = "0.20"
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            void encode_native_webgpu() {
+              WGPUDevice device = nullptr;
+              WGPUShaderSourceWGSL wgsl{};
+              WGPUShaderModuleDescriptor shaderDesc{};
+              auto module = wgpuDeviceCreateShaderModule(device, &shaderDesc);
+              auto encoder = wgpuDeviceCreateCommandEncoder(device, nullptr);
+              WGPURenderPassEncoder pass =
+                  wgpuCommandEncoderBeginRenderPass(encoder, nullptr);
+              wgpuRenderPassEncoderSetPipeline(pass, pipeline);
+              wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
+            }
+
+            void encode_dawn_cpp(
+              wgpu::Device device,
+              wgpu::RenderPipeline pipeline,
+              wgpu::Queue queue
+            ) {
+              wgpu::ShaderSourceWGSL source{};
+              wgpu::ShaderModuleDescriptor moduleDesc{};
+              auto module = device.CreateShaderModule(&moduleDesc);
+              auto encoder = device.CreateCommandEncoder();
+              auto pass = encoder.BeginRenderPass(&renderPassDesc);
+              pass.SetPipeline(pipeline);
+              pass.Draw(3);
+              pass.End();
+              auto commands = encoder.Finish();
+              queue.Submit(1, &commands);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "package.json").write_text(
+        json.dumps(
+            {
+                "dependencies": {
+                    "@webgpu/glslang": "latest",
+                    "webgpu-utils": "latest",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.cpp").write_text(
+        textwrap.dedent("""
+            void helper() {
+              auto WGPUShaderModuleDescriptorBytes = 0;
+              wgpuDeviceCreateShaderModuleLater();
+              auto mywebgpu_dawn = 1;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 26
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 26}
+    assert payload["migration"]["runtimeReferencesByKind"] == {
+        "build-system": 7,
+        "runtime-api": 19,
+    }
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "CMakeLists.txt": 4,
+        "Cargo.toml": 1,
+        "host.cpp": 19,
+        "package.json": 2,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("CMakeLists.txt", "wgsl", "build-system", "wgsl-build-system"),
+        ("CMakeLists.txt", "wgsl", "build-system", "wgsl-build-system"),
+        ("CMakeLists.txt", "wgsl", "build-system", "wgsl-build-system"),
+        ("CMakeLists.txt", "wgsl", "build-system", "wgsl-build-system"),
+        ("Cargo.toml", "wgsl", "build-system", "wgsl-build-system"),
+        ("host.cpp", "wgsl", "runtime-api", "WGPUDevice"),
+        ("host.cpp", "wgsl", "runtime-api", "WGPUShaderSourceWGSL"),
+        ("host.cpp", "wgsl", "runtime-api", "WGPUShaderModuleDescriptor"),
+        ("host.cpp", "wgsl", "runtime-api", "wgpuDeviceCreateShaderModule"),
+        ("host.cpp", "wgsl", "runtime-api", "wgpuDeviceCreateCommandEncoder"),
+        ("host.cpp", "wgsl", "runtime-api", "WGPURenderPassEncoder"),
+        ("host.cpp", "wgsl", "runtime-api", "wgpuCommandEncoderBeginRenderPass"),
+        ("host.cpp", "wgsl", "runtime-api", "wgpuRenderPassEncoderSetPipeline"),
+        ("host.cpp", "wgsl", "runtime-api", "wgpuRenderPassEncoderDraw"),
+        ("host.cpp", "wgsl", "runtime-api", "wgpu::ShaderSourceWGSL"),
+        ("host.cpp", "wgsl", "runtime-api", "wgpu::ShaderModuleDescriptor"),
+        ("host.cpp", "wgsl", "runtime-api", "CreateShaderModule"),
+        ("host.cpp", "wgsl", "runtime-api", "CreateCommandEncoder"),
+        ("host.cpp", "wgsl", "runtime-api", "BeginRenderPass"),
+        ("host.cpp", "wgsl", "runtime-api", "SetPipeline"),
+        ("host.cpp", "wgsl", "runtime-api", "Draw"),
+        ("host.cpp", "wgsl", "runtime-api", "End"),
+        ("host.cpp", "wgsl", "runtime-api", "Finish"),
+        ("host.cpp", "wgsl", "runtime-api", "Submit"),
+        ("package.json", "wgsl", "build-system", "wgsl-build-system"),
+        ("package.json", "wgsl", "build-system", "wgsl-build-system"),
     ]
 
 
@@ -8873,6 +10250,7 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
     assert set(artifact) == project_pipeline.REPORT_ARTIFACT_FIELDS - {
         "variant",
         "error",
+        "stage",
         "sourceRemap",
     }
     assert set(artifact["sourceHash"]) == project_pipeline.REPORT_HASH_FIELDS
@@ -10505,6 +11883,392 @@ def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch)
     ]
 
 
+def test_translate_project_directx_smoke_compiles_generated_artifact_with_dxc(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    artifact_path = (repo / "out" / "directx" / "simple.hlsl").resolve()
+    expected_command = [
+        "dxc",
+        "-T",
+        "vs_6_0",
+        "-E",
+        "VSMain",
+        str(artifact_path),
+        "-Fo",
+        project_pipeline.os.devnull,
+    ]
+    commands = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: "/usr/bin/dxc" if tool == "dxc" else None,
+    )
+
+    def run_toolchain(command, **kwargs):
+        commands.append((command, kwargs))
+        assert command == expected_command
+        assert kwargs["cwd"] == str(repo)
+        assert kwargs["input"] is None
+        assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+
+    assert len(commands) == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["validation"]["toolchains"] == [
+        {
+            "target": "directx",
+            "status": "available",
+            "tools": [
+                {
+                    "name": "dxc",
+                    "path": "/usr/bin/dxc",
+                    "available": True,
+                }
+            ],
+        }
+    ]
+    assert payload["validation"]["artifacts"][0]["path"] == "out/directx/simple.hlsl"
+    assert payload["validation"]["artifacts"][0]["status"] == "ok"
+    assert payload["validation"]["toolchainRuns"] == [
+        {
+            "source": "simple.cgl",
+            "sourceBackend": "cgl",
+            "target": "directx",
+            "path": "out/directx/simple.hlsl",
+            "command": expected_command,
+            "checkKind": "artifact",
+            "returncode": 0,
+            "status": "ok",
+            "stdout": "",
+            "stderr": "",
+        }
+    ]
+
+
+def test_translate_project_directx_smoke_compiles_all_graphics_entries_with_dxc(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "graphics.cgl").write_text(DIRECTX_GRAPHICS_CROSSL, encoding="utf-8")
+    artifact_path = (repo / "out" / "directx" / "graphics.hlsl").resolve()
+    expected_commands = [
+        [
+            "dxc",
+            "-T",
+            "vs_6_0",
+            "-E",
+            "VSMain",
+            str(artifact_path),
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+        [
+            "dxc",
+            "-T",
+            "ps_6_0",
+            "-E",
+            "PSMain",
+            str(artifact_path),
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+    ]
+    commands = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: "/usr/bin/dxc" if tool == "dxc" else None,
+    )
+
+    def run_toolchain(command, **kwargs):
+        commands.append((command, kwargs))
+        assert command in expected_commands
+        assert kwargs["cwd"] == str(repo)
+        assert kwargs["input"] is None
+        assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert [command for command, _kwargs in commands] == expected_commands
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["validation"]["artifacts"][0]["path"] == "out/directx/graphics.hlsl"
+    assert payload["validation"]["artifacts"][0]["status"] == "ok"
+    assert [
+        run["command"] for run in payload["validation"]["toolchainRuns"]
+    ] == expected_commands
+    assert all(
+        run["checkKind"] == "artifact"
+        and run["status"] == "ok"
+        and run["target"] == "directx"
+        and run["path"] == "out/directx/graphics.hlsl"
+        for run in payload["validation"]["toolchainRuns"]
+    )
+    assert validation["success"] is True
+
+
+def test_translate_project_webgl_smoke_validates_generated_artifact_with_glslang(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    expected_command = ["glslangValidator", "--stdin", "-S", "vert"]
+    commands = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/usr/bin/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
+
+    def run_toolchain(command, **kwargs):
+        commands.append((command, kwargs))
+        assert command == expected_command
+        assert kwargs["cwd"] == str(repo)
+        assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
+        assert "#version 300 es" in kwargs["input"]
+        assert "// Vertex Shader" in kwargs["input"]
+        return SimpleNamespace(returncode=0, stdout="validation ok", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    report = translate_project(
+        repo,
+        targets=["webgl"],
+        output_dir="out",
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+
+    assert len(commands) == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["validation"]["toolchains"] == [
+        {
+            "target": "webgl",
+            "status": "available",
+            "tools": [
+                {
+                    "name": "glslangValidator",
+                    "path": "/usr/bin/glslangValidator",
+                    "available": True,
+                }
+            ],
+        }
+    ]
+    assert payload["validation"]["artifacts"][0]["path"] == (
+        "out/webgl/simple.webgl.glsl"
+    )
+    assert payload["validation"]["artifacts"][0]["status"] == "ok"
+    assert payload["validation"]["toolchainRuns"] == [
+        {
+            "source": "simple.cgl",
+            "sourceBackend": "cgl",
+            "target": "webgl",
+            "path": "out/webgl/simple.webgl.glsl",
+            "command": expected_command,
+            "checkKind": "artifact",
+            "returncode": 0,
+            "status": "ok",
+            "stdout": "validation ok",
+            "stderr": "",
+        }
+    ]
+
+
+def test_translate_project_webgl_graphics_emits_runtime_stage_artifacts(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "graphics.cgl").write_text(DIRECTX_GRAPHICS_CROSSL, encoding="utf-8")
+    commands = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/usr/bin/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
+
+    def run_toolchain(command, **kwargs):
+        commands.append((command, kwargs))
+        assert kwargs["cwd"] == str(repo)
+        assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
+        assert "GL_VERTEX_SHADER" not in kwargs["input"]
+        assert "GL_FRAGMENT_SHADER" not in kwargs["input"]
+        if command[-1] == "vert":
+            assert "// Vertex Shader" in kwargs["input"]
+            assert "// Fragment Shader" not in kwargs["input"]
+        elif command[-1] == "frag":
+            assert "// Fragment Shader" in kwargs["input"]
+            assert "// Vertex Shader" not in kwargs["input"]
+        else:  # pragma: no cover - guarded by the exact command assertion below
+            raise AssertionError(command)
+        return SimpleNamespace(returncode=0, stdout="validation ok", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    report = translate_project(
+        repo,
+        targets=["webgl"],
+        output_dir="out",
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    artifact_paths = {
+        artifact["stage"]: artifact["path"] for artifact in payload["artifacts"]
+    }
+    assert artifact_paths == {
+        "vertex": "out/webgl/graphics.vert.webgl.glsl",
+        "fragment": "out/webgl/graphics.frag.webgl.glsl",
+    }
+    assert not (repo / "out" / "webgl" / "graphics.webgl.glsl").exists()
+    vertex_source = (repo / artifact_paths["vertex"]).read_text(encoding="utf-8")
+    fragment_source = (repo / artifact_paths["fragment"]).read_text(encoding="utf-8")
+    assert "// Vertex Shader" in vertex_source
+    assert "// Fragment Shader" not in vertex_source
+    assert "// Fragment Shader" in fragment_source
+    assert "// Vertex Shader" not in fragment_source
+    assert "GL_VERTEX_SHADER" not in vertex_source + fragment_source
+    assert "GL_FRAGMENT_SHADER" not in vertex_source + fragment_source
+    assert payload["artifactMatrix"]["expectedArtifactCount"] == 2
+    assert payload["artifactMatrix"]["emittedArtifactCount"] == 2
+    assert payload["artifactMatrix"]["missingArtifactCount"] == 0
+    assert payload["artifactMatrix"]["extraArtifactCount"] == 0
+    assert payload["artifactMatrix"]["complete"] is True
+    assert [command for command, _kwargs in commands] == [
+        ["glslangValidator", "--stdin", "-S", "vert"],
+        ["glslangValidator", "--stdin", "-S", "frag"],
+    ]
+    assert [
+        (run["stage"], run["path"], run["command"], run["status"])
+        for run in payload["validation"]["toolchainRuns"]
+    ] == [
+        (
+            "vertex",
+            "out/webgl/graphics.vert.webgl.glsl",
+            ["glslangValidator", "--stdin", "-S", "vert"],
+            "ok",
+        ),
+        (
+            "fragment",
+            "out/webgl/graphics.frag.webgl.glsl",
+            ["glslangValidator", "--stdin", "-S", "frag"],
+            "ok",
+        ),
+    ]
+    assert [
+        (artifact["stage"], artifact["path"], artifact["status"])
+        for artifact in payload["validation"]["artifacts"]
+    ] == [
+        ("vertex", "out/webgl/graphics.vert.webgl.glsl", "ok"),
+        ("fragment", "out/webgl/graphics.frag.webgl.glsl", "ok"),
+    ]
+    assert validation["success"] is True
+
+
+def test_translate_project_wgsl_smoke_validates_generated_artifact_with_naga(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    artifact_path = (repo / "out" / "wgsl" / "simple.wgsl").resolve()
+    expected_command = ["naga", "--input-kind", "wgsl", str(artifact_path)]
+    commands = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: "/usr/bin/naga" if tool == "naga" else None,
+    )
+
+    def run_toolchain(command, **kwargs):
+        commands.append((command, kwargs))
+        assert command == expected_command
+        assert kwargs["cwd"] == str(repo)
+        assert kwargs["input"] is None
+        assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
+        return SimpleNamespace(returncode=0, stdout="Validation successful", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    report = translate_project(
+        repo,
+        targets=["wgsl"],
+        output_dir="out",
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+
+    assert len(commands) == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["validation"]["toolchains"] == [
+        {
+            "target": "wgsl",
+            "status": "available",
+            "tools": [
+                {
+                    "name": "naga",
+                    "path": "/usr/bin/naga",
+                    "available": True,
+                }
+            ],
+        }
+    ]
+    assert payload["validation"]["artifacts"][0]["path"] == "out/wgsl/simple.wgsl"
+    assert payload["validation"]["artifacts"][0]["status"] == "ok"
+    assert payload["validation"]["toolchainRuns"] == [
+        {
+            "source": "simple.cgl",
+            "sourceBackend": "cgl",
+            "target": "wgsl",
+            "path": "out/wgsl/simple.wgsl",
+            "command": expected_command,
+            "checkKind": "artifact",
+            "returncode": 0,
+            "status": "ok",
+            "stdout": "Validation successful",
+            "stderr": "",
+        }
+    ]
+
+
 def test_translate_project_opengl_smoke_uses_source_stage_metadata(
     tmp_path, monkeypatch
 ):
@@ -10689,6 +12453,116 @@ def test_opengl_toolchain_smoke_command_prefers_opengl_source_stage(tmp_path):
     ) == (["glslangValidator", "--stdin", "-S", "comp"], "artifact")
 
 
+def test_webgl_toolchain_smoke_command_selects_glslang_stage_from_generated_markers(
+    tmp_path,
+):
+    vertex_shader = tmp_path / "vertex.webgl.glsl"
+    vertex_shader.write_text(
+        "#version 300 es\n// Vertex Shader\nvoid main() {}\n",
+        encoding="utf-8",
+    )
+    fragment_shader = tmp_path / "fragment.webgl.glsl"
+    fragment_shader.write_text(
+        "#version 300 es\n// Fragment Shader\nvoid main() {}\n",
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_command(
+        "webgl", ["glslangValidator"], vertex_shader
+    ) == (["glslangValidator", "--stdin", "-S", "vert"], "artifact")
+    assert project_pipeline._toolchain_smoke_command(
+        "webgl", ["glslangValidator"], fragment_shader
+    ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
+
+
+def test_webgl_toolchain_smoke_commands_validate_guarded_stages(tmp_path):
+    guarded_shader = tmp_path / "guarded.webgl.glsl"
+    guarded_shader.write_text(
+        "\n".join(
+            [
+                "#version 300 es",
+                "#ifdef GL_VERTEX_SHADER",
+                "void main() { gl_Position = vec4(0.0); }",
+                "#endif",
+                "#ifdef GL_FRAGMENT_SHADER",
+                "out vec4 fragColor;",
+                "void main() { fragColor = vec4(1.0); }",
+                "#endif",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_commands(
+        "webgl", ["glslangValidator"], guarded_shader
+    ) == [
+        (["glslangValidator", "--stdin", "-S", "vert"], "artifact"),
+        (["glslangValidator", "--stdin", "-S", "frag"], "artifact"),
+    ]
+
+
+def test_run_toolchain_smoke_filters_guarded_glsl_stage_sources(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    artifact_path = repo / "out" / "webgl" / "guarded.webgl.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(
+        "\n".join(
+            [
+                "#version 300 es",
+                "#ifdef GL_VERTEX_SHADER",
+                "void main() { gl_Position = vec4(0.0); }",
+                "#endif",
+                "#ifdef GL_FRAGMENT_SHADER",
+                "out vec4 fragColor;",
+                "void main() { fragColor = vec4(1.0); }",
+                "#endif",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    calls = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/usr/bin/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
+
+    def run_toolchain(command, **kwargs):
+        calls.append((command, kwargs["input"]))
+        return SimpleNamespace(returncode=0, stdout="validation ok", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    runs = project_pipeline._run_toolchain_smoke(
+        [
+            {
+                "source": "guarded.cgl",
+                "target": "webgl",
+                "path": "out/webgl/guarded.webgl.glsl",
+                "status": "translated",
+            }
+        ],
+        repo,
+    )
+
+    assert [call[0] for call in calls] == [
+        ["glslangValidator", "--stdin", "-S", "vert"],
+        ["glslangValidator", "--stdin", "-S", "frag"],
+    ]
+    assert "GL_VERTEX_SHADER" not in calls[0][1]
+    assert "GL_FRAGMENT_SHADER" not in calls[0][1]
+    assert "gl_Position = vec4(0.0);" in calls[0][1]
+    assert "fragColor = vec4(1.0);" not in calls[0][1]
+    assert "GL_VERTEX_SHADER" not in calls[1][1]
+    assert "GL_FRAGMENT_SHADER" not in calls[1][1]
+    assert "fragColor = vec4(1.0);" in calls[1][1]
+    assert "gl_Position = vec4(0.0);" not in calls[1][1]
+    assert [run["status"] for run in runs] == ["ok", "ok"]
+
+
 def test_vulkan_toolchain_smoke_command_selects_spirv_tool(tmp_path):
     assembly_shader = tmp_path / "shader.spvasm"
     assembly_shader.write_text("; SPIR-V\n", encoding="utf-8")
@@ -10704,6 +12578,112 @@ def test_vulkan_toolchain_smoke_command_selects_spirv_tool(tmp_path):
     assert project_pipeline._toolchain_smoke_command(
         "vulkan", ["spirv-val", "spirv-as"], binary_shader
     ) == (["spirv-val", str(binary_shader)], "artifact")
+
+
+def test_directx_toolchain_smoke_command_compiles_detected_entry(tmp_path):
+    shader = tmp_path / "shader.hlsl"
+    shader.write_text(
+        "float4 PSMain() : SV_Target { return 1.0.xxxx; }\n",
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_command("directx", ["dxc"], shader) == (
+        [
+            "dxc",
+            "-T",
+            "ps_6_0",
+            "-E",
+            "PSMain",
+            str(shader),
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+        "artifact",
+    )
+
+
+def test_directx_toolchain_smoke_commands_compile_all_detected_entries(tmp_path):
+    shader = tmp_path / "graphics.hlsl"
+    shader.write_text(
+        textwrap.dedent("""
+            float4 VSMain() : SV_Position { return 0.0.xxxx; }
+            float4 PSMain() : SV_Target { return 1.0.xxxx; }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_commands("directx", ["dxc"], shader) == [
+        (
+            [
+                "dxc",
+                "-T",
+                "vs_6_0",
+                "-E",
+                "VSMain",
+                str(shader),
+                "-Fo",
+                project_pipeline.os.devnull,
+            ],
+            "artifact",
+        ),
+        (
+            [
+                "dxc",
+                "-T",
+                "ps_6_0",
+                "-E",
+                "PSMain",
+                str(shader),
+                "-Fo",
+                project_pipeline.os.devnull,
+            ],
+            "artifact",
+        ),
+    ]
+
+
+def test_directx_toolchain_smoke_command_compiles_library_targets(tmp_path):
+    shader = tmp_path / "ray_library.hlsl"
+    shader.write_text(
+        '[shader("raygeneration")]\nvoid RayGenMain() {}\n',
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_command("directx", ["dxc"], shader) == (
+        ["dxc", "-T", "lib_6_3", str(shader), "-Fo", project_pipeline.os.devnull],
+        "artifact",
+    )
+
+
+def test_directx_toolchain_smoke_command_uses_vertex_default_for_unknown_entry(
+    tmp_path,
+):
+    shader = tmp_path / "shader.hlsl"
+    shader.write_text("void main() {}\n", encoding="utf-8")
+
+    assert project_pipeline._toolchain_smoke_command("directx", ["dxc"], shader) == (
+        [
+            "dxc",
+            "-T",
+            "vs_6_0",
+            "-E",
+            "VSMain",
+            str(shader),
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+        "artifact",
+    )
+
+
+def test_wgsl_toolchain_smoke_command_validates_artifact_with_naga(tmp_path):
+    shader = tmp_path / "shader.wgsl"
+    shader.write_text("@compute @workgroup_size(1) fn main() {}\n", encoding="utf-8")
+
+    assert project_pipeline._toolchain_smoke_command("wgsl", ["naga"], shader) == (
+        ["naga", "--input-kind", "wgsl", str(shader)],
+        "artifact",
+    )
 
 
 def test_validate_project_report_emits_closed_validation_report_schema(tmp_path):
@@ -13471,9 +15451,18 @@ def test_validate_project_report_rejects_toolchain_run_command_target_mismatch(
         (
             "directx",
             "out/directx/simple.hlsl",
-            ["dxc", "-help"],
-            "artifact",
+            [
+                "dxc",
+                "-T",
+                "vs_6_0",
+                "-E",
+                "VSMain",
+                "out/directx/simple.hlsl",
+                "-Fo",
+                project_pipeline.os.devnull,
+            ],
             "tool-availability",
+            "artifact",
         ),
     ),
 )
@@ -13605,7 +15594,7 @@ def test_validate_project_report_rejects_artifact_toolchain_run_argv_mismatch(
     ) in diagnostic["message"]
 
 
-def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatch(
+def test_validate_project_report_rejects_directx_artifact_toolchain_run_argv_mismatch(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -13639,8 +15628,17 @@ def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatc
                             "sourceBackend": "cgl",
                             "target": "directx",
                             "path": "out/directx/simple.hlsl",
-                            "command": ["dxc", "-T", "cs_6_0"],
-                            "checkKind": "tool-availability",
+                            "command": [
+                                "dxc",
+                                "-T",
+                                "cs_6_0",
+                                "-E",
+                                "CSMain",
+                                "out/directx/simple.hlsl",
+                                "-Fo",
+                                os.devnull,
+                            ],
+                            "checkKind": "artifact",
                             "returncode": 0,
                             "status": "ok",
                             "stdout": "",
@@ -13660,8 +15658,8 @@ def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatc
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "validation.toolchainRuns[0].command must match the configured tool "
-        "availability check for target directx"
+        "validation.toolchainRuns[0].command must match the configured "
+        "artifact check for target directx"
     ) in diagnostic["message"]
 
 
@@ -19196,7 +21194,6 @@ def test_inspect_project_report_omits_invalid_toolchain_run_commands(
     ("target", "extension", "tool", "command"),
     (
         ("cuda", "cu", "nvcc", ["nvcc", "--version"]),
-        ("directx", "hlsl", "dxc", ["dxc", "-help"]),
         ("hip", "hip", "hipcc", ["hipcc", "--version"]),
         ("metal", "metal", "xcrun", ["xcrun", "metal", "-v"]),
         ("mojo", "mojo", "mojo", ["mojo", "--version"]),
@@ -23723,6 +25720,16 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
     assert artifact["provenance"] == report_artifact["provenance"]
     assert artifact["sourceMap"]["kind"] == "crosstl-artifact-source-map"
     assert artifact["sourceRemap"]["path"] == "out/cgl/simple.source-remap.json"
+    assert artifact["hostInterface"] == {
+        "status": "ready",
+        "source": "source-artifact",
+        "parser": "cgl",
+        "entryPointCount": 1,
+        "resourceCount": 0,
+        "entryPoints": [{"name": "main", "stage": "vertex", "executionConfig": {}}],
+        "resources": [],
+        "diagnostics": [],
+    }
 
     assert set(payload["runtimePlan"]) == (
         project_pipeline.RUNTIME_ARTIFACT_MANIFEST_RUNTIME_PLAN_FIELDS
@@ -23899,6 +25906,16 @@ def test_build_runtime_package_from_runtime_artifact_manifest(tmp_path):
     assert artifact["sourcePath"] == "out/cgl/simple.cgl"
     assert artifact["packagePath"] == "artifacts/out/cgl/simple.cgl"
     assert artifact["hash"]["algorithm"] == "sha256"
+    assert artifact["hostInterface"] == {
+        "status": "ready",
+        "source": "source-artifact",
+        "parser": "cgl",
+        "entryPointCount": 1,
+        "resourceCount": 0,
+        "entryPoints": [{"name": "main", "stage": "vertex", "executionConfig": {}}],
+        "resources": [],
+        "diagnostics": [],
+    }
     assert (
         set(artifact["sourceRemap"])
         == project_pipeline.RUNTIME_PACKAGE_SOURCE_REMAP_FIELDS
@@ -24268,6 +26285,231 @@ def test_inspect_runtime_package_uses_registered_target_parser_for_host_interfac
         },
     ]
     assert host_interface["diagnostics"] == []
+
+
+def test_inspect_runtime_package_reflects_generated_wgsl_resource_bindings(tmp_path):
+    source = textwrap.dedent("""
+        shader ResourceShader {
+            cbuffer Camera {
+                mat4 viewProj;
+            }
+
+            sampler2D sourceTexture;
+            StructuredBuffer<float> values;
+            RWStructuredBuffer<float> outValues;
+
+            compute {
+                void main() {
+                }
+            }
+        }
+        """).strip()
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path,
+        source=source,
+        source_name="resource.cgl",
+        targets=("wgsl",),
+    )
+
+    payload = inspect_runtime_package(package_dir / "runtime-package.json")
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["source"] == "package-artifact"
+    assert host_interface["parser"] == "wgsl-reflection"
+    assert host_interface["entryPointCount"] == 1
+    assert host_interface["entryPoints"] == [
+        {"name": "compute_main", "stage": "compute", "executionConfig": {}}
+    ]
+    assert host_interface["resourceCount"] == 5
+    expected_resources = [
+        {
+            "name": "_Camera",
+            "kind": "uniform",
+            "type": "Camera",
+            "set": 0,
+            "binding": 0,
+            "access": "read",
+        },
+        {
+            "name": "sourceTexture",
+            "kind": "texture",
+            "type": "texture_2d<f32>",
+            "set": 0,
+            "binding": 1,
+            "access": None,
+        },
+        {
+            "name": "sourceTexture_sampler",
+            "kind": "sampler",
+            "type": "sampler",
+            "set": 0,
+            "binding": 2,
+            "access": None,
+        },
+        {
+            "name": "values",
+            "kind": "buffer",
+            "type": "array<f32>",
+            "set": 0,
+            "binding": 3,
+            "access": "read",
+        },
+        {
+            "name": "outValues",
+            "kind": "buffer",
+            "type": "array<f32>",
+            "set": 0,
+            "binding": 4,
+            "access": "read_write",
+        },
+    ]
+    assert host_interface["resources"] == expected_resources
+    assert host_interface["diagnostics"] == []
+
+    loader_manifest = build_runtime_loader_manifest(
+        package_dir / "runtime-package.json"
+    )
+    assert (
+        loader_manifest["loadUnits"][0]["hostInterface"]["resources"]
+        == expected_resources
+    )
+
+
+def test_inspect_runtime_package_reflects_explicit_wgsl_texture_sampler_group(
+    tmp_path,
+):
+    source = textwrap.dedent("""
+        shader ResourceShader {
+            layout(set = 2, binding = 4) uniform sampler2D sourceTexture;
+
+            fragment {
+                vec4 main() {
+                    return vec4(1.0);
+                }
+            }
+        }
+        """).strip()
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path,
+        source=source,
+        source_name="resource.cgl",
+        targets=("wgsl",),
+    )
+
+    payload = inspect_runtime_package(package_dir / "runtime-package.json")
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["source"] == "package-artifact"
+    assert host_interface["parser"] == "wgsl-reflection"
+    assert host_interface["resourceCount"] == 2
+    expected_resources = [
+        {
+            "name": "sourceTexture",
+            "kind": "texture",
+            "type": "texture_2d<f32>",
+            "set": 2,
+            "binding": 4,
+            "access": None,
+        },
+        {
+            "name": "sourceTexture_sampler",
+            "kind": "sampler",
+            "type": "sampler",
+            "set": 2,
+            "binding": 5,
+            "access": None,
+        },
+    ]
+    assert host_interface["resources"] == expected_resources
+    assert host_interface["diagnostics"] == []
+
+    loader_manifest = build_runtime_loader_manifest(
+        package_dir / "runtime-package.json"
+    )
+    assert (
+        loader_manifest["loadUnits"][0]["hostInterface"]["resources"]
+        == expected_resources
+    )
+
+
+def test_inspect_runtime_package_reports_symbolic_wgsl_resource_bindings(
+    tmp_path,
+):
+    source = textwrap.dedent("""
+        shader ResourceShader {
+            layout(set = BIND_GROUP, binding = COLOR_BINDING) uniform sampler2D sourceTexture;
+
+            fragment {
+                vec4 main() {
+                    return vec4(1.0);
+                }
+            }
+        }
+        """).strip()
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path,
+        source=source,
+        source_name="resource.cgl",
+        targets=("wgsl",),
+    )
+
+    payload = inspect_runtime_package(package_dir / "runtime-package.json")
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "unavailable"
+    assert host_interface["parser"] == "wgsl-reflection"
+    assert host_interface["resourceCount"] == 0
+    assert host_interface["resources"] == []
+    assert host_interface["diagnostics"] == [
+        project_pipeline.RUNTIME_WGSL_SYMBOLIC_RESOURCE_BINDING_DIAGNOSTIC
+    ]
+
+
+def test_inspect_runtime_package_flags_partially_reflected_symbolic_wgsl_bindings(
+    tmp_path,
+):
+    source = textwrap.dedent("""
+        shader ResourceShader {
+            cbuffer Camera {
+                mat4 viewProj;
+            }
+            layout(set = BIND_GROUP, binding = COLOR_BINDING) uniform sampler2D sourceTexture;
+
+            fragment {
+                vec4 main() {
+                    return vec4(1.0);
+                }
+            }
+        }
+        """).strip()
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path,
+        source=source,
+        source_name="resource.cgl",
+        targets=("wgsl",),
+    )
+
+    payload = inspect_runtime_package(package_dir / "runtime-package.json")
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "unavailable"
+    assert host_interface["parser"] == "wgsl-reflection"
+    assert host_interface["resourceCount"] == 1
+    assert host_interface["resources"] == [
+        {
+            "name": "_Camera",
+            "kind": "uniform",
+            "type": "Camera",
+            "set": 0,
+            "binding": 0,
+            "access": "read",
+        }
+    ]
+    assert host_interface["diagnostics"] == [
+        project_pipeline.RUNTIME_WGSL_SYMBOLIC_RESOURCE_BINDING_DIAGNOSTIC
+    ]
 
 
 def test_inspect_runtime_package_reports_entry_point_parameter_resources(tmp_path):
@@ -24962,6 +27204,218 @@ def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty(
     assert "host-interface-empty" in host_interface_action["message"]
 
 
+def test_plan_runtime_adapters_reports_webgpu_wgsl_adapter_metadata(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("wgsl",))
+
+    payload = plan_runtime_adapters(package_dir / "runtime-package.json")
+
+    assert payload["success"] is True
+    assert payload["targets"][0]["target"] == "wgsl"
+    assert payload["targets"][0]["adapterKind"] == "webgpu-wgsl-adapter"
+    assert payload["targets"][0]["requiredTools"] == ["naga"]
+    assert payload["targets"][0]["loaderResponsibilities"] == [
+        "Load the packaged WGSL artifact into the WebGPU shader-module creation path.",
+        "Bind WebGPU pipeline layouts, bind groups, and dispatch or draw state in host code.",
+    ]
+    adapter = payload["adapters"][0]
+    assert adapter["target"] == "wgsl"
+    assert adapter["adapterKind"] == "webgpu-wgsl-adapter"
+    assert adapter["artifactFormat"] == "WGSL source"
+    assert adapter["requiredTools"] == ["naga"]
+    assert adapter["packagePath"] == "artifacts/out/wgsl/simple.wgsl"
+    assert adapter["hostInterface"] == {
+        "status": "ready",
+        "source": "package-artifact",
+        "parser": "wgsl-reflection",
+        "entryPointCount": 1,
+        "resourceCount": 0,
+        "entryPoints": [
+            {"name": "vertex_main", "stage": "vertex", "executionConfig": {}}
+        ],
+        "resources": [],
+        "diagnostics": [],
+    }
+    assert [action["kind"] for action in payload["actions"]] == [
+        "wire-runtime-adapter",
+        "review-runtime-references",
+    ]
+
+
+def test_wgsl_runtime_metadata_uses_generated_stage_entry_names(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path,
+        source=DIRECTX_GRAPHICS_CROSSL,
+        source_name="graphics.cgl",
+        targets=("wgsl",),
+    )
+
+    adapter_plan = plan_runtime_adapters(package_dir / "runtime-package.json")
+    loader_manifest = build_runtime_loader_manifest(
+        package_dir / "runtime-package.json"
+    )
+
+    expected_entry_points = [
+        {"name": "vertex_main", "stage": "vertex", "executionConfig": {}},
+        {"name": "fragment_main", "stage": "fragment", "executionConfig": {}},
+    ]
+    assert (
+        adapter_plan["adapters"][0]["hostInterface"]["entryPoints"]
+        == expected_entry_points
+    )
+    assert (
+        loader_manifest["loadUnits"][0]["loadSteps"][0]["metadata"]["entryPoints"]
+        == expected_entry_points
+    )
+
+
+def test_plan_runtime_adapters_reports_webgl_adapter_validation_tool(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("webgl",))
+
+    payload = plan_runtime_adapters(package_dir / "runtime-package.json")
+    loader_manifest = build_runtime_loader_manifest(
+        package_dir / "runtime-package.json"
+    )
+
+    assert payload["success"] is True
+    assert payload["targets"][0]["target"] == "webgl"
+    assert payload["targets"][0]["adapterKind"] == "webgl-glsl-adapter"
+    assert payload["targets"][0]["requiredTools"] == ["glslangValidator"]
+    adapter = payload["adapters"][0]
+    assert adapter["target"] == "webgl"
+    assert adapter["adapterKind"] == "webgl-glsl-adapter"
+    assert adapter["artifactFormat"] == "GLSL ES source"
+    assert adapter["requiredTools"] == ["glslangValidator"]
+    assert adapter["packagePath"] == "artifacts/out/webgl/simple.webgl.glsl"
+    validate_step = loader_manifest["loadUnits"][0]["loadSteps"][-1]
+    assert validate_step["kind"] == "validate-target-toolchain"
+    assert validate_step["command"] == ["glslangValidator", "--stdin", "-S", "vert"]
+    assert validate_step["metadata"]["commandInput"] == {
+        "mode": "stdin",
+        "source": {
+            "field": "packagePath",
+            "path": "artifacts/out/webgl/simple.webgl.glsl",
+        },
+        "stage": "vert",
+    }
+
+
+def test_webgl_runtime_package_preserves_graphics_stage_artifacts(tmp_path):
+    _, package_dir, package = _build_runtime_package_fixture(
+        tmp_path,
+        source=DIRECTX_GRAPHICS_CROSSL,
+        source_name="graphics.cgl",
+        targets=("webgl",),
+    )
+
+    assert [
+        (artifact["stage"], artifact["packagePath"])
+        for artifact in package["artifacts"]
+    ] == [
+        ("vertex", "artifacts/out/webgl/graphics.vert.webgl.glsl"),
+        ("fragment", "artifacts/out/webgl/graphics.frag.webgl.glsl"),
+    ]
+
+    inspection = inspect_runtime_package(package_dir / "runtime-package.json")
+    adapter_plan = plan_runtime_adapters(package_dir / "runtime-package.json")
+    loader_manifest = build_runtime_loader_manifest(
+        package_dir / "runtime-package.json"
+    )
+
+    assert [
+        (
+            binding["stage"],
+            binding["hostInterface"]["status"],
+            binding["hostInterface"]["parser"],
+            binding["hostInterface"]["entryPoints"],
+        )
+        for binding in inspection["bindings"]
+    ] == [
+        (
+            "vertex",
+            "ready",
+            "opengl",
+            [{"name": "main", "stage": "vertex", "executionConfig": {}}],
+        ),
+        (
+            "fragment",
+            "ready",
+            "opengl",
+            [{"name": "main", "stage": "fragment", "executionConfig": {}}],
+        ),
+    ]
+    assert [
+        (adapter["stage"], adapter["packagePath"])
+        for adapter in adapter_plan["adapters"]
+    ] == [
+        ("vertex", "artifacts/out/webgl/graphics.vert.webgl.glsl"),
+        ("fragment", "artifacts/out/webgl/graphics.frag.webgl.glsl"),
+    ]
+    assert adapter_plan["summary"]["adapterCount"] == 2
+    assert adapter_plan["targets"][0]["packagePaths"] == [
+        "artifacts/out/webgl/graphics.vert.webgl.glsl",
+        "artifacts/out/webgl/graphics.frag.webgl.glsl",
+    ]
+    assert "resolve-host-interface-metadata" not in {
+        action["kind"] for action in adapter_plan["actions"]
+    }
+    assert [
+        (load_unit["stage"], load_unit["packagePath"])
+        for load_unit in loader_manifest["loadUnits"]
+    ] == [
+        ("vertex", "artifacts/out/webgl/graphics.vert.webgl.glsl"),
+        ("fragment", "artifacts/out/webgl/graphics.frag.webgl.glsl"),
+    ]
+    assert [
+        load_unit["loadSteps"][-1]["command"]
+        for load_unit in loader_manifest["loadUnits"]
+    ] == [
+        ["glslangValidator", "--stdin", "-S", "vert"],
+        ["glslangValidator", "--stdin", "-S", "frag"],
+    ]
+    load_metadata = [
+        load_unit["loadSteps"][0]["metadata"]
+        for load_unit in loader_manifest["loadUnits"]
+    ]
+    assert [metadata["shaderType"] for metadata in load_metadata] == [
+        "VERTEX_SHADER",
+        "FRAGMENT_SHADER",
+    ]
+    assert [metadata["apiCalls"] for metadata in load_metadata] == [
+        [
+            "WebGLRenderingContext.createShader",
+            "WebGLRenderingContext.shaderSource",
+            "WebGLRenderingContext.compileShader",
+        ],
+        [
+            "WebGLRenderingContext.createShader",
+            "WebGLRenderingContext.shaderSource",
+            "WebGLRenderingContext.compileShader",
+        ],
+    ]
+    vertex_group = load_metadata[0]["programGroup"]
+    fragment_group = load_metadata[1]["programGroup"]
+    assert vertex_group["id"] == fragment_group["id"]
+    assert vertex_group["apiCalls"] == [
+        "WebGLRenderingContext.attachShader",
+        "WebGLRenderingContext.linkProgram",
+    ]
+    assert vertex_group["stages"] == [
+        {
+            "stage": "vertex",
+            "packagePath": "artifacts/out/webgl/graphics.vert.webgl.glsl",
+            "shaderType": "VERTEX_SHADER",
+        },
+        {
+            "stage": "fragment",
+            "packagePath": "artifacts/out/webgl/graphics.frag.webgl.glsl",
+            "shaderType": "FRAGMENT_SHADER",
+        },
+    ]
+    assert loader_manifest["summary"]["loadUnitCount"] == 2
+    assert loader_manifest["summary"]["readyLoadUnitCount"] == 2
+    assert loader_manifest["summary"]["blockedLoadUnitCount"] == 0
+
+
 def test_plan_runtime_adapters_rejects_failed_package(tmp_path):
     package_path = tmp_path / "runtime-package.json"
     package_path.write_text(
@@ -25141,6 +27595,26 @@ def test_build_runtime_loader_manifest_from_runtime_package(tmp_path):
         "load-source-remap",
         "bind-host-interface",
     ]
+    assert [step["command"] for step in load_unit["loadSteps"]] == [
+        None,
+        None,
+        None,
+    ]
+    assert [step["metadata"] for step in load_unit["loadSteps"]] == [
+        {},
+        {
+            "source": {
+                "field": "sourceRemap.packagePath",
+                "path": "source-remaps/out/cgl/simple.source-remap.json",
+            }
+        },
+        {
+            "hostInterface": {
+                "entryPointCount": 1,
+                "resourceCount": 0,
+            }
+        },
+    ]
     for load_step in load_unit["loadSteps"]:
         assert (
             set(load_step) == project_pipeline.RUNTIME_LOADER_MANIFEST_LOAD_STEP_FIELDS
@@ -25187,10 +27661,138 @@ def test_runtime_loader_manifest_reports_blocked_host_interface_metadata(tmp_pat
         "load-package-artifact",
         "validate-target-toolchain",
     ]
+    assert load_unit["loadSteps"][1]["command"] == [
+        "spirv-as",
+        "artifacts/out/vulkan/simple.spvasm",
+        "-o",
+        project_pipeline.os.devnull,
+    ]
     assert len(load_unit["blockers"]) == 1
     assert load_unit["blockers"][0]["kind"] == "resolve-host-interface-metadata"
     assert load_unit["blockers"][0]["severity"] == "warning"
     assert "host-interface-empty" in load_unit["blockers"][0]["message"]
+
+
+def test_runtime_loader_manifest_reports_wgsl_validation_command(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("wgsl",))
+
+    payload = build_runtime_loader_manifest(package_dir / "runtime-package.json")
+
+    load_unit = payload["loadUnits"][0]
+    validate_step = load_unit["loadSteps"][-1]
+    assert load_unit["target"] == "wgsl"
+    assert load_unit["hostInterface"]["status"] == "ready"
+    assert [step["kind"] for step in load_unit["loadSteps"]] == [
+        "load-package-artifact",
+        "bind-host-interface",
+        "validate-target-toolchain",
+    ]
+    assert load_unit["loadSteps"][0]["metadata"] == {
+        "runtime": "webgpu",
+        "apiCalls": ["GPUDevice.createShaderModule"],
+        "source": {
+            "field": "packagePath",
+            "path": "artifacts/out/wgsl/simple.wgsl",
+        },
+        "shaderModuleDescriptor": {
+            "code": {
+                "field": "packagePath",
+                "path": "artifacts/out/wgsl/simple.wgsl",
+            }
+        },
+        "entryPoints": [
+            {"name": "vertex_main", "stage": "vertex", "executionConfig": {}},
+        ],
+    }
+    assert validate_step["kind"] == "validate-target-toolchain"
+    assert validate_step["tools"] == ["naga"]
+    assert validate_step["command"] == [
+        "naga",
+        "--input-kind",
+        "wgsl",
+        "artifacts/out/wgsl/simple.wgsl",
+    ]
+    assert validate_step["metadata"]["commandInput"] == {
+        "mode": "path",
+        "source": {
+            "field": "packagePath",
+            "path": "artifacts/out/wgsl/simple.wgsl",
+        },
+        "language": "wgsl",
+    }
+
+
+def test_runtime_loader_manifest_reports_directx_dxc_entry_profile_metadata(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path,
+        source=DIRECTX_GRAPHICS_CROSSL,
+        source_name="graphics.cgl",
+        targets=("directx",),
+    )
+
+    payload = build_runtime_loader_manifest(package_dir / "runtime-package.json")
+    load_unit = payload["loadUnits"][0]
+    load_step = load_unit["loadSteps"][0]
+    validate_step = load_unit["loadSteps"][-1]
+    expected_path = "artifacts/out/directx/graphics.hlsl"
+    expected_entry_profiles = [
+        {"entry": "VSMain", "profile": "vs_6_0"},
+        {"entry": "PSMain", "profile": "ps_6_0"},
+    ]
+    expected_commands = [
+        [
+            "dxc",
+            "-T",
+            "vs_6_0",
+            "-E",
+            "VSMain",
+            expected_path,
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+        [
+            "dxc",
+            "-T",
+            "ps_6_0",
+            "-E",
+            "PSMain",
+            expected_path,
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+    ]
+
+    assert load_unit["target"] == "directx"
+    assert load_unit["adapterKind"] == "directx-hlsl-adapter"
+    assert load_unit["artifactFormat"] == "HLSL source"
+    assert load_unit["packagePath"] == expected_path
+    assert load_unit["requiredTools"] == ["dxc"]
+    assert [step["kind"] for step in load_unit["loadSteps"]] == [
+        "load-package-artifact",
+        "bind-host-interface",
+        "validate-target-toolchain",
+    ]
+    assert load_step["metadata"] == {
+        "runtime": "directx",
+        "artifactFormat": "HLSL source",
+        "compiler": "dxc",
+        "targetProfiles": ["directx-11", "directx-12"],
+        "source": {"field": "packagePath", "path": expected_path},
+        "entryProfiles": expected_entry_profiles,
+    }
+    assert validate_step["kind"] == "validate-target-toolchain"
+    assert validate_step["tools"] == ["dxc"]
+    assert validate_step["command"] == expected_commands[0]
+    assert validate_step["metadata"]["commandInput"] == {
+        "mode": "path",
+        "source": {"field": "packagePath", "path": expected_path},
+        "language": "hlsl",
+        "compiler": "dxc",
+        "entryProfiles": expected_entry_profiles,
+        "commands": expected_commands,
+        "entryPoint": "VSMain",
+        "shaderModel": "vs_6_0",
+    }
 
 
 def test_project_cli_runtime_loader_manifest_text_outputs_load_units(tmp_path):
@@ -25333,7 +27935,38 @@ def test_build_runtime_host_loader_scaffolds_from_loader_manifest(tmp_path):
     )
     assert unit_payload["kind"] == "crosstl-runtime-host-loader-unit"
     assert unit_payload["packagePath"] == "artifacts/out/cgl/simple.cgl"
+    assert unit_payload["loadSteps"] == scaffold["loadSteps"]
     assert "does not rewrite host application code" in guide.read_text(encoding="utf-8")
+
+
+def test_runtime_host_loader_scaffolds_preserve_loader_step_metadata(tmp_path):
+    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("wgsl",))
+    loader_manifest_path = package_dir / "runtime-loader-manifest.json"
+    loader_manifest_path.write_text(
+        json.dumps(
+            build_runtime_loader_manifest(package_dir / "runtime-package.json"),
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    scaffold_dir = repo / "host-loader-scaffolds"
+
+    payload = build_runtime_host_loader_scaffolds(
+        loader_manifest_path,
+        scaffold_dir,
+    )
+
+    scaffold = payload["scaffolds"][0]
+    unit_payload = json.loads(
+        (scaffold_dir / scaffold["outputPath"]).read_text(encoding="utf-8")
+    )
+    load_metadata = unit_payload["loadSteps"][0]["metadata"]
+    assert load_metadata["runtime"] == "webgpu"
+    assert load_metadata["apiCalls"] == ["GPUDevice.createShaderModule"]
+    assert load_metadata["shaderModuleDescriptor"]["code"] == {
+        "field": "packagePath",
+        "path": "artifacts/out/wgsl/simple.wgsl",
+    }
 
 
 def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files(

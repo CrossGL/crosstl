@@ -25,6 +25,8 @@ BACKENDS = {
     "metal": ".metal",
     "directx": ".hlsl",
     "opengl": ".glsl",
+    "webgl": ".webgl.glsl",
+    "wgsl": ".wgsl",
     "vulkan": ".spvasm",
     "rust": ".rs",
     "mojo": ".mojo",
@@ -45,6 +47,8 @@ BACKEND_COMPATIBILITY = {
         "metal",
         "directx",
         "opengl",
+        "webgl",
+        "wgsl",
         "vulkan",
         "rust",
         "mojo",
@@ -56,6 +60,8 @@ BACKEND_COMPATIBILITY = {
         "metal",
         "directx",
         "opengl",
+        "webgl",
+        "wgsl",
         "vulkan",
         "rust",
         "mojo",
@@ -63,17 +69,28 @@ BACKEND_COMPATIBILITY = {
         "hip",
         "slang",
     ],
-    "compute": ["metal", "directx", "opengl", "vulkan", "cuda", "hip"],
+    "compute": [
+        "metal",
+        "directx",
+        "opengl",
+        "webgl",
+        "wgsl",
+        "vulkan",
+        "cuda",
+        "hip",
+    ],
     "cross_platform": [
         "metal",
         "directx",
         "opengl",
+        "webgl",
+        "wgsl",
         "vulkan",
         "rust",
         "mojo",
         "slang",
     ],
-    "gpu_computing": ["cuda", "hip", "mojo", "rust"],
+    "gpu_computing": ["cuda", "hip", "mojo", "rust", "webgl", "wgsl"],
 }
 EXAMPLE_BACKEND_SKIPS = {
     (
@@ -114,6 +131,43 @@ EXAMPLE_BACKEND_SKIPS = {
     ): (
         "Slang codegen intentionally rejects generic functions until the backend "
         "has monomorphization support."
+    ),
+    (
+        "advanced",
+        "GenericPatternMatching",
+        "wgsl",
+    ): (
+        "WGSL codegen intentionally rejects generic structs until the backend has layout support."
+    ),
+    (
+        "compute",
+        "ParticleSimulation",
+        "webgl",
+    ): (
+        "WebGL codegen intentionally rejects compute stages; use WebGPU/WGSL for compute."
+    ),
+    (
+        "cross_platform",
+        "UniversalPBRShader",
+        "wgsl",
+    ): (
+        "WGSL codegen intentionally rejects unsplit combined sampler2D resources "
+        "until texture/sampler binding splitting is available for this example."
+    ),
+    (
+        "gpu_computing",
+        "MatrixMultiplication",
+        "webgl",
+    ): (
+        "WebGL codegen intentionally rejects compute stages; use WebGPU/WGSL for compute."
+    ),
+    (
+        "graphics",
+        "ComplexShader",
+        "wgsl",
+    ): (
+        "WGSL codegen intentionally rejects image2D resources until storage texture "
+        "binding lowering is available for this example."
     ),
 }
 
@@ -334,7 +388,7 @@ def test_cross_backend_consistency():
             "total": 0,
         }
 
-    consistency_backends = ["metal", "directx", "opengl", "vulkan"]
+    consistency_backends = ["metal", "directx", "opengl", "webgl", "wgsl", "vulkan"]
     outputs = {}
 
     for backend in consistency_backends:

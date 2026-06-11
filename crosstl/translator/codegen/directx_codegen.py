@@ -344,6 +344,11 @@ class HLSLCodeGen:
         "write_sampler_feedback": "WriteSamplerFeedback",
         "write_sampler_feedback_bias": "WriteSamplerFeedbackBias",
     }
+    HLSL_INTERPOLATION_INTRINSICS = {
+        "interpolateAtSample": "EvaluateAttributeAtSample",
+        "interpolateAtOffset": "EvaluateAttributeSnapped",
+        "interpolateAtCentroid": "EvaluateAttributeCentroid",
+    }
     HLSL_SYNCHRONIZATION_INTRINSICS = {
         "barrier": "GroupMemoryBarrierWithGroupSync",
         "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
@@ -548,8 +553,9 @@ class HLSLCodeGen:
         "nonuniformEXT",
     }
 
-    def __init__(self):
+    def __init__(self, target_profile=None):
         """Initialize DirectX type maps and per-generation resource state."""
+        self.target_profile = self.normalize_directx_target_profile(target_profile)
         self.texture_variables = set()
         self.sampler_variables = set()
         self.global_mixed_sampler_names = set()
@@ -581,6 +587,7 @@ class HLSLCodeGen:
         self.function_return_types = {}
         self.function_image_access_requirements = {}
         self.hlsl_pixel_only_feedback_function_names = {}
+        self.hlsl_interpolation_function_names = {}
         self.hlsl_synchronization_function_names = {}
         self.hlsl_derivative_function_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
@@ -940,6 +947,31 @@ class HLSLCodeGen:
             "shader_record": "shader_record",
         }
 
+    def normalize_directx_target_profile(self, target_profile):
+        if target_profile is None:
+            return None
+
+        normalized = str(target_profile).strip().lower().replace("_", "-")
+        aliases = {
+            "dx-11": "dx11",
+            "d3d-11": "dx11",
+            "d3d11": "dx11",
+            "direct3d-11": "dx11",
+            "directx-11": "dx11",
+            "dx-12": "dx12",
+            "d3d-12": "dx12",
+            "d3d12": "dx12",
+            "direct3d-12": "dx12",
+            "directx-12": "dx12",
+        }
+        normalized = aliases.get(normalized, normalized)
+        if normalized not in {"dx11", "dx12"}:
+            raise ValueError(
+                "DirectX target profile must be one of: dx11, dx12, "
+                "directx-11, directx-12"
+            )
+        return normalized
+
     def generate(self, ast):
         """Generate complete HLSL source for a CrossGL AST."""
         return self.generate_program(ast)
@@ -979,6 +1011,7 @@ class HLSLCodeGen:
         self.hlsl_function_name_aliases = {}
         self.function_image_access_requirements = {}
         self.hlsl_pixel_only_feedback_function_names = {}
+        self.hlsl_interpolation_function_names = {}
         self.hlsl_synchronization_function_names = {}
         self.hlsl_derivative_function_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
@@ -1242,6 +1275,9 @@ class HLSLCodeGen:
         )
         self.hlsl_pixel_only_feedback_function_names = (
             self.collect_hlsl_pixel_only_feedback_function_names(functions)
+        )
+        self.hlsl_interpolation_function_names = (
+            self.collect_hlsl_interpolation_function_names(functions)
         )
         self.hlsl_synchronization_function_names = (
             self.collect_hlsl_synchronization_function_names(functions)
@@ -3595,6 +3631,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 func, effective_shader_type, return_semantic
             )
             self.validate_hlsl_feedback_texture_stage_calls(func, effective_shader_type)
+            self.validate_hlsl_interpolation_stage_calls(func, effective_shader_type)
             self.validate_hlsl_synchronization_stage_calls(func, effective_shader_type)
             self.validate_hlsl_derivative_stage_calls(func, effective_shader_type)
         waveops_helper_lanes_attribute = (
@@ -5830,20 +5867,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return f"{intrinsic}({args_str})"
 
     def interpolation_intrinsic_name(self, func_name):
-        return {
-            "interpolateAtSample": "EvaluateAttributeAtSample",
-            "interpolateAtOffset": "EvaluateAttributeSnapped",
-            "interpolateAtCentroid": "EvaluateAttributeCentroid",
-        }.get(func_name)
+        return self.HLSL_INTERPOLATION_INTRINSICS.get(func_name)
 
     def generate_wave_op_expression(self, expr):
         operation = getattr(expr, "operation", "")
         return self.generate_hlsl_wave_intrinsic_call(operation, expr.arguments)
 
+    def validate_directx_wave_intrinsic_profile(self, operation):
+        if self.target_profile != "dx11":
+            return
+
+        raise ValueError(
+            f"DirectX profile dx11 does not support wave intrinsic '{operation}'; "
+            "wave intrinsics require DirectX 12 / Shader Model 6.0"
+        )
+
     def generate_hlsl_wave_intrinsic_call(self, operation, args):
         expected_args = self.HLSL_WAVE_INTRINSIC_ARITIES.get(operation)
         if expected_args is None:
             raise ValueError(f"DirectX wave intrinsic '{operation}' is not recognized")
+        self.validate_directx_wave_intrinsic_profile(operation)
 
         actual_args = len(args)
         if actual_args != expected_args:
@@ -19456,6 +19499,86 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "RasterizerOrderedStructuredBuffer",
             "RasterizerOrderedByteAddressBuffer",
         }
+
+    def is_hlsl_interpolation_builtin_call_name(self, callee, shadowed_names=None):
+        if callee not in self.HLSL_INTERPOLATION_INTRINSICS:
+            return False
+        if shadowed_names is None:
+            shadowed_names = getattr(self, "function_return_types", {})
+        return callee not in shadowed_names
+
+    def collect_hlsl_interpolation_function_names(self, functions):
+        named_functions = {
+            func.name: func
+            for func in functions or []
+            if getattr(func, "name", None) is not None
+        }
+        requirements = {}
+        calls_by_function = {}
+
+        for func_name, func in named_functions.items():
+            callees = set()
+            for node in self.walk_ast(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                callee = self.function_call_name(node)
+                if self.is_hlsl_interpolation_builtin_call_name(
+                    callee, named_functions
+                ):
+                    requirements[func_name] = callee
+                elif callee in named_functions:
+                    callees.add(callee)
+            if callees:
+                calls_by_function[func_name] = callees
+
+        changed = True
+        while changed:
+            changed = False
+            for func_name, callees in calls_by_function.items():
+                if func_name in requirements:
+                    continue
+                for callee in callees:
+                    required_builtin = requirements.get(callee)
+                    if required_builtin is not None:
+                        requirements[func_name] = required_builtin
+                        changed = True
+                        break
+
+        return requirements
+
+    def hlsl_interpolation_calls(self, func):
+        calls = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            callee = self.function_call_name(node)
+            if self.is_hlsl_interpolation_builtin_call_name(callee):
+                calls.append((callee, callee))
+            elif callee in self.hlsl_interpolation_function_names:
+                calls.append((callee, self.hlsl_interpolation_function_names[callee]))
+        return calls
+
+    def validate_hlsl_interpolation_stage_calls(self, func, shader_type):
+        if shader_type in {None, "fragment"}:
+            return
+
+        calls = self.hlsl_interpolation_calls(func)
+        if not calls:
+            return
+
+        callee, builtin_name = calls[0]
+        intrinsic = self.HLSL_INTERPOLATION_INTRINSICS[builtin_name]
+        if callee == builtin_name:
+            detail = (
+                f"'{builtin_name}' lowers to {intrinsic}, which is only valid "
+                "in fragment/pixel stages"
+            )
+        else:
+            detail = (
+                f"'{callee}' reaches '{builtin_name}', which lowers to "
+                f"{intrinsic} and is only valid in fragment/pixel stages"
+            )
+        raise ValueError(f"DirectX {shader_type} stage cannot call {callee}; {detail}")
 
     def is_hlsl_derivative_builtin_call_name(self, callee, shadowed_names=None):
         if callee not in self.HLSL_DERIVATIVE_INTRINSICS:
