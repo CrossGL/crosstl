@@ -32764,6 +32764,54 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     assert_spirv_asm_validates_if_available(spirv_output, tmp_path)
 
 
+def test_translate_project_vulkan_compute_bool_parameter_uses_uint_interface(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "flip.cgl").write_text(
+        textwrap.dedent("""
+            shader FlipParam {
+                compute {
+                    void main(bool flip) {
+                        if (flip) {
+                        }
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("vulkan", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    bool_type = re.search(r"(%\d+) = OpTypeBool\b", output)
+    uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", output)
+    assert bool_type is not None
+    assert uint_type is not None
+    assert re.search(
+        rf"OpTypePointer Input {re.escape(uint_type.group(1))}\b", output
+    )
+    assert not re.search(
+        rf"OpTypePointer Input {re.escape(bool_type.group(1))}\b", output
+    )
+    assert re.search(
+        rf"%\d+ = OpINotEqual {re.escape(bool_type.group(1))} %\d+ %\d+",
+        output,
+    )
+    assert_spirv_asm_validates_if_available(output, tmp_path)
+
+
 def test_translate_project_rust_gpu_graphics_entry_io_lowers_for_targets(
     tmp_path,
 ):
