@@ -7,6 +7,7 @@ import bisect
 import fnmatch
 import hashlib
 import json
+import math
 import operator
 import os
 import re
@@ -4740,14 +4741,11 @@ def _external_corpus_manifest_entry_duplicate_reasons(
     entry: Mapping[str, Any],
     *,
     seen_ids: Mapping[str, int],
-    seen_paths: Mapping[str, int],
 ) -> list[str]:
-    entry_id, path = _external_corpus_manifest_entry_identity(entry)
+    entry_id, _path = _external_corpus_manifest_entry_identity(entry)
     reasons = []
     if entry_id is not None and entry_id in seen_ids:
         reasons.append(f"id duplicates entry {seen_ids[entry_id] + 1}")
-    if path is not None and path in seen_paths:
-        reasons.append(f"path duplicates entry {seen_paths[path] + 1}")
     return reasons
 
 
@@ -4756,22 +4754,18 @@ def _valid_external_corpus_manifest_entries(
 ) -> list[tuple[int, Mapping[str, Any]]]:
     entries = []
     seen_ids: dict[str, int] = {}
-    seen_paths: dict[str, int] = {}
     for index, entry in enumerate(manifest.get("entries", [])):
         if _external_corpus_manifest_entry_reasons(entry):
             continue
         duplicate_reasons = _external_corpus_manifest_entry_duplicate_reasons(
             entry,
             seen_ids=seen_ids,
-            seen_paths=seen_paths,
         )
         if duplicate_reasons:
             continue
-        entry_id, path = _external_corpus_manifest_entry_identity(entry)
+        entry_id, _path = _external_corpus_manifest_entry_identity(entry)
         if entry_id is not None:
             seen_ids[entry_id] = index
-        if path is not None:
-            seen_paths[path] = index
         entries.append((index, entry))
     return entries
 
@@ -4898,6 +4892,7 @@ def _external_corpus_report(
     manifest_entry_count = len(manifest.get("entries", []))
 
     entries = []
+    emitted_entry_ids: set[str] = set()
     for index, raw_entry in valid_manifest_entries:
         path = str(raw_entry.get("path", "")).replace("\\", "/")
         entry_targets = _manifest_entry_targets(raw_entry, targets)
@@ -4921,8 +4916,12 @@ def _external_corpus_report(
             and entry_path.exists()
         )
         discovered = unit is not None
+        entry_id = str(raw_entry.get("id") or path or f"entry-{index + 1}")
+        if entry_id in emitted_entry_ids:
+            entry_id = f"{entry_id}#entry-{index + 1}"
+        emitted_entry_ids.add(entry_id)
         entry_payload = {
-            "id": str(raw_entry.get("id") or path or f"entry-{index + 1}"),
+            "id": entry_id,
             "path": path,
             "sourceBackend": source_backend,
             "targets": entry_targets,
@@ -6754,6 +6753,32 @@ class SourceLocation:
         }
 
 
+def _diagnostic_detail_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if isinstance(value, Mapping):
+        return {
+            str(key): _diagnostic_detail_value(item)
+            for key, item in value.items()
+            if isinstance(key, str) and key.strip()
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_diagnostic_detail_value(item) for item in value]
+    return str(value)
+
+
+def _diagnostic_details_payload(details: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        str(key): _diagnostic_detail_value(value)
+        for key, value in details.items()
+        if isinstance(key, str) and key.strip() and value is not None
+    }
+
+
 @dataclass(frozen=True)
 class ProjectDiagnostic:
     """Structured project diagnostic compatible with compiler diagnostics."""
@@ -6768,7 +6793,7 @@ class ProjectDiagnostic:
     check_kind: str | None = None
     missing_capabilities: Sequence[str] = ()
     original_location: SourceLocation | None = None
-    details: Mapping[str, Any] | None = None
+    details: Mapping[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         payload = {
@@ -6790,7 +6815,7 @@ class ProjectDiagnostic:
         if self.missing_capabilities:
             payload["missingCapabilities"] = list(self.missing_capabilities)
         if self.details:
-            payload["details"] = dict(self.details)
+            payload["details"] = _diagnostic_details_payload(self.details)
         return payload
 
 
@@ -6890,21 +6915,17 @@ def _external_corpus_entry_diagnostics(
     diagnostics: list[ProjectDiagnostic] = []
     location = _config_location(config)
     seen_ids: dict[str, int] = {}
-    seen_paths: dict[str, int] = {}
     for index, entry in enumerate(manifest.get("entries", [])):
         reasons = _external_corpus_manifest_entry_reasons(entry)
         if not reasons and isinstance(entry, Mapping):
             reasons = _external_corpus_manifest_entry_duplicate_reasons(
                 entry,
                 seen_ids=seen_ids,
-                seen_paths=seen_paths,
             )
         if not reasons:
-            entry_id, path = _external_corpus_manifest_entry_identity(entry)
+            entry_id, _path = _external_corpus_manifest_entry_identity(entry)
             if entry_id is not None:
                 seen_ids[entry_id] = index
-            if path is not None:
-                seen_paths[path] = index
             continue
         diagnostics.append(
             ProjectDiagnostic(
@@ -9527,6 +9548,7 @@ class _MetalTemplateMaterializationWorkBudget:
             limit=self.limit,
             limit_source=self.limit_source,
             unique_specialization_count=self.used,
+            required_work_items=self.used,
             requested_signature=requested_signature,
             suggested_action=suggested_action,
             source_location=location,
@@ -10471,6 +10493,7 @@ def _raise_metal_type_identifier_rewrite_error(
         limit=pass_limit,
         limit_source=limit_source,
         unique_specialization_count=pass_count,
+        required_work_items=pass_count,
         requested_signature=(
             f"{pass_name}: {pass_count} type identifier rewrite passes for "
             f"'{original_text}'"
@@ -12064,8 +12087,67 @@ def _template_materialization_unsupported_message(
             )
     return (
         f"Template-hostile target '{target}' requires concrete template arguments "
-        f"before translating '{unit.relative_path}': " + "; ".join(details)
+        f"before translating '{unit.relative_path}': "
+        + "; ".join(details)
+        + ". Suggested action: "
+        + _template_materialization_suggested_remediation(target)
+        + "."
     )
+
+
+def _template_materialization_suggested_remediation(target: str) -> str:
+    return (
+        "add a concrete Metal template instantiation, supply explicit template "
+        "arguments, or configure project.source_options.metal.template_variants "
+        f"for the {target} target"
+    )
+
+
+def _template_materialization_unsupported_details(
+    target: str,
+    unit: ProjectTranslationUnit,
+    unsupported: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    missing_parameters: list[str] = []
+    declarations: list[dict[str, Any]] = []
+    for record in unsupported:
+        missing = [
+            str(parameter)
+            for parameter in record.get("missingParameters", [])
+            if str(parameter)
+        ]
+        for parameter in missing:
+            if parameter not in missing_parameters:
+                missing_parameters.append(parameter)
+
+        declaration = record.get("sourceDeclaration")
+        declaration_payload: dict[str, Any] = {
+            "name": str(record.get("name") or "<unknown>"),
+            "missingTemplateParameters": missing,
+            "requiredSignature": str(record.get("requiredSignature") or ""),
+            "reason": str(record.get("reason") or "missing-template-arguments"),
+            "targetBackend": target,
+        }
+        if isinstance(declaration, Mapping):
+            file_name = declaration.get("file")
+            line = declaration.get("line")
+            column = declaration.get("column")
+            if isinstance(file_name, str) and file_name:
+                location: dict[str, Any] = {"file": file_name}
+                if isinstance(line, int):
+                    location["line"] = line
+                if isinstance(column, int):
+                    location["column"] = column
+                declaration_payload["declarationLocation"] = location
+        declarations.append(declaration_payload)
+
+    return {
+        "sourcePath": unit.relative_path,
+        "targetBackend": target,
+        "missingTemplateParameters": missing_parameters,
+        "sourceDeclarations": declarations,
+        "suggestedRemediation": _template_materialization_suggested_remediation(target),
+    }
 
 
 def _template_materialization_unsupported_location(
@@ -12520,6 +12602,11 @@ def _project_template_materialization_for_artifact(
                     source_backend=unit.source_backend,
                     variant=variant,
                     missing_capabilities=["template.specialization"],
+                    details=_template_materialization_unsupported_details(
+                        target,
+                        unit,
+                        unsupported_type_records,
+                    ),
                 )
             ],
             blocked=True,
@@ -12606,6 +12693,7 @@ def _project_template_materialization_for_artifact(
                 f"Suggested action: {suggested_action}.",
                 limit=materialization_work_limit,
                 limit_source=materialization_work_limit_source,
+                required_work_items=materialization_work_items,
                 requested_signature=requested_signature,
                 suggested_action=suggested_action,
                 source_location=location,
@@ -13070,6 +13158,11 @@ def _project_template_materialization_for_artifact(
                 source_backend=unit.source_backend,
                 variant=variant,
                 missing_capabilities=["template.specialization"],
+                details=_template_materialization_unsupported_details(
+                    target,
+                    unit,
+                    unsupported,
+                ),
             )
         ]
         return ProjectTemplateMaterializedSource(
@@ -13152,6 +13245,80 @@ def _translation_failure_missing_capabilities(
     return ["batch.translation"]
 
 
+def _template_materialization_failure_details(exc: Exception) -> dict[str, Any]:
+    limit = getattr(exc, "limit", None)
+    limit_source = getattr(exc, "limit_source", None)
+    required_work_items = getattr(exc, "required_work_items", None)
+    unique_specialization_count = getattr(exc, "unique_specialization_count", None)
+    requested_signature = getattr(exc, "requested_signature", None)
+    suggested_action = getattr(exc, "suggested_action", None)
+
+    template_materialization = {}
+    if isinstance(limit, int) and not isinstance(limit, bool):
+        template_materialization["limit"] = limit
+    if _is_non_empty_string(limit_source):
+        template_materialization["limitSource"] = limit_source
+    if isinstance(required_work_items, int) and not isinstance(
+        required_work_items, bool
+    ):
+        template_materialization["requiredWorkItems"] = required_work_items
+    if isinstance(unique_specialization_count, int) and not isinstance(
+        unique_specialization_count, bool
+    ):
+        template_materialization["requestedSpecializationCount"] = (
+            unique_specialization_count
+        )
+    if _is_non_empty_string(requested_signature):
+        template_materialization["requestedSignature"] = requested_signature
+    if _is_non_empty_string(suggested_action):
+        template_materialization["suggestedAction"] = suggested_action
+
+    if not template_materialization:
+        return {}
+    return {"templateMaterialization": template_materialization}
+
+
+def _opengl_template_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.opengl-template-type-unresolved"
+    ):
+        return {}
+
+    unresolved_parameter = getattr(exc, "unresolved_parameter", None)
+    if not _is_non_empty_string(unresolved_parameter):
+        unresolved_parameter = _metal_template_missing_binding(exc)
+    enclosing_type = getattr(exc, "enclosing_generated_type", None)
+    if not _is_non_empty_string(enclosing_type):
+        enclosing_type = _opengl_template_enclosing_type_from_message(exc)
+
+    details = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    if _is_non_empty_string(unresolved_parameter):
+        details["unresolvedParameter"] = unresolved_parameter
+    if _is_non_empty_string(enclosing_type):
+        details["enclosingGeneratedType"] = enclosing_type
+    return dict(sorted(details.items()))
+
+
+def _translation_failure_details(
+    exc: Exception,
+    target: str,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    del target
+    return {
+        **_opengl_template_failure_details(exc, unit, artifact_path),
+        **_template_materialization_failure_details(exc),
+    }
+
+
 def _translation_failure_project_diagnostics(
     exc: Exception,
     target: str,
@@ -13215,35 +13382,6 @@ def _translation_failure_project_diagnostics(
             details=_translation_failure_details(exc, target, unit, artifact_path),
         )
     ]
-
-
-def _translation_failure_details(
-    exc: Exception,
-    target: str,
-    unit: ProjectTranslationUnit,
-    artifact_path: str | None,
-) -> dict[str, Any] | None:
-    if _translation_failure_diagnostic_code(exc) != (
-        "project.translate.opengl-template-type-unresolved"
-    ):
-        return None
-
-    unresolved_parameter = getattr(exc, "unresolved_parameter", None)
-    if not _is_non_empty_string(unresolved_parameter):
-        unresolved_parameter = _metal_template_missing_binding(exc)
-    enclosing_type = getattr(exc, "enclosing_generated_type", None)
-    if not _is_non_empty_string(enclosing_type):
-        enclosing_type = _opengl_template_enclosing_type_from_message(exc)
-
-    details = {
-        "sourcePath": unit.relative_path,
-        "targetArtifact": artifact_path or "",
-    }
-    if _is_non_empty_string(unresolved_parameter):
-        details["unresolvedParameter"] = unresolved_parameter
-    if _is_non_empty_string(enclosing_type):
-        details["enclosingGeneratedType"] = enclosing_type
-    return dict(sorted(details.items()))
 
 
 def _opengl_template_enclosing_type_from_message(exc: Exception) -> str | None:
@@ -28922,6 +29060,35 @@ def _string_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
     return []
 
 
+def _diagnostic_detail_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return []
+    if isinstance(value, list):
+        reasons: list[str] = []
+        for index, item in enumerate(value):
+            reasons.extend(
+                _diagnostic_detail_contract_reasons(f"{prefix}[{index}]", item)
+            )
+        return reasons
+    if isinstance(value, Mapping):
+        reasons = []
+        for key, item in value.items():
+            if not _is_non_empty_string(key):
+                reasons.append(f"{prefix} keys must be non-empty strings")
+                key_prefix = prefix
+            else:
+                key_prefix = _mapping_key_path(prefix, key)
+            reasons.extend(_diagnostic_detail_contract_reasons(key_prefix, item))
+        return reasons
+    return [f"{prefix} values must be JSON scalar, array, or object values"]
+
+
+def _diagnostic_details_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    return _diagnostic_detail_contract_reasons(prefix, value)
+
+
 def _non_empty_string_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
     reasons = _string_mapping_contract_reasons(prefix, value)
     if reasons:
@@ -31094,9 +31261,6 @@ def _external_corpus_contract_reasons(
         reasons.extend(
             _duplicate_field_contract_reasons("externalCorpus.entries", entries, "id")
         )
-        reasons.extend(
-            _duplicate_path_contract_reasons("externalCorpus.entries", entries)
-        )
     reasons.extend(
         _external_corpus_summary_contract_reasons(
             external_corpus.get("summary"),
@@ -33067,10 +33231,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 reasons.append(
                     f"diagnostics[{index}].missingCapabilities must be a list of strings"
                 )
-            if "details" in diagnostic and not isinstance(
-                diagnostic.get("details"), Mapping
-            ):
-                reasons.append(f"diagnostics[{index}].details must be an object")
+            if "details" in diagnostic:
+                reasons.extend(
+                    _diagnostic_details_contract_reasons(
+                        f"diagnostics[{index}].details",
+                        diagnostic.get("details"),
+                    )
+                )
         if has_summary and isinstance(units, list) and isinstance(project, Mapping):
             reasons.extend(
                 _current_project_config_diagnostic_contract_reasons(

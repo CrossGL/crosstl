@@ -464,6 +464,9 @@ def test_project_package_exposes_public_api_surface():
         "ProjectPortabilityReport",
         "ProjectScan",
         "ProjectTranslationUnit",
+        "PROJECT_TEST_RUNNER_INSPECTION_KIND",
+        "PROJECT_TEST_RUNNER_PLAN_KIND",
+        "PROJECT_TEST_RUNNER_REPORT_KIND",
         "REFLECTION_AMBIGUOUS_BINDING",
         "REFLECTION_EMPTY",
         "REFLECTION_INCOMPLETE_OUTPUT",
@@ -521,13 +524,16 @@ def test_project_package_exposes_public_api_surface():
         "build_runtime_loader_manifest",
         "build_runtime_package",
         "build_runtime_test_manifest",
+        "build_project_test_runner_plan",
         "compare_runtime_outputs",
         "default_runtime_test_adapters",
         "execute_runtime_host_integration",
+        "execute_project_test_runner_plan",
         "inspect_runtime_host_integration_handoff",
         "inspect_runtime_host_loader_scaffolds",
         "inspect_runtime_package",
         "inspect_project_report",
+        "inspect_project_test_runner_plan",
         "load_runtime_verification_fixtures",
         "load_runtime_test_manifest",
         "load_project_config",
@@ -550,6 +556,7 @@ def test_project_package_exposes_public_api_surface():
         "verify_runtime_test_manifest",
         "write_runtime_verification_report",
         "write_runtime_test_report",
+        "write_project_test_runner_report",
     }
     for name in project_api.__all__:
         assert hasattr(project_api, name)
@@ -17028,7 +17035,9 @@ def test_translate_project_skips_invalid_external_corpus_provenance(tmp_path):
     )
 
 
-def test_translate_project_skips_duplicate_external_corpus_entries(tmp_path):
+def test_translate_project_preserves_external_corpus_entries_with_shared_path(
+    tmp_path,
+):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
@@ -17039,19 +17048,27 @@ def test_translate_project_skips_duplicate_external_corpus_entries(tmp_path):
                 "schemaVersion": 1,
                 "entries": [
                     {
-                        "id": "repo/simple",
+                        "id": "repo/simple-a",
                         "path": "simple.cgl",
                         "sourceBackend": "cgl",
                         "targets": ["cgl"],
+                        "repository": "https://github.com/example/project",
+                        "sourceUrl": (
+                            "https://github.com/example/project/blob/main/a.cgl"
+                        ),
                     },
                     {
-                        "id": "repo/simple-path-duplicate",
+                        "id": "repo/simple-b",
                         "path": "simple.cgl",
                         "sourceBackend": "cgl",
                         "targets": ["cgl"],
+                        "repository": "https://github.com/example/project",
+                        "sourceUrl": (
+                            "https://github.com/example/project/blob/main/b.cgl"
+                        ),
                     },
                     {
-                        "id": "repo/simple",
+                        "id": "repo/simple-a",
                         "path": "other.cgl",
                         "sourceBackend": "cgl",
                         "targets": ["cgl"],
@@ -17079,19 +17096,25 @@ def test_translate_project_skips_duplicate_external_corpus_entries(tmp_path):
     assert validation["success"] is True
     external_corpus = payload["externalCorpus"]
     assert external_corpus["summary"]["manifestEntryCount"] == 3
-    assert external_corpus["summary"]["validEntryCount"] == 1
-    assert external_corpus["summary"]["invalidEntryCount"] == 2
-    assert [entry["path"] for entry in external_corpus["entries"]] == ["simple.cgl"]
-    assert payload["diagnosticCounts"] == {"note": 0, "warning": 2, "error": 0}
+    assert external_corpus["summary"]["validEntryCount"] == 2
+    assert external_corpus["summary"]["invalidEntryCount"] == 1
+    assert [entry["id"] for entry in external_corpus["entries"]] == [
+        "repo/simple-a",
+        "repo/simple-b",
+    ]
+    assert [entry["path"] for entry in external_corpus["entries"]] == [
+        "simple.cgl",
+        "simple.cgl",
+    ]
+    assert [entry["sourceUrl"] for entry in external_corpus["entries"]] == [
+        "https://github.com/example/project/blob/main/a.cgl",
+        "https://github.com/example/project/blob/main/b.cgl",
+    ]
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
     diagnostics = payload["diagnostics"]
-    assert all(
-        diagnostic["code"] == "project.config.external-corpus-entry-invalid"
-        for diagnostic in diagnostics
-    )
-    assert "entry 2" in diagnostics[0]["message"]
-    assert "path duplicates entry 1" in diagnostics[0]["message"]
-    assert "entry 3" in diagnostics[1]["message"]
-    assert "id duplicates entry 1" in diagnostics[1]["message"]
+    assert diagnostics[0]["code"] == "project.config.external-corpus-entry-invalid"
+    assert "entry 3" in diagnostics[0]["message"]
+    assert "id duplicates entry 1" in diagnostics[0]["message"]
 
 
 def test_validate_project_report_accepts_generated_source_maps(tmp_path):
@@ -22879,7 +22902,7 @@ def test_validate_project_report_rejects_external_corpus_entry_state_mismatches(
     ) in diagnostic["message"]
 
 
-def test_validate_project_report_rejects_duplicate_external_corpus_entries(
+def test_validate_project_report_rejects_duplicate_external_corpus_entry_ids(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -22949,10 +22972,6 @@ def test_validate_project_report_rejects_duplicate_external_corpus_entries(
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
         "externalCorpus.entries[1].id duplicates externalCorpus.entries[0].id"
-        in diagnostic["message"]
-    )
-    assert (
-        "externalCorpus.entries[1].path duplicates externalCorpus.entries[0].path"
         in diagnostic["message"]
     )
 
@@ -25926,6 +25945,7 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
                         "variant": 0,
                         "checkKind": "maybe",
                         "missingCapabilities": "repo.scan",
+                        "details": [],
                     }
                 ],
             }
@@ -25975,6 +25995,7 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
     assert "diagnostics[0].missingCapabilities must be a list of strings" in (
         diagnostic["message"]
     )
+    assert "diagnostics[0].details must be an object" in diagnostic["message"]
 
 
 def test_project_diagnostics_preserve_original_locations(tmp_path):
@@ -35075,7 +35096,7 @@ def test_runtime_host_loader_scaffolds_preserve_loader_step_metadata(tmp_path):
 def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files(
     tmp_path,
 ):
-    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
+    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("cuda",))
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
     loader_manifest_path.write_text(
         json.dumps(
@@ -35171,7 +35192,7 @@ def test_runtime_host_loader_scaffolds_sanitize_target_and_unit_paths(tmp_path):
 
 
 def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds(tmp_path):
-    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
+    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("cuda",))
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
     loader_manifest_path.write_text(
         json.dumps(
@@ -35369,7 +35390,7 @@ def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file(
 
 def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units(tmp_path):
     _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=("vulkan",), unresolved_host_interface=True
+        tmp_path, targets=("cuda",), unresolved_host_interface=True
     )
 
     payload = inspect_runtime_host_loader_scaffolds(
@@ -35552,7 +35573,7 @@ def test_plan_runtime_host_loader_consumption_reports_ready_units(tmp_path):
 
 def test_plan_runtime_host_loader_consumption_carries_blocked_units(tmp_path):
     _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=("vulkan",), unresolved_host_interface=True
+        tmp_path, targets=("cuda",), unresolved_host_interface=True
     )
 
     payload = plan_runtime_host_loader_consumption(
@@ -35721,7 +35742,7 @@ def test_build_runtime_host_integration_handoff_writes_ready_bundle(tmp_path):
 
 def test_build_runtime_host_integration_handoff_writes_blocked_bundle(tmp_path):
     repo, plan_path, _ = _write_host_loader_consumption_plan_fixture(
-        tmp_path, targets=("vulkan",), unresolved_host_interface=True
+        tmp_path, targets=("cuda",), unresolved_host_interface=True
     )
     handoff_dir = repo / "host-integration"
 
@@ -35732,7 +35753,7 @@ def test_build_runtime_host_integration_handoff_writes_blocked_bundle(tmp_path):
     assert payload["summary"]["blockedLoaderUnitCount"] == 1
     assert payload["targets"][0]["status"] == "blocked"
     assert payload["actions"][0]["kind"] == "resolve-loader-scaffold-blockers"
-    assert (handoff_dir / "targets" / "vulkan.integration.json").is_file()
+    assert (handoff_dir / "targets" / "cuda.integration.json").is_file()
 
 
 def test_build_runtime_host_integration_handoff_rejects_wrong_plan_kind(tmp_path):
@@ -35980,7 +36001,7 @@ def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch(
 
 def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle(tmp_path):
     _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=("vulkan",), unresolved_host_interface=True
+        tmp_path, targets=("cuda",), unresolved_host_interface=True
     )
 
     payload = inspect_runtime_host_integration_handoff(
@@ -35993,7 +36014,7 @@ def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle(tmp_pat
     assert payload["summary"]["readyTargetCount"] == 0
     assert payload["summary"]["blockedTargetCount"] == 1
     assert payload["summary"]["failedTargetCount"] == 0
-    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["target"] == "cuda"
     assert payload["targets"][0]["status"] == "blocked"
     assert payload["targets"][0]["targetStatus"] == "blocked"
     assert payload["targets"][0]["loaderUnitCount"] == 1
@@ -36182,7 +36203,7 @@ def test_plan_runtime_host_integration_execution_reports_ready_steps(tmp_path):
 
 def test_plan_runtime_host_integration_execution_carries_blocked_steps(tmp_path):
     _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=("vulkan",), unresolved_host_interface=True
+        tmp_path, targets=("cuda",), unresolved_host_interface=True
     )
 
     payload = plan_runtime_host_integration_execution(
@@ -36198,7 +36219,7 @@ def test_plan_runtime_host_integration_execution_carries_blocked_steps(tmp_path)
     assert payload["summary"]["blockedLoaderUnitCount"] == 1
     assert payload["summary"]["stepCount"] == 1
     assert payload["summary"]["blockedStepCount"] == 1
-    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["target"] == "cuda"
     assert payload["targets"][0]["status"] == "blocked"
     assert payload["targets"][0]["blockedStepCount"] == 1
     assert payload["steps"][0]["kind"] == "resolve-loader-scaffold-blockers"
@@ -36437,7 +36458,7 @@ def test_execute_runtime_host_integration_reports_blocked_steps_without_failure(
     tmp_path,
 ):
     _, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
-        tmp_path, targets=("vulkan",), unresolved_host_interface=True
+        tmp_path, targets=("cuda",), unresolved_host_interface=True
     )
 
     payload = execute_runtime_host_integration(plan_path)
@@ -39987,6 +40008,82 @@ def test_translate_project_metal_call_site_template_materializes_for_opengl(
     assert validation["success"] is True
 
 
+def test_translate_project_metal_implicit_template_helper_materializes_to_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "implicit_helper.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            T add_one(T value) {
+                return value + T(1);
+            }
+
+            kernel void launch(
+                device float* out [[buffer(0)]],
+                device const float* src [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                float value = src[gid];
+                out[gid] = add_one(value);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx", "opengl", "vulkan"],
+        output_dir="out",
+    )
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+    for artifact in payload["artifacts"]:
+        assert artifact["templateMaterialization"] == {
+            "status": "materialized",
+            "specializationCount": 1,
+            "configuredParameterCount": 0,
+            "configuredParameters": {},
+            "configuredParameterSources": {},
+            "specializations": [
+                {
+                    "name": "add_one",
+                    "materializedName": "add_one_float",
+                    "parameters": {"T": "float"},
+                    "parameterSources": {"T": "call-site"},
+                    "source": "call-site",
+                }
+            ],
+            "unsupported": [],
+        }
+        output_path = repo / artifact["path"]
+        assert output_path.exists()
+        output = output_path.read_text(encoding="utf-8")
+        assert "add_one<" not in output
+        assert not re.search(r"\bT\b", output)
+        if artifact["target"] in {"directx", "opengl"}:
+            assert "add_one_float" in output
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+
+
 def test_translate_project_metal_source_instantiation_propagates_plain_helper_bindings_for_opengl(
     tmp_path,
 ):
@@ -40359,7 +40456,8 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
         encoding="utf-8",
     )
 
-    payload = translate_project(load_project_config(repo)).to_json()
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
 
     artifact = payload["artifacts"][0]
     assert artifact["status"] == "failed"
@@ -40389,6 +40487,21 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
     assert diagnostic["location"]["line"] == 9
     assert diagnostic["location"]["column"] == 1
     assert "work limit exceeded before GLSL codegen" in diagnostic["message"]
+    assert diagnostic["details"]["templateMaterialization"] == {
+        "limit": 4,
+        "limitSource": "project.source_options.metal.max_template_materialization_work",
+        "requiredWorkItems": 6,
+        "requestedSignature": "3 source instantiations x 2 templates",
+        "suggestedAction": (
+            "raise max_template_materialization_work for this source pattern or "
+            "OpenGL target, or reduce source template instantiations"
+        ),
+    }
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
 
 
 def test_metal_project_materialization_default_work_budget_scales_source_instantiations(
@@ -40660,6 +40773,17 @@ def test_translate_project_metal_implicit_type_environment_budget_diagnostic(
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
     assert "implicit-template-materialization/type-environment" in diagnostic["message"]
     assert "templates=1" in diagnostic["message"]
+    detail = diagnostic["details"]["templateMaterialization"]
+    assert detail["limit"] == 3
+    assert (
+        detail["limitSource"]
+        == "project.source_options.metal.max_template_materialization_work"
+    )
+    assert detail["requiredWorkItems"] > detail["limit"]
+    assert "implicit-template-materialization/type-environment" in (
+        detail["requestedSignature"]
+    )
+    assert "raise max_template_materialization_work" in detail["suggestedAction"]
 
 
 def test_translate_project_metal_type_alias_rewrite_cycle_reports_diagnostic(
@@ -42170,6 +42294,32 @@ def test_translate_project_metal_void_cast_before_unresolved_helper_is_diagnosti
         assert diagnostic["missingCapabilities"] == ["template.specialization"]
         assert "convert_value missing U" in diagnostic["message"]
         assert "list index out of range" not in diagnostic["message"]
+        assert "Suggested action:" in diagnostic["message"]
+        assert diagnostic["details"] == {
+            "sourcePath": "steel_attention_nax_min.metal",
+            "targetBackend": diagnostic["target"],
+            "missingTemplateParameters": ["U"],
+            "sourceDeclarations": [
+                {
+                    "name": "convert_value",
+                    "missingTemplateParameters": ["U"],
+                    "requiredSignature": "convert_value<U>",
+                    "reason": "missing-template-arguments",
+                    "targetBackend": diagnostic["target"],
+                    "declarationLocation": {
+                        "file": "steel_attention_nax_min.metal",
+                        "line": 4,
+                        "column": 1,
+                    },
+                }
+            ],
+            "suggestedRemediation": (
+                "add a concrete Metal template instantiation, supply explicit "
+                "template arguments, or configure "
+                "project.source_options.metal.template_variants for the "
+                f"{diagnostic['target']} target"
+            ),
+        }
 
 
 def test_translate_project_variadic_template_helper_materializes_for_opengl(
