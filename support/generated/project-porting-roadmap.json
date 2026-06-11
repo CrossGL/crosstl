@@ -6178,6 +6178,168 @@
     },
     {
       "category": "project",
+      "description": "Inspect host integration handoff bundles before downstream runtime consumption.",
+      "id": "project.runtime_host_integration_handoff_inspection",
+      "name": "Runtime host integration handoff inspection",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_missing_target_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_unsafe_generated_path",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "inspect-host-integration-handoff builds crosstl-runtime-host-integration-handoff-inspection JSON, text, and SARIF output from a host integration handoff manifest, verifies host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, parses target handoff files even when the handoff status is blocked, checks target, status, loader-unit count, and action-count consistency, rejects absolute or outside-root generated paths, reports missing, malformed, wrong-kind, and mismatched files as structured diagnostics, and keeps inspection read-only and bundle-local. It does not rewrite host application code, execute device code, generate runtime framework code, install target SDKs, or re-run host integration.",
+          "status": "supported"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_missing_target_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_unsafe_generated_path",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "inspect-host-integration-handoff builds crosstl-runtime-host-integration-handoff-inspection JSON, text, and SARIF output from a host integration handoff manifest, verifies host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, parses target handoff files even when the handoff status is blocked, checks target, status, loader-unit count, and action-count consistency, rejects absolute or outside-root generated paths, reports missing, malformed, wrong-kind, and mismatched files as structured diagnostics, and keeps inspection read-only and bundle-local. It does not rewrite host application code, execute device code, generate runtime framework code, install target SDKs, or re-run host integration.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_missing_target_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_unsafe_generated_path",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "inspect-host-integration-handoff builds crosstl-runtime-host-integration-handoff-inspection JSON, text, and SARIF output from a host integration handoff manifest, verifies host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, parses target handoff files even when the handoff status is blocked, checks target, status, loader-unit count, and action-count consistency, rejects absolute or outside-root generated paths, reports missing, malformed, wrong-kind, and mismatched files as structured diagnostics, and keeps inspection read-only and bundle-local. It does not rewrite host application code, execute device code, generate runtime framework code, install target SDKs, or re-run host integration.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_missing_target_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_unsafe_generated_path",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "inspect-host-integration-handoff builds crosstl-runtime-host-integration-handoff-inspection JSON, text, and SARIF output from a host integration handoff manifest, verifies host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, parses target handoff files even when the handoff status is blocked, checks target, status, loader-unit count, and action-count consistency, rejects absolute or outside-root generated paths, reports missing, malformed, wrong-kind, and mismatched files as structured diagnostics, and keeps inspection read-only and bundle-local. It does not rewrite host application code, execute device code, generate runtime framework code, install target SDKs, or re-run host integration.",
+          "status": "supported"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_missing_target_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_unsafe_generated_path",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "inspect-host-integration-handoff builds crosstl-runtime-host-integration-handoff-inspection JSON, text, and SARIF output from a host integration handoff manifest, verifies host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, parses target handoff files even when the handoff status is blocked, checks target, status, loader-unit count, and action-count consistency, rejects absolute or outside-root generated paths, reports missing, malformed, wrong-kind, and mismatched files as structured diagnostics, and keeps inspection read-only and bundle-local. It does not rewrite host application code, execute device code, generate runtime framework code, install target SDKs, or re-run host integration.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_missing_target_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_unsafe_generated_path",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "inspect-host-integration-handoff builds crosstl-runtime-host-integration-handoff-inspection JSON, text, and SARIF output from a host integration handoff manifest, verifies host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, parses target handoff files even when the handoff status is blocked, checks target, status, loader-unit count, and action-count consistency, rejects absolute or outside-root generated paths, reports missing, malformed, wrong-kind, and mismatched files as structured diagnostics, and keeps inspection read-only and bundle-local. It does not rewrite host application code, execute device code, generate runtime framework code, install target SDKs, or re-run host integration.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_missing_target_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_unsafe_generated_path",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "inspect-host-integration-handoff builds crosstl-runtime-host-integration-handoff-inspection JSON, text, and SARIF output from a host integration handoff manifest, verifies host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, parses target handoff files even when the handoff status is blocked, checks target, status, loader-unit count, and action-count consistency, rejects absolute or outside-root generated paths, reports missing, malformed, wrong-kind, and mismatched files as structured diagnostics, and keeps inspection read-only and bundle-local. It does not rewrite host application code, execute device code, generate runtime framework code, install target SDKs, or re-run host integration.",
+          "status": "supported"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_missing_target_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_unsafe_generated_path",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "inspect-host-integration-handoff builds crosstl-runtime-host-integration-handoff-inspection JSON, text, and SARIF output from a host integration handoff manifest, verifies host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, parses target handoff files even when the handoff status is blocked, checks target, status, loader-unit count, and action-count consistency, rejects absolute or outside-root generated paths, reports missing, malformed, wrong-kind, and mismatched files as structured diagnostics, and keeps inspection read-only and bundle-local. It does not rewrite host application code, execute device code, generate runtime framework code, install target SDKs, or re-run host integration.",
+          "status": "supported"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_missing_target_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_unsafe_generated_path",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "inspect-host-integration-handoff builds crosstl-runtime-host-integration-handoff-inspection JSON, text, and SARIF output from a host integration handoff manifest, verifies host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, parses target handoff files even when the handoff status is blocked, checks target, status, loader-unit count, and action-count consistency, rejects absolute or outside-root generated paths, reports missing, malformed, wrong-kind, and mismatched files as structured diagnostics, and keeps inspection read-only and bundle-local. It does not rewrite host application code, execute device code, generate runtime framework code, install target SDKs, or re-run host integration.",
+          "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_missing_target_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_unsafe_generated_path",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "inspect-host-integration-handoff builds crosstl-runtime-host-integration-handoff-inspection JSON, text, and SARIF output from a host integration handoff manifest, verifies host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, parses target handoff files even when the handoff status is blocked, checks target, status, loader-unit count, and action-count consistency, rejects absolute or outside-root generated paths, reports missing, malformed, wrong-kind, and mismatched files as structured diagnostics, and keeps inspection read-only and bundle-local. It does not rewrite host application code, execute device code, generate runtime framework code, install target SDKs, or re-run host integration.",
+          "status": "supported"
+        },
+        "wgsl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_missing_target_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_unsafe_generated_path",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_integration_handoff_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "inspect-host-integration-handoff builds crosstl-runtime-host-integration-handoff-inspection JSON, text, and SARIF output from a host integration handoff manifest, verifies host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, parses target handoff files even when the handoff status is blocked, checks target, status, loader-unit count, and action-count consistency, rejects absolute or outside-root generated paths, reports missing, malformed, wrong-kind, and mismatched files as structured diagnostics, and keeps inspection read-only and bundle-local. It does not rewrite host application code, execute device code, generate runtime framework code, install target SDKs, or re-run host integration.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Inspect existing project portability reports as concise JSON, text, or SARIF summaries for triage and migration planning.",
       "id": "project.report_inspection",
       "name": "Project report inspection",
@@ -9139,12 +9301,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 22,
+    "feature_count": 23,
     "status_counts": {
       "cuda": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 18,
+        "supported": 19,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9152,7 +9314,7 @@
       "directx": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 18,
+        "supported": 19,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9160,7 +9322,7 @@
       "hip": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 18,
+        "supported": 19,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9168,7 +9330,7 @@
       "metal": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 18,
+        "supported": 19,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9176,7 +9338,7 @@
       "mojo": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 18,
+        "supported": 19,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9184,7 +9346,7 @@
       "opengl": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 18,
+        "supported": 19,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9192,7 +9354,7 @@
       "rust": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 18,
+        "supported": 19,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9200,7 +9362,7 @@
       "slang": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 18,
+        "supported": 19,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9208,7 +9370,7 @@
       "vulkan": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 18,
+        "supported": 19,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9216,7 +9378,7 @@
       "webgl": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 18,
+        "supported": 19,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9224,7 +9386,7 @@
       "wgsl": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 18,
+        "supported": 19,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

@@ -1,5 +1,6 @@
 """CrossGL-to-GLSL code generator."""
 
+import re
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -295,6 +296,14 @@ class GLSLCodeGen:
     """Emit GLSL source from the shared CrossGL translator AST."""
 
     OPENGL_DESCRIPTOR_SET_BINDING_STRIDE = 1024
+    METAL_ONLY_SYSTEM_INCLUDES = frozenset(
+        {
+            "metal_math",
+            "metal_math.h",
+            "metal_stdlib",
+            "metal_stdlib.h",
+        }
+    )
     MESH_STAGE_NAMES = {"mesh", "task", "amplification", "object"}
     UNSIGNED_VECTOR_COMPUTE_BUILTINS = {"gl_GlobalInvocationID"}
     GLSL_STAGE_GUARD_MACROS = {
@@ -1495,6 +1504,80 @@ class GLSLCodeGen:
             return True
         return version_number >= 420
 
+    def glsl_version_line_with_minimum(self, version_line, minimum_version):
+        version_number = self.glsl_version_number(version_line)
+        if version_number is None or version_number >= minimum_version:
+            return version_line
+
+        parts = str(version_line or "").strip().split()
+        profile_parts = parts[2:] if len(parts) > 2 else []
+        if "es" in profile_parts:
+            es_minimum = 300 if minimum_version <= 330 else 320
+            if version_number >= es_minimum:
+                return version_line
+            return f"#version {es_minimum} es"
+
+        profile = next(
+            (part for part in profile_parts if part in {"core", "compatibility"}),
+            "core",
+        )
+        return f"#version {minimum_version} {profile}"
+
+    def generated_stage_io_layout_minimum_version(self, code):
+        minimum_version = None
+        for line in str(code or "").splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("layout("):
+                continue
+
+            end = stripped.find(")")
+            if end == -1:
+                continue
+            layout_parts = {
+                part.partition("=")[0].strip()
+                for part in stripped[len("layout(") : end].split(",")
+            }
+            if "component" in layout_parts:
+                minimum_version = max(minimum_version or 0, 440)
+            if layout_parts & {"location", "index"}:
+                minimum_version = max(minimum_version or 0, 330)
+        return minimum_version
+
+    def glsl_layout_minimum_satisfied_by_extensions(self, minimum_version):
+        if minimum_version is None:
+            return True
+        if minimum_version <= 330 and self.glsl_extension_enabled(
+            "GL_ARB_explicit_attrib_location"
+        ):
+            return True
+        if minimum_version <= 440 and self.glsl_extension_enabled(
+            "GL_ARB_enhanced_layouts"
+        ):
+            return True
+        return False
+
+    def ensure_glsl_version_supports_generated_layouts(self, code):
+        minimum_version = self.generated_stage_io_layout_minimum_version(code)
+        if self.glsl_layout_minimum_satisfied_by_extensions(minimum_version):
+            return code
+
+        lines = str(code).splitlines(keepends=True)
+        for index, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped.startswith("#version"):
+                continue
+            upgraded = self.glsl_version_line_with_minimum(stripped, minimum_version)
+            if upgraded == stripped:
+                return code
+            line_end = "\n" if line.endswith("\n") else ""
+            lines[index] = f"{upgraded}{line_end}"
+            self.current_glsl_version_line = upgraded
+            self.current_glsl_resource_binding_layouts_supported = (
+                self.glsl_resource_binding_layouts_supported(upgraded)
+            )
+            return "".join(lines)
+        return code
+
     def should_emit_resource_binding_layouts(self):
         return getattr(
             self,
@@ -1535,6 +1618,20 @@ class GLSLCodeGen:
             if behavior in {"", "enable", "require"}:
                 extensions.add(extension_name)
         return extensions
+
+    def should_emit_glsl_preprocessor_directive(self, directive):
+        if not isinstance(directive, PreprocessorNode):
+            return True
+        if str(directive.directive).lstrip("#") != "include":
+            return True
+
+        content = str(getattr(directive, "content", "") or "").strip()
+        if not content:
+            return True
+        match = re.match(r'^[<"]([^>"]+)[>"]', content)
+        include_name = match.group(1) if match else content.split()[0]
+        normalized = include_name.strip().replace("\\", "/").lower()
+        return normalized not in self.METAL_ONLY_SYSTEM_INCLUDES
 
     def glsl_extension_enabled(self, extension_name):
         return extension_name in self.current_glsl_extensions
@@ -2422,6 +2519,8 @@ class GLSLCodeGen:
         version_line = None
         extra_lines = []
         for directive in preprocessors:
+            if not self.should_emit_glsl_preprocessor_directive(directive):
+                continue
             if isinstance(directive, PreprocessorNode):
                 if directive.directive == "precision":
                     line = (
@@ -3121,7 +3220,7 @@ class GLSLCodeGen:
                     stage_code = f"// {stage_name.title()} Shader\n" + stage_code
                     code += self.wrap_stage_guard(stage_code, stage_name)
 
-        return code
+        return self.ensure_glsl_version_supports_generated_layouts(code)
 
     def collect_stage_deferred_top_level_helpers(self, ast, functions, target_stage):
         if target_stage is None or not getattr(ast, "stages", None):
@@ -3719,15 +3818,27 @@ class GLSLCodeGen:
             const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
             value = getattr(node, "value", None)
             value_code = self.generate_constant_expression(value)
-            layout = self.glsl_constant_layout_prefix(node)
+            constant_id = self.glsl_specialization_constant_id(node)
             declaration = format_c_style_array_declaration(
                 self.map_type(const_type), name
             )
-            code += f"{layout}const {declaration} = {value_code};\n"
+            if constant_id is not None:
+                code += (
+                    "/* CrossGL fallback: OpenGL source validation cannot preserve "
+                    f"specialization constant id {constant_id} for "
+                    f"'{name}'; using the default literal. */\n"
+                )
+            code += f"const {declaration} = {value_code};\n"
 
         return f"{code}\n" if code else ""
 
     def glsl_constant_layout_prefix(self, node):
+        constant_id = self.glsl_specialization_constant_id(node)
+        if constant_id is None:
+            return ""
+        return f"layout(constant_id = {constant_id}) "
+
+    def glsl_specialization_constant_id(self, node):
         constant_id = None
         for attr in getattr(node, "attributes", []) or []:
             attr_name = getattr(attr, "name", None)
@@ -3749,9 +3860,7 @@ class GLSLCodeGen:
                     f"'{name}': {constant_id} differs from {value}"
                 )
             constant_id = value
-        if constant_id is None:
-            return ""
-        return f"layout(constant_id = {constant_id}) "
+        return constant_id
 
     def generate_constant_expression(self, expr):
         value_code = self.generate_expression(expr)
@@ -7375,6 +7484,11 @@ class GLSLCodeGen:
         ).items():
             if name not in parameter_names:
                 self.current_stage_parameter_aliases.setdefault(name, alias)
+
+        if "output" not in parameter_names:
+            output_member_map = self.stage_output_member_map(entry_func, stage_context)
+            if output_member_map:
+                self.current_stage_outputs.setdefault("output", output_member_map)
 
     def stage_parameter_aliases(self, func, shader_type):
         if shader_type is None:
@@ -16099,6 +16213,15 @@ class GLSLCodeGen:
 
         return None, None
 
+    def accepts_hlsl_sampler_register_for_texture_binding(self, node):
+        vtype = self.resource_node_type(node)
+        mapped_type = self.map_resource_type_with_format(vtype, node)
+        return (
+            self.is_opaque_resource_type(mapped_type)
+            and not self.is_storage_image_type(vtype)
+            and mapped_type.startswith(("sampler", "isampler", "usampler"))
+        )
+
     def validate_resource_register_prefix(self, node, source):
         actual_prefix = self.resource_register_prefix(source)
         if actual_prefix is None:
@@ -16106,6 +16229,12 @@ class GLSLCodeGen:
 
         expected_prefix, namespace = self.expected_resource_register_prefix(node)
         if expected_prefix is None or actual_prefix == expected_prefix:
+            return
+        if (
+            expected_prefix == "t"
+            and actual_prefix == "s"
+            and self.accepts_hlsl_sampler_register_for_texture_binding(node)
+        ):
             return
 
         node_name = self.resource_node_name(node, "<unnamed>")

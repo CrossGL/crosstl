@@ -12,6 +12,7 @@ from crosstl.translator.ast import (
     IdentifierNode,
     NamedType,
     ParameterNode,
+    PreprocessorNode,
     PrimitiveType,
     ReturnNode,
     ShaderNode,
@@ -79,7 +80,31 @@ def test_glsl_specialization_constant_metadata_emits_layout():
 
     generated = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "layout(constant_id = 0) const int LIGHTING_MODEL = 0;" in generated
+    assert "layout(constant_id" not in generated
+    assert (
+        "/* CrossGL fallback: OpenGL source validation cannot preserve "
+        "specialization constant id 0 for 'LIGHTING_MODEL'; using the default "
+        "literal. */"
+    ) in generated
+    assert "const int LIGHTING_MODEL = 0;" in generated
+
+
+def test_glsl_codegen_drops_metal_system_includes_but_preserves_glsl_includes():
+    ast = ShaderNode(
+        "IncludeFilters",
+        ExecutionModel.COMPUTE_KERNEL,
+        preprocessors=[
+            PreprocessorNode("include", "<metal_math>"),
+            PreprocessorNode("include", "<metal_stdlib>"),
+            PreprocessorNode("include", "<shared.glsl>"),
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "#include <metal_math>" not in generated
+    assert "#include <metal_stdlib>" not in generated
+    assert "#include <shared.glsl>" in generated
 
 
 def test_glsl_tile_image_ext_importer_attribute_roundtrips():
@@ -1771,6 +1796,28 @@ def test_glsl_global_resource_binding_attributes_drive_layout_bindings():
     )
     assert "layout(binding = 8) uniform sampler2D registerTex;" in generated_code
     assert "layout(binding = 9) uniform sampler2D autoTex;" in generated_code
+
+
+def test_glsl_hlsl_sampler_register_metadata_maps_to_texture_binding():
+    code = """
+    shader LegacyHlslSamplerRegister {
+        sampler2D Texture @register(s0);
+        sampler2D NextTexture;
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                return texture(Texture, uv) + texture(NextTexture, uv);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(binding = 0) uniform sampler2D Texture;" in generated_code
+    assert "layout(binding = 1) uniform sampler2D NextTexture;" in generated_code
 
 
 def test_glsl_resource_binding_aliases_accept_equivalent_metadata():

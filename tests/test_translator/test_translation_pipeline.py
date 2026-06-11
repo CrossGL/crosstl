@@ -115,6 +115,23 @@ NATIVE_SOURCE_EXTENSION_ALIAS_TO_TARGET_PIPELINE_CASES = tuple(
     )
 )
 
+GLSL_FRAGMENT_INVOCATION_DENSITY_SOURCE = """
+#version 450 core
+#extension GL_EXT_fragment_invocation_density : require
+layout(location = 0) out vec4 fragColor;
+
+void main() {
+    float h = (
+        clamp(
+            1.0 - 1.0 / float(gl_FragSizeEXT.x * gl_FragSizeEXT.y),
+            0.0,
+            1.0
+        )
+    ) / 1.35;
+    fragColor = vec4(h);
+}
+"""
+
 
 def _write_source(tmp_path, filename, source):
     path = tmp_path / filename
@@ -856,6 +873,48 @@ def test_hlsl_compute_scalar_splat_swizzle_lowers_for_vulkan_and_metal(tmp_path)
     assert "a.xxxx" not in metal
     assert "unsupported Metal program-scope groupshared global" in metal
     assert "unsupported Metal program-scope groupshared store" in metal
+
+
+def test_hlsl_legacy_sampler_register_lowers_to_opengl_binding(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "sprite.fx",
+        """
+        sampler2D Texture : register(s0);
+
+        float4 main(float2 uv : TEXCOORD0) : SV_Target
+        {
+            return tex2D(Texture, uv);
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="opengl", format_output=False
+    )
+
+    assert "layout(binding = 0) uniform sampler2D Texture;" in generated
+    assert "fragColor = texture(Texture, uv);" in generated
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "vulkan"])
+def test_glsl_fragment_invocation_density_rejects_unsupported_targets_before_output(
+    tmp_path, target
+):
+    source_path = _write_source(
+        tmp_path, "CubeFDM_fs.glsl", GLSL_FRAGMENT_INVOCATION_DENSITY_SOURCE
+    )
+    output_path = tmp_path / f"CubeFDM_fs.{target}.out"
+
+    with pytest.raises(ValueError, match="GL_EXT_fragment_invocation_density"):
+        crosstl.translate(
+            str(source_path),
+            backend=target,
+            save_shader=str(output_path),
+            format_output=False,
+        )
+
+    assert not output_path.exists()
 
 
 def test_metal_max_total_threads_metadata_translates_to_vulkan(tmp_path):

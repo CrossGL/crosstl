@@ -547,6 +547,25 @@ plan. It remains a metadata bundle only and does not rewrite host application
 code, execute device code, generate runtime framework code, or install target
 SDKs.
 
+Inspect host integration handoff files before downstream tooling consumes them:
+
+.. code-block:: bash
+
+   python -m crosstl inspect-host-integration-handoff \
+     crosstl-host-integration/host-integration.json \
+     --format text
+
+Host integration handoff inspections emit a
+``crosstl-runtime-host-integration-handoff-inspection`` JSON document that
+verifies the handoff manifest, guide, and per-target
+``targets/*.integration.json`` files are present, readable, and consistent with
+the handoff manifest. Target files are parsed for matching kind, target, status,
+loader-unit counts, and action counts. Missing, malformed, wrong-kind, or
+mismatched handoff files are reported as structured diagnostics. Inspection is
+read-only and remains bundle-local: it does not rewrite host application code,
+execute device code, generate runtime framework code, install target SDKs, or
+re-run host integration.
+
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a
 related location. Remapped diagnostics also expose sanitized
