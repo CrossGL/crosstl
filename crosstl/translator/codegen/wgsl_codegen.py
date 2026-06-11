@@ -1449,6 +1449,7 @@ class WGSLCodeGen:
                 f"{self.type_name_string(vtype.element_type)}>"
             )
         if isinstance(vtype, ArrayType):
+            self.validate_not_resource_array(vtype)
             element = self.type_name_string(vtype.element_type)
             if vtype.size is None:
                 return f"array<{element}>"
@@ -1557,6 +1558,33 @@ class WGSLCodeGen:
         ):
             return str(vtype.name)
         return None
+
+    def validate_not_resource_array(self, vtype):
+        resource_type = self.resource_array_element_type_name(vtype)
+        if resource_type is None:
+            return
+        raise ValueError(
+            "WGSL target does not support resource arrays of "
+            f"{resource_type}; WebGPU/WGSL requires texture, sampler, image, "
+            "and storage-buffer resources to be declared as individual "
+            "module-scope bindings"
+        )
+
+    def resource_array_element_type_name(self, vtype):
+        if not isinstance(vtype, ArrayType):
+            return None
+        element_type = self.array_element_type(vtype)
+        resource_type = self.resource_type_name(element_type)
+        if resource_type is not None and self.is_resource_type_name(resource_type):
+            return self.type_display_name(element_type)
+        return self.storage_buffer_like_type_name(element_type)
+
+    def type_display_name(self, vtype):
+        if isinstance(vtype, NamedType):
+            return str(vtype.name)
+        if isinstance(vtype, str):
+            return vtype.strip()
+        return str(vtype)
 
     def is_buffer_pointer_type(self, vtype, qualifiers=()):
         if not isinstance(vtype, PointerType):
