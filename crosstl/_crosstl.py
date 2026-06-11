@@ -456,7 +456,17 @@ def _run_project_scan(args):
 
 
 def _run_translate_project(args):
-    from .project import translate_project
+    from .project import build_runtime_binding_manifest, translate_project
+
+    binding_manifest_path = getattr(args, "runtime_binding_manifest", None)
+    if binding_manifest_path and (
+        not args.report or _is_stdout_output(args.report)
+    ):
+        print(
+            "Error: --runtime-binding-manifest requires --report with a file path",
+            file=sys.stderr,
+        )
+        return 2
 
     config = _load_project_config_from_args(args)
     report = translate_project(
@@ -471,6 +481,9 @@ def _run_translate_project(args):
     payload = report.to_json()
     if args.report:
         _write_json_payload(payload, args.report)
+        if binding_manifest_path:
+            binding_payload = build_runtime_binding_manifest(args.report)
+            _write_json_payload(binding_payload, binding_manifest_path)
     else:
         _write_json_payload(payload)
     summary = payload["summary"]
@@ -777,6 +790,106 @@ def _run_runtime_manifest(args):
         )
     elif args.format == "text":
         _write_text_payload(_format_runtime_artifact_manifest(payload), args.output)
+    else:
+        _write_json_payload(payload, args.output)
+    return 0 if payload["success"] else 1
+
+
+def _format_runtime_binding_manifest(payload):
+    lines = [f"Runtime binding manifest: {payload.get('sourceReport')}"]
+    for header_line in (
+        _format_payload_schema_version(payload, "Manifest schema version"),
+        _format_payload_kind(payload, "Manifest kind"),
+        _format_payload_generated_at(payload, "Manifest generated at"),
+        _format_payload_hash(payload, "sourceReportHash", "Source report hash"),
+    ):
+        if header_line:
+            lines.append(header_line)
+    lines.append(f"Status: {'ok' if payload.get('success') else 'failed'}")
+    scope = payload.get("scope")
+    if isinstance(scope, str) and scope:
+        lines.append(f"Manifest scope: {scope}")
+
+    project = payload.get("project")
+    for project_line in (
+        _format_project_root_path(project),
+        _format_project_output_dir(project),
+        _format_project_string_list(project, "Project targets", "targets"),
+    ):
+        if project_line:
+            lines.append(project_line)
+
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        lines.append(
+            "Summary: "
+            f"{summary.get('targetCount', 0)} targets, "
+            f"{summary.get('entryCount', 0)} binding entries, "
+            f"{summary.get('resourceBindingCount', 0)} resources, "
+            f"{summary.get('scalarConstantCount', 0)} scalar constants"
+        )
+
+    targets = payload.get("targets", [])
+    if targets:
+        lines.append("Binding targets:")
+        for target in targets:
+            if not isinstance(target, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"{target.get('targetBackend', 'unknown')}: "
+                f"{target.get('entryCount', 0)} entries, "
+                f"{target.get('resourceBindingCount', 0)} resources, "
+                f"{target.get('dispatchDimensionCount', 0)} dispatch dimensions"
+            )
+
+    entries = payload.get("entries", [])
+    if entries:
+        lines.append("Binding entries:")
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            entry_point = entry.get("entryPoint")
+            entry_name = (
+                entry_point.get("name")
+                if isinstance(entry_point, Mapping)
+                else "<none>"
+            )
+            lines.append(
+                "- "
+                f"{entry.get('targetBackend', 'unknown')}: "
+                f"{entry.get('sourceFile', '<unknown>')} -> "
+                f"{entry.get('artifactPath', '<unknown>')} :: {entry_name}"
+            )
+
+    diagnostics = payload.get("diagnostics", [])
+    if diagnostics:
+        lines.append("Diagnostics:")
+        for diagnostic in diagnostics:
+            if isinstance(diagnostic, Mapping):
+                lines.append(_format_project_diagnostic_line(diagnostic))
+    runtime_diagnostics = payload.get("runtimeDiagnostics", [])
+    if runtime_diagnostics:
+        lines.append("Runtime metadata diagnostics:")
+        for diagnostic in runtime_diagnostics:
+            if isinstance(diagnostic, Mapping):
+                lines.append(_format_project_diagnostic_line(diagnostic))
+    return "\n".join(lines) + "\n"
+
+
+def _run_runtime_binding_manifest(args):
+    from .project import build_runtime_binding_manifest
+
+    payload = build_runtime_binding_manifest(args.report)
+    if args.format == "sarif":
+        _write_json_payload(
+            _format_project_diagnostics_sarif(
+                payload, tool_name="CrossTL runtime binding manifest"
+            ),
+            args.output,
+        )
+    elif args.format == "text":
+        _write_text_payload(_format_runtime_binding_manifest(payload), args.output)
     else:
         _write_json_payload(payload, args.output)
     return 0 if payload["success"] else 1
@@ -5564,6 +5677,13 @@ def _build_parser():
         help="Write project portability JSON report to this path; use '-' for stdout",
     )
     translate_project_parser.add_argument(
+        "--runtime-binding-manifest",
+        help=(
+            "Write backend-neutral runtime binding manifest from the emitted "
+            "project report; requires --report with a file path"
+        ),
+    )
+    translate_project_parser.add_argument(
         "--validate",
         action="store_true",
         help="Validate emitted artifacts and record available toolchains",
@@ -5744,6 +5864,24 @@ def _build_parser():
         "--output", "-o", help="Write runtime artifact manifest; use '-' for stdout"
     )
     runtime_manifest_parser.set_defaults(func=_run_runtime_manifest)
+
+    runtime_binding_manifest_parser = subparsers.add_parser(
+        "runtime-binding-manifest",
+        help="Build a runtime binding manifest from a project report",
+    )
+    runtime_binding_manifest_parser.add_argument(
+        "report", help="Project portability report JSON"
+    )
+    runtime_binding_manifest_parser.add_argument(
+        "--format",
+        choices=("json", "text", "sarif"),
+        default="json",
+        help="Binding manifest output format",
+    )
+    runtime_binding_manifest_parser.add_argument(
+        "--output", "-o", help="Write runtime binding manifest; use '-' for stdout"
+    )
+    runtime_binding_manifest_parser.set_defaults(func=_run_runtime_binding_manifest)
 
     package_runtime_parser = subparsers.add_parser(
         "package-runtime",
@@ -6008,6 +6146,7 @@ def _use_legacy_cli(argv):
         "inspect-report",
         "plan-runtime",
         "runtime-manifest",
+        "runtime-binding-manifest",
         "package-runtime",
         "inspect-runtime-package",
         "plan-host-bindings",

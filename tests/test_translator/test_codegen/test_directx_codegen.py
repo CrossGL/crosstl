@@ -289,6 +289,37 @@ def test_glsl_vertex_output_locations_lower_to_distinct_hlsl_semantics(tmp_path)
     assert generated_code.count(": TEXCOORD1") == 1
 
 
+def test_glsl_vertex_input_locations_lower_to_distinct_hlsl_semantics(tmp_path):
+    shader = """
+    #version 450
+    layout(location = 0) in vec4 inPosition;
+    layout(location = 1) in vec3 inNormal;
+    layout(location = 2) in vec2 inUV;
+    layout(location = 0) out vec2 outUV;
+
+    void main() {
+        outUV = inUV;
+        gl_Position = inPosition;
+    }
+    """
+    shader_path = tmp_path / "conservative.vert"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "float4 inPosition: TEXCOORD0;" in generated_code
+    assert "float3 inNormal: TEXCOORD1;" in generated_code
+    assert "float2 inUV: TEXCOORD2;" in generated_code
+    assert "float2 outUV: TEXCOORD0;" in generated_code
+    assert "float4 gl_Position: SV_POSITION;" in generated_code
+    assert ": location" not in generated_code
+
+
 def test_directx_user_defined_synchronization_names_are_not_lowered():
     shader = """
     shader SynchronizationShadowing {
@@ -33322,6 +33353,44 @@ def test_hlsl_local_helpers_capture_stage_input_parameters():
     assert "float shadow(float2 uv, VertexOutput input);" in generated_code
     assert "float shadow(float2 uv, VertexOutput input) {" in generated_code
     assert "shadow(input.worldPosition.xy, input)" in generated_code
+
+
+def test_hlsl_local_helpers_capture_stage_output_parameters():
+    shader = """
+    shader LocalHelperStageOutputCapture {
+        struct VertexInput {
+            vec4 color;
+        };
+
+        struct VertexOutput {
+            vec4 color;
+            float size;
+        };
+
+        vertex {
+            void accumulate(VertexInput input) {
+                output.color += input.color;
+                output.size += 1.0;
+            }
+
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                output.color = vec4(0.0);
+                output.size = 0.0;
+                accumulate(input);
+                return output;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "void accumulate(VertexInput input, inout VertexOutput output) {"
+        in generated_code
+    )
+    assert "accumulate(input, output);" in generated_code
 
 
 def test_hlsl_compute_builtins_are_auto_parameters_when_referenced_by_name():

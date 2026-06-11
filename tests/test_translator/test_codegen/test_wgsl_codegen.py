@@ -104,6 +104,33 @@ def test_wgsl_codegen_preserves_explicit_io_attributes():
     )
 
 
+def test_wgsl_codegen_maps_derivative_intrinsics():
+    shader = """
+    shader WGSLDerivatives {
+        fragment {
+            vec4 main(vec3 frag_pos @ TEXCOORD0) @ gl_FragColor {
+                vec3 dx = dFdx(frag_pos);
+                vec3 dy = ddy(frag_pos);
+                vec3 fine = ddx_fine(frag_pos);
+                vec3 coarse = dFdyCoarse(frag_pos);
+                return vec4(dx + dy + fine + coarse, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "dpdx(frag_pos)" in generated
+    assert "dpdy(frag_pos)" in generated
+    assert "dpdxFine(frag_pos)" in generated
+    assert "dpdyCoarse(frag_pos)" in generated
+    assert "dFdx(" not in generated
+    assert "ddy(" not in generated
+    assert "ddx_fine(" not in generated
+    assert "dFdyCoarse(" not in generated
+
+
 def test_wgsl_codegen_emits_compute_workgroup_size():
     generated = WGSLCodeGen().generate(parse_shader(WGSL_COMPUTE_SHADER))
 

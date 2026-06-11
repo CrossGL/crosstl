@@ -10354,6 +10354,24 @@ class SlangCodeGen:
             "samplerCubeArray": "SamplerCubeArray<float4>",
             "sampler2DMS": "Sampler2DMS<float4>",
             "sampler2DMSArray": "Sampler2DMSArray<float4>",
+            "isampler1D": "Sampler1D<int4>",
+            "isampler1DArray": "Sampler1DArray<int4>",
+            "isampler2D": "Sampler2D<int4>",
+            "isampler3D": "Sampler3D<int4>",
+            "isamplerCube": "SamplerCube<int4>",
+            "isampler2DArray": "Sampler2DArray<int4>",
+            "isamplerCubeArray": "SamplerCubeArray<int4>",
+            "isampler2DMS": "Sampler2DMS<int4>",
+            "isampler2DMSArray": "Sampler2DMSArray<int4>",
+            "usampler1D": "Sampler1D<uint4>",
+            "usampler1DArray": "Sampler1DArray<uint4>",
+            "usampler2D": "Sampler2D<uint4>",
+            "usampler3D": "Sampler3D<uint4>",
+            "usamplerCube": "SamplerCube<uint4>",
+            "usampler2DArray": "Sampler2DArray<uint4>",
+            "usamplerCubeArray": "SamplerCubeArray<uint4>",
+            "usampler2DMS": "Sampler2DMS<uint4>",
+            "usampler2DMSArray": "Sampler2DMSArray<uint4>",
             "sampler2DShadow": "Sampler2DShadow",
             "sampler2DArrayShadow": "Sampler2DArrayShadow",
             "samplerCubeShadow": "SamplerCubeShadow",
@@ -10652,6 +10670,24 @@ class SlangCodeGen:
             "sampler3D": "Texture3D<float4>",
             "samplerCube": "TextureCube<float4>",
             "samplerCubeArray": "TextureCubeArray<float4>",
+            "isampler1D": "Texture1D<int4>",
+            "isampler1DArray": "Texture1DArray<int4>",
+            "isampler2D": "Texture2D<int4>",
+            "isampler2DArray": "Texture2DArray<int4>",
+            "isampler3D": "Texture3D<int4>",
+            "isamplerCube": "TextureCube<int4>",
+            "isamplerCubeArray": "TextureCubeArray<int4>",
+            "isampler2DMS": "Texture2DMS<int4>",
+            "isampler2DMSArray": "Texture2DMSArray<int4>",
+            "usampler1D": "Texture1D<uint4>",
+            "usampler1DArray": "Texture1DArray<uint4>",
+            "usampler2D": "Texture2D<uint4>",
+            "usampler2DArray": "Texture2DArray<uint4>",
+            "usampler3D": "Texture3D<uint4>",
+            "usamplerCube": "TextureCube<uint4>",
+            "usamplerCubeArray": "TextureCubeArray<uint4>",
+            "usampler2DMS": "Texture2DMS<uint4>",
+            "usampler2DMSArray": "Texture2DMSArray<uint4>",
             "sampler2DShadow": "Texture2D<float>",
             "sampler2DArrayShadow": "Texture2DArray<float>",
             "samplerCubeShadow": "TextureCube<float>",
@@ -12849,13 +12885,14 @@ class SlangCodeGen:
                     return self.unsupported_sampled_texture_call(
                         func_name, offset_reason
                     )
+            texture_type = self.get_expression_type(args[0])
+            result_type = self.sampled_texture_value_type(texture_type)
             expected_reason = self.texture_result_expected_type_unsupported_reason(
-                func_name, "float4"
+                func_name, result_type
             )
             if expected_reason:
                 return self.unsupported_sampled_texture_call(func_name, expected_reason)
             lod_or_sample = self.generate_expression(extra_args[0])
-            texture_type = self.get_expression_type(args[0])
             if self.is_multisample_sampler_type(texture_type):
                 return f"{texture_name}[{coord}, {lod_or_sample}]"
             coord_constructor = self.texel_fetch_coord_constructor(texture_type)
@@ -14124,6 +14161,7 @@ class SlangCodeGen:
         return info["size"]
 
     def sampled_texture_coordinate_rank(self, resource_type):
+        resource_type = self.sampled_texture_shape_type(resource_type)
         return {
             "sampler1D": 1,
             "sampler1DArray": 2,
@@ -14135,6 +14173,7 @@ class SlangCodeGen:
         }.get(resource_type)
 
     def texel_fetch_coordinate_rank(self, resource_type):
+        resource_type = self.sampled_texture_shape_type(resource_type)
         return {
             "sampler1D": 1,
             "sampler1DArray": 2,
@@ -14146,6 +14185,7 @@ class SlangCodeGen:
         }.get(resource_type)
 
     def texture_offset_rank(self, resource_type):
+        resource_type = self.sampled_texture_shape_type(resource_type)
         return {
             "sampler1D": 1,
             "sampler1DArray": 1,
@@ -14155,6 +14195,7 @@ class SlangCodeGen:
         }.get(resource_type)
 
     def texture_gradient_rank(self, resource_type):
+        resource_type = self.sampled_texture_shape_type(resource_type)
         return {
             "sampler1D": 1,
             "sampler1DArray": 1,
@@ -14166,6 +14207,7 @@ class SlangCodeGen:
         }.get(resource_type)
 
     def gather_offset_rank(self, resource_type):
+        resource_type = self.sampled_texture_shape_type(resource_type)
         return {
             "sampler2D": 2,
             "sampler2DArray": 2,
@@ -14555,11 +14597,28 @@ class SlangCodeGen:
             and "Shadow" not in resource_type
         )
 
+    def sampled_texture_shape_type(self, type_name):
+        resource_type = self.resource_base_type(type_name)
+        if not isinstance(resource_type, str):
+            return None
+        for prefix in ("isampler", "usampler"):
+            if resource_type.startswith(prefix):
+                return f"sampler{resource_type[len(prefix):]}"
+        return resource_type
+
+    def sampled_texture_value_type(self, type_name):
+        resource_type = self.resource_base_type(type_name)
+        if isinstance(resource_type, str) and resource_type.startswith("isampler"):
+            return "int4"
+        if isinstance(resource_type, str) and resource_type.startswith("usampler"):
+            return "uint4"
+        return "float4"
+
     def is_sampled_texture_resource_type(self, type_name):
         resource_type = self.resource_base_type(type_name)
         return (
             isinstance(resource_type, str)
-            and resource_type.startswith("sampler")
+            and resource_type.startswith(("sampler", "isampler", "usampler"))
             and resource_type != "sampler"
         )
 
@@ -14589,13 +14648,13 @@ class SlangCodeGen:
         return type_name.split("[", 1)[0]
 
     def is_multisample_sampler_type(self, type_name):
-        return self.resource_base_type(type_name) in {
+        return self.sampled_texture_shape_type(type_name) in {
             "sampler2DMS",
             "sampler2DMSArray",
         }
 
     def is_texel_fetch_sampler_type(self, type_name):
-        return self.resource_base_type(type_name) in {
+        return self.sampled_texture_shape_type(type_name) in {
             "sampler1D",
             "sampler1DArray",
             "sampler2D",
@@ -14606,7 +14665,7 @@ class SlangCodeGen:
         }
 
     def is_texel_fetch_offset_sampler_type(self, type_name):
-        return self.resource_base_type(type_name) in {
+        return self.sampled_texture_shape_type(type_name) in {
             "sampler1D",
             "sampler1DArray",
             "sampler2D",
@@ -14615,7 +14674,7 @@ class SlangCodeGen:
         }
 
     def texel_fetch_coord_constructor(self, type_name):
-        base_type = self.resource_base_type(type_name)
+        base_type = self.sampled_texture_shape_type(type_name)
         if base_type in {"sampler1D", "sampler1DArray"}:
             return "int2" if base_type == "sampler1D" else "int3"
         if base_type in {"sampler3D", "sampler2DArray"}:

@@ -209,6 +209,108 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+  runtime-parity:
+    name: Runtime Parity (${{ matrix.adapter }} on ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            adapter: opengl
+            required_tools: glslangValidator
+            install_command: sudo apt-get update && sudo apt-get install -y glslang-tools
+          - os: ubuntu-latest
+            adapter: vulkan
+            required_tools: spirv-val,spirv-as
+            install_command: sudo apt-get update && sudo apt-get install -y spirv-tools
+          - os: macOS-latest
+            adapter: metal
+            required_tools: xcrun
+            install_command: xcrun -sdk macosx -f metal
+          - os: windows-latest
+            adapter: directx
+            required_tools: dxc
+            install_command: ""
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install adapter toolchain
+        shell: bash
+        env:
+          INSTALL_COMMAND: ${{ matrix.install_command }}
+        run: |
+          if [ -n "$INSTALL_COMMAND" ]; then
+            eval "$INSTALL_COMMAND"
+          fi
+
+      - name: Probe runtime parity adapter availability
+        id: probe_runtime_parity
+        shell: bash
+        env:
+          RUNTIME_PARITY_ADAPTER: ${{ matrix.adapter }}
+          RUNTIME_PARITY_REQUIRED_TOOLS: ${{ matrix.required_tools }}
+        run: |
+          python - <<'PY'
+          import os
+          import shutil
+
+          adapter = os.environ["RUNTIME_PARITY_ADAPTER"]
+          required_tools = [
+              tool
+              for tool in os.environ["RUNTIME_PARITY_REQUIRED_TOOLS"].split(",")
+              if tool
+          ]
+          missing = [tool for tool in required_tools if shutil.which(tool) is None]
+          available = "false" if missing else "true"
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"available={available}\n")
+              output.write(f"missing={','.join(missing)}\n")
+          if missing:
+              print(
+                  f"Runtime parity adapter unavailable for {adapter}: "
+                  + ", ".join(missing)
+              )
+          else:
+              print(f"Runtime parity adapter available for {adapter}")
+          PY
+
+      - name: Install dependencies
+        if: steps.probe_runtime_parity.outputs.available == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install -r requirements.txt
+
+      - name: Run runtime parity tests
+        if: steps.probe_runtime_parity.outputs.available == 'true'
+        shell: bash
+        run: |
+          mkdir -p support/generated
+          python -m pytest -q \
+            tests/test_translator/test_runtime_verification.py \
+            -k "runtime_parity" \
+            --junitxml support/generated/runtime-parity-${{ matrix.adapter }}-${{ matrix.os }}.xml
+
+      - name: Record unavailable runtime parity adapter
+        if: steps.probe_runtime_parity.outputs.available != 'true'
+        shell: bash
+        run: |
+          {
+            echo "## Runtime Parity Adapter Skipped"
+            echo "- Adapter: ${{ matrix.adapter }}"
+            echo "- OS: ${{ matrix.os }}"
+            echo "- Missing tools: ${{ steps.probe_runtime_parity.outputs.missing }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   compiler-smoke-linux:
     name: Compiler Smoke (Linux CUDA/DXC/SPIR-V/Slang)
     runs-on: ubuntu-24.04

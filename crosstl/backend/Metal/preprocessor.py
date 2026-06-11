@@ -76,6 +76,8 @@ class _MetalTemplateFunction:
     body_start: int
     source: str
     variadic_template_parameters: Set[str] = field(default_factory=set)
+    template_parameter_defaults: Dict[str, str] = field(default_factory=dict)
+    template_type_traits: Dict[str, Dict[str, object]] = field(default_factory=dict)
     materializations: List[str] = field(default_factory=list)
 
 
@@ -417,6 +419,7 @@ class MetalPreprocessor(HLSLPreprocessor):
 
     def _find_template_functions(self, code: str) -> List[_MetalTemplateFunction]:
         templates: List[_MetalTemplateFunction] = []
+        template_type_traits = self._find_template_type_traits(code)
         pos = 0
         while True:
             match = re.search(r"\btemplate\s*<", code[pos:])
@@ -461,6 +464,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                     variadic_template_parameters=(
                         self._variadic_template_parameter_names(parameter_text)
                     ),
+                    template_parameter_defaults=(
+                        self._template_parameter_defaults(parameter_text)
+                    ),
+                    template_type_traits=template_type_traits,
                 )
             )
             pos = body_end
@@ -952,6 +959,19 @@ class MetalPreprocessor(HLSLPreprocessor):
                 names.append(tokens[-1])
         return names
 
+    def _template_parameter_defaults(
+        self, template_parameters: str
+    ) -> Dict[str, str]:
+        defaults: Dict[str, str] = {}
+        for parameter in self._split_top_level_commas(template_parameters):
+            if "=" not in parameter:
+                continue
+            names = self._template_parameter_names(parameter)
+            if not names:
+                continue
+            defaults[names[-1]] = parameter.split("=", 1)[1].strip()
+        return defaults
+
     def _variadic_template_parameter_names(self, template_parameters: str) -> Set[str]:
         names: Set[str] = set()
         for parameter in self._split_top_level_commas(template_parameters):
@@ -970,6 +990,7 @@ class MetalPreprocessor(HLSLPreprocessor):
     ) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
         substitutions: Dict[str, str] = {}
         variadic_bindings: Dict[str, List[str]] = {}
+        defaults = getattr(template, "template_parameter_defaults", {}) or {}
         argument_index = 0
         for parameter_index, name in enumerate(template.template_parameters):
             if name in template.variadic_template_parameters:
@@ -987,10 +1008,18 @@ class MetalPreprocessor(HLSLPreprocessor):
                 substitutions[name] = values[0] if values else "void"
                 argument_index += variadic_count
                 continue
-            if argument_index >= len(template_arguments):
-                break
-            substitutions[name] = template_arguments[argument_index]
-            argument_index += 1
+            if argument_index < len(template_arguments):
+                substitutions[name] = template_arguments[argument_index]
+                argument_index += 1
+                continue
+            default_argument = defaults.get(name)
+            if default_argument is None:
+                continue
+            substitutions[name] = self._resolve_template_default_argument(
+                default_argument,
+                substitutions,
+                template,
+            )
         return substitutions, variadic_bindings
 
     def _template_arguments_satisfy_parameters(
@@ -998,16 +1027,153 @@ class MetalPreprocessor(HLSLPreprocessor):
         template: _MetalTemplateFunction,
         template_arguments: List[str],
     ) -> bool:
-        fixed_parameter_count = len(
-            [
-                name
-                for name in template.template_parameters
-                if name not in template.variadic_template_parameters
-            ]
+        defaults = getattr(template, "template_parameter_defaults", {}) or {}
+        argument_index = 0
+        parameter_count = len(template.template_parameters)
+        for parameter_index, name in enumerate(template.template_parameters):
+            if name in template.variadic_template_parameters:
+                remaining_fixed = parameter_count - parameter_index - 1
+                remaining_arguments = len(template_arguments) - argument_index
+                if remaining_arguments < remaining_fixed:
+                    return False
+                variadic_count = max(0, remaining_arguments - remaining_fixed)
+                argument_index += variadic_count
+                continue
+            if argument_index < len(template_arguments):
+                argument_index += 1
+                continue
+            if name not in defaults:
+                return False
+        return True
+
+    def _resolve_template_default_argument(
+        self,
+        default_argument: str,
+        substitutions: Dict[str, str],
+        template: _MetalTemplateFunction,
+    ) -> str:
+        resolved = self._replace_identifiers(str(default_argument), substitutions)
+        resolved = self._normalize_template_argument_text(resolved)
+        trait_resolved = self._resolve_template_type_trait(
+            resolved,
+            getattr(template, "template_type_traits", {}) or {},
         )
-        if template.variadic_template_parameters:
-            return len(template_arguments) >= fixed_parameter_count
-        return len(template_arguments) >= len(template.template_parameters)
+        return trait_resolved or resolved
+
+    def _resolve_template_type_trait(
+        self,
+        type_text: str,
+        traits: Dict[str, Dict[str, object]],
+    ) -> Optional[str]:
+        text = str(type_text or "").strip()
+        match = re.fullmatch(
+            r"(?:typename\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_:]*)\s*"
+            r"<(?P<args>.*)>\s*::\s*type",
+            text,
+            re.DOTALL,
+        )
+        if match is None:
+            return None
+        trait = traits.get(match.group("name").split("::")[-1])
+        if not trait:
+            return None
+        arguments = [
+            self._normalize_template_argument_text(argument)
+            for argument in self._split_top_level_commas(match.group("args"))
+        ]
+        specializations = trait.get("specializations", {})
+        specialized = specializations.get(tuple(arguments))
+        if isinstance(specialized, str) and specialized:
+            return specialized
+        parameters = trait.get("parameters", [])
+        default_type = trait.get("default")
+        if not isinstance(default_type, str) or len(arguments) < len(parameters):
+            return None
+        substitutions = dict(zip(parameters, arguments))
+        resolved = self._replace_identifiers(default_type, substitutions)
+        return self._normalize_template_argument_text(resolved)
+
+    def _find_template_type_traits(self, code: str) -> Dict[str, Dict[str, object]]:
+        traits: Dict[str, Dict[str, object]] = {}
+        pos = 0
+        while True:
+            match = re.search(r"\btemplate\s*<", code[pos:])
+            if match is None:
+                break
+            start = pos + match.start()
+            angle_start = code.find("<", start)
+            angle_end = self._find_matching_angle(code, angle_start)
+            if angle_end is None:
+                pos = start + len("template")
+                continue
+            declaration_start = angle_end + 1
+            body_start = self._find_next_top_level_char(code, declaration_start, "{")
+            semicolon = self._find_next_top_level_char(code, declaration_start, ";")
+            if body_start is None or (semicolon is not None and semicolon < body_start):
+                pos = declaration_start
+                continue
+            body_end = self._find_matching_brace(code, body_start)
+            if body_end is None:
+                pos = body_start + 1
+                continue
+            header = code[declaration_start:body_start]
+            body = code[body_start + 1 : body_end - 1]
+            self._record_template_type_trait(
+                traits,
+                code[angle_start + 1 : angle_end],
+                header,
+                body,
+            )
+            pos = body_end
+        return traits
+
+    def _record_template_type_trait(
+        self,
+        traits: Dict[str, Dict[str, object]],
+        parameter_text: str,
+        header: str,
+        body: str,
+    ) -> None:
+        alias_type = self._template_type_trait_alias_type(body)
+        if not alias_type:
+            return
+        header_match = re.search(
+            r"\b(?:struct|class)\s+([A-Za-z_][A-Za-z0-9_:]*)\s*"
+            r"(?:<(?P<args>[^{};]*)>)?",
+            header,
+            re.DOTALL,
+        )
+        if header_match is None:
+            return
+        name = header_match.group(1).split("::")[-1]
+        trait = traits.setdefault(
+            name,
+            {
+                "parameters": [],
+                "default": None,
+                "specializations": {},
+            },
+        )
+        specialization_args = header_match.group("args")
+        if specialization_args is not None:
+            arguments = tuple(
+                self._normalize_template_argument_text(argument)
+                for argument in self._split_top_level_commas(specialization_args)
+            )
+            trait.setdefault("specializations", {})[arguments] = alias_type
+            return
+        trait["parameters"] = self._template_parameter_names(parameter_text)
+        trait["default"] = alias_type
+
+    def _template_type_trait_alias_type(self, body: str) -> Optional[str]:
+        match = re.search(
+            r"\busing\s+type\s*=\s*(?P<type>[^;{}]+)\s*;",
+            body,
+            re.DOTALL,
+        )
+        if match is None:
+            return None
+        return self._normalize_template_argument_text(match.group("type"))
 
     def _expand_variadic_function_parameters(
         self, source: str, variadic_bindings: Dict[str, List[str]]
