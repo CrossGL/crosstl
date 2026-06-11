@@ -9,7 +9,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 from crosstl.translator.codegen import normalize_backend_name
 
@@ -110,6 +110,188 @@ class RuntimeArtifactSelector:
 
 
 @dataclass(frozen=True)
+class RuntimeEntryPoint:
+    """Backend-neutral entry-point metadata required by runtime adapters."""
+
+    name: str
+    stage: str | None = None
+    execution_config: Mapping[str, Any] = field(default_factory=dict)
+    workgroup_size: tuple[Any, ...] = field(default_factory=tuple)
+    parameters: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"name": self.name}
+        if self.stage is not None:
+            payload["stage"] = self.stage
+        if self.execution_config:
+            payload["executionConfig"] = dict(self.execution_config)
+        if self.workgroup_size:
+            payload["workgroupSize"] = list(self.workgroup_size)
+        if self.parameters:
+            payload["parameters"] = [dict(parameter) for parameter in self.parameters]
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
+
+
+@dataclass(frozen=True)
+class RuntimeResourceBinding:
+    """Backend-neutral resource binding consumed by a runtime adapter."""
+
+    binding_id: str | None = None
+    name: str | None = None
+    kind: str | None = None
+    type_name: str | None = None
+    set: Any = None
+    binding: Any = None
+    index: int | None = None
+    access: str | None = None
+    value: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        for field_name, value in (
+            ("id", self.binding_id),
+            ("name", self.name),
+            ("kind", self.kind),
+            ("type", self.type_name),
+            ("set", self.set),
+            ("binding", self.binding),
+            ("index", self.index),
+            ("access", self.access),
+            ("value", self.value),
+        ):
+            if value is not None:
+                payload[field_name] = value
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
+
+
+@dataclass(frozen=True)
+class RuntimeSpecializationConstant:
+    """Specialization or function constant value for adapter execution."""
+
+    name: str | None = None
+    constant_id: Any = None
+    kind: str = "specialization-constant"
+    dtype: str | None = None
+    value: Any = None
+    default: Any = None
+    required: bool = False
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"kind": self.kind, "required": self.required}
+        if self.name is not None:
+            payload["name"] = self.name
+        if self.constant_id is not None:
+            payload["id"] = self.constant_id
+        if self.dtype is not None:
+            payload["dtype"] = self.dtype
+        if self.value is not None:
+            payload["value"] = self.value
+        if self.default is not None:
+            payload["default"] = self.default
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
+
+
+@dataclass(frozen=True)
+class RuntimeDispatchGeometry:
+    """Backend-neutral dispatch geometry for kernel execution."""
+
+    entry_point: str | None = None
+    workgroup_size: tuple[Any, ...] = field(default_factory=tuple)
+    workgroup_count: tuple[int, ...] = field(default_factory=tuple)
+    global_size: tuple[int, ...] = field(default_factory=tuple)
+    grid_size: tuple[int, ...] = field(default_factory=tuple)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if self.entry_point is not None:
+            payload["entryPoint"] = self.entry_point
+        if self.workgroup_size:
+            payload["workgroupSize"] = list(self.workgroup_size)
+        if self.workgroup_count:
+            payload["workgroupCount"] = list(self.workgroup_count)
+        if self.global_size:
+            payload["globalSize"] = list(self.global_size)
+        if self.grid_size:
+            payload["gridSize"] = list(self.grid_size)
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
+
+
+@dataclass(frozen=True)
+class RuntimeValidationHook:
+    """Validation hook expected before, during, or after adapter execution."""
+
+    name: str
+    phase: str = "pre-run"
+    required: bool = True
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "name": self.name,
+            "phase": self.phase,
+            "required": self.required,
+        }
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
+
+
+@dataclass(frozen=True)
+class RuntimeAdapterContract:
+    """Backend-neutral contract runtime adapters use to execute an artifact."""
+
+    contract_id: str | None = None
+    entry_points: tuple[RuntimeEntryPoint, ...] = field(default_factory=tuple)
+    resource_bindings: tuple[RuntimeResourceBinding, ...] = field(default_factory=tuple)
+    specialization_constants: tuple[RuntimeSpecializationConstant, ...] = (
+        field(default_factory=tuple)
+    )
+    dispatch: RuntimeDispatchGeometry | None = None
+    validation_hooks: tuple[RuntimeValidationHook, ...] = field(default_factory=tuple)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if self.contract_id is not None:
+            payload["id"] = self.contract_id
+        if self.entry_points:
+            payload["entryPoints"] = [
+                entry_point.to_json() for entry_point in self.entry_points
+            ]
+        if self.resource_bindings:
+            payload["resourceBindings"] = [
+                binding.to_json() for binding in self.resource_bindings
+            ]
+        if self.specialization_constants:
+            payload["specializationConstants"] = [
+                constant.to_json() for constant in self.specialization_constants
+            ]
+        if self.dispatch is not None:
+            dispatch = self.dispatch.to_json()
+            if dispatch:
+                payload["dispatch"] = dispatch
+        if self.validation_hooks:
+            payload["validationHooks"] = [
+                hook.to_json() for hook in self.validation_hooks
+            ]
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
+
+
+@dataclass(frozen=True)
 class RuntimeFixture:
     """A runtime verification fixture bound to one translated artifact."""
 
@@ -118,6 +300,7 @@ class RuntimeFixture:
     inputs: tuple[RuntimeValue, ...] = field(default_factory=tuple)
     expected_outputs: tuple[RuntimeValue, ...] = field(default_factory=tuple)
     default_tolerance: RuntimeTolerance = field(default_factory=RuntimeTolerance)
+    adapter_contract: RuntimeAdapterContract | None = None
     executor: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
@@ -131,6 +314,10 @@ class RuntimeFixture:
         }
         if self.executor is not None:
             payload["executor"] = self.executor
+        if self.adapter_contract is not None:
+            adapter_contract = self.adapter_contract.to_json()
+            if adapter_contract:
+                payload["runtimeAdapter"] = adapter_contract
         if self.metadata:
             payload["metadata"] = dict(self.metadata)
         return payload
@@ -144,6 +331,9 @@ class RuntimeExecutionRequest:
     artifact: Mapping[str, Any]
     artifact_path: Path | None
     project_root: Path | None
+    adapter_contract: RuntimeAdapterContract = field(
+        default_factory=RuntimeAdapterContract
+    )
 
 
 @dataclass(frozen=True)
@@ -163,6 +353,21 @@ class RuntimeExecutorResult:
     outputs: Any = field(default_factory=dict)
     message: str | None = None
     details: Mapping[str, Any] = field(default_factory=dict)
+
+
+@runtime_checkable
+class RuntimeAdapter(Protocol):
+    """Protocol implemented by backend or downstream runtime adapters."""
+
+    name: str
+
+    def is_available(
+        self, request: RuntimeExecutionRequest
+    ) -> RuntimeExecutorAvailability:
+        ...
+
+    def run(self, request: RuntimeExecutionRequest) -> RuntimeExecutorResult:
+        ...
 
 
 class RuntimeExecutor:
@@ -377,6 +582,10 @@ def _parse_runtime_fixture(value: Any, *, index: int) -> RuntimeFixture:
             )
         )
     )
+    adapter_contract = _parse_runtime_adapter_contract(
+        value.get("runtimeAdapter", value.get("adapterContract")),
+        field_name=f"fixtures[{index}].runtimeAdapter",
+    )
     executor = _optional_string(
         value.get("executor"), field_name=f"fixtures[{index}].executor"
     )
@@ -391,6 +600,7 @@ def _parse_runtime_fixture(value: Any, *, index: int) -> RuntimeFixture:
         inputs=inputs,
         expected_outputs=expected_outputs,
         default_tolerance=default_tolerance,
+        adapter_contract=adapter_contract,
         executor=executor,
         metadata=dict(metadata),
     )
@@ -437,6 +647,254 @@ def _parse_artifact_selector(value: Mapping[str, Any], *, field_name: str):
             f"{field_name}.selector must identify an artifact."
         )
     return selector
+
+
+def _parse_runtime_adapter_contract(
+    value: Any, *, field_name: str
+) -> RuntimeAdapterContract | None:
+    if value is None:
+        return None
+    if isinstance(value, RuntimeAdapterContract):
+        return value
+    if not isinstance(value, Mapping):
+        raise RuntimeVerificationError(f"{field_name} must be an object.")
+    metadata = _parse_runtime_metadata(
+        value.get("metadata", {}), field_name=f"{field_name}.metadata"
+    )
+    dispatch = (
+        _parse_runtime_dispatch_geometry(
+            value.get("dispatch", value.get("dispatchGeometry")),
+            field_name=f"{field_name}.dispatch",
+        )
+        if "dispatch" in value or "dispatchGeometry" in value
+        else None
+    )
+    return RuntimeAdapterContract(
+        contract_id=_optional_string(value.get("id"), field_name=f"{field_name}.id"),
+        entry_points=tuple(
+            _parse_runtime_entry_point(
+                entry_point, field_name=f"{field_name}.entryPoints[{index}]"
+            )
+            for index, entry_point in enumerate(
+                _required_sequence(
+                    value.get("entryPoints", []),
+                    field_name=f"{field_name}.entryPoints",
+                )
+            )
+        ),
+        resource_bindings=tuple(
+            _parse_runtime_resource_binding(
+                binding, field_name=f"{field_name}.resourceBindings[{index}]"
+            )
+            for index, binding in enumerate(
+                _required_sequence(
+                    value.get("resourceBindings", value.get("resources", [])),
+                    field_name=f"{field_name}.resourceBindings",
+                )
+            )
+        ),
+        specialization_constants=_parse_runtime_specialization_constants(
+            value, field_name=field_name
+        ),
+        dispatch=dispatch,
+        validation_hooks=tuple(
+            _parse_runtime_validation_hook(
+                hook, field_name=f"{field_name}.validationHooks[{index}]"
+            )
+            for index, hook in enumerate(
+                _required_sequence(
+                    value.get("validationHooks", []),
+                    field_name=f"{field_name}.validationHooks",
+                )
+            )
+        ),
+        metadata=metadata,
+    )
+
+
+def _parse_runtime_entry_point(value: Any, *, field_name: str) -> RuntimeEntryPoint:
+    if isinstance(value, RuntimeEntryPoint):
+        return value
+    if not isinstance(value, Mapping):
+        raise RuntimeVerificationError(f"{field_name} must be an object.")
+    execution_config = value.get("executionConfig", {})
+    if execution_config is None:
+        execution_config = {}
+    if not isinstance(execution_config, Mapping):
+        raise RuntimeVerificationError(f"{field_name}.executionConfig must be an object.")
+    return RuntimeEntryPoint(
+        name=_required_string(value.get("name"), field_name=f"{field_name}.name"),
+        stage=_optional_string(value.get("stage"), field_name=f"{field_name}.stage"),
+        execution_config=dict(execution_config),
+        workgroup_size=_parse_runtime_vector(
+            value.get("workgroupSize"),
+            field_name=f"{field_name}.workgroupSize",
+            integer_only=False,
+        ),
+        parameters=tuple(
+            _parse_runtime_metadata(
+                parameter, field_name=f"{field_name}.parameters[{index}]"
+            )
+            for index, parameter in enumerate(
+                _required_sequence(
+                    value.get("parameters", []), field_name=f"{field_name}.parameters"
+                )
+            )
+        ),
+        metadata=_parse_runtime_metadata(
+            value.get("metadata", {}), field_name=f"{field_name}.metadata"
+        ),
+    )
+
+
+def _parse_runtime_resource_binding(
+    value: Any, *, field_name: str
+) -> RuntimeResourceBinding:
+    if isinstance(value, RuntimeResourceBinding):
+        return value
+    if not isinstance(value, Mapping):
+        raise RuntimeVerificationError(f"{field_name} must be an object.")
+    binding_id = _optional_string(value.get("id"), field_name=f"{field_name}.id")
+    name = _optional_string(value.get("name"), field_name=f"{field_name}.name")
+    kind = _optional_string(value.get("kind"), field_name=f"{field_name}.kind")
+    index = value.get("index")
+    if index is not None and (
+        not isinstance(index, int) or isinstance(index, bool) or index < 0
+    ):
+        raise RuntimeVerificationError(
+            f"{field_name}.index must be a non-negative integer."
+        )
+    if binding_id is None and name is None and value.get("binding") is None:
+        raise RuntimeVerificationError(
+            f"{field_name} must identify a resource by id, name, or binding."
+        )
+    return RuntimeResourceBinding(
+        binding_id=binding_id,
+        name=name,
+        kind=kind,
+        type_name=_optional_string(value.get("type"), field_name=f"{field_name}.type"),
+        set=value.get("set"),
+        binding=value.get("binding"),
+        index=index,
+        access=_optional_string(value.get("access"), field_name=f"{field_name}.access"),
+        value=_optional_string(value.get("value"), field_name=f"{field_name}.value"),
+        metadata=_parse_runtime_metadata(
+            value.get("metadata", {}), field_name=f"{field_name}.metadata"
+        ),
+    )
+
+
+def _parse_runtime_specialization_constants(
+    value: Mapping[str, Any], *, field_name: str
+) -> tuple[RuntimeSpecializationConstant, ...]:
+    constants: list[RuntimeSpecializationConstant] = []
+    for key, default_kind in (
+        ("specializationConstants", "specialization-constant"),
+        ("functionConstants", "function-constant"),
+    ):
+        for index, constant in enumerate(
+            _required_sequence(value.get(key, []), field_name=f"{field_name}.{key}")
+        ):
+            constants.append(
+                _parse_runtime_specialization_constant(
+                    constant,
+                    field_name=f"{field_name}.{key}[{index}]",
+                    default_kind=default_kind,
+                )
+            )
+    return tuple(constants)
+
+
+def _parse_runtime_specialization_constant(
+    value: Any, *, field_name: str, default_kind: str
+) -> RuntimeSpecializationConstant:
+    if isinstance(value, RuntimeSpecializationConstant):
+        return value
+    if not isinstance(value, Mapping):
+        raise RuntimeVerificationError(f"{field_name} must be an object.")
+    name = _optional_string(value.get("name"), field_name=f"{field_name}.name")
+    constant_id = value.get("id", value.get("constantId"))
+    if name is None and constant_id is None:
+        raise RuntimeVerificationError(
+            f"{field_name} must identify a constant by name or id."
+        )
+    return RuntimeSpecializationConstant(
+        name=name,
+        constant_id=constant_id,
+        kind=(
+            _optional_string(value.get("kind"), field_name=f"{field_name}.kind")
+            or default_kind
+        ),
+        dtype=_optional_string(value.get("dtype"), field_name=f"{field_name}.dtype"),
+        value=value.get("value"),
+        default=value.get("default"),
+        required=_optional_bool(
+            value.get("required", False), field_name=f"{field_name}.required"
+        ),
+        metadata=_parse_runtime_metadata(
+            value.get("metadata", {}), field_name=f"{field_name}.metadata"
+        ),
+    )
+
+
+def _parse_runtime_dispatch_geometry(
+    value: Any, *, field_name: str
+) -> RuntimeDispatchGeometry:
+    if isinstance(value, RuntimeDispatchGeometry):
+        return value
+    if not isinstance(value, Mapping):
+        raise RuntimeVerificationError(f"{field_name} must be an object.")
+    return RuntimeDispatchGeometry(
+        entry_point=_optional_string(
+            value.get("entryPoint", value.get("entry_point")),
+            field_name=f"{field_name}.entryPoint",
+        ),
+        workgroup_size=_parse_runtime_vector(
+            value.get("workgroupSize"),
+            field_name=f"{field_name}.workgroupSize",
+            integer_only=False,
+        ),
+        workgroup_count=_parse_runtime_vector(
+            value.get("workgroupCount"),
+            field_name=f"{field_name}.workgroupCount",
+            integer_only=True,
+        ),
+        global_size=_parse_runtime_vector(
+            value.get("globalSize"),
+            field_name=f"{field_name}.globalSize",
+            integer_only=True,
+        ),
+        grid_size=_parse_runtime_vector(
+            value.get("gridSize"),
+            field_name=f"{field_name}.gridSize",
+            integer_only=True,
+        ),
+        metadata=_parse_runtime_metadata(
+            value.get("metadata", {}), field_name=f"{field_name}.metadata"
+        ),
+    )
+
+
+def _parse_runtime_validation_hook(
+    value: Any, *, field_name: str
+) -> RuntimeValidationHook:
+    if isinstance(value, RuntimeValidationHook):
+        return value
+    if not isinstance(value, Mapping):
+        raise RuntimeVerificationError(f"{field_name} must be an object.")
+    return RuntimeValidationHook(
+        name=_required_string(value.get("name"), field_name=f"{field_name}.name"),
+        phase=(
+            _optional_string(value.get("phase"), field_name=f"{field_name}.phase")
+            or "pre-run"
+        ),
+        required=_optional_bool(
+            value.get("required", True), field_name=f"{field_name}.required"
+        ),
+        metadata=_parse_runtime_metadata(
+            value.get("metadata", {}), field_name=f"{field_name}.metadata"
+        ),
+    )
 
 
 def _parse_runtime_value_list(value: Any, *, field_name: str):
@@ -496,6 +954,38 @@ def _parse_shape(value: Any, *, field_name: str) -> tuple[int, ...]:
     return tuple(shape)
 
 
+def _parse_runtime_vector(
+    value: Any, *, field_name: str, integer_only: bool
+) -> tuple[Any, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        expected = "integers" if integer_only else "scalars"
+        raise RuntimeVerificationError(f"{field_name} must be a list of {expected}.")
+    vector: list[Any] = []
+    for index, item in enumerate(value):
+        if integer_only:
+            if not isinstance(item, int) or isinstance(item, bool) or item < 0:
+                raise RuntimeVerificationError(
+                    f"{field_name}[{index}] must be a non-negative integer."
+                )
+            vector.append(item)
+            continue
+        if isinstance(item, (str, int, float)) and not isinstance(item, bool):
+            vector.append(item)
+            continue
+        raise RuntimeVerificationError(f"{field_name}[{index}] must be a scalar.")
+    return tuple(vector)
+
+
+def _parse_runtime_metadata(value: Any, *, field_name: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise RuntimeVerificationError(f"{field_name} must be an object.")
+    return dict(value)
+
+
 def _parse_tolerance(
     value: RuntimeTolerance | Mapping[str, Any] | None, *, field_name: str
 ) -> RuntimeTolerance:
@@ -544,6 +1034,12 @@ def _optional_string(value: Any, *, field_name: str) -> str | None:
         return None
     if not isinstance(value, str) or not value.strip():
         raise RuntimeVerificationError(f"{field_name} must be a non-empty string.")
+    return value
+
+
+def _optional_bool(value: Any, *, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise RuntimeVerificationError(f"{field_name} must be a boolean.")
     return value
 
 
@@ -667,11 +1163,13 @@ def _verify_runtime_fixture(
             status=selected["status"],
             failure_phase=selected["failurePhase"],
             artifact=selected.get("artifact"),
+            adapter_contract=fixture.adapter_contract,
             diagnostics=selected.get("diagnostics", []),
         )
 
     artifact = selected["artifact"]
     artifact_path = _runtime_artifact_path(artifact, root_path=root_path)
+    adapter_contract = _runtime_adapter_contract(fixture, artifact)
     target = _normalize_target(
         str(artifact.get("target", fixture.selector.target or ""))
     )
@@ -683,6 +1181,7 @@ def _verify_runtime_fixture(
             status=UNAVAILABLE,
             failure_phase="runtime",
             artifact=artifact,
+            adapter_contract=adapter_contract,
             executor={"key": executor_key, "status": UNAVAILABLE},
             diagnostics=[
                 _diagnostic(
@@ -699,6 +1198,7 @@ def _verify_runtime_fixture(
         artifact=artifact,
         artifact_path=artifact_path,
         project_root=root_path,
+        adapter_contract=adapter_contract,
     )
     executor_name = getattr(executor, "name", executor.__class__.__name__)
     availability = _executor_availability(executor, request)
@@ -708,6 +1208,7 @@ def _verify_runtime_fixture(
             status=UNAVAILABLE,
             failure_phase="runtime",
             artifact=artifact,
+            adapter_contract=adapter_contract,
             executor={
                 "key": executor_key,
                 "name": executor_name,
@@ -734,6 +1235,7 @@ def _verify_runtime_fixture(
             status=UNAVAILABLE,
             failure_phase="runtime",
             artifact=artifact,
+            adapter_contract=adapter_contract,
             executor={
                 "key": executor_key,
                 "name": executor_name,
@@ -753,6 +1255,7 @@ def _verify_runtime_fixture(
             fixture,
             status=SKIPPED,
             artifact=artifact,
+            adapter_contract=adapter_contract,
             executor={"key": executor_key, "name": executor_name, "status": SKIPPED},
             diagnostics=[
                 _diagnostic(
@@ -769,6 +1272,7 @@ def _verify_runtime_fixture(
             status=RUNTIME_FAILED,
             failure_phase="runtime",
             artifact=artifact,
+            adapter_contract=adapter_contract,
             executor={
                 "key": executor_key,
                 "name": executor_name,
@@ -789,6 +1293,7 @@ def _verify_runtime_fixture(
             status=RUNTIME_FAILED,
             failure_phase="runtime",
             artifact=artifact,
+            adapter_contract=adapter_contract,
             executor={
                 "key": executor_key,
                 "name": executor_name,
@@ -820,6 +1325,7 @@ def _verify_runtime_fixture(
             fixture,
             status=SKIPPED,
             artifact=artifact,
+            adapter_contract=adapter_contract,
             executor=executor_payload,
         )
     if normalized_status in EXECUTOR_UNAVAILABLE_STATUSES:
@@ -828,6 +1334,7 @@ def _verify_runtime_fixture(
             status=UNAVAILABLE,
             failure_phase="runtime",
             artifact=artifact,
+            adapter_contract=adapter_contract,
             executor=executor_payload,
         )
     if normalized_status in EXECUTOR_FAILED_STATUSES:
@@ -836,6 +1343,7 @@ def _verify_runtime_fixture(
             status=RUNTIME_FAILED,
             failure_phase="runtime",
             artifact=artifact,
+            adapter_contract=adapter_contract,
             executor=executor_payload,
         )
     if normalized_status not in EXECUTOR_OK_STATUSES:
@@ -844,6 +1352,7 @@ def _verify_runtime_fixture(
             status=RUNTIME_FAILED,
             failure_phase="runtime",
             artifact=artifact,
+            adapter_contract=adapter_contract,
             executor=executor_payload,
             diagnostics=[
                 _diagnostic(
@@ -868,6 +1377,7 @@ def _verify_runtime_fixture(
         status=COMPARISON_FAILED if comparison_failed else PASSED,
         failure_phase="comparison" if comparison_failed else None,
         artifact=artifact,
+        adapter_contract=adapter_contract,
         executor=executor_payload,
         comparisons=comparisons,
     )
@@ -959,6 +1469,185 @@ def _artifact_failed(artifact: Mapping[str, Any]) -> bool:
         "failed",
         TRANSLATION_FAILED,
     }
+
+
+def _runtime_adapter_contract(
+    fixture: RuntimeFixture, artifact: Mapping[str, Any]
+) -> RuntimeAdapterContract:
+    artifact_contract = _runtime_adapter_contract_from_artifact(artifact)
+    if fixture.adapter_contract is None:
+        return artifact_contract
+    return _merge_runtime_adapter_contract(artifact_contract, fixture.adapter_contract)
+
+
+def _runtime_adapter_contract_from_artifact(
+    artifact: Mapping[str, Any],
+) -> RuntimeAdapterContract:
+    explicit_contract = _parse_runtime_adapter_contract(
+        artifact.get("runtimeAdapter", artifact.get("adapterContract")),
+        field_name="artifact.runtimeAdapter",
+    )
+    entry_points = tuple(
+        _parse_runtime_entry_point(
+            entry_point, field_name=f"artifact.entryPoints[{index}]"
+        )
+        for index, entry_point in enumerate(
+            _runtime_record_sequence(artifact.get("entryPoints"))
+        )
+        if isinstance(entry_point, Mapping)
+    )
+    resource_bindings = tuple(
+        _parse_runtime_resource_binding(
+            binding, field_name=f"artifact.resourceBindings[{index}]"
+        )
+        for index, binding in enumerate(
+            _runtime_record_sequence(artifact.get("resourceBindings"))
+        )
+        if isinstance(binding, Mapping)
+    )
+    artifact_payload = {
+        "specializationConstants": artifact.get("specializationConstants", []),
+        "functionConstants": artifact.get("functionConstants", []),
+    }
+    manifest_contract = RuntimeAdapterContract(
+        entry_points=entry_points,
+        resource_bindings=resource_bindings,
+        specialization_constants=_parse_runtime_specialization_constants(
+            artifact_payload, field_name="artifact"
+        ),
+        dispatch=_runtime_dispatch_geometry_from_artifact(artifact),
+        validation_hooks=tuple(
+            _parse_runtime_validation_hook(
+                hook, field_name=f"artifact.validationHooks[{index}]"
+            )
+            for index, hook in enumerate(
+                _runtime_record_sequence(artifact.get("validationHooks"))
+            )
+            if isinstance(hook, Mapping)
+        ),
+    )
+    if explicit_contract is None:
+        return manifest_contract
+    return _merge_runtime_adapter_contract(manifest_contract, explicit_contract)
+
+
+def _runtime_dispatch_geometry_from_artifact(
+    artifact: Mapping[str, Any],
+) -> RuntimeDispatchGeometry | None:
+    dispatch = artifact.get("dispatch")
+    if not isinstance(dispatch, Mapping):
+        return None
+    for index, workgroup in enumerate(_runtime_record_sequence(dispatch.get("workgroups"))):
+        if not isinstance(workgroup, Mapping):
+            continue
+        metadata = {}
+        for field_name in ("stage", "source", "executionConfig"):
+            if field_name in workgroup:
+                metadata[field_name] = workgroup[field_name]
+        if "status" in dispatch:
+            metadata["status"] = dispatch["status"]
+        return _parse_runtime_dispatch_geometry(
+            {
+                "entryPoint": workgroup.get("entryPoint"),
+                "workgroupSize": workgroup.get("workgroupSize"),
+                "metadata": metadata,
+            },
+            field_name=f"artifact.dispatch.workgroups[{index}]",
+        )
+    if any(
+        key in dispatch
+        for key in (
+            "entryPoint",
+            "workgroupSize",
+            "workgroupCount",
+            "globalSize",
+            "gridSize",
+        )
+    ):
+        return _parse_runtime_dispatch_geometry(
+            dispatch, field_name="artifact.dispatch"
+        )
+    return None
+
+
+def _merge_runtime_adapter_contract(
+    base: RuntimeAdapterContract, override: RuntimeAdapterContract
+) -> RuntimeAdapterContract:
+    return RuntimeAdapterContract(
+        contract_id=override.contract_id or base.contract_id,
+        entry_points=_merge_runtime_contract_items(
+            base.entry_points,
+            override.entry_points,
+            key=lambda item: (item.name, item.stage),
+        ),
+        resource_bindings=_merge_runtime_contract_items(
+            base.resource_bindings,
+            override.resource_bindings,
+            key=_runtime_resource_binding_key,
+        ),
+        specialization_constants=_merge_runtime_contract_items(
+            base.specialization_constants,
+            override.specialization_constants,
+            key=lambda item: item.name if item.name is not None else item.constant_id,
+        ),
+        dispatch=_merge_runtime_dispatch(base.dispatch, override.dispatch),
+        validation_hooks=_merge_runtime_contract_items(
+            base.validation_hooks,
+            override.validation_hooks,
+            key=lambda item: (item.phase, item.name),
+        ),
+        metadata={**dict(base.metadata), **dict(override.metadata)},
+    )
+
+
+def _merge_runtime_contract_items(
+    base: tuple[Any, ...], override: tuple[Any, ...], *, key: Any
+) -> tuple[Any, ...]:
+    if not base:
+        return override
+    if not override:
+        return base
+    result = list(base)
+    positions = {key(item): index for index, item in enumerate(result)}
+    for item in override:
+        item_key = key(item)
+        if item_key in positions:
+            result[positions[item_key]] = item
+        else:
+            positions[item_key] = len(result)
+            result.append(item)
+    return tuple(result)
+
+
+def _runtime_resource_binding_key(binding: RuntimeResourceBinding) -> Any:
+    if binding.binding_id is not None:
+        return ("id", binding.binding_id)
+    if binding.name is not None:
+        return ("name", binding.name)
+    return ("binding", binding.set, binding.binding, binding.index)
+
+
+def _merge_runtime_dispatch(
+    base: RuntimeDispatchGeometry | None, override: RuntimeDispatchGeometry | None
+) -> RuntimeDispatchGeometry | None:
+    if base is None:
+        return override
+    if override is None:
+        return base
+    return RuntimeDispatchGeometry(
+        entry_point=override.entry_point or base.entry_point,
+        workgroup_size=override.workgroup_size or base.workgroup_size,
+        workgroup_count=override.workgroup_count or base.workgroup_count,
+        global_size=override.global_size or base.global_size,
+        grid_size=override.grid_size or base.grid_size,
+        metadata={**dict(base.metadata), **dict(override.metadata)},
+    )
+
+
+def _runtime_record_sequence(value: Any) -> Sequence[Any]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return value
+    return ()
 
 
 def _runtime_artifact_path(
@@ -1256,6 +1945,7 @@ def _fixture_result(
     status: str,
     failure_phase: str | None = None,
     artifact: Mapping[str, Any] | None = None,
+    adapter_contract: RuntimeAdapterContract | None = None,
     executor: Mapping[str, Any] | None = None,
     comparisons: Sequence[Mapping[str, Any]] = (),
     diagnostics: Sequence[Mapping[str, Any]] = (),
@@ -1269,6 +1959,10 @@ def _fixture_result(
         "comparisons": [dict(comparison) for comparison in comparisons],
         "diagnostics": [dict(diagnostic) for diagnostic in diagnostics],
     }
+    if adapter_contract is not None:
+        adapter_payload = adapter_contract.to_json()
+        if adapter_payload:
+            result["runtimeAdapter"] = adapter_payload
     if failure_phase is not None:
         result["failurePhase"] = failure_phase
     return result

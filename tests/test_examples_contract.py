@@ -104,11 +104,33 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
 ADDITIONAL_FIXED_CASES = (("cross_platform/UniversalPBRShader.cgl", "slang"),)
 
 GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES = (
-    ("advanced/GenericPatternMatching.cgl", "vulkan", "SPIR-V"),
-    ("advanced/GenericPatternMatching.cgl", "cuda", "CUDA"),
-    ("advanced/GenericPatternMatching.cgl", "hip", "HIP"),
-    ("advanced/GenericPatternMatching.cgl", "mojo", "Mojo"),
-    ("advanced/GenericPatternMatching.cgl", "slang", "Slang"),
+    (
+        "advanced/GenericPatternMatching.cgl",
+        "vulkan",
+        "SPIR-V codegen does not support unspecialized generic helper "
+        "'safe_divide' with generic parameters (T); specialize the function "
+        "before SPIR-V generation",
+    ),
+    (
+        "advanced/GenericPatternMatching.cgl",
+        "cuda",
+        "CUDA codegen does not support generic functions",
+    ),
+    (
+        "advanced/GenericPatternMatching.cgl",
+        "hip",
+        "HIP codegen does not support generic functions",
+    ),
+    (
+        "advanced/GenericPatternMatching.cgl",
+        "mojo",
+        "Mojo codegen does not support generic functions",
+    ),
+    (
+        "advanced/GenericPatternMatching.cgl",
+        "slang",
+        "Slang codegen does not support generic functions",
+    ),
 )
 
 KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
@@ -279,15 +301,12 @@ def test_additional_fixed_examples_translate(relative_path, backend):
 
 
 @pytest.mark.parametrize(
-    "relative_path,backend,backend_label", GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES
+    "relative_path,backend,message", GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES
 )
 def test_generic_function_examples_report_backend_diagnostics(
-    relative_path, backend, backend_label
+    relative_path, backend, message
 ):
-    with pytest.raises(
-        ValueError,
-        match=rf"{backend_label} codegen does not support generic functions",
-    ):
+    with pytest.raises(ValueError, match=re.escape(message)):
         crosstl.translate(
             str(_example_path(relative_path)), backend=backend, format_output=False
         )

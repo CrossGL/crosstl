@@ -29,6 +29,7 @@ from crosstl.translator.ast import (
 from crosstl.translator.codegen.SPIRV_codegen import (
     SpirvId,
     SpirvType,
+    UnsupportedSPIRVFeatureError,
     VulkanSPIRVCodeGen,
 )
 from crosstl.translator.lexer import Lexer
@@ -317,6 +318,74 @@ class TestVulkanSPIRVCodeGen:
 
         self.assert_uint_int_min_literal_lowering(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_metal_bool_function_constant_lowers_to_spirv_spec_constant(
+        self, tmp_path
+    ):
+        source_path = tmp_path / "conv.metal"
+        source_path.write_text(
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            constant bool do_flip [[function_constant(200)]];
+
+            kernel void conv() {
+                if (do_flip) {
+                }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        spv_code = crosstl.translate(
+            str(source_path), backend="vulkan", format_output=False
+        )
+        bool_type = re.search(r"(%\d+) = OpTypeBool\b", spv_code)
+        assert bool_type is not None
+        do_flip = spirv_named_id(spv_code, "do_flip")
+
+        assert (
+            f"{do_flip} = OpSpecConstantFalse {bool_type.group(1)}" in spv_code
+        )
+        assert f"OpDecorate {do_flip} SpecId 200" in spv_code
+        assert not re.search(rf"{re.escape(do_flip)} = OpVariable\b", spv_code)
+        assert not re.search(
+            rf"OpTypePointer (?:Input|Output) {re.escape(bool_type.group(1))}\b",
+            spv_code,
+        )
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_compute_bool_input_reports_structured_lowering_diagnostic(self):
+        source_code = """
+        shader BoolInputDiagnostic {
+            compute {
+                void main(bool do_flip) {}
+            }
+        }
+        """
+        ast = Parser(Lexer(source_code).tokens).parse()
+        stage = next(iter(ast.stages.values()))
+        stage.entry_point.parameters[0].source_location = {
+            "line": 4,
+            "column": 27,
+        }
+
+        with pytest.raises(
+            UnsupportedSPIRVFeatureError,
+            match=(
+                r"source declaration 'bool do_flip'.*Lower boolean "
+                r"input-like values as int or uint uniforms or specialization "
+                r"constants"
+            ),
+        ) as exc_info:
+            VulkanSPIRVCodeGen().generate(ast)
+
+        assert exc_info.value.feature == "spirv.bool_interface"
+        assert exc_info.value.missing_capabilities == (
+            "spirv.bool_interface_lowering",
+        )
+        assert exc_info.value.source_location == {"line": 4, "column": 27}
 
     def test_initialization(self):
         gen = VulkanSPIRVCodeGen()

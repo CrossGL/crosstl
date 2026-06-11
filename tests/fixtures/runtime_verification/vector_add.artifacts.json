@@ -1,0 +1,82 @@
+{
+  "kind": "crosstl-project-portability-report",
+  "project": {
+    "targets": [
+      "metal"
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "metal|kernels/vector_add.cgl|debug",
+      "source": "kernels/vector_add.cgl",
+      "path": "tests/fixtures/runtime_verification/vector_add.metal",
+      "target": "metal",
+      "sourceBackend": "cgl",
+      "stage": "compute",
+      "variant": "debug",
+      "status": "translated",
+      "entryPoints": [
+        {
+          "name": "vector_add",
+          "stage": "compute",
+          "executionConfig": {
+            "numthreads": [
+              4,
+              1,
+              1
+            ]
+          }
+        }
+      ],
+      "resourceBindings": [
+        {
+          "id": "buffer|0|0|lhs|0",
+          "name": "lhs",
+          "kind": "buffer",
+          "type": "float32",
+          "set": 0,
+          "binding": 0,
+          "access": "read",
+          "status": "bound"
+        },
+        {
+          "id": "buffer|0|1|rhs|1",
+          "name": "rhs",
+          "kind": "buffer",
+          "type": "float32",
+          "set": 0,
+          "binding": 1,
+          "access": "read",
+          "status": "bound"
+        },
+        {
+          "id": "buffer|0|2|out|2",
+          "name": "out",
+          "kind": "buffer",
+          "type": "float32",
+          "set": 0,
+          "binding": 2,
+          "access": "write",
+          "status": "bound"
+        }
+      ],
+      "dispatch": {
+        "status": "available",
+        "workgroupCount": 1,
+        "workgroups": [
+          {
+            "entryPoint": "vector_add",
+            "stage": "compute",
+            "workgroupSize": [
+              4,
+              1,
+              1
+            ],
+            "source": "fixture"
+          }
+        ],
+        "diagnostics": []
+      }
+    }
+  ]
+}
