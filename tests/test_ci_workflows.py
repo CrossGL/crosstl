@@ -30,6 +30,15 @@ TRANSLATOR_TEST_MATRIX_NAMES = {
     "webgl": "webgl",
     "wgsl": "wgsl",
 }
+DEMO_GENERATED_OUTPUT_TRIGGER_PATHS = {
+    "crosstl/backend/**",
+    "crosstl/translator/ast.py",
+    "crosstl/translator/codegen/**",
+    "crosstl/translator/lexer.py",
+    "crosstl/translator/parser.py",
+    "crosstl/translator/source_registry.py",
+    "crosstl/translator/validation.py",
+}
 
 
 def _workflow_texts():
@@ -74,6 +83,41 @@ def _parse_matrix_values(raw):
         for item in raw.split(",")
         if item.strip().strip("\"'")
     }
+
+
+def _workflow_event_paths(workflow_text, event_name):
+    event_header = f"  {event_name}:"
+    lines = workflow_text.splitlines()
+    for index, line in enumerate(lines):
+        if line != event_header:
+            continue
+        section = []
+        for section_line in lines[index + 1 :]:
+            if (
+                section_line.strip()
+                and section_line.startswith("  ")
+                and not section_line.startswith("    ")
+            ):
+                break
+            section.append(section_line)
+        break
+    else:
+        raise AssertionError(f"workflow event not found: {event_name}")
+
+    for index, line in enumerate(section):
+        if line.strip() != "paths:":
+            continue
+        indent = len(line) - len(line.lstrip())
+        paths = []
+        for item_line in section[index + 1 :]:
+            item_indent = len(item_line) - len(item_line.lstrip())
+            if item_line.strip() and item_indent <= indent:
+                break
+            item = re.match(r"^\s*-\s+(.+?)\s*$", item_line)
+            if item:
+                paths.append(item.group(1).strip("\"'"))
+        return paths
+    raise AssertionError(f"workflow event has no paths filter: {event_name}")
 
 
 def _matrix_values(workflow_text, key):
@@ -219,7 +263,26 @@ def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
     assert "permissions:\n  contents: read" in demo
     assert "timeout-minutes: 45" in demo
     assert "os: [ubuntu-latest]" in demo
+    demo_push_paths = set(_workflow_event_paths(demo, "push"))
+    demo_pull_request_paths = set(_workflow_event_paths(demo, "pull_request"))
+    assert demo_push_paths == demo_pull_request_paths
+    assert DEMO_GENERATED_OUTPUT_TRIGGER_PATHS <= demo_push_paths
+    for broad_path in (
+        "crosstl/**",
+        "crosstl/translator/**",
+        ".github/**",
+        "tools/**",
+        "support/**",
+    ):
+        assert broad_path not in demo_push_paths
     assert '".github/workflows/demo.yml"' in demo
+    assert '"crosstl/backend/**"' in demo
+    assert '"crosstl/translator/ast.py"' in demo
+    assert '"crosstl/translator/codegen/**"' in demo
+    assert '"crosstl/translator/lexer.py"' in demo
+    assert '"crosstl/translator/parser.py"' in demo
+    assert '"crosstl/translator/source_registry.py"' in demo
+    assert '"crosstl/translator/validation.py"' in demo
     assert '"demos/open-source-porting/**"' in demo
     assert '"support/demo-ci-metadata.json"' in demo
     assert '"tests/test_demo_open_source_porting.py"' in demo
