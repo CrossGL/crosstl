@@ -32341,8 +32341,12 @@ def test_translate_project_metal_matmul_buffers_lower_to_opengl_resources(
         "    uint inner_dim;\n"
         "} params;"
     ) in output
-    assert "layout(std430, binding = 1) readonly buffer ABuffer { float A[]; };" in output
-    assert "layout(std430, binding = 2) readonly buffer BBuffer { float B[]; };" in output
+    assert (
+        "layout(std430, binding = 1) readonly buffer ABuffer { float A[]; };" in output
+    )
+    assert (
+        "layout(std430, binding = 2) readonly buffer BBuffer { float B[]; };" in output
+    )
     assert "layout(std430, binding = 3) buffer XBuffer { float X[]; };" in output
     assert "void main()" in output
     assert "uvec2 id = uvec2(gl_GlobalInvocationID.xy);" in output

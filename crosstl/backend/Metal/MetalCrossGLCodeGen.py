@@ -2413,9 +2413,10 @@ class MetalToCrossGLConverter:
             return False
         if mapped_text in {"float", "double", "int", "uint", "bool"}:
             return True
-        if self.crossgl_identifier_pattern.fullmatch(mapped_text) and mapped_text[
-            0
-        ].isupper():
+        if (
+            self.crossgl_identifier_pattern.fullmatch(mapped_text)
+            and mapped_text[0].isupper()
+        ):
             return True
         return bool(
             re.fullmatch(

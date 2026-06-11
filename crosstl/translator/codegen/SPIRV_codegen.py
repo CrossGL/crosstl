@@ -16164,9 +16164,7 @@ class VulkanSPIRVCodeGen:
                 )
             else:
                 incompatibility_reasons.append(
-                    self.storage_buffer_argument_rejection_reason(
-                        param, arg, arg_index
-                    )
+                    self.storage_buffer_argument_rejection_reason(param, arg, arg_index)
                 )
             search(
                 param_index,
