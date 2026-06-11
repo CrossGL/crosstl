@@ -490,15 +490,7 @@ class MojoToCrossGLConverter:
         if selected:
             return selected
 
-        if "main" in function_names:
-            return set()
-
-        return {
-            function.name
-            for function in functions
-            if function.name != "main"
-            and self.expression_uses_mojo_gpu_builtins(function)
-        }
+        return set()
 
     def collect_reachable_gpu_function_names(self, ast, kernel_names):
         if not kernel_names:
