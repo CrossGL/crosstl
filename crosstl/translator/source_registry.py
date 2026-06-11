@@ -86,10 +86,15 @@ class SourceSpec:
         *,
         include_paths: Sequence[str] | None = None,
         defines: Mapping[str, str] | None = None,
+        source_options: Mapping[str, Any] | None = None,
     ):
         """Parse source code into that source backend's AST."""
         lexer_cls, parser_cls = self.load_lexer_parser()
         lexer_kwargs = {}
+        if source_options:
+            for name, value in source_options.items():
+                if _accepts_keyword(lexer_cls, name):
+                    lexer_kwargs[name] = value
         if file_path is not None and _accepts_keyword(lexer_cls, "file_path"):
             lexer_kwargs["file_path"] = file_path
         if include_paths and _accepts_keyword(lexer_cls, "include_paths"):

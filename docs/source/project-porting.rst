@@ -645,6 +645,9 @@ configuration contract is intentionally small:
    [project.defines]
    USE_FAST_PATH = "1"
 
+   [project.source_options.metal]
+   max_template_specializations = 2048
+
    [project.variants.debug]
    USE_FAST_PATH = "0"
 
@@ -678,7 +681,11 @@ files in the skipped-file rollups and emit structured diagnostics with the
 same specific guidance as single-file translation, while continuing to discover
 supported translation units in the repository.
 Include directories, defines, and named
-variants are recorded in project reports. Project reports include
+variants are recorded in project reports. Source frontend options can also be
+set under ``[project.source_options.<source-backend>]`` and are forwarded only
+to source lexers that expose matching keyword options. Metal source imports
+support ``max_template_specializations`` for project-specific explicit helper
+materialization budgets. Project reports include
 order-preserving include-directory status records and status counts so missing,
 non-directory, outside-project, and frontend-visible active include directories
 can be triaged without re-running discovery. Missing include directories,

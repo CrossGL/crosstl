@@ -16132,9 +16132,9 @@ class MetalCodeGen:
     ):
         if shader_type != "vertex":
             return False
-        if self.is_resource_parameter_type(raw_param_type):
-            return False
-        if self.is_sampler_type(raw_param_type):
+        if self.is_metal_resource_or_buffer_parameter(
+            raw_param_type, parameter, shader_type
+        ):
             return False
         if self.type_name_string(raw_param_type) in self.structs_by_name:
             return False
@@ -16143,6 +16143,17 @@ class MetalCodeGen:
         if self.is_graphics_stage_output_parameter(parameter, shader_type):
             return False
         return True
+
+    def is_metal_resource_or_buffer_parameter(
+        self, raw_param_type, parameter, shader_type=None
+    ):
+        if self.is_resource_parameter_type(raw_param_type):
+            return True
+        if self.is_raw_buffer_parameter_type(raw_param_type, parameter):
+            return True
+        if self.is_bound_scalar_value_parameter(raw_param_type, parameter, shader_type):
+            return True
+        return False
 
     def all_functions(self, ast):
         functions = list(getattr(ast, "functions", []) or [])

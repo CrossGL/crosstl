@@ -14958,6 +14958,80 @@ def test_metal_cbuffer_parameter_avoids_stage_input_name():
     assert "input.position * input1.scale" in generated_code
 
 
+def test_metal_vertex_buffer_reference_parameter_stays_out_of_stage_input_wrapper():
+    code = """
+    shader MetalVertexBufferInput {
+        struct Camera {
+            mat4 invViewMatrix;
+        };
+
+        struct Input {
+            vec3 position @ POSITION;
+        };
+
+        struct Output {
+            vec4 position @ SV_POSITION;
+        };
+
+        vertex {
+            Output main(Input input, constant Camera& camera @buffer(0)) {
+                Output output;
+                output.position = vec4(input.position, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "vertex")
+
+    assert (
+        "vertex Output vertex_main(Input input [[stage_in]], "
+        "constant Camera& camera [[buffer(0)]])"
+    ) in generated_code
+    assert "struct vertex_main_Input" not in generated_code
+    assert "_crossglInput" not in generated_code
+    assert "constant Camera& camera = _crossglInput.camera;" not in generated_code
+
+
+def test_metal_vertex_stage_input_wrapper_excludes_buffer_resources():
+    code = """
+    shader MetalVertexBufferInput {
+        struct Camera {
+            mat4 invViewMatrix;
+        };
+
+        struct Output {
+            vec4 position @ SV_POSITION;
+        };
+
+        vertex {
+            Output main(vec3 position @ POSITION, constant Camera& camera @buffer(0)) {
+                Output output;
+                output.position = vec4(position, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "vertex")
+
+    assert "struct vertex_main_Input" in generated_code
+    assert "float3 position [[attribute(0)]];" in generated_code
+    assert "constant Camera& camera [[buffer(0)]];" not in generated_code
+    assert re.search(
+        r"vertex Output vertex_main\([^)]*constant Camera& camera "
+        r"\[\[buffer\(0\)\]\][^)]*vertex_main_Input _crossglInput "
+        r"\[\[stage_in\]\][^)]*\)",
+        generated_code,
+    )
+    assert "float3 position = _crossglInput.position;" in generated_code
+    assert "constant Camera& camera = _crossglInput.camera;" not in generated_code
+
+
 def test_metal_cbuffer_parameter_avoids_texture_resource_name():
     code = """
     shader CBufferScope {

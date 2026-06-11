@@ -60,10 +60,9 @@ The harness writes reports, generated artifacts, and command logs under
 
 ## Current Translator Gaps
 
-- CrossGL/crosstl#1001: expand project macro planning for backend-native
-  shader directives.
-- CrossGL/crosstl#1002: parse numeric-heavy generated Metal specialization
-  identifiers.
+- CrossGL/crosstl#1012: plan Metal mode directives as project variants.
+- CrossGL/crosstl#1013: handle generated Metal numeric suffixes in specialized
+  declarators.
 - CrossGL/crosstl#1003: materialize concrete project template variants before
   template-hostile targets.
 - CrossGL/crosstl#1004: scale project template specialization without hard
@@ -87,7 +86,8 @@ CrossGL/crosstl#939, CrossGL/crosstl#940, CrossGL/crosstl#941,
 CrossGL/crosstl#943, CrossGL/crosstl#944, CrossGL/crosstl#945, and
 CrossGL/crosstl#946. CrossGL/crosstl#979, CrossGL/crosstl#980,
 CrossGL/crosstl#981, CrossGL/crosstl#982, CrossGL/crosstl#983,
-CrossGL/crosstl#984, and CrossGL/crosstl#985 are also covered by mainline
-fixes. The current full-corpus scout no longer reports runtime-adapter
-contracts, boolean SPIR-V interface lowering, or the previous closed issue set
-as active missing capabilities.
+CrossGL/crosstl#984, CrossGL/crosstl#985, CrossGL/crosstl#1001, and
+CrossGL/crosstl#1002 are also covered by mainline fixes or superseded by the
+current follow-up issue set. The current full-corpus scout no longer reports
+runtime-adapter contracts, boolean SPIR-V interface lowering, or the previous
+closed issue set as active missing capabilities.

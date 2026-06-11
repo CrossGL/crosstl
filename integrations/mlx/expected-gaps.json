@@ -23,16 +23,16 @@
   },
   "tracked_issues": [
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1001",
-      "scope": "project-native-directive-planning",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1012",
+      "scope": "metal-mode-directive-planning",
       "status": "open",
-      "summary": "Expand project macro planning for backend-native shader directives."
+      "summary": "Plan Metal mode directives as project variants."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1002",
-      "scope": "metal-generated-specialization-identifiers",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1013",
+      "scope": "metal-generated-specialization-declarators",
       "status": "open",
-      "summary": "Parse numeric-heavy generated Metal specialization identifiers."
+      "summary": "Handle generated Metal numeric suffixes in specialized declarators."
     },
     {
       "issue": "https://github.com/CrossGL/crosstl/issues/1003",
@@ -73,6 +73,8 @@
     "https://github.com/CrossGL/crosstl/issues/982",
     "https://github.com/CrossGL/crosstl/issues/983",
     "https://github.com/CrossGL/crosstl/issues/984",
-    "https://github.com/CrossGL/crosstl/issues/985"
+    "https://github.com/CrossGL/crosstl/issues/985",
+    "https://github.com/CrossGL/crosstl/issues/1001",
+    "https://github.com/CrossGL/crosstl/issues/1002"
   ]
 }
