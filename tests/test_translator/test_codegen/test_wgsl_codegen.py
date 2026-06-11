@@ -1811,12 +1811,102 @@ def test_wgsl_codegen_rejects_structured_buffers_inside_user_structs():
         WGSLCodeGen().generate(parse_shader(shader))
 
 
-def test_wgsl_codegen_rejects_structured_buffer_parameters():
+def test_wgsl_codegen_lowers_structured_buffer_parameters_to_storage_pointers():
     shader = """
     shader WGSLStructuredBufferParameter {
-        float readFirst(StructuredBuffer<float> values) {
-            return values[0];
+        StructuredBuffer<float> values;
+        RWStructuredBuffer<float> outValues;
+
+        float readAt(StructuredBuffer<float> src, uint index) {
+            return buffer_load(src, index);
         }
+
+        void writeAt(RWStructuredBuffer<float> dst, uint index, float value) {
+            buffer_store(dst, index, value);
+        }
+
+        compute {
+            void main(uint3 gid @ gl_GlobalInvocationID) {
+                float value = readAt(values, gid.x);
+                writeAt(outValues, gid.x, value);
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(0)\nvar<storage, read> values: array<f32>;" in generated
+    assert (
+        "@group(0) @binding(1)\nvar<storage, read_write> outValues: array<f32>;"
+        in generated
+    )
+    assert (
+        "fn readAt(src: ptr<storage, array<f32>, read>, index: u32) -> f32" in generated
+    )
+    assert (
+        "fn writeAt(dst: ptr<storage, array<f32>, read_write>, "
+        "index: u32, value: f32)" in generated
+    )
+    assert "return (*src)[index];" in generated
+    assert "(*dst)[index] = value;" in generated
+    assert "var value: f32 = readAt(&values, gid.x);" in generated
+    assert "writeAt(&outValues, gid.x, value);" in generated
+    assert "StructuredBuffer<float> src" not in generated
+    assert "RWStructuredBuffer<float> dst" not in generated
+
+
+def test_wgsl_codegen_lowers_reference_structured_buffer_parameters():
+    shader = """
+    shader WGSLStructuredBufferReferenceParameter {
+        StructuredBuffer<float> values;
+        RWStructuredBuffer<float> outValues;
+
+        uint readCount(StructuredBuffer<float>& src) {
+            return buffer_dimensions(src);
+        }
+
+        void copyAt(
+            StructuredBuffer<float>& src,
+            RWStructuredBuffer<float>& dst,
+            uint index
+        ) {
+            dst.Store(index, src.Load(index));
+        }
+
+        compute {
+            void main(uint3 gid @ gl_GlobalInvocationID) {
+                uint count = readCount(values);
+                if (gid.x < count) {
+                    copyAt(values, outValues, gid.x);
+                }
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "fn readCount(src: ptr<storage, array<f32>, read>) -> u32" in generated
+    assert "return arrayLength(src);" in generated
+    assert (
+        "fn copyAt(src: ptr<storage, array<f32>, read>, "
+        "dst: ptr<storage, array<f32>, read_write>, index: u32)" in generated
+    )
+    assert "(*dst)[index] = (*src)[index];" in generated
+    assert "var count: u32 = readCount(&values);" in generated
+    assert "copyAt(&values, &outValues, gid.x);" in generated
+
+
+def test_wgsl_codegen_rejects_readonly_structured_buffer_parameter_stores():
+    shader = """
+    shader WGSLReadonlyStructuredBufferParameterStore {
+        void writeBad(StructuredBuffer<float> src) {
+            buffer_store(src, 0u, 1.0);
+        }
+
         compute {
             void main() {
                 return;
@@ -1827,9 +1917,53 @@ def test_wgsl_codegen_rejects_structured_buffer_parameters():
 
     with pytest.raises(
         ValueError,
-        match="WGSL target does not support StructuredBuffer parameters yet",
+        match="cannot store through read-only StructuredBuffer",
     ):
         WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_resolves_structured_buffer_parameter_overloads_by_access():
+    shader = """
+    shader WGSLStructuredBufferParameterOverloads {
+        StructuredBuffer<float> values;
+        RWStructuredBuffer<float> outValues;
+
+        float access(StructuredBuffer<float> src, uint index) {
+            return buffer_load(src, index);
+        }
+
+        float access(RWStructuredBuffer<float> src, uint index) {
+            return buffer_load(src, index);
+        }
+
+        compute {
+            void main(uint3 gid @ gl_GlobalInvocationID) {
+                float readOnlyValue = access(values, gid.x);
+                float readWriteValue = access(outValues, gid.x);
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "fn access_structured_buffer_read_f32_u32"
+        "(src: ptr<storage, array<f32>, read>, index: u32) -> f32" in generated
+    )
+    assert (
+        "fn access_structured_buffer_read_write_f32_u32"
+        "(src: ptr<storage, array<f32>, read_write>, index: u32) -> f32" in generated
+    )
+    assert (
+        "var readOnlyValue: f32 = "
+        "access_structured_buffer_read_f32_u32(&values, gid.x);" in generated
+    )
+    assert (
+        "var readWriteValue: f32 = "
+        "access_structured_buffer_read_write_f32_u32(&outValues, gid.x);" in generated
+    )
 
 
 def test_wgsl_codegen_does_not_rewrite_shadowed_cbuffer_member_identifiers():

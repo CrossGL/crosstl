@@ -1056,7 +1056,7 @@ class WGSLCodeGen:
             )
             self.register_parameter_value_types(entry_point)
             self.push_pointer_identifier_scope(
-                self.buffer_pointer_parameter_names(entry_point)
+                self.raw_buffer_pointer_parameter_names(entry_point)
             )
             try:
                 signature = self.generate_function_signature(
@@ -1558,11 +1558,11 @@ class WGSLCodeGen:
                 "WGSL target does not support "
                 f"{unsupported_storage_type} resources yet"
             )
-        if self.structured_buffer_element_type(node.param_type) is not None:
-            raise ValueError(
-                "WGSL target does not support StructuredBuffer parameters yet; "
-                "declare them as module-scope storage resources"
-            )
+        structured_buffer_parameter = self.structured_buffer_parameter_type(
+            node.param_type
+        )
+        if structured_buffer_parameter is not None:
+            return f"{prefix}{parameter_name}: {structured_buffer_parameter}"
         sampled_texture_array = self.sampled_texture_array_info(node.param_type)
         if sampled_texture_array is not None:
             resource_type = self.type_display_name(
@@ -4697,8 +4697,16 @@ class WGSLCodeGen:
     def is_resource_type_name(self, lower_type_name):
         return lower_type_name in self.RESOURCE_TYPE_NAMES
 
-    def structured_buffer_element_type(self, vtype):
+    def structured_buffer_named_type(self, vtype):
+        if isinstance(vtype, ReferenceType):
+            vtype = vtype.referenced_type
         if not isinstance(vtype, NamedType):
+            return None
+        return vtype
+
+    def structured_buffer_element_type(self, vtype):
+        vtype = self.structured_buffer_named_type(vtype)
+        if vtype is None:
             return None
         base_name = str(vtype.name).lower()
         if base_name not in self.STRUCTURED_BUFFER_TYPE_NAMES:
@@ -4711,12 +4719,21 @@ class WGSLCodeGen:
         return vtype.generic_args[0]
 
     def structured_buffer_access(self, vtype):
-        if self.structured_buffer_element_type(vtype) is None:
+        vtype = self.structured_buffer_named_type(vtype)
+        if vtype is None or self.structured_buffer_element_type(vtype) is None:
             return None
         base_name = str(vtype.name).lower()
         if base_name in self.WRITABLE_STRUCTURED_BUFFER_TYPE_NAMES:
             return "read_write"
         return "read"
+
+    def structured_buffer_parameter_type(self, vtype):
+        element_type = self.structured_buffer_element_type(vtype)
+        if element_type is None:
+            return None
+        element = self.type_name_string(element_type)
+        access = self.structured_buffer_access(vtype) or "read"
+        return f"ptr<storage, array<{element}>, {access}>"
 
     def constant_buffer_element_type(self, vtype):
         if not isinstance(vtype, NamedType):
@@ -5014,6 +5031,15 @@ class WGSLCodeGen:
             return False
         qualifier_names = {str(qualifier).lower() for qualifier in qualifiers or []}
         return bool(qualifier_names.intersection({"buffer", "storage"}))
+
+    def is_buffer_pointer_parameter_type(self, vtype, qualifiers=()):
+        return (
+            self.is_buffer_pointer_type(
+                vtype,
+                qualifiers,
+            )
+            or self.structured_buffer_element_type(vtype) is not None
+        )
 
     def buffer_pointer_element_type(self, vtype):
         if not isinstance(vtype, PointerType):
@@ -6132,6 +6158,11 @@ class WGSLCodeGen:
     def function_type_signature(self, vtype):
         if vtype is None:
             return "void"
+        structured_element = self.structured_buffer_element_type(vtype)
+        if structured_element is not None:
+            access = self.structured_buffer_access(vtype) or "read"
+            element = self.function_type_signature(structured_element)
+            return f"structured_buffer_{access}_{element}"
         try:
             mapped_type = self.type_name_string(vtype, allow_storage_resources=True)
         except ValueError:
@@ -6218,6 +6249,8 @@ class WGSLCodeGen:
         ) == self.function_type_match_name(expected_type)
 
     def function_type_match_name(self, vtype):
+        if self.structured_buffer_element_type(vtype) is not None:
+            return self.function_type_signature(vtype)
         try:
             return self.type_name_string(vtype, allow_storage_resources=True)
         except ValueError:
@@ -6753,7 +6786,7 @@ class WGSLCodeGen:
                 for index, parameter in enumerate(
                     getattr(function, "parameters", []) or []
                 )
-                if self.is_buffer_pointer_type(
+                if self.is_buffer_pointer_parameter_type(
                     parameter.param_type, getattr(parameter, "qualifiers", [])
                 )
             ]
@@ -6770,6 +6803,15 @@ class WGSLCodeGen:
         return tuple(key for key in keys if key)
 
     def buffer_pointer_parameter_names(self, function):
+        return tuple(
+            getattr(parameter, "name", "")
+            for parameter in getattr(function, "parameters", []) or []
+            if self.is_buffer_pointer_parameter_type(
+                parameter.param_type, getattr(parameter, "qualifiers", [])
+            )
+        )
+
+    def raw_buffer_pointer_parameter_names(self, function):
         return tuple(
             getattr(parameter, "name", "")
             for parameter in getattr(function, "parameters", []) or []

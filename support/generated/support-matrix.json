@@ -399,7 +399,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 69,
+        "unsupported_marker_count": 68,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
@@ -463,10 +463,6 @@
           },
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "\"WGSL target does not support StructuredBuffer parameters yet; \""
-          },
-          {
-            "path": "crosstl/translator/codegen/wgsl_codegen.py",
             "text": "\"WGSL target does not support gl_WorkGroupSize outside compute stages\""
           },
           {
@@ -480,6 +476,10 @@
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
             "text": "\"WGSL target does not support implicit builtin identifier(s): \""
+          },
+          {
+            "path": "crosstl/translator/codegen/wgsl_codegen.py",
+            "text": "+ \", \".join(unsupported)"
           }
         ]
       },
@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 125
+        "test_count": 128
       },
       "translator_codegen": {
         "exists": true,
@@ -3255,9 +3255,12 @@
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsupported_storage_buffer_resource_forms",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_invalid_structured_buffer_dimensions",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_structured_buffers_inside_user_structs",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_structured_buffer_parameters"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_structured_buffer_parameters_to_storage_pointers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_reference_structured_buffer_parameters",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_readonly_structured_buffer_parameter_stores",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_resolves_structured_buffer_parameter_overloads_by_access"
           ],
-          "notes": "StructuredBuffer and RWStructuredBuffer globals lower to WGSL storage-buffer arrays with read/read_write access modes, explicit and automatic binding allocation, direct indexed access, buffer_load/buffer_store helper lowering, HLSL Load/Store member helper lowering, and buffer_dimensions/GetDimensions lowering to WGSL arrayLength. Append/consume buffers, byte-address buffers, counter helpers, read-only stores, parameters, and user-struct storage-resource fields produce deterministic diagnostics.",
+          "notes": "StructuredBuffer and RWStructuredBuffer globals lower to WGSL storage-buffer arrays with read/read_write access modes, explicit and automatic binding allocation, direct indexed access, buffer_load/buffer_store helper lowering, HLSL Load/Store member helper lowering, and buffer_dimensions/GetDimensions lowering to WGSL arrayLength. Helper parameters lower to storage pointers with read/read_write access, reference parameters preserve resource metadata, call sites pass storage resources by address, and overload signatures preserve buffer access. Append/consume buffers, byte-address buffers, counter helpers, read-only stores, and user-struct storage-resource fields produce deterministic diagnostics.",
           "status": "supported"
         }
       }
