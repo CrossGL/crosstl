@@ -57,7 +57,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `angle-simple-texture-2d` | `google/angle` at `52232eaf409a28d77947df5622af274e1ef770c6` | BSD-style | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses extracted upstream SimpleTexture2D shader strings. |
 | `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, Metal, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. OpenGL stage-input lowering is tracked in issue #896; DirectX scalar-vector construction lowering is tracked in issue #930. |
 | `arm-opengl-es-sdk-cube` | `ARM-software/opengl-es-sdk-for-android` at `c3caf759bb2e71fa9a118b3e3abd996cf00e660a` | MIT | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream cube shader pair unchanged. |
-| `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. OpenGL constant-parameter lowering is tracked in issue #899, and DirectX buffer-resource lowering is tracked in issue #877. |
+| `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. OpenGL constant-parameter lowering is tracked in issue #924, and DirectX buffer-resource lowering is tracked in issue #925. |
 | `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, Metal, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. Host launch and memory-management integration remain outside the demo scope. |
 | `nvpro-vk-mini-samples-rectangle` | `nvpro-samples/vk_mini_samples` at `994ac9f446ef44962c563b9600c8e9f117a3725d` | Apache-2.0 | GLSL | CrossGL, Metal, OpenGL, Vulkan | Uses the upstream rectangle shader pair unchanged. |
 | `ogl-samples-flat-color` | `g-truc/ogl-samples` at `38cada7a9458864265e25415ae61586d500ff5fc` | MIT | GLSL | CrossGL, Metal, OpenGL, Vulkan | Uses the upstream GLSL 330 flat-color shader pair unchanged. |
@@ -250,8 +250,8 @@ issue #768 closed and is now checked for OpenGL, Metal, and Vulkan output.
 The `bkvogel/metal_performance_testing` matmul kernel is checked for CrossGL,
 Metal, and Vulkan output. OpenGL remains excluded because generated compute
 input parameters are not lowered to valid GLSL declarations, tracked in issue
-#899. DirectX remains excluded because Metal buffer parameters still lower to
-raw HLSL pointer parameters, tracked in issue #877.
+#924. DirectX remains excluded because Metal buffer parameters still lower to
+raw HLSL pointer parameters, tracked in issue #925.
 
 The `SaschaWillems/Vulkan` headless compute shader was retested after issue
 #780 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan output.
