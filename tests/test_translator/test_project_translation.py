@@ -39251,6 +39251,99 @@ def test_translate_project_metal_source_instantiation_propagates_plain_helper_bi
     assert validation["success"] is True
 
 
+def test_translate_project_metal_templated_functor_header_reports_before_translation(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "binary_ops.h").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            struct AddFunctor {
+                T operator()(T lhs, T rhs) const {
+                    return lhs + rhs;
+                }
+            };
+
+            template <typename T, typename Op>
+            kernel void binary_two(
+                device const T* lhs [[buffer(0)]],
+                device const T* rhs [[buffer(1)]],
+                device T* out [[buffer(2)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                Op op;
+                out[gid] = op(lhs[gid], rhs[gid]);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "binary_two.metal").write_text(
+        textwrap.dedent("""
+            #include "binary_ops.h"
+            template [[host_name("binary_add_f32")]] [[kernel]]
+            decltype(binary_two<float, AddFunctor<float>>)
+            binary_two<float, AddFunctor<float>>;
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    assert artifact["templateMaterialization"] == {
+        "status": "unsupported",
+        "specializationCount": 0,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "configuredParameterSources": {},
+        "specializations": [],
+        "unsupported": [
+            {
+                "name": "AddFunctor",
+                "parameters": ["T"],
+                "missingParameters": [],
+                "reason": "missing-template-arguments",
+                "sourceDeclaration": {
+                    "file": "binary_two.metal",
+                    "line": 4,
+                    "column": 1,
+                    "name": "AddFunctor",
+                },
+                "target": "opengl",
+                "requiredSignature": "AddFunctor<float>",
+            }
+        ],
+    }
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.template-materialization-unsupported": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "binary_two.metal"
+    assert diagnostic["location"]["line"] == 4
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert "AddFunctor" in diagnostic["message"]
+    assert "unmaterialized concrete template functor use" in diagnostic["message"]
+    assert "required AddFunctor<float>" in diagnostic["message"]
+    assert "Expected type" not in diagnostic["message"]
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
 def test_translate_project_metal_repeated_call_site_templates_share_budget_for_opengl(
     tmp_path,
 ):
