@@ -37826,6 +37826,65 @@ def test_translate_project_hip_pointer_parameters_lower_to_directx_resources(
     assert_directx_compute_validates_if_available(output, tmp_path)
 
 
+def test_translate_project_hip_bridge_cgl_storage_arrays_lower_to_directx_resources(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.cgl").write_text(
+        textwrap.dedent("""
+            // HIP to CrossGL conversion
+            // Kernel: AddKernel
+            @compute
+            @stage_entry
+            @workgroup_size(1, 1, 1)
+            fn AddKernel(
+                @group(0) @binding(0) var<storage, read_write> a: array<f32>,
+                @group(0) @binding(1) var<storage, read> b: array<f32>
+            ) {
+                var global_idx: i32 = (
+                    gl_LocalInvocationID.x + (gl_WorkGroupID.x * gl_WorkGroupSize.x)
+                );
+                a[global_idx] += b[global_idx];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        validate=True,
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+    assert payload["diagnosticCounts"]["error"] == 0
+
+    artifact = payload["artifacts"][0]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+
+    assert "RWStructuredBuffer<float> a : register(u0);" in output
+    assert "StructuredBuffer<float> b : register(t1);" in output
+    assert (
+        "void CSMain(uint3 groupThreadID : SV_GroupThreadID, "
+        "uint3 groupID : SV_GroupID)"
+    ) in output
+    assert "a[global_idx] += b[global_idx];" in output
+    assert ": group" not in output
+    assert "float a[]" not in output
+    assert "float b[]" not in output
+    assert re.search(r"void CSMain\([^)]*StructuredBuffer", output) is None
+    assert re.search(r"void CSMain\([^)]*float\s+[ab]\[\]", output) is None
+    assert "gl_LocalInvocationID" not in output
+    assert "gl_WorkGroupID" not in output
+    assert "gl_WorkGroupSize" not in output
+
+    assert_directx_compute_validates_if_available(output, tmp_path)
+
+
 def test_translate_project_opencl_directx_allocates_generated_parameter_bindings(
     tmp_path,
 ):
