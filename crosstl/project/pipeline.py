@@ -2072,6 +2072,9 @@ INCLUDE_DEPENDENCY_PROCESSING_STATUSES = frozenset(
 SOURCE_FRONTENDS_PRESERVING_UNRESOLVED_SYSTEM_INCLUDES = frozenset(
     ("cgl", "crossgl", "directx", "metal", "slang", "cuda", "hip", "opencl")
 )
+SOURCE_FRONTENDS_WITH_NATIVE_MACRO_EXPANSION = frozenset(
+    ("cuda", "directx", "hip", "metal", "opencl", "opengl", "slang", "vulkan")
+)
 VALIDATION_TOOLCHAIN_RUN_STATUSES = frozenset(("ok", "failed"))
 VARIANT_OUTPUT_SAFE_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
@@ -4844,6 +4847,18 @@ def _unsupported_macro_form_reason(
         return "__VA_OPT__ variadic expansion is not modeled by project macro planning"
     if "#@" in replacement:
         return "charizing macro operator is not modeled by project macro planning"
+    if source_backend in SOURCE_FRONTENDS_WITH_NATIVE_MACRO_EXPANSION:
+        return None
+    if function_like:
+        return (
+            "function-like define requires native macro expansion not provided "
+            "by the source frontend"
+        )
+    if "##" in replacement:
+        return (
+            "token-pasting define requires native macro expansion not provided "
+            "by the source frontend"
+        )
     return None
 
 
