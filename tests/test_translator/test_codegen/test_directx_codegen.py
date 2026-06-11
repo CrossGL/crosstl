@@ -67,6 +67,23 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def test_hlsl_type_node_renders_expression_generic_arguments():
+    type_node = NamedType(
+        "LoopedElemToLoc",
+        [
+            NamedType("DIM"),
+            UnaryOpNode("-", LiteralNode(1, PrimitiveType("int"))),
+            NamedType("OffsetT"),
+            NamedType("General"),
+        ],
+    )
+
+    assert (
+        HLSLCodeGen().convert_type_node_to_string(type_node)
+        == "LoopedElemToLoc<DIM, -1, OffsetT, General>"
+    )
+
+
 HLSL_SCALAR_VECTOR_ZERO_DIAGNOSTIC = re.compile(
     r"(?:(?:\b(?:float|double|half|min16float|min10float|int|uint|"
     r"min16int|min16uint|bool)[234]\((?:0(?:\.0)?|0u|false|true)\)"

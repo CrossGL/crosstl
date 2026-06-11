@@ -121,12 +121,12 @@ EXAMPLE_BACKEND_SKIPS = {
         "WebGL codegen intentionally rejects compute stages; use WebGPU/WGSL for compute."
     ),
     (
-        "graphics",
-        "ComplexShader",
+        "gpu_computing",
+        "MatrixMultiplication",
         "wgsl",
     ): (
-        "WGSL codegen intentionally rejects image2D resources until storage texture "
-        "binding lowering is available for this example."
+        "WGSL codegen intentionally rejects subgroup/warp intrinsics until they "
+        "can be lowered to WebGPU subgroup operations."
     ),
 }
 

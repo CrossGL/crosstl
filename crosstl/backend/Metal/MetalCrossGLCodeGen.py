@@ -1161,9 +1161,9 @@ class MetalToCrossGLConverter:
                                     f"alignas({self.generate_expression(item, False)})"
                                 )
                         struct_alignas = " ".join(parts) + " "
-                    generic_prefix = self.format_generic_prefix(struct_node)
                     code += (
-                        f"    {generic_prefix}{struct_alignas}struct "
+                        f"    {self.format_generic_prefix(struct_node)}"
+                        f"{struct_alignas}struct "
                         f"{self.map_struct_name(struct_node.name)} {{\n"
                     )
                 for member in struct_node.members:

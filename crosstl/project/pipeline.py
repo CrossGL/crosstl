@@ -10215,7 +10215,7 @@ def _metal_function_return_type(
     open_paren = preprocessor._function_parameter_start(header)
     if open_paren is None:
         return None
-    before_params = header[:open_paren].rstrip()
+    before_params = _masked_metal_non_code_text(header[:open_paren]).rstrip()
     match = re.search(rf"\b{re.escape(function_name)}\s*$", before_params)
     if match is None:
         return None

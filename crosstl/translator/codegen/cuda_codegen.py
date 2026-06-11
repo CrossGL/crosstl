@@ -1,5 +1,7 @@
 """CrossGL-to-CUDA code generator."""
 
+import re
+
 from ..ast import (
     ArrayAccessNode,
     AssignmentNode,
@@ -53,6 +55,7 @@ from .enum_utils import (
     infer_enum_constructor_type,
 )
 from .generic_function_utils import (
+    collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
     generic_function_call_name,
@@ -62,9 +65,6 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
-)
-from .generic_function_utils import (
-    reject_unsupported_generic_functions as reject_generic_functions_for_target,
 )
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
@@ -523,7 +523,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.reserve_explicit_cuda_resource_bindings(ast_node)
         self.visit(ast_node)
         self.insert_helper_functions()
-        return "\n".join(self.output)
+        result = "\n".join(self.output)
+        self.reject_unresolved_generic_output(result)
+        return result
 
     def fused_multiply_add_result_type(self, raw_args):
         if len(raw_args) != 3:
@@ -543,12 +545,33 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def reject_unsupported_generic_functions(self, ast_node):
         """Reject generic functions before emitting non-compilable CUDA code."""
-        reject_generic_functions_for_target(
-            ast_node,
-            "CUDA",
-            self.generic_function_specializations,
-            referenced_generic_names=set(),
+        functions = list(iter_function_nodes(ast_node)) + list(
+            (self.generic_function_specializations or {}).values()
         )
+        unresolved = collect_unresolved_generic_function_call_names(self, functions)
+        if unresolved:
+            raise_unresolved_generic_function_call(self, unresolved[0], "CUDA")
+
+    def reject_unresolved_generic_output(self, result):
+        specialized_source_names = {
+            key[0]
+            for key in self.generic_function_specializations or {}
+            if isinstance(key, tuple) and key
+        }
+        generic_names = {
+            param
+            for funcs in (self.generic_function_definitions or {}).values()
+            for func in funcs
+            if getattr(func, "name", None) not in specialized_source_names
+            for param in generic_function_parameters(func)
+        }
+        for name in sorted(generic_names):
+            if re.search(rf"\b{re.escape(name)}\b", result):
+                raise ValueError(
+                    "CUDA codegen cannot emit unresolved generic parameter "
+                    f"'{name}'; specialize generic declarations before CUDA "
+                    "generation"
+                )
 
     def unsupported_stage_types(self):
         return set()

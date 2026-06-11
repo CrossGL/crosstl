@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1124
+        "test_count": 1125
       },
       "translator_codegen": {
         "exists": true,
@@ -245,7 +245,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1196
+        "test_count": 1201
       },
       "translator_codegen": {
         "exists": true,
@@ -615,7 +615,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1014
+        "test_count": 1018
       },
       "translator_codegen": {
         "exists": true,
@@ -644,7 +644,7 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 45,
+        "unsupported_marker_count": 46,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -737,7 +737,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 1025
+        "test_count": 1028
       },
       "translator_codegen": {
         "exists": true,
@@ -761,12 +761,8 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 194,
+        "unsupported_marker_count": 193,
         "unsupported_marker_samples": [
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "reject_unsupported_generic_functions as reject_generic_functions_for_target,"
-          },
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "CUDA_UNSUPPORTED_FP16_VECTOR_TYPES = {"
@@ -842,6 +838,10 @@
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "f\"Unsupported {semantic} stage parameter semantic for CUDA \""
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "f\"Unsupported {semantic} stage parameter semantic for CUDA \""
           }
         ]
       },
@@ -878,12 +878,8 @@
         "path": "crosstl/backend/HIP"
       },
       "signals": {
-        "unsupported_marker_count": 136,
+        "unsupported_marker_count": 135,
         "unsupported_marker_samples": [
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "reject_unsupported_generic_functions as reject_generic_functions_for_target,"
-          },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "HIP_UNSUPPORTED_FP16_VECTOR_TYPES = {"
@@ -959,6 +955,10 @@
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "f\"Unsupported {semantic} return semantic for HIP codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "f\"Unsupported {semantic} stage parameter semantic for HIP codegen; \""
           }
         ]
       },
@@ -995,12 +995,8 @@
         "path": "crosstl/backend/Mojo"
       },
       "signals": {
-        "unsupported_marker_count": 100,
+        "unsupported_marker_count": 99,
         "unsupported_marker_samples": [
-          {
-            "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "reject_unsupported_generic_functions as reject_generic_functions_for_target,"
-          },
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
             "text": "MOJO_HLSL_UNSUPPORTED_WRITABLE_TEXTURE_TYPES = set()"
@@ -1076,6 +1072,10 @@
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
             "text": "f\"Unsupported {semantic} parameter semantic for Mojo {shader_type} \""
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "f\"Unsupported {semantic} parameter semantic for Mojo codegen; \""
           }
         ]
       },
@@ -1229,12 +1229,8 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 410,
+        "unsupported_marker_count": 409,
         "unsupported_marker_samples": [
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "reject_unsupported_generic_functions as reject_generic_functions_for_target,"
-          },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "self.reject_unsupported_generic_functions(ast)"
@@ -1298,6 +1294,10 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "if node.name not in unsupported_tess_factor_builtins:"
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for Slang codegen; \""
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",

@@ -1925,6 +1925,16 @@ class GLSLCodeGen:
                 extensions.add(extension_name)
         return extensions
 
+    def should_emit_glsl_preprocessor_line(self, line):
+        stripped = line.strip()
+        if stripped.startswith("#pragma METAL"):
+            return False
+        if not stripped.startswith("#include"):
+            return True
+
+        include_target = stripped[len("#include") :].strip()
+        return not include_target.lower().startswith(("<metal", '"metal'))
+
     def should_emit_glsl_preprocessor_directive(self, directive):
         if not isinstance(directive, PreprocessorNode):
             return True
@@ -2856,7 +2866,7 @@ class GLSLCodeGen:
                 line = str(directive).strip()
             if line.startswith("#version") and version_line is None:
                 version_line = line
-            elif line:
+            elif line and self.should_emit_glsl_preprocessor_line(line):
                 extra_lines.append(line)
         if version_line is None:
             version_line = self.default_glsl_version_line(ast, target_stage)
@@ -3447,10 +3457,16 @@ class GLSLCodeGen:
             for helpers in deferred_top_level_helpers_by_stage.values()
             for func in helpers
         }
+        called_function_names = self.collect_called_function_names(ast)
         for func in functions:
             if self.should_elide_metal_simd_group_placeholder_function(func):
                 continue
             if id(func) in deferred_top_level_helper_ids:
+                continue
+            if self.should_skip_unresolved_top_level_helper(
+                func,
+                called_function_names,
+            ):
                 continue
             qualifier_name = function_stage_name(func)
 
@@ -3598,6 +3614,81 @@ class GLSLCodeGen:
                     code += self.wrap_stage_guard(stage_code, stage_name)
 
         return self.ensure_glsl_version_supports_generated_layouts(code)
+
+    def collect_called_function_names(self, root):
+        return {
+            self.function_call_name(node)
+            for node in self.walk_ast(root)
+            if isinstance(node, FunctionCallNode) and self.function_call_name(node)
+        }
+
+    def should_skip_unresolved_top_level_helper(self, func, called_function_names):
+        if generic_function_parameters(func):
+            return False
+        if getattr(func, "name", None) in called_function_names:
+            return False
+
+        qualifier = (
+            func.qualifiers[0]
+            if getattr(func, "qualifiers", None)
+            else getattr(func, "qualifier", None)
+        )
+        if normalize_stage_name(qualifier):
+            return False
+
+        return self.function_signature_has_unresolved_type(func)
+
+    def function_signature_has_unresolved_type(self, func):
+        if self.type_name_is_unresolved_glsl_placeholder(
+            getattr(func, "return_type", None)
+        ):
+            return True
+        for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+            if self.type_name_is_unresolved_glsl_placeholder(param_type):
+                return True
+        return False
+
+    def type_name_is_unresolved_glsl_placeholder(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not type_name or type_name == "void":
+            return False
+
+        try:
+            mapped_type = self.map_type(type_name)
+        except OpenGLTemplateTypeError:
+            return True
+        base_type, _array_suffix = split_array_type_suffix(str(mapped_type or ""))
+        base_type = base_type.rstrip("*&").strip()
+        if not base_type:
+            return False
+        if "<" in base_type or ">" in base_type:
+            return True
+        if base_type in self.type_mapping or self.is_opaque_resource_type(base_type):
+            return False
+        if (
+            self.is_scalar_value_type(base_type)
+            or self.is_vector_value_type(base_type)
+            or self.is_matrix_value_type(base_type)
+        ):
+            return False
+        if self.canonical_resource_type(base_type) is not None:
+            return False
+        if base_type in getattr(self, "structs_by_name", {}):
+            return False
+        if base_type in getattr(self, "struct_member_types", {}):
+            return False
+        if base_type in getattr(self, "enum_type_names", set()):
+            return False
+        if base_type in getattr(self, "enum_struct_type_names", set()):
+            return False
+        return (
+            mapped_type == type_name
+            and self.type_name_looks_like_generic_placeholder(base_type)
+        )
+
+    def type_name_looks_like_generic_placeholder(self, type_name):
+        return bool(re.fullmatch(r"[A-Z][A-Za-z0-9_]*", str(type_name)))
 
     def collect_stage_deferred_top_level_helpers(self, ast, functions, target_stage):
         if target_stage is None or not getattr(ast, "stages", None):
@@ -10107,6 +10198,8 @@ class GLSLCodeGen:
                 and func_name not in self.function_return_types
             ):
                 return self.glsl_bitcast_result_type(func_name, args[0])
+            if self.metal_as_type_target(func_name) in self.GLSL_BFLOAT16_ALIASES:
+                return "bfloat16_t"
             specialized_func_name = generic_function_call_name(self, func_name, args)
             if specialized_func_name in self.function_return_types:
                 return self.function_return_types[specialized_func_name]
@@ -11303,6 +11396,13 @@ class GLSLCodeGen:
             if bitcast_call is not None:
                 return bitcast_call
 
+            metal_as_type_call = self.generate_metal_as_type_call(
+                original_func_name,
+                expr.args,
+            )
+            if metal_as_type_call is not None:
+                return metal_as_type_call
+
             mul_call = self.generate_mul_call(original_func_name, expr.args)
             if mul_call is not None:
                 return mul_call
@@ -11563,6 +11663,10 @@ class GLSLCodeGen:
             )
 
         value = self.generate_expression(args[0])
+        if target == "__crossgl_identity":
+            return value
+        if target.startswith("__crossgl_cast:"):
+            return f"{target.split(':', 1)[1]}({value})"
         if target == "__crossgl_bfloat16_to_uint":
             return f"(floatBitsToUint({value}) >> 16u)"
         return f"{target}({value})"
@@ -11581,6 +11685,22 @@ class GLSLCodeGen:
 
         value_type = self.map_type(source_type)
         component_type = self.vector_component_type(value_type) or value_type
+        if (
+            (func_name == "asfloat" and component_type == "float")
+            or (func_name == "asint" and component_type == "int")
+            or (func_name == "asuint" and component_type == "uint")
+        ):
+            return "__crossgl_identity"
+        if func_name == "asint" and component_type == "uint":
+            if value_type == "uint":
+                return "__crossgl_cast:int"
+            if value_type.startswith("uvec"):
+                return f"__crossgl_cast:ivec{value_type[-1]}"
+        if func_name == "asuint" and component_type == "int":
+            if value_type == "int":
+                return "__crossgl_cast:uint"
+            if value_type.startswith("ivec"):
+                return f"__crossgl_cast:uvec{value_type[-1]}"
         if func_name == "asfloat":
             if component_type == "int":
                 return "intBitsToFloat"
@@ -11603,16 +11723,59 @@ class GLSLCodeGen:
             if value_type.endswith(("2", "3", "4")):
                 return f"vec{value_type[-1]}"
         if func_name == "asint":
+            if value_type == "int":
+                return "int"
             if value_type == "float":
                 return "int"
+            if value_type == "uint":
+                return "int"
+            if value_type.startswith("ivec"):
+                return value_type
+            if value_type.startswith("uvec"):
+                return f"ivec{value_type[-1]}"
             if value_type.endswith(("2", "3", "4")):
                 return f"ivec{value_type[-1]}"
         if func_name == "asuint":
+            if value_type == "uint":
+                return "uint"
             if value_type == "float":
                 return "uint"
+            if value_type == "int":
+                return "uint"
+            if value_type.startswith("uvec"):
+                return value_type
+            if value_type.startswith("ivec"):
+                return f"uvec{value_type[-1]}"
             if value_type.endswith(("2", "3", "4")):
                 return f"uvec{value_type[-1]}"
         return None
+
+    def metal_as_type_target(self, func_name):
+        text = str(func_name or "").strip()
+        for prefix in ("as_type<", "metal::as_type<"):
+            if text.startswith(prefix) and text.endswith(">"):
+                return text[len(prefix) : -1].strip().split("::")[-1]
+        return None
+
+    def generate_metal_as_type_call(self, func_name, args):
+        if func_name in self.function_return_types:
+            return None
+
+        target_type = self.metal_as_type_target(func_name)
+        if target_type not in self.GLSL_BFLOAT16_ALIASES:
+            return None
+        if len(args) != 1:
+            raise ValueError("OpenGL as_type<bfloat16_t> alias requires 1 argument")
+
+        value_expr = args[0]
+        value_type = self.map_type(self.expression_result_type(value_expr))
+        component_type = self.vector_component_type(value_type) or value_type
+        if component_type not in {"int", "uint"}:
+            return None
+
+        value = self.generate_expression(value_expr)
+        payload = value if component_type == "uint" else f"uint({value})"
+        return f"uintBitsToFloat(({payload} << 16u))"
 
     def is_elided_bfloat16_type_alias_global(self, node):
         if not isinstance(node, VariableNode):
@@ -17027,6 +17190,10 @@ class GLSLCodeGen:
         if generic_struct_type is not None:
             return generic_struct_type
 
+        materialized_generic_type = self.materialized_generic_type_name(vtype_str)
+        if materialized_generic_type is not None:
+            return materialized_generic_type
+
         if vtype_str in getattr(self, "enum_type_names", set()):
             return "int"
 
@@ -17034,6 +17201,22 @@ class GLSLCodeGen:
             return vtype_str
 
         return self.type_mapping.get(vtype_str, vtype_str)
+
+    def materialized_generic_type_name(self, type_name):
+        base_type, array_suffix = split_array_type_suffix(str(type_name or "").strip())
+        if array_suffix:
+            return None
+        base_name, generic_args = generic_type_parts(base_type)
+        if not base_name or not generic_args:
+            return None
+        suffix_parts = [sanitize_type_name(arg) for arg in generic_args]
+        suffix_parts = [part for part in suffix_parts if part]
+        if not suffix_parts:
+            return None
+        suffix = "_".join(suffix_parts)
+        if base_name.endswith(f"_{suffix}"):
+            return base_name
+        return None
 
     def unresolved_template_placeholder_type(self, type_name):
         if not getattr(self, "enforce_concrete_glsl_types", False):
@@ -18231,7 +18414,10 @@ class GLSLCodeGen:
             )
             return f"{referenced_type}&"
         generic_args = getattr(type_node, "generic_args", [])
-        if hasattr(type_node, "name") and generic_args:
+        type_name = getattr(type_node, "name", None)
+        if type_name is None and hasattr(type_node, "value"):
+            return str(type_node.value)
+        if type_name and generic_args:
             converted_args = []
             for arg in generic_args:
                 converted = self.convert_type_node_to_string(arg)
@@ -18242,9 +18428,9 @@ class GLSLCodeGen:
                         converted = str(arg)
                 converted_args.append(converted)
             args = ", ".join(converted_args)
-            return f"{type_node.name}<{args}>"
-        if hasattr(type_node, "name"):
-            return type_node.name
+            return f"{type_name}<{args}>"
+        if type_name:
+            return type_name
         elif hasattr(type_node, "rows") and hasattr(type_node, "cols"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
             if type_node.rows == type_node.cols:
@@ -18274,6 +18460,8 @@ class GLSLCodeGen:
                     return f"bvec{size}"
                 else:
                     return f"{element_type}{size}"
+        elif hasattr(type_node, "operator") or hasattr(type_node, "identifier"):
+            return self.expression_to_string(type_node)
         else:
             return str(type_node)
 

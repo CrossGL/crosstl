@@ -3694,6 +3694,19 @@ def test_codegen_omits_namespace_self_alias_from_mlx_logging_header():
     parse_crossgl(crossgl)
 
 
+def test_codegen_preserves_type_template_metadata_for_crossgl_generics():
+    code = """
+    template <typename U>
+    struct Limits {
+        U max;
+    };
+    """
+    crossgl = convert(code)
+
+    assert "generic<U> struct Limits" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_sanitizes_scoped_types_from_public_shader_headers():
     # Reduced from Blender and tinygrad shader headers that reference C++
     # namespace-scoped helper types in typedefs and function signatures.

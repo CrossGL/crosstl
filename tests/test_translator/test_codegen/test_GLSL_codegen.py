@@ -10,6 +10,7 @@ from crosstl.translator.ast import (
     ExecutionModel,
     FunctionNode,
     IdentifierNode,
+    LiteralNode,
     NamedType,
     ParameterNode,
     PointerType,
@@ -20,6 +21,7 @@ from crosstl.translator.ast import (
     ShaderStage,
     StructMemberNode,
     StructNode,
+    UnaryOpNode,
     VectorType,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
@@ -53,6 +55,23 @@ def generate_code(ast_node):
     """
     codegen = GLSLCodeGen()
     return codegen.generate(ast_node)
+
+
+def test_glsl_type_node_renders_expression_generic_arguments():
+    type_node = NamedType(
+        "LoopedElemToLoc",
+        [
+            NamedType("DIM"),
+            UnaryOpNode("-", LiteralNode(1, PrimitiveType("int"))),
+            NamedType("OffsetT"),
+            NamedType("General"),
+        ],
+    )
+
+    assert (
+        GLSLCodeGen().convert_type_node_to_string(type_node)
+        == "LoopedElemToLoc<DIM, (-1), OffsetT, General>"
+    )
 
 
 def glsl_image_atomic_parameter_diagnostic(operation, resource_type, zero_value):
@@ -24825,6 +24844,46 @@ def test_opengl_hlsl_bitcast_aliases_map_to_glsl_bit_functions():
     assert "asfloat(" not in generated_code
 
 
+def test_opengl_hlsl_bitcast_aliases_elide_same_type_conversions():
+    shader = """
+    shader BitcastAliasIdentity {
+        fragment {
+            vec4 main(float value, int signedBits, uint bits, ivec2 signedPair, uvec2 pair) @ gl_FragColor {
+                float sameFloat = asfloat(value);
+                int sameInt = asint(signedBits);
+                uint sameUint = asuint(bits);
+                uvec2 samePair = asuint(pair);
+                uint unsignedBits = asuint(signedBits);
+                uvec2 unsignedPair = asuint(signedPair);
+                int signedFromUint = asint(bits);
+                ivec2 signedFromPair = asint(pair);
+                return vec4(
+                    sameFloat + float(sameInt + sameUint + samePair.x),
+                    float(unsignedBits + unsignedPair.x),
+                    float(signedFromUint + signedFromPair.x),
+                    1.0
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float sameFloat = value;" in generated_code
+    assert "int sameInt = signedBits;" in generated_code
+    assert "uint sameUint = bits;" in generated_code
+    assert "uvec2 samePair = pair;" in generated_code
+    assert "uint unsignedBits = uint(signedBits);" in generated_code
+    assert "uvec2 unsignedPair = uvec2(signedPair);" in generated_code
+    assert "int signedFromUint = int(bits);" in generated_code
+    assert "ivec2 signedFromPair = ivec2(pair);" in generated_code
+    assert "BitsTo" not in generated_code
+    assert "asuint(" not in generated_code
+    assert "asint(" not in generated_code
+    assert "asfloat(" not in generated_code
+
+
 def test_opengl_bfloat16_asuint_alias_lowers_to_uint_payload():
     shader = """
     shader BFloat16BitcastAlias {
@@ -24846,6 +24905,67 @@ def test_opengl_bfloat16_asuint_alias_lowers_to_uint_payload():
     assert "bfloat16_t" not in generated_code
     assert "bfloat " not in generated_code
     assert "asuint(" not in generated_code
+
+
+def test_opengl_bfloat16_as_type_alias_lowers_from_uint_payload():
+    shader = """
+    shader BFloat16AsTypeAlias {
+        bfloat16_t unpackScalar(uint bits) {
+            return as_type<bfloat16_t>(bits);
+        }
+
+        bfloat unpackNamedAlias(uint bits) {
+            return as_type<bfloat>(bits);
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float unpackScalar(uint bits)" in generated_code
+    assert "float unpackNamedAlias(uint bits)" in generated_code
+    assert "return uintBitsToFloat((bits << 16u));" in generated_code
+    assert "bfloat16_t" not in generated_code
+    assert "bfloat " not in generated_code
+    assert "as_type<" not in generated_code
+
+
+def test_opengl_empty_struct_emits_placeholder_member():
+    shader = """
+    shader EmptyStruct {
+        struct Marker {
+        }
+
+        float pass_through(float value) {
+            return value;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct Marker {\n    int _crossgl_empty;\n};" in generated_code
+    assert "struct Marker {}" not in generated_code
+
+
+def test_opengl_skips_uncalled_helpers_with_unresolved_template_types():
+    shader = """
+    shader UncalledTemplateHelper {
+        T ceildiv(T n, U m) {
+            return (n + m - 1) / m;
+        }
+
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "T ceildiv" not in generated_code
+    assert " U " not in generated_code
 
 
 def test_opengl_hlsl_bitcast_alias_renames_local_target_shadow():

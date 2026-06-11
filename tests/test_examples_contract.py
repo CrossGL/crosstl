@@ -20,11 +20,30 @@ FULL_BACKEND_EXAMPLES = (
     "graphics/SimpleShader.cgl",
 )
 
-WEBGL_COMPUTE_EXAMPLE_DIAGNOSTICS = (
-    ("compute/ParticleSimulation.cgl", "webgl"),
-    ("gpu_computing/MatrixMultiplication.cgl", "webgl"),
+BACKEND_EXAMPLE_DIAGNOSTICS = (
+    (
+        "compute/ParticleSimulation.cgl",
+        "webgl",
+        ValueError,
+        "WebGL target does not support shader stage\\(s\\): compute",
+    ),
+    (
+        "gpu_computing/MatrixMultiplication.cgl",
+        "webgl",
+        ValueError,
+        "WebGL target does not support shader stage\\(s\\): compute",
+    ),
+    (
+        "gpu_computing/MatrixMultiplication.cgl",
+        "wgsl",
+        ValueError,
+        "WGSL target does not support subgroup/warp intrinsic __shfl_down_sync yet",
+    ),
 )
-WEBGL_COMPUTE_EXAMPLE_DIAGNOSTIC_CASES = set(WEBGL_COMPUTE_EXAMPLE_DIAGNOSTICS)
+BACKEND_EXAMPLE_DIAGNOSTIC_CASES = {
+    (relative_path, backend)
+    for relative_path, backend, _exc_type, _message in BACKEND_EXAMPLE_DIAGNOSTICS
+}
 
 MOJO_PLACEHOLDER_MARKERS = (
     "# CrossGL builtin placeholders",
@@ -70,7 +89,7 @@ FULL_BACKEND_EXAMPLE_CASES = tuple(
     (relative_path, backend)
     for relative_path in FULL_BACKEND_EXAMPLES
     for backend in codegen.backend_names()
-    if (relative_path, backend) not in WEBGL_COMPUTE_EXAMPLE_DIAGNOSTIC_CASES
+    if (relative_path, backend) not in BACKEND_EXAMPLE_DIAGNOSTIC_CASES
     and (relative_path, backend) not in MOJO_PLACEHOLDER_EXAMPLE_CASE_KEYS
 )
 
@@ -99,7 +118,6 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
 
 ADDITIONAL_FIXED_CASES = (
     ("advanced/GenericPatternMatching.cgl", "hip"),
-    ("advanced/GenericPatternMatching.cgl", "slang"),
     ("cross_platform/UniversalPBRShader.cgl", "slang"),
 )
 
@@ -194,12 +212,13 @@ def test_portable_examples_translate_to_all_registered_backends(relative_path, b
     _assert_generated_output_is_usable(generated)
 
 
-@pytest.mark.parametrize("relative_path,backend", WEBGL_COMPUTE_EXAMPLE_DIAGNOSTICS)
-def test_webgl_compute_examples_report_actionable_diagnostics(relative_path, backend):
-    with pytest.raises(
-        ValueError,
-        match="WebGL target does not support shader stage\\(s\\): compute",
-    ):
+@pytest.mark.parametrize(
+    "relative_path,backend,exc_type,message", BACKEND_EXAMPLE_DIAGNOSTICS
+)
+def test_backend_example_gaps_report_actionable_diagnostics(
+    relative_path, backend, exc_type, message
+):
+    with pytest.raises(exc_type, match=message):
         crosstl.translate(
             str(_example_path(relative_path)), backend=backend, format_output=False
         )
