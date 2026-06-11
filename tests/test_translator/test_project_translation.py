@@ -6571,6 +6571,91 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
     assert_spirv_asm_validates_if_available(vulkan, tmp_path)
 
 
+def test_translate_project_wgsl_hlsl_texture_sampler_register_pair(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "hello_texture.hlsl").write_text(
+        textwrap.dedent("""
+            struct PSInput
+            {
+                float4 position : SV_POSITION;
+                float2 uv : TEXCOORD;
+            };
+
+            Texture2D g_texture : register(t0);
+            SamplerState g_sampler : register(s0);
+
+            PSInput VSMain(float4 position : POSITION, float2 uv : TEXCOORD)
+            {
+                PSInput result;
+                result.position = position;
+                result.uv = uv;
+                return result;
+            }
+
+            float4 PSMain(PSInput input) : SV_TARGET
+            {
+                return g_texture.Sample(g_sampler, input.uv);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu"]
+            include = ["gpu/*.hlsl"]
+            targets = ["cgl", "wgsl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    wgsl = (repo / "translated" / "wgsl" / "gpu" / "hello_texture.wgsl").read_text(
+        encoding="utf-8"
+    )
+    cgl = (repo / "translated" / "cgl" / "gpu" / "hello_texture.cgl").read_text(
+        encoding="utf-8"
+    )
+
+    assert payload["summary"]["unitCount"] == 1
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+
+    texture_binding = re.search(
+        r"@group\(0\) @binding\((\d+)\)\nvar g_texture: texture_2d<f32>;",
+        wgsl,
+    )
+    sampler_binding = re.search(
+        r"@group\(0\) @binding\((\d+)\)\nvar g_sampler: sampler;",
+        wgsl,
+    )
+    assert texture_binding is not None
+    assert sampler_binding is not None
+    assert texture_binding.group(1) != sampler_binding.group(1)
+    assert "return textureSample(g_texture, g_sampler, input.uv);" in wgsl
+
+    assert "@ register(t0)\n    sampler2D g_texture;" in cgl
+    assert "@ register(s0)\n    sampler g_sampler;" in cgl
+
+    artifacts_by_target = {
+        artifact["target"]: artifact for artifact in payload["artifacts"]
+    }
+    assert artifacts_by_target["cgl"]["sourceRemap"]["target"] == "cgl"
+    assert artifacts_by_target["wgsl"]["sourceRemap"]["target"] == "wgsl"
+    assert artifacts_by_target["wgsl"]["sourceMap"]["source"]["file"] == (
+        "gpu/hello_texture.hlsl"
+    )
+    assert payload["summary"]["sourceRemapCount"] == 2
+
+
 def test_translate_project_glsl_usampler_texel_fetch_lowers_to_uint_spirv(
     tmp_path,
 ):
