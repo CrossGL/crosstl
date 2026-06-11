@@ -9,7 +9,14 @@ on:
       - main
     paths:
       - ".github/workflows/demo.yml"
+      - "crosstl/backend/**"
       - "crosstl/project/**"
+      - "crosstl/translator/ast.py"
+      - "crosstl/translator/codegen/**"
+      - "crosstl/translator/lexer.py"
+      - "crosstl/translator/parser.py"
+      - "crosstl/translator/source_registry.py"
+      - "crosstl/translator/validation.py"
       - "demos/open-source-porting/**"
       - "docs/source/project-porting.rst"
       - "support/demo-ci-metadata.json"
@@ -24,7 +31,14 @@ on:
       - main
     paths:
       - ".github/workflows/demo.yml"
+      - "crosstl/backend/**"
       - "crosstl/project/**"
+      - "crosstl/translator/ast.py"
+      - "crosstl/translator/codegen/**"
+      - "crosstl/translator/lexer.py"
+      - "crosstl/translator/parser.py"
+      - "crosstl/translator/source_registry.py"
+      - "crosstl/translator/validation.py"
       - "demos/open-source-porting/**"
       - "docs/source/project-porting.rst"
       - "support/demo-ci-metadata.json"
