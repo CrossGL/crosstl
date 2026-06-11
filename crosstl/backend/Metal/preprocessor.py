@@ -366,6 +366,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             if declaration_end is None:
                 continue
             declaration = code[start:declaration_end]
+            if self._find_next_top_level_char(declaration, 0, "{") is not None:
+                continue
             if "decltype" not in declaration and not re.search(
                 r"\b[A-Za-z_][A-Za-z0-9_:]*\s*<", declaration
             ):
