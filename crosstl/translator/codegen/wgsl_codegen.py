@@ -464,6 +464,7 @@ class WGSLCodeGen:
         "textureprojoffset",
         "texturequerylevels",
         "texturequerylod",
+        "texturesamples",
         "texturesize",
         "texelfetch",
         "imagesize",
@@ -1827,8 +1828,7 @@ class WGSLCodeGen:
         return {
             struct.name: struct
             for struct in structs
-            if getattr(struct, "name", None)
-            and getattr(struct, "generic_params", None)
+            if getattr(struct, "name", None) and getattr(struct, "generic_params", None)
         }
 
     def monomorphized_structs(self, ast, target_stage, source_structs):
@@ -1862,9 +1862,9 @@ class WGSLCodeGen:
                 or key in self._generic_struct_specialized_names
             ):
                 return
-            self._generic_struct_specialized_names[
-                key
-            ] = self.generic_struct_specialized_name_from_key(key)
+            self._generic_struct_specialized_names[key] = (
+                self.generic_struct_specialized_name_from_key(key)
+            )
             pending.append(vtype)
 
         def enqueue_from_ast_value(value):
@@ -2030,9 +2030,7 @@ class WGSLCodeGen:
                 return False
             _, generic_args = parsed
             return any(
-                self.type_node_contains_generic_parameter(
-                    arg, generic_parameter_names
-                )
+                self.type_node_contains_generic_parameter(arg, generic_parameter_names)
                 for arg in generic_args
             )
         if isinstance(vtype, NamedType):
@@ -2099,9 +2097,7 @@ class WGSLCodeGen:
         if isinstance(vtype, GenericType):
             return vtype.name
         if isinstance(vtype, str):
-            match = re.fullmatch(
-                r"\s*([A-Za-z_][0-9A-Za-z_]*)\s*<(.+)>\s*", vtype
-            )
+            match = re.fullmatch(r"\s*([A-Za-z_][0-9A-Za-z_]*)\s*<(.+)>\s*", vtype)
             if match is not None:
                 args = self.split_generic_constructor_arguments(match.group(2))
                 if args is not None:
@@ -3547,6 +3543,12 @@ class WGSLCodeGen:
             return self.generate_texture_gather_compare_call(function_name, args)
         if normalized_name == "texturegathercompareoffset":
             return self.generate_texture_gather_compare_offset_call(function_name, args)
+        if normalized_name == "texturequerylevels":
+            return self.generate_texture_num_levels_call(function_name, args)
+        if normalized_name == "texturequerylod":
+            return self.generate_texture_query_lod_call(function_name, args)
+        if normalized_name == "texturesamples":
+            return self.generate_texture_num_samples_call(function_name, args)
         if normalized_name == "texturesize":
             return self.generate_texture_dimensions_call(args)
         if normalized_name == "imagesize":
@@ -3951,6 +3953,33 @@ class WGSLCodeGen:
                 "WGSL target requires imageSize() to use a storage image resource"
             )
         return f"vec2<i32>(textureDimensions({self.generate_expression(image)}))"
+
+    def generate_texture_num_levels_call(self, function_name, args):
+        if len(args) != 1:
+            raise ValueError(
+                f"WGSL target supports {function_name}() calls with exactly 1 "
+                f"argument; got {len(args)}"
+            )
+        return f"textureNumLevels({self.generate_expression(args[0])})"
+
+    def generate_texture_num_samples_call(self, function_name, args):
+        if len(args) != 1:
+            raise ValueError(
+                f"WGSL target supports {function_name}() calls with exactly 1 "
+                f"argument; got {len(args)}"
+            )
+        return f"textureNumSamples({self.generate_expression(args[0])})"
+
+    def generate_texture_query_lod_call(self, function_name, args):
+        if len(args) != 2:
+            raise ValueError(
+                f"WGSL target recognizes {function_name}() calls with texture "
+                f"and coordinate operands; got {len(args)} argument(s)"
+            )
+        raise ValueError(
+            "WGSL target cannot lower textureQueryLod(); WebGPU/WGSL lacks "
+            "sampler LOD query builtins"
+        )
 
     def generate_texel_fetch_call(self, function_name, args):
         if len(args) != 3:
@@ -4387,8 +4416,7 @@ class WGSLCodeGen:
             return vtype.name
         if isinstance(vtype, VectorType):
             return (
-                f"vec{vtype.size}<"
-                f"{self.raw_type_name_string(vtype.element_type)}>"
+                f"vec{vtype.size}<" f"{self.raw_type_name_string(vtype.element_type)}>"
             )
         if isinstance(vtype, MatrixType):
             return (
@@ -4414,9 +4442,7 @@ class WGSLCodeGen:
         if isinstance(vtype, ReferenceType):
             return self.raw_type_name_string(vtype.referenced_type)
         if isinstance(vtype, PointerType):
-            return (
-                f"{self.raw_type_name_string(vtype.pointee_type)}*"
-            )
+            return f"{self.raw_type_name_string(vtype.pointee_type)}*"
         return str(vtype)
 
     def builtin_option_payload_type(self, vtype):
@@ -4434,7 +4460,9 @@ class WGSLCodeGen:
     def builtin_option_specialization(self, vtype):
         if self.builtin_option_payload_type(vtype) is None:
             return None
-        return self._builtin_option_specializations.get(self.raw_type_name_string(vtype))
+        return self._builtin_option_specializations.get(
+            self.raw_type_name_string(vtype)
+        )
 
     def builtin_option_specialized_type_name(self, vtype):
         specialization = self.builtin_option_specialization(vtype)

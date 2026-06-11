@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 118
+        "test_count": 120
       },
       "translator_codegen": {
         "exists": true,
@@ -3849,9 +3849,11 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_query_helpers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_texture_query_lod"
           ],
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "notes": "Covers textureSize, textureQueryLevels, and textureSamples lowering to textureDimensions, textureNumLevels, and textureNumSamples, with deterministic textureQueryLod diagnostics because WebGPU/WGSL does not expose sampler LOD query builtins.",
           "status": "diagnostic"
         }
       }

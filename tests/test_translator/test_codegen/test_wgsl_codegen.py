@@ -2828,6 +2828,51 @@ def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls():
     assert "return sampleEnv(envMap, envMap_sampler, normal);" in generated
 
 
+def test_wgsl_codegen_lowers_texture_query_helpers():
+    shader = """
+    shader WGSLTextureQueries {
+        sampler2D colorTex;
+        fragment {
+            vec4 main() @ gl_FragColor {
+                uint2 size = textureSize(colorTex, 0);
+                uint levels = textureQueryLevels(colorTex);
+                uint samples = textureSamples(colorTex);
+                return vec4(float(size.x + size.y + levels + samples));
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var size: vec2<u32> = textureDimensions(colorTex, 0);" in generated
+    assert "var levels: u32 = textureNumLevels(colorTex);" in generated
+    assert "var samples: u32 = textureNumSamples(colorTex);" in generated
+
+
+def test_wgsl_codegen_rejects_texture_query_lod():
+    shader = """
+    shader WGSLTextureQueryLod {
+        sampler2D colorTex;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec2 lod = textureQueryLod(colorTex, uv);
+                return vec4(lod, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target cannot lower textureQueryLod\(\); WebGPU/WGSL lacks "
+            r"sampler LOD query builtins"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_lowers_split_sampler_lod_grad_and_offset_calls():
     shader = """
     shader WGSLTextureSamplingForms {
