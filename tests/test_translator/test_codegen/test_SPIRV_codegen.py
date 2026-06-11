@@ -2006,8 +2006,8 @@ class TestVulkanSPIRVCodeGen:
             }
 
             struct MaterializedComplex {
-                float real;
-                float imag;
+                float x;
+                float y;
             }
 
             compute {

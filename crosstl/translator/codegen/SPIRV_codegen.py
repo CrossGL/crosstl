@@ -1462,6 +1462,60 @@ class VulkanSPIRVCodeGen:
             source_type
         ) == self.aggregate_canonical_key(target_type)
 
+    def is_complex_struct_type(
+        self, type_id: SpirvId, members: Optional[List[Tuple[SpirvId, str]]] = None
+    ) -> bool:
+        if members is None:
+            members = self.current_struct_members.get(type_id.type.base_type)
+        if members is None or len(members) != 2:
+            return False
+
+        member_names = [name for _, name in members]
+        type_name = str(type_id.type.base_type)
+        if not (
+            type_name.startswith("complex")
+            or member_names == ["real", "imag"]
+        ):
+            return False
+
+        return all(
+            self.normalize_primitive_name(member_type.type.base_type)
+            in {"float", "double"}
+            for member_type, _ in members
+        )
+
+    def complex_struct_types_are_layout_compatible(
+        self,
+        source_type: SpirvId,
+        target_type: SpirvId,
+        source_members: List[Tuple[SpirvId, str]],
+        target_members: List[Tuple[SpirvId, str]],
+    ) -> bool:
+        if len(source_members) != len(target_members):
+            return False
+        if not (
+            self.is_complex_struct_type(source_type, source_members)
+            or self.is_complex_struct_type(target_type, target_members)
+        ):
+            return False
+
+        for source_member_type, target_member_type in zip(
+            (member_type for member_type, _ in source_members),
+            (member_type for member_type, _ in target_members),
+        ):
+            source_type_name = self.normalize_primitive_name(
+                source_member_type.type.base_type
+            )
+            target_type_name = self.normalize_primitive_name(
+                target_member_type.type.base_type
+            )
+            if source_type_name not in {"float", "double"}:
+                return False
+            if target_type_name not in {"float", "double"}:
+                return False
+
+        return True
+
     def convert_aggregate_value_to_type(
         self, value_id: SpirvId, source_type: SpirvId, target_type: SpirvId
     ) -> Optional[SpirvId]:
@@ -1547,12 +1601,15 @@ class VulkanSPIRVCodeGen:
         if len(source_members) != len(target_members):
             return None
 
+        allow_layout_only_members = self.complex_struct_types_are_layout_compatible(
+            source_type, target_type, source_members, target_members
+        )
         values = []
         for index, (
             (source_member_type, source_name),
             (target_member_type, target_name),
         ) in enumerate(zip(source_members, target_members)):
-            if source_name != target_name:
+            if source_name != target_name and not allow_layout_only_members:
                 return None
             source_member = self.composite_extract(value_id, source_member_type, index)
             target_member = self.convert_value_to_type(
