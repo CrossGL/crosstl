@@ -732,8 +732,7 @@ class RuntimeDependencyProbeExecutor(RuntimeExecutor):
             return RuntimeExecutorResult(
                 status=SKIPPED,
                 message=(
-                    "Runtime dependencies are unavailable: "
-                    + ", ".join(missing_labels)
+                    "Runtime dependencies are unavailable: " + ", ".join(missing_labels)
                 ),
                 details=details,
             )
@@ -1007,9 +1006,7 @@ def load_runtime_test_manifest(
 ) -> RuntimeTestManifest:
     """Load a project runtime test manifest from JSON or TOML."""
 
-    path = _filesystem_path_arg(
-        manifest_path, field_name="Runtime test manifest path"
-    )
+    path = _filesystem_path_arg(manifest_path, field_name="Runtime test manifest path")
     try:
         if path.suffix.lower() == ".toml":
             payload = _load_toml(path)
@@ -1035,8 +1032,7 @@ def parse_runtime_test_manifest(payload: Any) -> RuntimeTestManifest:
         raise RuntimeVerificationError("Runtime test manifest must be an object.")
     if payload.get("kind") not in (None, RUNTIME_TEST_MANIFEST_KIND):
         raise RuntimeVerificationError(
-            "Runtime test manifest kind must be "
-            f"{RUNTIME_TEST_MANIFEST_KIND}."
+            "Runtime test manifest kind must be " f"{RUNTIME_TEST_MANIFEST_KIND}."
         )
 
     adapters = tuple(
@@ -1296,9 +1292,7 @@ def _load_runtime_test_manifest_argument(
     if isinstance(manifest, RuntimeTestManifest):
         return manifest, None
     if isinstance(manifest, (str, os.PathLike)):
-        path = _filesystem_path_arg(
-            manifest, field_name="Runtime test manifest path"
-        )
+        path = _filesystem_path_arg(manifest, field_name="Runtime test manifest path")
         return load_runtime_test_manifest(path), path
     if isinstance(manifest, Mapping):
         return parse_runtime_test_manifest(manifest), None
@@ -1321,9 +1315,7 @@ def _runtime_test_manifest_artifact_input(
     return artifact_path
 
 
-def _parse_runtime_test_adapter(
-    value: Any, *, index: int
-) -> RuntimeTestAdapterSpec:
+def _parse_runtime_test_adapter(value: Any, *, index: int) -> RuntimeTestAdapterSpec:
     if isinstance(value, RuntimeTestAdapterSpec):
         return value
     if not isinstance(value, Mapping):

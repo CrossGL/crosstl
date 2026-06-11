@@ -12224,8 +12224,9 @@ class VulkanSPIRVCodeGen:
             return {
                 **structured_info,
                 "declared_type_name": type_name,
-                "resource_class": structured_info.get("buffer_kind")
-                or "storage buffer",
+                "resource_class": (
+                    structured_info.get("buffer_kind") or "storage buffer"
+                ),
                 "array_dimensions": dimensions,
             }
 

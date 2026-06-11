@@ -9024,11 +9024,10 @@ def translate_project(
                         materialized_path = (
                             Path(template_temp_dir.name) / Path(unit.relative_path).name
                         )
-                        materialized_path.write_text(
-                            template_materialization.text,
-                            encoding="utf-8",
-                            newline="",
-                        )
+                        with materialized_path.open(
+                            "w", encoding="utf-8", newline=""
+                        ) as materialized_file:
+                            materialized_file.write(template_materialization.text)
                         translation_input_path = materialized_path
                         translation_defines = template_materialization.defines
                         translation_source_options = (

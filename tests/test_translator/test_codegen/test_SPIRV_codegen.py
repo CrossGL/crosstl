@@ -14685,9 +14685,7 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_storage_buffer_reference_overloads_preserve_resource_type(
-        self, tmp_path
-    ):
+    def test_storage_buffer_reference_overloads_preserve_resource_type(self, tmp_path):
         source_code = """
         shader StorageBufferReferenceOverloadProvenance {
             StructuredBuffer<float> weights @binding(0);
