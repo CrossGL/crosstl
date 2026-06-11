@@ -1155,6 +1155,63 @@ def test_wgsl_codegen_allows_resource_like_user_type_names():
     assert "var info: TextureInfo;" in generated
 
 
+def test_wgsl_codegen_escapes_reserved_struct_fields_and_member_accesses():
+    shader = """
+    shader WGSLReservedStructFields {
+        struct Light {
+            int type;
+            float match;
+        };
+
+        float readLight(Light light) {
+            return float(light.type) + light.match;
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "struct Light {\n    type_: i32,\n    match_: f32,\n};" in generated
+    assert "return (f32(light.type_) + light.match_);" in generated
+    assert " type:" not in generated
+    assert " match:" not in generated
+    assert "light.type;" not in generated
+    assert "light.match;" not in generated
+
+
+def test_wgsl_codegen_escapes_reserved_resources_functions_and_locals():
+    shader = """
+    shader WGSLReservedFunctionIdentifiers {
+        sampler2D type;
+
+        float match(float type, float match) {
+            float while = type + match;
+            return while;
+        }
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                float value = match(uv.x, uv.y);
+                return texture(type, uv) + vec4(value);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(0)\nvar type_: texture_2d<f32>;" in generated
+    assert "@group(0) @binding(1)\nvar type__sampler: sampler;" in generated
+    assert "fn match_(type_: f32, match_: f32) -> f32" in generated
+    assert "var while_: f32 = (type_ + match_);" in generated
+    assert "return while_;" in generated
+    assert "var value: f32 = match_(uv.x, uv.y);" in generated
+    assert "textureSample(type_, type__sampler, uv)" in generated
+    assert "fn match(" not in generated
+    assert "var while:" not in generated
+    assert "textureSample(type," not in generated
+
+
 def test_wgsl_aliases_format_as_noop_wgsl():
     source = "@vertex fn main() {}"
 
