@@ -200,6 +200,9 @@ jobs:
             dxc -T "$profile" -E "$entry" "$shader" -Fo "$out_dir/$output"
           }
           while read -r shader entry profile; do
+            shader="${shader%$'\r'}"
+            entry="${entry%$'\r'}"
+            profile="${profile%$'\r'}"
             compile_hlsl "$shader" "$entry" "$profile"
           done < <(
             python demos/open-source-porting/run_demo.py \

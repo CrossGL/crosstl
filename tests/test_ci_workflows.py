@@ -251,6 +251,7 @@ def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
     assert "name: open-source-porting-demo-reports-${{ matrix.os }}" in demo
     assert "name: Upload demo failure summary" in demo
     assert "name: open-source-porting-demo-failure-summary-${{ matrix.os }}" in demo
+    assert "profile=\"${profile%$'\\r'}\"" in demo
     assert "if: failure() && steps.run_demo_tests.outcome == 'failure'" in demo
     assert "if-no-files-found: ignore" in demo
     assert "retention-days: 30" in demo
