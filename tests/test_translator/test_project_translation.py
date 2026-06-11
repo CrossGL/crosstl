@@ -9557,6 +9557,244 @@ def test_translate_project_opengl_uses_metal_default_template_helper_type(
     assert not re.search(r"\bIndexT\b", output)
 
 
+def test_translate_project_opengl_materializes_mlx_accumulator_template_default(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "softmax.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_softmax(name, type) \\
+                instantiate_kernel("softmax" #name, softmax, type)
+
+            template <typename U>
+            struct DefaultAccT {
+                using type = float;
+            };
+
+            template <typename T, typename AccT>
+            AccT reduce_acc(T value) {
+                AccT local = AccT(value);
+                return local;
+            }
+
+            template <typename T, typename AccT = typename DefaultAccT<T>::type>
+            [[kernel]] void softmax(
+                device const T* in [[buffer(0)]],
+                device AccT* scratch [[buffer(1)]],
+                device T* out [[buffer(2)]],
+                uint gid [[thread_position_in_grid]]) {
+                AccT tmp = reduce_acc<T, AccT>(in[gid]);
+                scratch[gid] = tmp;
+                out[gid] = T(tmp);
+            }
+
+            instantiate_softmax(float32, float)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["specializations"] == [
+        {
+            "name": "softmax",
+            "materializedName": "softmaxfloat32",
+            "parameters": {"AccT": "float", "T": "float"},
+            "parameterSources": {
+                "AccT": "source-default",
+                "T": "source-instantiation",
+            },
+            "source": "source-instantiation",
+        },
+        {
+            "name": "reduce_acc",
+            "materializedName": "reduce_acc_float_float",
+            "parameters": {"AccT": "float", "T": "float"},
+            "parameterSources": {"AccT": "call-site", "T": "call-site"},
+            "source": "call-site",
+        },
+    ]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert (
+        "layout(std430, binding = 1) buffer scratchBuffer { float scratch[]; };"
+        in output
+    )
+    assert "float reduce_acc_float_float(float value)" in output
+    assert "float tmp = reduce_acc_float_float(in_[gid]);" in output
+    assert not re.search(r"\b(?:T|AccT)\b", output)
+    assert "typename" not in output
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_opengl_materializes_mlx_auxiliary_template_default(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "attention.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_attention(name, type) \\
+                instantiate_kernel("attention" #name, scaled_dot_product_attention, type)
+
+            template <typename U>
+            U read_aux(U value) {
+                U local = value;
+                return local;
+            }
+
+            template <typename T, typename U = uint>
+            [[kernel]] void scaled_dot_product_attention(
+                device const T* scores [[buffer(0)]],
+                device const U* bmask [[buffer(1)]],
+                device T* out [[buffer(2)]],
+                uint gid [[thread_position_in_grid]]) {
+                U mask_value = read_aux<U>(bmask[gid]);
+                out[gid] = scores[gid] + T(mask_value);
+            }
+
+            instantiate_attention(float32, float)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["specializations"] == [
+        {
+            "name": "scaled_dot_product_attention",
+            "materializedName": "attentionfloat32",
+            "parameters": {"T": "float", "U": "uint"},
+            "parameterSources": {
+                "T": "source-instantiation",
+                "U": "source-default",
+            },
+            "source": "source-instantiation",
+        },
+        {
+            "name": "read_aux",
+            "materializedName": "read_aux_uint",
+            "parameters": {"U": "uint"},
+            "parameterSources": {"U": "call-site"},
+            "source": "call-site",
+        },
+    ]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert (
+        "layout(std430, binding = 1) readonly buffer bmaskBuffer { uint bmask[]; };"
+        in output
+    )
+    assert "uint read_aux_uint(uint value)" in output
+    assert "uint mask_value = read_aux_uint(bmask[gid]);" in output
+    assert not re.search(r"\b(?:T|U)\b", output)
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_opengl_missing_accumulator_template_diagnostic(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "reduction.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_reduce(name, type) \\
+                instantiate_kernel("reduce" #name, reduce_values, type)
+
+            template <typename T, typename AccT>
+            [[kernel]] void reduce_values(
+                device const T* in [[buffer(0)]],
+                device AccT* out [[buffer(1)]]) {
+                out[0] = AccT(in[0]);
+            }
+
+            instantiate_reduce(float32, float)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    assert artifact["templateMaterialization"]["unsupported"] == [
+        {
+            "name": "reduce_values",
+            "parameters": ["T", "AccT"],
+            "missingParameters": ["AccT"],
+            "reason": "missing-template-arguments",
+            "sourceDeclaration": {
+                "file": "shaders/reduction.metal",
+                "line": 5,
+                "column": 1,
+                "name": "reduce_values",
+            },
+            "target": "opengl",
+            "requiredSignature": "reduce_values<float, AccT>",
+        }
+    ]
+    diagnostic = payload["diagnostics"][0]
+    assert (
+        diagnostic["code"]
+        == "project.translate.template-materialization-unsupported"
+    )
+    assert "reduce_values missing AccT" in diagnostic["message"]
+    assert "reduce_values missing T" not in diagnostic["message"]
+
+
 def test_translate_project_opengl_reports_unresolved_metal_template_kernel(
     tmp_path,
 ):
