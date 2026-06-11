@@ -18108,24 +18108,28 @@ def test_compute_builtin_identifiers_lower_to_mojo_gpu_index_aliases():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    # Mojo GPU docs expose kernel coordinates through x/y/z UInt aliases such as
-    # global_idx_uint, thread_idx_uint, block_idx_uint, block_dim_uint, and
-    # grid_dim_uint:
-    # https://mojolang.org/docs/std/gpu/primitives/id/
     assert "var matrix_size: Int32 = 0" in generated_code
-    assert "var local_x: Int32 = Int32(thread_idx_uint.x)" in generated_code
-    assert "var global_x: Int32 = Int32(global_idx_uint.x)" in generated_code
-    assert "var group_count: Int32 = Int32(grid_dim_uint.x)" in generated_code
-    assert "var group_size: Int32 = Int32(block_dim_uint.x)" in generated_code
+    assert (
+        "fn compute_main(global_idx_uint: SIMD[DType.uint32, 4], "
+        "thread_idx_uint: SIMD[DType.uint32, 4], "
+        "block_idx_uint: SIMD[DType.uint32, 4], "
+        "grid_dim_uint: SIMD[DType.uint32, 4], "
+        "block_dim_uint: SIMD[DType.uint32, 4]) -> None:"
+    ) in generated_code
+    assert "var local_x: Int32 = Int32(thread_idx_uint[0])" in generated_code
+    assert "var global_x: Int32 = Int32(global_idx_uint[0])" in generated_code
+    assert "var group_count: Int32 = Int32(grid_dim_uint[0])" in generated_code
+    assert "var group_size: Int32 = Int32(block_dim_uint[0])" in generated_code
     assert (
         "var global_id: SIMD[DType.uint32, 4] = "
         "SIMD[DType.uint32, 4]("
-        "global_idx_uint.x, global_idx_uint.y, global_idx_uint.z, 0)"
+        "global_idx_uint[0], global_idx_uint[1], global_idx_uint[2], 0)"
     ) in generated_code
     assert (
         "var workgroup_xy: SIMD[DType.uint32, 2] = "
-        "SIMD[DType.uint32, 2](block_idx_uint.x, block_idx_uint.y)"
+        "SIMD[DType.uint32, 2](block_idx_uint[0], block_idx_uint[1])"
     ) in generated_code
+    assert "# CrossGL GPU builtin placeholders" not in generated_code
     assert "# CrossGL builtin placeholders" not in generated_code
     assert "gl_LocalInvocationID" not in generated_code
     assert "gl_GlobalInvocationID" not in generated_code

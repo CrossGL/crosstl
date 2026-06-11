@@ -1189,6 +1189,14 @@ MOJO_GPU_BUILTIN_ALIASES = {
     "gl_WorkGroupSize": ("block_dim_uint", "uvec3"),
 }
 
+MOJO_GPU_BUILTIN_PARAMETER_ORDER = (
+    "global_idx_uint",
+    "thread_idx_uint",
+    "block_idx_uint",
+    "grid_dim_uint",
+    "block_dim_uint",
+)
+
 MOJO_VECTOR_ARITHMETIC_OPS = {
     "+": "add",
     "-": "sub",
@@ -1674,11 +1682,7 @@ class MojoCodeGen:
 
         functions = getattr(ast, "functions", [])
         for func in functions:
-            # Handle both old and new AST function structures
-            if hasattr(func, "qualifiers") and func.qualifiers:
-                qualifier = func.qualifiers[0] if func.qualifiers else None
-            else:
-                qualifier = getattr(func, "qualifier", None)
+            qualifier = self.function_stage_qualifier(func)
 
             if qualifier == "vertex":
                 code += "# Vertex Shader\n"
@@ -1738,6 +1742,24 @@ class MojoCodeGen:
         header += "\n"
 
         return header + self.generate_required_helpers() + code
+
+    def function_stage_qualifier(self, func):
+        if hasattr(func, "qualifiers") and func.qualifiers:
+            qualifier = func.qualifiers[0] if func.qualifiers else None
+        else:
+            qualifier = getattr(func, "qualifier", None)
+        if qualifier:
+            value = getattr(qualifier, "value", None)
+            return value if isinstance(value, str) else str(qualifier)
+
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name is None:
+                continue
+            normalized = str(attr_name).strip().lower().replace("-", "_")
+            if normalized in MOJO_SUPPORTED_STAGE_TYPES:
+                return normalized
+        return None
 
     def stage_type_name(self, stage_type):
         value = getattr(stage_type, "value", None)
@@ -6002,6 +6024,20 @@ class MojoCodeGen:
         for name, type_name in extra_param_infos:
             self.register_variable_type(name, type_name)
 
+        synthetic_compute_builtin_params = []
+        if shader_type == "compute":
+            existing_param_names = {
+                getattr(param, "name", None) for param, _ in param_infos
+            }
+            existing_param_names.update(name for name, _ in extra_param_infos)
+            synthetic_compute_builtin_params = (
+                self.compute_gpu_builtin_parameter_infos(
+                    getattr(func, "body", []), existing_param_names
+                )
+            )
+            for name, type_name in synthetic_compute_builtin_params:
+                self.register_variable_type(name, type_name)
+
         if hasattr(func, "return_type"):
             return_type = self.convert_type_node_to_string(func.return_type)
         else:
@@ -6033,6 +6069,7 @@ class MojoCodeGen:
 
         param_names = {p.name for p, _ in param_infos if hasattr(p, "name")}
         param_names.update(name for name, _ in extra_param_infos)
+        param_names.update(name for name, _ in synthetic_compute_builtin_params)
         mutated_params = self.collect_mutated_parameters(
             getattr(func, "body", []), param_names
         )
@@ -6094,11 +6131,16 @@ class MojoCodeGen:
             params.append(
                 f"{ownership}{self.mojo_identifier(name)}: {self.map_type(param_type)}"
             )
+        for name, param_type in synthetic_compute_builtin_params:
+            params.append(f"{self.mojo_identifier(name)}: {self.map_type(param_type)}")
 
         params_str = ", ".join(params) if params else ""
 
         function_name = self.shader_entry_function_name(
-            func, shader_type, param_infos, return_type
+            func,
+            shader_type,
+            [*param_infos, *synthetic_compute_builtin_params],
+            return_type,
         )
         self.function_return_types[func.name] = return_type
         if function_name != func.name:
@@ -6211,6 +6253,88 @@ class MojoCodeGen:
             and self.type_name(return_type) == "void"
             and self.current_shader_stage_count <= 1
         )
+
+    def compute_gpu_builtin_parameter_infos(self, body, existing_names):
+        required_builtins = self.collect_compute_gpu_builtin_aliases(body)
+        if not required_builtins:
+            return []
+
+        existing_names = {name for name in existing_names if isinstance(name, str)}
+        ordered = []
+        seen_aliases = set()
+        for alias_name in MOJO_GPU_BUILTIN_PARAMETER_ORDER:
+            for candidate_alias, type_name in sorted(required_builtins):
+                if candidate_alias != alias_name or candidate_alias in seen_aliases:
+                    continue
+                seen_aliases.add(candidate_alias)
+                if candidate_alias not in existing_names:
+                    ordered.append((candidate_alias, type_name))
+        for alias_name, type_name in sorted(required_builtins):
+            if alias_name in seen_aliases:
+                continue
+            seen_aliases.add(alias_name)
+            if alias_name not in existing_names:
+                ordered.append((alias_name, type_name))
+        return ordered
+
+    def collect_compute_gpu_builtin_aliases(self, node, required=None, visited=None):
+        if required is None:
+            required = set()
+        if visited is None:
+            visited = set()
+        if node is None or isinstance(node, (int, float, bool)):
+            return required
+        if isinstance(node, str):
+            builtin = MOJO_GPU_BUILTIN_ALIASES.get(node)
+            if builtin is not None:
+                required.add(builtin)
+            return required
+        if isinstance(node, (list, tuple, set)):
+            for item in node:
+                self.collect_compute_gpu_builtin_aliases(item, required, visited)
+            return required
+
+        node_id = id(node)
+        if node_id in visited:
+            return required
+        visited.add(node_id)
+
+        builtin_name = getattr(node, "builtin_name", None)
+        if builtin_name is None and isinstance(node, IdentifierNode):
+            builtin_name = getattr(node, "name", None)
+        builtin = MOJO_GPU_BUILTIN_ALIASES.get(builtin_name)
+        if builtin is not None:
+            required.add(builtin)
+
+        for attr_name in (
+            "statements",
+            "body",
+            "expression",
+            "initial_value",
+            "object",
+            "object_expr",
+            "vector_expr",
+            "array",
+            "index",
+            "left",
+            "right",
+            "condition",
+            "true_expr",
+            "false_expr",
+            "function",
+            "args",
+            "arguments",
+            "then_branch",
+            "else_branch",
+            "if_body",
+            "else_body",
+        ):
+            if not hasattr(node, attr_name):
+                continue
+            self.collect_compute_gpu_builtin_aliases(
+                getattr(node, attr_name), required, visited
+            )
+        return required
 
     def mojo_compute_global_invocation_id_parameter_bridge(
         self, parameter, param_type, semantic, emitted_param_names, parameter_names
@@ -9290,7 +9414,8 @@ class MojoCodeGen:
         if builtin is None or name in self.variable_types:
             return None
         alias_name, type_name = builtin
-        self.required_gpu_builtin_placeholders.add((alias_name, type_name))
+        if alias_name not in self.variable_types:
+            self.required_gpu_builtin_placeholders.add((alias_name, type_name))
         if component:
             swizzle_indices = self.get_swizzle_indices(component)
             if swizzle_indices is None:
@@ -9337,6 +9462,8 @@ class MojoCodeGen:
     def gpu_builtin_component_expression(self, alias_name, index, dtype):
         component_names = ("x", "y", "z")
         if 0 <= index < len(component_names):
+            if alias_name in self.variable_types:
+                return f"{self.mojo_identifier(alias_name)}[{index}]"
             return f"{alias_name}.{component_names[index]}"
         return MOJO_DTYPE_INFO.get(dtype, MOJO_DTYPE_INFO["DType.uint32"])[2]
 
