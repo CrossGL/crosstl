@@ -664,6 +664,100 @@ def test_translate_project_glsl_overloaded_vector_helper_to_mojo(tmp_path):
     assert "fragColor = linearToSrgb((light * sample(tex," in generated
 
 
+def test_translate_project_mojo_gpu_vector_add_filters_host_runtime(tmp_path):
+    repo = tmp_path / "repo"
+    kernel_dir = repo / "kernels"
+    kernel_dir.mkdir(parents=True)
+    (kernel_dir / "vector_addition.mojo").write_text(
+        textwrap.dedent("""
+        from std.math import ceildiv
+        from std.sys import has_accelerator
+        from std.gpu.host import DeviceContext
+        from std.gpu import block_dim, block_idx, thread_idx
+        from layout import TileTensor, row_major
+
+        alias float_dtype = DType.float32
+        alias vector_size = 1000
+        alias layout = row_major[vector_size]()
+        alias block_size = 256
+        alias num_blocks = ceildiv(vector_size, block_size)
+
+        fn vector_addition(
+            lhs_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+            rhs_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+            out_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+        ):
+            var tid = block_idx.x * block_dim.x + thread_idx.x
+            if tid < vector_size:
+                out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid]
+
+        fn main():
+            if not has_accelerator():
+                print("No compatible GPU found")
+            else:
+                ctx = DeviceContext()
+                lhs_device_buffer = ctx.enqueue_create_buffer[float_dtype](vector_size)
+                rhs_device_buffer = ctx.enqueue_create_buffer[float_dtype](vector_size)
+                result_device_buffer = ctx.enqueue_create_buffer[float_dtype](vector_size)
+                lhs_tensor = TileTensor(lhs_device_buffer, layout)
+                rhs_tensor = TileTensor(rhs_device_buffer, layout)
+                result_tensor = TileTensor(result_device_buffer, layout)
+                ctx.enqueue_function[vector_addition](
+                    lhs_tensor,
+                    rhs_tensor,
+                    result_tensor,
+                    grid_dim=num_blocks,
+                    block_dim=block_size,
+                )
+                print("Result vector:", result_device_buffer)
+        """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+        [project]
+        source_roots = ["kernels"]
+        include = ["kernels/*.mojo"]
+        targets = ["opengl", "metal", "vulkan"]
+        output_dir = "translated"
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo), format_output=False)
+    payload = report.to_json()
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["migration"]["actionsByKind"] == {"manual-runtime-integration": 1}
+
+    generated = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+    for source in generated.values():
+        for host_token in (
+            "has_accelerator",
+            "DeviceContext",
+            "enqueue_function",
+            "enqueue_create_buffer",
+            "print",
+            "num_blocks",
+            "block_size",
+        ):
+            assert host_token not in source
+
+    assert "layout(std430, binding = 0) buffer lhs_tensorBuffer" in generated["opengl"]
+    assert "out_tensor[tid] = (lhs_tensor[tid] + rhs_tensor[tid]);" in generated[
+        "opengl"
+    ]
+    assert "kernel void vector_addition" in generated["metal"]
+    assert "out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid];" in generated["metal"]
+    assert 'OpEntryPoint GLCompute' in generated["vulkan"]
+    assert '"vector_addition"' in generated["vulkan"]
+
+
 @pytest.mark.parametrize("target_backend", ("opengl", "metal"))
 def test_translate_project_lowers_slang_default_parameter_calls(
     tmp_path, target_backend

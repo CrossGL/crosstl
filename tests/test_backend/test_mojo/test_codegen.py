@@ -4152,6 +4152,80 @@ def test_bracket_attribute_codegen_uses_shader_stage():
     assert "run()@ compute_shader" not in generated_code
 
 
+def test_mojo_gpu_kernel_extraction_filters_host_runtime():
+    code = """
+    from std.math import ceildiv
+    from std.sys import has_accelerator
+    from std.gpu.host import DeviceContext
+    from std.gpu import block_dim, block_idx, thread_idx
+    from layout import TileTensor, row_major
+
+    alias float_dtype = DType.float32
+    alias vector_size = 1000
+    alias layout = row_major[vector_size]()
+    alias block_size = 256
+    alias num_blocks = ceildiv(vector_size, block_size)
+
+    fn vector_addition(
+        lhs_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+        rhs_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+        out_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+    ):
+        var tid = block_idx.x * block_dim.x + thread_idx.x
+        if tid < vector_size:
+            out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid]
+
+    fn main():
+        if not has_accelerator():
+            print("No compatible GPU found")
+        else:
+            ctx = DeviceContext()
+            lhs_device_buffer = ctx.enqueue_create_buffer[float_dtype](vector_size)
+            rhs_device_buffer = ctx.enqueue_create_buffer[float_dtype](vector_size)
+            result_device_buffer = ctx.enqueue_create_buffer[float_dtype](vector_size)
+            lhs_tensor = TileTensor(lhs_device_buffer, layout)
+            rhs_tensor = TileTensor(rhs_device_buffer, layout)
+            result_tensor = TileTensor(result_device_buffer, layout)
+            ctx.enqueue_function[vector_addition](
+                lhs_tensor,
+                rhs_tensor,
+                result_tensor,
+                grid_dim=num_blocks,
+                block_dim=block_size,
+            )
+            print("Result vector:", result_device_buffer)
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "compute {" in generated_code
+    assert "void vector_addition(" in generated_code
+    assert "RWStructuredBuffer<float> lhs_tensor" in generated_code
+    assert "RWStructuredBuffer<float> rhs_tensor" in generated_code
+    assert "RWStructuredBuffer<float> out_tensor" in generated_code
+    assert "@ stage_entry" in generated_code
+    assert "int vector_size = 1000;" in generated_code
+    assert "int tid =" in generated_code
+    assert "gl_WorkGroupID.x" in generated_code
+    assert "gl_WorkGroupSize.x" in generated_code
+    assert "gl_LocalInvocationID.x" in generated_code
+
+    for host_token in (
+        "has_accelerator",
+        "DeviceContext",
+        "enqueue_function",
+        "enqueue_create_buffer",
+        "print",
+        "block_size",
+        "num_blocks",
+        "layout_",
+    ):
+        assert host_token not in generated_code
+
+    parse_crossgl(generated_code)
+
+
 def test_class_codegen_uses_struct_shape_and_method_functions():
     code = """
     class Accumulator:
