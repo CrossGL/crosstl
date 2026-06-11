@@ -735,6 +735,69 @@ def test_translate_project_glsl_overloaded_vector_helper_to_mojo(tmp_path):
     assert "fragColor = linearToSrgb((light * sample(tex," in generated
 
 
+def test_translate_project_glsl_overloaded_vector_helper_to_wgsl(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "cube.frag").write_text(
+        textwrap.dedent("""
+        #version 450
+        layout(binding = 0) uniform sampler2D tex;
+        layout(location = 0) in vec2 texcoord;
+        layout(location = 0) out vec4 fragColor;
+
+        float linearToSrgb(float linear) {
+            return linear;
+        }
+        vec3 linearToSrgb(vec3 linear) {
+            return vec3(
+                linearToSrgb(linear.r),
+                linearToSrgb(linear.g),
+                linearToSrgb(linear.b)
+            );
+        }
+        vec4 linearToSrgb(vec4 linear) {
+            return vec4(linearToSrgb(linear.rgb), linear.a);
+        }
+
+        void main() {
+            vec4 light = vec4(0.5);
+            fragColor = linearToSrgb(light * texture(tex, texcoord.xy));
+        }
+        """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+        [project]
+        source_roots = ["shaders"]
+        include = ["shaders/*.frag"]
+        targets = ["wgsl"]
+        output_dir = "translated"
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo), format_output=False)
+    payload = report.to_json()
+    generated = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert "fn linearToSrgb(" not in generated
+    assert generated.count("fn linearToSrgb_") == 3
+    assert "fn linearToSrgb_f32(linear: f32) -> f32" in generated
+    assert "fn linearToSrgb_vec3_f32(linear: vec3<f32>) -> vec3<f32>" in generated
+    assert "fn linearToSrgb_vec4_f32(linear: vec4<f32>) -> vec4<f32>" in generated
+    assert "linearToSrgb_f32(linear.r)" in generated
+    assert "linearToSrgb_vec3_f32(linear.rgb)" in generated
+    assert (
+        "fragColor = linearToSrgb_vec4_f32((light * textureSample("
+        in generated
+    )
+    assert "fragColor = linearToSrgb((light * textureSample(" not in generated
+
+
 def test_translate_project_mojo_gpu_vector_add_filters_host_runtime(tmp_path):
     repo = tmp_path / "repo"
     kernel_dir = repo / "kernels"
