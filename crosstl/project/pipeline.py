@@ -8789,6 +8789,220 @@ def _metal_diagnostic_template_call_noop_replacements(
     return replacements
 
 
+def _metal_block_spans(preprocessor: Any, source: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    stack: list[int] = []
+    i = 0
+    while i < len(source):
+        if source[i] in "\"'":
+            _literal, consumed = preprocessor._read_string(source, i)
+            i += consumed
+            continue
+        if source.startswith("//", i):
+            end = source.find("\n", i)
+            if end == -1:
+                break
+            i = end + 1
+            continue
+        if source.startswith("/*", i):
+            end = source.find("*/", i + 2)
+            if end == -1:
+                break
+            i = end + 2
+            continue
+        if source[i] == "{":
+            stack.append(i)
+        elif source[i] == "}" and stack:
+            spans.append((stack.pop(), i + 1))
+        i += 1
+    return spans
+
+
+def _metal_enclosing_block_end(
+    block_spans: Sequence[tuple[int, int]],
+    position: int,
+) -> int | None:
+    enclosing = [span for span in block_spans if span[0] < position < span[1]]
+    if not enclosing:
+        return None
+    return min(enclosing, key=lambda span: span[1] - span[0])[1]
+
+
+def _metal_statement_semicolon(
+    preprocessor: Any,
+    source: str,
+    start: int,
+) -> int | None:
+    depths = {"<": 0, "(": 0, "[": 0, "{": 0}
+    i = start
+    while i < len(source):
+        if source[i] in "\"'":
+            _literal, consumed = preprocessor._read_string(source, i)
+            i += consumed
+            continue
+        if source.startswith("//", i):
+            end = source.find("\n", i)
+            if end == -1:
+                return None
+            i = end + 1
+            continue
+        if source.startswith("/*", i):
+            end = source.find("*/", i + 2)
+            if end == -1:
+                return None
+            i = end + 2
+            continue
+
+        character = source[i]
+        if character in depths:
+            depths[character] += 1
+        elif character == ">" and depths["<"] > 0:
+            depths["<"] -= 1
+        elif character == ")" and depths["("] > 0:
+            depths["("] -= 1
+        elif character == "]" and depths["["] > 0:
+            depths["["] -= 1
+        elif character == "}" and depths["{"] > 0:
+            depths["{"] -= 1
+        elif character == ";" and not any(depths.values()):
+            return i
+        i += 1
+    return None
+
+
+def _metal_concrete_using_alias_type(alias_type: str) -> str | None:
+    alias_type = str(alias_type or "").strip()
+    if alias_type.startswith("typename "):
+        alias_type = alias_type[len("typename ") :].strip()
+    if "<" not in alias_type or ">" not in alias_type:
+        return None
+    if any(character in alias_type for character in "{};="):
+        return None
+    return alias_type
+
+
+def _inline_metal_concrete_using_template_aliases(
+    preprocessor: Any,
+    source: str,
+    excluded_spans: Sequence[tuple[int, int]],
+) -> str:
+    block_spans = _metal_block_spans(preprocessor, source)
+    aliases: list[dict[str, Any]] = []
+    alias_spans: list[tuple[int, int]] = []
+    excluded = list(excluded_spans)
+    i = 0
+    while i < len(source):
+        if source[i] in "\"'":
+            _literal, consumed = preprocessor._read_string(source, i)
+            i += consumed
+            continue
+        if source.startswith("//", i):
+            end = source.find("\n", i)
+            if end == -1:
+                break
+            i = end + 1
+            continue
+        if source.startswith("/*", i):
+            end = source.find("*/", i + 2)
+            if end == -1:
+                break
+            i = end + 2
+            continue
+        span = preprocessor._containing_span(i, excluded)
+        if span is not None:
+            i = span[1]
+            continue
+        if not (source[i].isalpha() or source[i] == "_"):
+            i += 1
+            continue
+
+        ident, consumed = preprocessor._read_identifier(source, i)
+        if ident != "using":
+            i += consumed
+            continue
+
+        j = i + consumed
+        while j < len(source) and source[j].isspace():
+            j += 1
+        if j >= len(source) or not (source[j].isalpha() or source[j] == "_"):
+            i += consumed
+            continue
+        alias_name, alias_consumed = preprocessor._read_identifier(source, j)
+        j += alias_consumed
+        while j < len(source) and source[j].isspace():
+            j += 1
+        if j >= len(source) or source[j] != "=":
+            i += consumed
+            continue
+        semicolon = _metal_statement_semicolon(preprocessor, source, j + 1)
+        if semicolon is None:
+            i += consumed
+            continue
+        alias_type = _metal_concrete_using_alias_type(source[j + 1 : semicolon])
+        scope_end = _metal_enclosing_block_end(block_spans, i)
+        if alias_type is None or scope_end is None:
+            i = semicolon + 1
+            continue
+        aliases.append(
+            {
+                "name": alias_name,
+                "type": alias_type,
+                "start": i,
+                "end": semicolon + 1,
+                "scope_end": scope_end,
+            }
+        )
+        alias_spans.append((i, semicolon + 1))
+        i = semicolon + 1
+
+    if not aliases:
+        return source
+
+    replacements: list[tuple[int, int, str]] = [
+        (alias["start"], alias["end"], "") for alias in aliases
+    ]
+    excluded_for_replacement = [*excluded, *alias_spans]
+    i = 0
+    while i < len(source):
+        if source[i] in "\"'":
+            _literal, consumed = preprocessor._read_string(source, i)
+            i += consumed
+            continue
+        if source.startswith("//", i):
+            end = source.find("\n", i)
+            if end == -1:
+                break
+            i = end + 1
+            continue
+        if source.startswith("/*", i):
+            end = source.find("*/", i + 2)
+            if end == -1:
+                break
+            i = end + 2
+            continue
+        span = preprocessor._containing_span(i, excluded_for_replacement)
+        if span is not None:
+            i = span[1]
+            continue
+        if not (source[i].isalpha() or source[i] == "_"):
+            i += 1
+            continue
+        ident, consumed = preprocessor._read_identifier(source, i)
+        candidates = [
+            alias
+            for alias in aliases
+            if alias["name"] == ident
+            and alias["end"] <= i
+            and i < alias["scope_end"]
+        ]
+        if candidates:
+            alias = max(candidates, key=lambda item: int(item["end"]))
+            replacements.append((i, i + consumed, str(alias["type"])))
+        i += consumed
+
+    return preprocessor._apply_text_replacements(source, replacements)
+
+
 def _strip_metal_diagnostic_template_helpers(
     preprocessor: Any,
     source: str,
@@ -9336,6 +9550,11 @@ def _project_template_materialization_for_artifact(
             materialized = preprocessor._apply_text_replacements(
                 materialized, explicit_replacements
             )
+    materialized = _inline_metal_concrete_using_template_aliases(
+        preprocessor,
+        materialized,
+        preprocessor._find_template_declaration_spans(materialized),
+    )
     if not materialized.endswith("\n"):
         materialized += "\n"
 
