@@ -3539,8 +3539,14 @@ class WGSLCodeGen:
             )
         if normalized_name == "texturegather":
             return self.generate_texture_gather_call(function_name, args)
+        if normalized_name == "texturegatheroffset":
+            return self.generate_texture_gather_offset_call(function_name, args)
+        if normalized_name == "texturegatheroffsets":
+            return self.generate_texture_gather_offsets_call(function_name, args)
         if normalized_name == "texturegathercompare":
             return self.generate_texture_gather_compare_call(function_name, args)
+        if normalized_name == "texturegathercompareoffset":
+            return self.generate_texture_gather_compare_offset_call(function_name, args)
         if normalized_name == "texturesize":
             return self.generate_texture_dimensions_call(args)
         if normalized_name == "imagesize":
@@ -3775,6 +3781,60 @@ class WGSLCodeGen:
         self.require_comparison_sampler_operand(args, function_name, implicit=3)
         return self.generate_texture_builtin_call(
             "textureGatherCompare", function_name, args, implicit=3, explicit=4
+        )
+
+    def generate_texture_gather_offset_call(self, function_name, args):
+        component = LiteralNode(0, PrimitiveType("int"))
+        if len(args) == 3:
+            texture, coords, offset = args
+            sampler = None
+        elif len(args) == 4:
+            texture = args[0]
+            if self.is_sampler_expression(args[1]):
+                sampler, coords, offset = args[1:]
+            else:
+                coords, offset, component = args[1:]
+                sampler = None
+        elif len(args) == 5:
+            texture, sampler, coords, offset, component = args
+        else:
+            raise ValueError(
+                "WGSL target supports textureGatherOffset() calls with "
+                "texture/coords/offset, texture/coords/offset/component, "
+                "texture/sampler/coords/offset, or "
+                "texture/sampler/coords/offset/component arguments; got "
+                f"{len(args)} argument(s) for {function_name}"
+            )
+
+        sampler_expression = (
+            self.generate_expression(sampler)
+            if sampler is not None
+            else self.texture_sampler_expression(texture)
+        )
+        return (
+            f"textureGather({self.generate_expression(component)}, "
+            f"{self.generate_expression(texture)}, "
+            f"{sampler_expression}, "
+            f"{self.generate_expression(coords)}, "
+            f"{self.generate_expression(offset)})"
+        )
+
+    def generate_texture_gather_offsets_call(self, function_name, args):
+        raise ValueError(
+            "WGSL target does not support textureGatherOffsets(); "
+            "WebGPU textureGather() accepts at most one offset operand"
+        )
+
+    def generate_texture_gather_compare_offset_call(self, function_name, args):
+        if len(args) not in {4, 5}:
+            raise ValueError(
+                f"WGSL target supports {function_name}() calls with 4 or "
+                f"5 argument(s); got {len(args)}"
+            )
+        self.require_depth_texture_operand(args[0], function_name)
+        self.require_comparison_sampler_operand(args, function_name, implicit=4)
+        return self.generate_texture_builtin_call(
+            "textureGatherCompare", function_name, args, implicit=4, explicit=5
         )
 
     def generate_texture_sample_level_offset_call(self, function_name, args):

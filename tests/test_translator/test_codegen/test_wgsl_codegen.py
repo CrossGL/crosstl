@@ -2605,6 +2605,136 @@ def test_wgsl_codegen_lowers_texture_gather_compare_calls():
     assert "gatherImplicit(shadowMap, shadowMap_sampler, uv, depth)" in generated
 
 
+def test_wgsl_codegen_lowers_texture_gather_offset_calls():
+    shader = """
+    shader WGSLTextureGatherOffset {
+        sampler2D colorTex;
+        sampler linearSampler;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                ivec2 offset = ivec2(1, 0);
+                return textureGatherOffset(colorTex, uv, offset)
+                    + textureGatherOffset(colorTex, uv, offset, 2)
+                    + textureGatherOffset(colorTex, linearSampler, uv, offset)
+                    + textureGatherOffset(colorTex, linearSampler, uv, offset, 3);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "textureGather(0, colorTex, colorTex_sampler, uv, offset)" in generated
+    assert "textureGather(2, colorTex, colorTex_sampler, uv, offset)" in generated
+    assert "textureGather(0, colorTex, linearSampler, uv, offset)" in generated
+    assert "textureGather(3, colorTex, linearSampler, uv, offset)" in generated
+
+
+def test_wgsl_codegen_lowers_texture_gather_compare_offset_calls():
+    shader = """
+    shader WGSLTextureGatherCompareOffset {
+        sampler2DShadow shadowMap;
+        samplerComparisonState compareSampler;
+        vec4 gatherImplicit(
+            sampler2DShadow tex,
+            vec2 uv,
+            float depth,
+            ivec2 offset
+        ) {
+            return textureGatherCompareOffset(tex, uv, depth, offset);
+        }
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0, float depth @ TEXCOORD1) @ gl_FragColor {
+                ivec2 offset = ivec2(1, 0);
+                return textureGatherCompareOffset(
+                        shadowMap,
+                        compareSampler,
+                        uv,
+                        depth,
+                        offset
+                    )
+                    + gatherImplicit(shadowMap, uv, depth, offset);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "fn gatherImplicit(tex: texture_depth_2d, tex_sampler: sampler_comparison, "
+        "uv: vec2<f32>, depth: f32, offset: vec2<i32>) -> vec4<f32>"
+    ) in generated
+    assert (
+        "return textureGatherCompare(tex, tex_sampler, uv, depth, offset);" in generated
+    )
+    assert (
+        "textureGatherCompare(shadowMap, compareSampler, uv, depth, offset)"
+        in generated
+    )
+    assert (
+        "gatherImplicit(shadowMap, shadowMap_sampler, uv, depth, offset)" in generated
+    )
+
+
+def test_wgsl_codegen_rejects_plain_sampler_for_texture_gather_compare_offset():
+    shader = """
+    shader WGSLBadGatherCompareOffsetSampler {
+        sampler2DShadow shadowMap;
+        sampler plainSampler;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureGatherCompareOffset(
+                    shadowMap,
+                    plainSampler,
+                    uv,
+                    0.5,
+                    ivec2(1, 0)
+                );
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target requires textureGatherCompareOffset\(\) explicit sampler "
+            r"operand to use samplerComparisonState"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_texture_gather_offsets():
+    shader = """
+    shader WGSLTextureGatherOffsets {
+        sampler2D colorTex;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureGatherOffsets(
+                    colorTex,
+                    uv,
+                    ivec2(-1, 0),
+                    ivec2(0, -1),
+                    ivec2(1, 0),
+                    ivec2(0, 1)
+                );
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target does not support textureGatherOffsets\(\); "
+            r"WebGPU textureGather\(\) accepts at most one offset operand"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_rejects_plain_sampler_for_texture_gather_compare():
     shader = """
     shader WGSLBadGatherCompareSampler {
