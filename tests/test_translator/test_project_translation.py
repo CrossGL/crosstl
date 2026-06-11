@@ -32241,14 +32241,16 @@ def test_translate_project_metal_matmul_buffers_lower_to_directx_resources(
                 uint col = id.x;
                 float sum = 0.0;
 
-                for (uint inner = 0; inner < params.inner_dim; inner++) {
-                    uint index_A = (row * params.inner_dim) + inner;
-                    uint index_B = (inner * params.col_dim_x) + col;
-                    sum += A[index_A] * B[index_B];
-                }
+                if (row < params.row_dim_x && col < params.col_dim_x) {
+                    for (uint inner = 0; inner < params.inner_dim; inner++) {
+                        uint index_A = (row * params.inner_dim) + inner;
+                        uint index_B = (inner * params.col_dim_x) + col;
+                        sum += A[index_A] * B[index_B];
+                    }
 
-                uint index = (row * params.col_dim_x) + col;
-                X[index] = sum;
+                    uint index = (row * params.col_dim_x) + col;
+                    X[index] = sum;
+                }
             }
             """).strip(),
         encoding="utf-8",
@@ -32279,6 +32281,85 @@ def test_translate_project_metal_matmul_buffers_lower_to_directx_resources(
     assert "float* B" not in output
     assert "float* X" not in output
     assert "void CSMain(float*" not in output
+    assert "thread_position_in_grid" not in output
+
+
+def test_translate_project_metal_matmul_buffers_lower_to_opengl_resources(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "matmul.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct MatMulParams {
+                uint row_dim_x;
+                uint col_dim_x;
+                uint inner_dim;
+            };
+
+            kernel void mat_mul_simple1(
+                constant MatMulParams& params [[buffer(0)]],
+                device const float* A [[buffer(1)]],
+                device const float* B [[buffer(2)]],
+                device float* X [[buffer(3)]],
+                uint2 id [[thread_position_in_grid]]
+            ) {
+                uint row = id.y;
+                uint col = id.x;
+                float sum = 0.0;
+
+                if (row < params.row_dim_x && col < params.col_dim_x) {
+                    for (uint inner = 0; inner < params.inner_dim; inner++) {
+                        uint index_A = (row * params.inner_dim) + inner;
+                        uint index_B = (inner * params.col_dim_x) + col;
+                        sum += A[index_A] * B[index_B];
+                    }
+
+                    uint index = (row * params.col_dim_x) + col;
+                    X[index] = sum;
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("opengl", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert (
+        "layout(std140, binding = 0) uniform MatMulParams {\n"
+        "    uint row_dim_x;\n"
+        "    uint col_dim_x;\n"
+        "    uint inner_dim;\n"
+        "} params;"
+    ) in output
+    assert "layout(std430, binding = 1) readonly buffer ABuffer { float A[]; };" in output
+    assert "layout(std430, binding = 2) readonly buffer BBuffer { float B[]; };" in output
+    assert "layout(std430, binding = 3) buffer XBuffer { float X[]; };" in output
+    assert "void main()" in output
+    assert "uvec2 id = uvec2(gl_GlobalInvocationID.xy);" in output
+    assert "A[index_A]" in output
+    assert "B[index_B]" in output
+    assert "X[index] = sum;" in output
+    assert "params.row_dim_x" in output
+    assert "params.col_dim_x" in output
+    assert "params.inner_dim" in output
+    assert "void mat_mul_simple1(" not in output
+    assert "float* A" not in output
+    assert "float* B" not in output
+    assert "float* X" not in output
     assert "thread_position_in_grid" not in output
 
 
