@@ -40161,7 +40161,7 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
 
     payload = translate_project(
         repo,
-        targets=["cgl", "metal", "vulkan", "wgsl"],
+        targets=["cgl", "directx", "metal", "vulkan", "wgsl"],
         output_dir="out",
     ).to_json()
 
@@ -40169,6 +40169,7 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {
         ("cgl", "translated"),
+        ("directx", "translated"),
         ("metal", "translated"),
         ("vulkan", "translated"),
         ("wgsl", "translated"),
@@ -40206,6 +40207,27 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
         "gl_WorkGroupSize",
     ]:
         assert gl_builtin not in metal_output
+
+    directx_output = outputs["directx"]
+    assert "RWStructuredBuffer<float> C : register(u0);" in directx_output
+    assert "RWStructuredBuffer<float> A : register(u1);" in directx_output
+    assert "RWStructuredBuffer<float> B : register(u2);" in directx_output
+    assert "cbuffer vectorAdd_Args : register(b3)" in directx_output
+    assert "uint3 groupID : SV_GroupID" in directx_output
+    assert "uint3 groupThreadID : SV_GroupThreadID" in directx_output
+    assert "SV_DispatchThreadID" not in directx_output
+    assert "float A[]" not in directx_output
+    assert "float B[]" not in directx_output
+    assert "float C[]" not in directx_output
+    assert ": group" not in directx_output
+    for gl_builtin in [
+        "gl_GlobalInvocationID",
+        "gl_WorkGroupID",
+        "gl_LocalInvocationID",
+        "gl_WorkGroupSize",
+    ]:
+        assert gl_builtin not in directx_output
+    assert_directx_compute_validates_if_available(directx_output, tmp_path)
 
     spirv_output = outputs["vulkan"]
     assert "OpEntryPoint GLCompute" in spirv_output
