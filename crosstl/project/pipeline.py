@@ -8793,7 +8793,7 @@ def _project_template_materialization_for_artifact(
         source = unit.path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
-    if "template" not in source:
+    if "template" not in source and "#include" not in source:
         return None
 
     from crosstl.backend.Metal.preprocessor import (
@@ -8801,7 +8801,34 @@ def _project_template_materialization_for_artifact(
         MetalTemplateSpecializationError,
     )
 
-    source_template_parameters = _metal_template_parameter_names(source)
+    base_preprocessor_kwargs: dict[str, Any] = {
+        "include_paths": list(include_paths),
+    }
+    if "strict_preprocessor" in source_options:
+        base_preprocessor_kwargs["strict"] = bool(source_options["strict_preprocessor"])
+    if "max_template_specializations" in source_options:
+        base_preprocessor_kwargs["max_template_specializations"] = source_options[
+            "max_template_specializations"
+        ]
+    if "template_specialization_limit_source" in source_options:
+        base_preprocessor_kwargs["template_specialization_limit_source"] = (
+            source_options["template_specialization_limit_source"]
+        )
+
+    try:
+        discovery_preprocessor = MetalPreprocessor(
+            **base_preprocessor_kwargs,
+            defines={},
+        )
+        discovery_source = _metal_preprocess_without_template_materialization(
+            discovery_preprocessor,
+            source,
+            file_path=str(unit.path),
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+    source_template_parameters = _metal_template_parameter_names(discovery_source)
     if not source_template_parameters:
         return None
 
@@ -8821,21 +8848,10 @@ def _project_template_materialization_for_artifact(
         for name, value in defines.items()
         if name not in configured_parameters
     }
-    preprocessor_kwargs: dict[str, Any] = {
-        "include_paths": list(include_paths),
-        "defines": parser_defines,
-    }
-    if "strict_preprocessor" in source_options:
-        preprocessor_kwargs["strict"] = bool(source_options["strict_preprocessor"])
-    if "max_template_specializations" in source_options:
-        preprocessor_kwargs["max_template_specializations"] = source_options[
-            "max_template_specializations"
-        ]
-    if "template_specialization_limit_source" in source_options:
-        preprocessor_kwargs["template_specialization_limit_source"] = source_options[
-            "template_specialization_limit_source"
-        ]
-    preprocessor = MetalPreprocessor(**preprocessor_kwargs)
+    preprocessor = MetalPreprocessor(
+        **base_preprocessor_kwargs,
+        defines=parser_defines,
+    )
     try:
         preprocessed = _metal_preprocess_without_template_materialization(
             preprocessor,

@@ -6,13 +6,13 @@ import pytest
 
 import crosstl
 import crosstl.translator.codegen as codegen
-from tests.test_backend.test_SPIRV.test_codegen import (
-    SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
-)
 from crosstl.formatter import format_shader_code
 from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from tests.test_backend.test_SPIRV.test_codegen import (
+    SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
+)
 
 WEBGL_SHADER = """
 shader WebGLSmoke {
