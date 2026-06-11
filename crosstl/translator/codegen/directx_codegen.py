@@ -627,6 +627,8 @@ class HLSLCodeGen:
         self.function_parameter_types = {}
         self.hlsl_function_name_aliases = {}
         self.function_stage_parameter_dependencies = {}
+        self.function_hlsl_fragment_builtin_dependencies = {}
+        self.function_hlsl_fragment_builtin_parameter_names = {}
         self.function_return_types = {}
         self.function_image_access_requirements = {}
         self.hlsl_pixel_only_feedback_function_names = {}
@@ -1316,6 +1318,15 @@ class HLSLCodeGen:
             )
         self.function_stage_parameter_dependencies = (
             self.collect_hlsl_function_stage_parameter_dependencies(ast, target_stage)
+        )
+        self.function_hlsl_fragment_builtin_dependencies = (
+            self.collect_hlsl_function_fragment_builtin_dependencies(ast, target_stage)
+        )
+        self.function_hlsl_fragment_builtin_parameter_names = (
+            self.collect_hlsl_fragment_builtin_parameter_names(
+                ast,
+                self.function_hlsl_fragment_builtin_dependencies,
+            )
         )
         self.function_image_access_requirements = (
             collect_function_image_access_requirements(
@@ -3071,8 +3082,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def referenced_hlsl_glsl_builtin_int_constants(self, ast):
         declared_names = {
-            getattr(node, "name", None)
-            for node in getattr(ast, "constants", []) or []
+            getattr(node, "name", None) for node in getattr(ast, "constants", []) or []
         }
         declared_names.update(
             getattr(node, "name", getattr(node, "variable_name", None))
@@ -3539,6 +3549,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             params_str = self.append_required_hlsl_stage_parameter_parameters(
                 params_str, getattr(func, "name", None), param_names
             )
+            params_str = self.append_required_hlsl_fragment_builtin_parameters(
+                params_str, getattr(func, "name", None), param_names
+            )
             for parameter in self.required_hlsl_stage_parameters(
                 getattr(func, "name", None)
             ):
@@ -3547,6 +3560,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     self.local_variable_types[name] = self.type_name_string(
                         self.hlsl_parameter_raw_type(parameter)
                     )
+            for builtin_name in self.required_hlsl_fragment_builtin_names(
+                getattr(func, "name", None)
+            ):
+                name = self.hlsl_fragment_builtin_parameter_name(
+                    getattr(func, "name", None),
+                    builtin_name,
+                )
+                param_type = self.hlsl_fragment_builtin_parameter_type(builtin_name)
+                if name and param_type:
+                    self.current_identifier_aliases[builtin_name] = name
+                    self.local_variable_types[name] = param_type
         elif effective_shader_type == "compute":
             for (
                 builtin_name,
@@ -3554,9 +3578,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 param_type,
                 semantic,
                 alias,
-            ) in self.required_hlsl_compute_builtin_parameters(
-                func, execution_config
-            ):
+            ) in self.required_hlsl_compute_builtin_parameters(func, execution_config):
                 if alias is not None:
                     self.current_identifier_aliases[builtin_name] = alias
                     continue
@@ -13138,9 +13160,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             mapped_type = self.map_type(self.hlsl_struct_member_type_name(member))
             normalized_name = str(member_name).replace("_", "").lower()
             if normalized_name in {"depth", "fragdepth", "glfragdepth"}:
-                if (
-                    mapped_type == "float"
-                    and not self.hlsl_semantic_range_is_used(used_ranges, "SV_DEPTH")
+                if mapped_type == "float" and not self.hlsl_semantic_range_is_used(
+                    used_ranges, "SV_DEPTH"
                 ):
                     defaults[member_name] = "SV_DEPTH"
                     self.hlsl_reserve_semantic_range(
@@ -14002,10 +14023,138 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 used_names.add(base_name)
         return used_names
 
+    def hlsl_fragment_builtin_parameter_specs(self):
+        return {
+            "gl_FragCoord": ("_crossglFragCoord", "float4"),
+            "gl_FragSizeEXT": ("_crossglFragSize", "uint2"),
+        }
+
+    def hlsl_fragment_builtin_parameter_type(self, builtin_name):
+        spec = self.hlsl_fragment_builtin_parameter_specs().get(builtin_name)
+        return spec[1] if spec is not None else None
+
+    def direct_hlsl_fragment_builtin_dependencies(self, func):
+        return set(
+            self.used_hlsl_fragment_builtin_names(getattr(func, "body", []))
+        ) & set(self.hlsl_fragment_builtin_parameter_specs())
+
+    def collect_hlsl_function_fragment_builtin_dependencies(
+        self, ast, target_stage=None
+    ):
+        direct_dependencies = {}
+        function_calls = {}
+
+        for func in self.collect_functions(ast):
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            direct_dependencies.setdefault(
+                func_name,
+                self.direct_hlsl_fragment_builtin_dependencies(func),
+            )
+            function_calls.setdefault(func_name, self.hlsl_called_function_names(func))
+
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if stage_name != "fragment" or not stage_matches(target_stage, stage_name):
+                continue
+            stage_functions = list(getattr(stage, "local_functions", []) or [])
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is not None:
+                stage_functions.append(entry_point)
+            for func in stage_functions:
+                func_name = getattr(func, "name", None)
+                if not func_name:
+                    continue
+                direct_dependencies[func_name] = (
+                    self.direct_hlsl_fragment_builtin_dependencies(func)
+                )
+                function_calls[func_name] = self.hlsl_called_function_names(func)
+
+        dependencies = {name: set(deps) for name, deps in direct_dependencies.items()}
+        changed = True
+        while changed:
+            changed = False
+            for func_name, calls in function_calls.items():
+                before = set(dependencies.get(func_name, set()))
+                for called_name in calls:
+                    dependencies.setdefault(func_name, set()).update(
+                        dependencies.get(called_name, set())
+                    )
+                if dependencies.get(func_name, set()) != before:
+                    changed = True
+
+        return {
+            func_name: sorted(dependency_names)
+            for func_name, dependency_names in dependencies.items()
+            if dependency_names
+        }
+
+    def collect_hlsl_fragment_builtin_parameter_names(self, ast, dependencies):
+        functions_by_name = {
+            getattr(func, "name", None): func
+            for func in self.collect_functions(ast)
+            if getattr(func, "name", None)
+        }
+        parameter_names = {}
+        specs = self.hlsl_fragment_builtin_parameter_specs()
+        for func_name, builtin_names in (dependencies or {}).items():
+            func = functions_by_name.get(func_name)
+            if func is None:
+                continue
+            reserved_names = self.collect_hlsl_function_identifier_names(func)
+            reserved_names.update(self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES)
+            names = {}
+            for builtin_name in builtin_names:
+                spec = specs.get(builtin_name)
+                if spec is None:
+                    continue
+                base_name, _param_type = spec
+                name = self.hlsl_unique_local_identifier(base_name, reserved_names)
+                reserved_names.add(name)
+                names[builtin_name] = name
+            if names:
+                parameter_names[func_name] = names
+        return parameter_names
+
+    def required_hlsl_fragment_builtin_names(self, func_name):
+        return list(
+            (self.function_hlsl_fragment_builtin_dependencies or {}).get(
+                func_name,
+                [],
+            )
+        )
+
+    def hlsl_fragment_builtin_parameter_name(self, func_name, builtin_name):
+        return (
+            (self.function_hlsl_fragment_builtin_parameter_names or {})
+            .get(func_name, {})
+            .get(builtin_name)
+        )
+
+    def append_required_hlsl_fragment_builtin_parameters(
+        self, params_str, func_name, existing_param_names=None
+    ):
+        existing_param_names = set(existing_param_names or set())
+        for builtin_name in self.required_hlsl_fragment_builtin_names(func_name):
+            name = self.hlsl_fragment_builtin_parameter_name(func_name, builtin_name)
+            param_type = self.hlsl_fragment_builtin_parameter_type(builtin_name)
+            if not name or not param_type or name in existing_param_names:
+                continue
+            params_str = self.append_hlsl_parameter_declaration(
+                params_str,
+                f"{param_type} {name}",
+            )
+            existing_param_names.add(name)
+        return params_str
+
     def required_hlsl_fragment_builtin_parameters(
         self, func, reserved_names=None, explicit_stage_builtins=None
     ):
         used_names = self.used_hlsl_fragment_builtin_names(getattr(func, "body", []))
+        used_names.update(
+            self.required_hlsl_fragment_builtin_names(getattr(func, "name", None))
+        )
         reserved_names = set(reserved_names or ())
         explicit_stage_builtins = explicit_stage_builtins or {}
         builtin_parameters = [
@@ -14066,7 +14215,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def required_hlsl_compute_builtin_parameters(self, func, execution_config=None):
         used_names = self.used_hlsl_compute_builtin_names(getattr(func, "body", []))
         builtin_parameters = [
-            ("gl_GlobalInvocationID", "dispatchThreadID", "uint3", "SV_DispatchThreadID"),
+            (
+                "gl_GlobalInvocationID",
+                "dispatchThreadID",
+                "uint3",
+                "SV_DispatchThreadID",
+            ),
             ("gl_LocalInvocationID", "groupThreadID", "uint3", "SV_GroupThreadID"),
             ("gl_WorkGroupID", "groupID", "uint3", "SV_GroupID"),
             ("gl_LocalInvocationIndex", "groupIndex", "uint", "SV_GroupIndex"),
@@ -14097,9 +14251,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 continue
             name = self.hlsl_unique_local_identifier(base_name, reserved_names)
             reserved_names.add(name)
-            required_parameters.append(
-                (builtin_name, name, param_type, semantic, None)
-            )
+            required_parameters.append((builtin_name, name, param_type, semantic, None))
         return required_parameters
 
     def hlsl_compute_workgroup_size_expression(self, execution_config=None):
@@ -15016,6 +15168,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if not name or name in param_names:
                 continue
             generated_args.append(name)
+
+        for builtin_name in self.required_hlsl_fragment_builtin_names(func_name):
+            generated_args.append(
+                self.current_identifier_aliases.get(builtin_name, builtin_name)
+            )
 
         return generated_args
 
