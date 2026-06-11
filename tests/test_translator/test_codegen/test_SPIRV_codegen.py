@@ -25749,6 +25749,41 @@ class TestVulkanSPIRVCodeGen:
         assert "OpFMul" in spv_code
         assert "WARNING" not in spv_code
 
+    def test_overloaded_user_function_calls_use_matching_parameter_types(
+        self, tmp_path
+    ):
+        source_code = """
+        shader OverloadedLinearToSrgb {
+            float linearToSrgb(float c) {
+                return c + 1.0;
+            }
+
+            vec3 linearToSrgb(vec3 c) {
+                return vec3(linearToSrgb(c.r), linearToSrgb(c.g), linearToSrgb(c.b));
+            }
+
+            vec4 linearToSrgb(vec4 c) {
+                return vec4(linearToSrgb(c.rgb), c.a);
+            }
+
+            fragment {
+                vec4 main() {
+                    vec4 color = vec4(0.1, 0.2, 0.3, 1.0);
+                    return linearToSrgb(color);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("OpFunctionCall") == 5
+        assert_spirv_function_calls_use_declared_parameter_types(spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.0")
+
     def test_function_parameters_generate_opfunctionparameter(self):
         source_code = """
         shader FunctionParams {

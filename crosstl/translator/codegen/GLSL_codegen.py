@@ -4268,9 +4268,15 @@ class GLSLCodeGen:
         )
         for _entry_id, stage_name, func in stage_entry_records:
             for parameter in getattr(func, "parameters", getattr(func, "params", [])):
-                member_type = self.stage_entry_constant_value_parameter_member_type(
-                    parameter, stage_name
+                explicit_value_type = self.stage_entry_constant_value_parameter_type(
+                    parameter
                 )
+                compute_value_type = (
+                    self.stage_entry_compute_value_parameter_type(parameter)
+                    if explicit_value_type is None and stage_name == "compute"
+                    else None
+                )
+                member_type = explicit_value_type or compute_value_type
                 if member_type is None:
                     continue
                 binding = self.explicit_resource_binding_index(parameter)
@@ -4297,6 +4303,7 @@ class GLSLCodeGen:
                     parameter_name,
                     used_member_names,
                     parameter_member_name_counts,
+                    force_block_qualified=compute_value_type is not None,
                 )
                 used_member_names.add(member_name)
                 if member_name != parameter_name:
@@ -4412,11 +4419,17 @@ class GLSLCodeGen:
         )
 
     def stage_entry_constant_value_parameter_member_name(
-        self, block_name, parameter_name, used_names, parameter_member_name_counts=None
+        self,
+        block_name,
+        parameter_name,
+        used_names,
+        parameter_member_name_counts=None,
+        force_block_qualified=False,
     ):
         parameter_name = sanitize_type_name(parameter_name or "value")
         if (
-            parameter_name
+            not force_block_qualified
+            and parameter_name
             and parameter_name not in self.GLSL_RESERVED_IDENTIFIERS
             and parameter_name not in used_names
             and (parameter_member_name_counts or {}).get(parameter_name, 0) == 1

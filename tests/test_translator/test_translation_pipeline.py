@@ -12,6 +12,10 @@ import crosstl.translator.codegen as codegen
 from crosstl.project import translate_project
 from crosstl.translator.ast import ShaderStage
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
+from tests.test_translator.spirv_wgsl_contract import (
+    SPIRV_VERTEX_POSITION_OUTPUT_SOURCE,
+    assert_spirv_position_output_wgsl_contract,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -151,31 +155,6 @@ vec4 FragmentDensityToColor() {
 void main() {
     fragColor = FragmentDensityToColor();
 }
-"""
-
-SPIRV_VERTEX_POSITION_OUTPUT_SOURCE = """
-; SPIR-V
-; Version: 1.0
-OpCapability Shader
-OpMemoryModel Logical GLSL450
-OpEntryPoint Vertex %main "main" %pos
-OpName %main "main"
-OpName %pos "gl_Position"
-OpDecorate %pos BuiltIn Position
-%void = OpTypeVoid
-%fn = OpTypeFunction %void
-%float = OpTypeFloat 32
-%v4float = OpTypeVector %float 4
-%ptr_output_v4float = OpTypePointer Output %v4float
-%float_0 = OpConstant %float 0
-%float_1 = OpConstant %float 1
-%const_pos = OpConstantComposite %v4float %float_0 %float_0 %float_0 %float_1
-%pos = OpVariable %ptr_output_v4float Output
-%main = OpFunction %void None %fn
-%entry = OpLabel
-OpStore %pos %const_pos
-OpReturn
-OpFunctionEnd
 """
 
 
@@ -1084,12 +1063,7 @@ def test_spirv_assembly_vertex_position_output_lowers_to_wgsl(tmp_path):
     generated = crosstl.translate(str(source_path), backend="wgsl", format_output=False)
 
     _assert_generated_output_is_usable(generated)
-    assert "struct VertexOutput" in generated
-    assert "@builtin(position) position: vec4<f32>," in generated
-    assert "@vertex\nfn vertex_main() -> VertexOutput" in generated
-    assert "output.position = vec4<f32>(0, 0, 0, 1);" in generated
-    assert "return output;" in generated
-    assert "gl_Position" not in generated
+    assert_spirv_position_output_wgsl_contract(generated)
 
 
 @pytest.mark.parametrize(
@@ -1290,10 +1264,10 @@ def test_hlsl_compute_scalar_splat_swizzle_lowers_for_vulkan_and_metal(tmp_path)
         vulkan,
     )
     assert "Could not find member xxxx" not in vulkan
+    assert "threadgroup int a;" in metal
     assert "int4 x = int4(a);" in metal
     assert "a.xxxx" not in metal
-    assert "unsupported Metal program-scope groupshared global" in metal
-    assert "unsupported Metal program-scope groupshared store" in metal
+    assert "unsupported Metal program-scope groupshared" not in metal
 
 
 def test_hlsl_legacy_sampler_register_lowers_to_opengl_binding(tmp_path):

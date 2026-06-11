@@ -1097,6 +1097,7 @@ REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
     ("path", "resolvedPath", "status", "frontendVisible")
 )
 SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
+TARGET_SOURCE_OPTIONS_KEY = "target_options"
 TEMPLATE_VARIANTS_SOURCE_OPTION = "template_variants"
 METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION = "max_template_specializations"
 METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION = (
@@ -2684,6 +2685,116 @@ def _as_non_empty_str_mapping(value: Any, *, field_name: str) -> dict[str, str]:
     return result
 
 
+def _as_source_pattern_options(
+    value: Any,
+    *,
+    field_name: str,
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a table")
+    pattern_options: dict[str, dict[str, Any]] = {}
+    for pattern, per_source_options in value.items():
+        if not isinstance(pattern, str) or not pattern.strip():
+            raise ValueError(f"{field_name} keys must be non-empty strings")
+        source_path = _mapping_key_path(field_name, pattern)
+        if not isinstance(per_source_options, Mapping):
+            raise ValueError(f"{source_path} must be a table")
+        normalized_pattern_options: dict[str, Any] = {}
+        for per_source_name, per_source_value in per_source_options.items():
+            if not isinstance(per_source_name, str) or not per_source_name.strip():
+                raise ValueError(f"{source_path} keys must be non-empty strings")
+            if isinstance(per_source_value, bool):
+                normalized_pattern_options[per_source_name] = per_source_value
+            elif isinstance(per_source_value, int):
+                normalized_pattern_options[per_source_name] = per_source_value
+            elif isinstance(per_source_value, str):
+                normalized_pattern_options[per_source_name] = per_source_value
+            else:
+                raise ValueError(
+                    f"{source_path} entries must map option names to "
+                    "strings, integers, or booleans"
+                )
+        pattern_options[_normalize_project_relative_path(pattern)] = (
+            normalized_pattern_options
+        )
+    return pattern_options
+
+
+def _as_source_option_table(
+    source_backend: str,
+    options: Mapping[str, Any],
+    *,
+    option_path: str,
+    allow_template_variants: bool,
+    allow_target_options: bool,
+) -> dict[str, Any]:
+    normalized_options: dict[str, Any] = {}
+    for name, option_value in options.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"{option_path} keys must be non-empty strings")
+        if name == SOURCE_OPTION_PATTERNS_KEY:
+            normalized_options[name] = _as_source_pattern_options(
+                option_value,
+                field_name=_mapping_key_path(option_path, name),
+            )
+            continue
+        if name == TEMPLATE_VARIANTS_SOURCE_OPTION:
+            if not allow_template_variants:
+                raise ValueError(
+                    f"{_mapping_key_path(option_path, name)} is not supported here"
+                )
+            normalized_options[name] = _as_template_variant_options(
+                option_value,
+                field_name=_mapping_key_path(option_path, name),
+            )
+            continue
+        if name == TARGET_SOURCE_OPTIONS_KEY:
+            if not allow_target_options:
+                raise ValueError(
+                    f"{_mapping_key_path(option_path, name)} is not supported here"
+                )
+            if not isinstance(option_value, Mapping):
+                raise ValueError(
+                    f"{_mapping_key_path(option_path, name)} must be a table"
+                )
+            target_options: dict[str, dict[str, Any]] = {}
+            target_options_path = _mapping_key_path(option_path, name)
+            for target, target_source_options in option_value.items():
+                if not isinstance(target, str) or not target.strip():
+                    raise ValueError(
+                        f"{target_options_path} keys must be non-empty strings"
+                    )
+                target_path = _mapping_key_path(target_options_path, target)
+                if not isinstance(target_source_options, Mapping):
+                    raise ValueError(f"{target_path} must be a table")
+                target_key = normalize_backend_name(target) or target.strip().lower()
+                target_options[target_key] = _as_source_option_table(
+                    source_backend,
+                    target_source_options,
+                    option_path=target_path,
+                    allow_template_variants=False,
+                    allow_target_options=False,
+                )
+            normalized_options[name] = target_options
+            continue
+        if isinstance(option_value, bool):
+            normalized_options[name] = option_value
+        elif isinstance(option_value, int):
+            normalized_options[name] = option_value
+        elif isinstance(option_value, str):
+            normalized_options[name] = option_value
+        else:
+            raise ValueError(
+                f"{option_path} entries must map option names to strings, "
+                "integers, or booleans"
+            )
+    return _normalize_source_options_for_backend(
+        source_backend,
+        normalized_options,
+        option_path=option_path,
+    )
+
+
 def _as_source_options(value: Any, *, field_name: str) -> dict[str, dict[str, Any]]:
     if value is None:
         return {}
@@ -2702,78 +2813,13 @@ def _as_source_options(value: Any, *, field_name: str) -> dict[str, dict[str, An
         if not isinstance(options, Mapping):
             option_path = _mapping_key_path(field_name, source_backend)
             raise ValueError(f"{option_path} must be a table")
-        normalized_options: dict[str, Any] = {}
         option_path = _mapping_key_path(field_name, source_backend)
-        for name, option_value in options.items():
-            if not isinstance(name, str) or not name.strip():
-                raise ValueError(f"{option_path} keys must be non-empty strings")
-            if name == SOURCE_OPTION_PATTERNS_KEY:
-                if not isinstance(option_value, Mapping):
-                    raise ValueError(
-                        f"{_mapping_key_path(option_path, name)} must be a table"
-                    )
-                pattern_options: dict[str, dict[str, Any]] = {}
-                pattern_path = _mapping_key_path(option_path, name)
-                for pattern, per_source_options in option_value.items():
-                    if not isinstance(pattern, str) or not pattern.strip():
-                        raise ValueError(
-                            f"{pattern_path} keys must be non-empty strings"
-                        )
-                    source_path = _mapping_key_path(pattern_path, pattern)
-                    if not isinstance(per_source_options, Mapping):
-                        raise ValueError(f"{source_path} must be a table")
-                    normalized_pattern_options: dict[str, Any] = {}
-                    for per_source_name, per_source_value in per_source_options.items():
-                        if (
-                            not isinstance(per_source_name, str)
-                            or not per_source_name.strip()
-                        ):
-                            raise ValueError(
-                                f"{source_path} keys must be non-empty strings"
-                            )
-                        if isinstance(per_source_value, bool):
-                            normalized_pattern_options[per_source_name] = (
-                                per_source_value
-                            )
-                        elif isinstance(per_source_value, int):
-                            normalized_pattern_options[per_source_name] = (
-                                per_source_value
-                            )
-                        elif isinstance(per_source_value, str):
-                            normalized_pattern_options[per_source_name] = (
-                                per_source_value
-                            )
-                        else:
-                            raise ValueError(
-                                f"{source_path} entries must map option names to "
-                                "strings, integers, or booleans"
-                            )
-                    pattern_options[_normalize_project_relative_path(pattern)] = (
-                        normalized_pattern_options
-                    )
-                normalized_options[name] = pattern_options
-                continue
-            if name == TEMPLATE_VARIANTS_SOURCE_OPTION:
-                normalized_options[name] = _as_template_variant_options(
-                    option_value,
-                    field_name=_mapping_key_path(option_path, name),
-                )
-                continue
-            if isinstance(option_value, bool):
-                normalized_options[name] = option_value
-            elif isinstance(option_value, int):
-                normalized_options[name] = option_value
-            elif isinstance(option_value, str):
-                normalized_options[name] = option_value
-            else:
-                raise ValueError(
-                    f"{option_path} entries must map option names to strings, "
-                    "integers, or booleans"
-                )
-        normalized_options = _normalize_source_options_for_backend(
+        normalized_options = _as_source_option_table(
             backend_key,
-            normalized_options,
+            options,
             option_path=option_path,
+            allow_template_variants=True,
+            allow_target_options=True,
         )
         result[backend_key] = normalized_options
     return result
@@ -4914,36 +4960,45 @@ def _source_options_for_backend(
     return {
         name: value
         for name, value in source_options.items()
-        if name != SOURCE_OPTION_PATTERNS_KEY
+        if name not in {SOURCE_OPTION_PATTERNS_KEY, TARGET_SOURCE_OPTIONS_KEY}
     }
 
 
 def _source_options_for_unit(
-    config: ProjectConfig, source_backend: str, relative_path: str
+    config: ProjectConfig,
+    source_backend: str,
+    relative_path: str,
+    target: str | None = None,
 ) -> dict[str, Any]:
     register_default_sources()
     key = SOURCE_REGISTRY.resolve_name(source_backend) or source_backend.strip().lower()
     configured_options = config.source_options.get(key, {})
-    source_options = {
-        name: value
-        for name, value in configured_options.items()
-        if name != SOURCE_OPTION_PATTERNS_KEY
-    }
+    source_options: dict[str, Any] = {}
     template_limit_source = None
     work_limit_source = None
-    if METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in source_options:
-        template_limit_source = (
-            f"project.source_options.{key}."
-            f"{METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION}"
-        )
-    if METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION in source_options:
-        work_limit_source = (
-            f"project.source_options.{key}."
-            f"{METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION}"
-        )
 
-    source_patterns = configured_options.get(SOURCE_OPTION_PATTERNS_KEY)
-    if isinstance(source_patterns, Mapping):
+    def apply_options(option_values: Mapping[str, Any], option_path: str) -> None:
+        nonlocal template_limit_source, work_limit_source
+        for name, value in option_values.items():
+            if name in {SOURCE_OPTION_PATTERNS_KEY, TARGET_SOURCE_OPTIONS_KEY}:
+                continue
+            source_options[name] = value
+        if METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in option_values:
+            template_limit_source = (
+                f"{option_path}.{METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION}"
+            )
+        if METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION in option_values:
+            work_limit_source = (
+                f"{option_path}.{METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION}"
+            )
+
+    def apply_source_patterns(
+        option_values: Mapping[str, Any], option_path: str
+    ) -> None:
+        nonlocal template_limit_source, work_limit_source
+        source_patterns = option_values.get(SOURCE_OPTION_PATTERNS_KEY)
+        if not isinstance(source_patterns, Mapping):
+            return
         normalized_path = _normalize_project_relative_path(relative_path)
         for pattern, pattern_options in source_patterns.items():
             if not isinstance(pattern, str) or not isinstance(pattern_options, Mapping):
@@ -4954,7 +5009,7 @@ def _source_options_for_unit(
             source_options.update(pattern_options)
             if METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in pattern_options:
                 pattern_path = _mapping_key_path(
-                    f"project.source_options.{key}.{SOURCE_OPTION_PATTERNS_KEY}",
+                    f"{option_path}.{SOURCE_OPTION_PATTERNS_KEY}",
                     normalized_pattern,
                 )
                 template_limit_source = (
@@ -4962,7 +5017,7 @@ def _source_options_for_unit(
                 )
             if METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION in pattern_options:
                 pattern_path = _mapping_key_path(
-                    f"project.source_options.{key}.{SOURCE_OPTION_PATTERNS_KEY}",
+                    f"{option_path}.{SOURCE_OPTION_PATTERNS_KEY}",
                     normalized_pattern,
                 )
                 work_limit_source = (
@@ -4970,7 +5025,24 @@ def _source_options_for_unit(
                     f"{METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION}"
                 )
 
+    backend_option_path = f"project.source_options.{key}"
+    apply_options(configured_options, backend_option_path)
+    apply_source_patterns(configured_options, backend_option_path)
+
+    target_options = configured_options.get(TARGET_SOURCE_OPTIONS_KEY)
+    if target is not None and isinstance(target_options, Mapping):
+        target_key = normalize_backend_name(target) or target.strip().lower()
+        configured_target_options = target_options.get(target_key)
+        if isinstance(configured_target_options, Mapping):
+            target_option_path = _mapping_key_path(
+                f"{backend_option_path}.{TARGET_SOURCE_OPTIONS_KEY}",
+                target_key,
+            )
+            apply_options(configured_target_options, target_option_path)
+            apply_source_patterns(configured_target_options, target_option_path)
+
     source_options.pop(SOURCE_OPTION_PATTERNS_KEY, None)
+    source_options.pop(TARGET_SOURCE_OPTIONS_KEY, None)
     if (
         source_backend == "metal"
         and METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in source_options
@@ -4997,6 +5069,7 @@ def _frontend_source_options(source_options: Mapping[str, Any]) -> dict[str, Any
         if name
         not in {
             TEMPLATE_VARIANTS_SOURCE_OPTION,
+            TARGET_SOURCE_OPTIONS_KEY,
             METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION,
             METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION,
         }
@@ -12299,7 +12372,7 @@ def _project_template_materialization_for_artifact(
             1,
             len(templates),
         )
-        if materialization_work_items > preprocessor.max_template_specializations:
+        if materialization_work_items > materialization_work_limit:
             first_instantiation = source_instantiations[0]
             first_template = template_lookup.get(first_instantiation.function_name)
             if first_template is not None:
@@ -12327,7 +12400,7 @@ def _project_template_materialization_for_artifact(
                 f"{len(templates)} templates"
             )
             suggested_action = (
-                "raise max_template_specializations for this source pattern "
+                "raise max_template_materialization_work for this source pattern "
                 "or OpenGL target, or reduce source template instantiations"
             )
             raise MetalTemplateSpecializationError(
@@ -12335,13 +12408,13 @@ def _project_template_materialization_for_artifact(
                 f"GLSL codegen for '{unit.relative_path}'; "
                 f"{materialization_work_items} source-instantiation/template work "
                 f"items requested ({requested_signature}), limit "
-                f"{preprocessor.max_template_specializations} from "
-                f"{preprocessor.template_specialization_limit_source}. "
+                f"{materialization_work_limit} from "
+                f"{materialization_work_limit_source}. "
                 f"First {location_kind}: "
                 f"{location.file}:{location.line}:{location.column}. "
                 f"Suggested action: {suggested_action}.",
-                limit=preprocessor.max_template_specializations,
-                limit_source=preprocessor.template_specialization_limit_source,
+                limit=materialization_work_limit,
+                limit_source=materialization_work_limit_source,
                 requested_signature=requested_signature,
                 suggested_action=suggested_action,
                 source_location=location,
@@ -13374,7 +13447,10 @@ def translate_project(
                     artifacts.append(artifact)
                     continue
                 source_options = _source_options_for_unit(
-                    config, unit.source_backend, unit.relative_path
+                    config,
+                    unit.source_backend,
+                    unit.relative_path,
+                    target=target,
                 )
                 try:
                     template_materialization = (
@@ -27917,11 +27993,82 @@ def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[st
                     )
                 )
                 continue
+            if name == TARGET_SOURCE_OPTIONS_KEY:
+                if not isinstance(option_value, Mapping):
+                    reasons.append(f"{name_prefix} must be an object")
+                    continue
+                for target, target_options in option_value.items():
+                    if not _is_non_empty_string(target):
+                        reasons.append(f"{name_prefix} keys must be non-empty strings")
+                        target_prefix = name_prefix
+                    else:
+                        target_prefix = _mapping_key_path(name_prefix, target)
+                    if not isinstance(target_options, Mapping):
+                        reasons.append(f"{target_prefix} must be an object")
+                        continue
+                    for (
+                        target_option_name,
+                        target_option_value,
+                    ) in target_options.items():
+                        if not _is_non_empty_string(target_option_name):
+                            reasons.append(
+                                f"{target_prefix} keys must be non-empty strings"
+                            )
+                            continue
+                        target_option_prefix = _mapping_key_path(
+                            target_prefix,
+                            target_option_name,
+                        )
+                        if target_option_name == SOURCE_OPTION_PATTERNS_KEY:
+                            if not isinstance(target_option_value, Mapping):
+                                reasons.append(
+                                    f"{target_option_prefix} must be an object"
+                                )
+                                continue
+                            for pattern, pattern_options in target_option_value.items():
+                                if not _is_non_empty_string(pattern):
+                                    reasons.append(
+                                        f"{target_option_prefix} keys must be "
+                                        "non-empty strings"
+                                    )
+                                    continue
+                                pattern_prefix = _mapping_key_path(
+                                    target_option_prefix,
+                                    pattern,
+                                )
+                                if not isinstance(pattern_options, Mapping):
+                                    reasons.append(
+                                        f"{pattern_prefix} must be an object"
+                                    )
+                                    continue
+                                if any(
+                                    not _is_non_empty_string(pattern_option)
+                                    for pattern_option in pattern_options
+                                ):
+                                    reasons.append(
+                                        f"{pattern_prefix} keys must be non-empty "
+                                        "strings"
+                                    )
+                                if any(
+                                    not isinstance(pattern_value, (str, int, bool))
+                                    for pattern_value in pattern_options.values()
+                                ):
+                                    reasons.append(
+                                        f"{pattern_prefix} values must be strings, "
+                                        "integers, or booleans"
+                                    )
+                            continue
+                        if not isinstance(target_option_value, (str, int, bool)):
+                            reasons.append(
+                                f"{target_prefix} values must be strings, "
+                                "integers, booleans, or source_patterns objects"
+                            )
+                continue
             if not isinstance(option_value, (str, int, bool)):
                 reasons.append(
                     f"{option_prefix} values must be strings, integers, "
-                    "booleans, source_patterns objects, or template_variants "
-                    "objects"
+                    "booleans, source_patterns objects, target_options "
+                    "objects, or template_variants objects"
                 )
     return reasons
 

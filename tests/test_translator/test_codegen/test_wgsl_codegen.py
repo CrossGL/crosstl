@@ -688,6 +688,30 @@ def test_wgsl_codegen_rejects_mutating_value_array_parameters():
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+def test_wgsl_codegen_lowers_mutating_bound_storage_array_parameters():
+    shader = """
+    @compute
+    @workgroup_size(1, 1, 1)
+    fn main(
+        @group(0) @binding(0) var<storage, read_write> out: array<f32>
+    ) {
+        var i: i32 = gl_LocalInvocationID.x;
+        out[i] = 1.0f;
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "@group(0) @binding(0)\nvar<storage, read_write> out: array<f32>;" in generated
+    )
+    assert "@compute\n@workgroup_size(1, 1, 1)\nfn compute_main(" in generated
+    assert "@builtin(local_invocation_id) local_invocation_id: vec3<u32>" in generated
+    assert "var i: i32 = i32(local_invocation_id.x);" in generated
+    assert "out[i] = 1.0;" in generated
+    assert "ptr<storage" not in generated
+
+
 def test_wgsl_codegen_rejects_resource_bearing_struct_arrays():
     shader = """
     shader WGSLResourceBearingStructArray {

@@ -2416,11 +2416,23 @@ class WGSLCodeGen:
             )
         storage_buffer_access = self.structured_buffer_access(node.param_type)
         if storage_buffer_access:
+            self._module_storage_access_modes[node.name] = storage_buffer_access
             attributes = (
                 self.explicit_binding_attributes(node) or self.next_binding_attributes()
             )
             return (
                 f"{attributes}\nvar<storage, {storage_buffer_access}> "
+                f"{self.module_identifier_name(node.name)}: "
+                f"{self.type_name_string(node.param_type, allow_storage_resources=True)};"
+            )
+        storage_parameter_access = self.stage_storage_parameter_access(node)
+        if storage_parameter_access:
+            self._module_storage_access_modes[node.name] = storage_parameter_access
+            attributes = (
+                self.explicit_binding_attributes(node) or self.next_binding_attributes()
+            )
+            return (
+                f"{attributes}\nvar<storage, {storage_parameter_access}> "
                 f"{self.module_identifier_name(node.name)}: "
                 f"{self.type_name_string(node.param_type, allow_storage_resources=True)};"
             )
@@ -5395,6 +5407,21 @@ class WGSLCodeGen:
             return str(vtype.name)
         return None
 
+    def stage_storage_parameter_access(self, parameter):
+        qualifier_names = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        qualifier_names.update(
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "resource_qualifiers", []) or []
+        )
+        if not qualifier_names.intersection({"buffer", "storage"}):
+            return None
+        if "read" in qualifier_names and "read_write" not in qualifier_names:
+            return "read"
+        return "read_write"
+
     def validate_not_resource_array(self, vtype):
         resource_type = self.resource_array_element_type_name(vtype)
         if resource_type is not None:
@@ -6635,13 +6662,14 @@ class WGSLCodeGen:
 
     def register_parameter_value_types(self, function):
         for parameter in getattr(function, "parameters", []) or []:
+            is_stage_resource = self.is_stage_resource_parameter(parameter)
             value_type = (
                 self.stage_resource_module_type(parameter)
-                if self.is_stage_resource_parameter(parameter)
+                if is_stage_resource
                 else parameter.param_type
             )
             self.register_value_type(parameter.name, value_type)
-            if self.is_by_value_array_parameter(parameter):
+            if self.is_by_value_array_parameter(parameter) and not is_stage_resource:
                 self.register_immutable_array_parameter(parameter.name)
             self.register_parameter_resource_aliases(parameter)
 
@@ -7505,6 +7533,8 @@ class WGSLCodeGen:
     def is_stage_resource_parameter(self, parameter):
         param_type = getattr(parameter, "param_type", None)
         if self.structured_buffer_element_type(param_type) is not None:
+            return True
+        if self.stage_storage_parameter_access(parameter) is not None:
             return True
         if self.stage_uniform_parameter_type(parameter) is not None:
             return True
