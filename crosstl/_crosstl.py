@@ -751,6 +751,12 @@ def _format_runtime_artifact_manifest(payload):
         for diagnostic in diagnostics:
             if isinstance(diagnostic, Mapping):
                 lines.append(_format_project_diagnostic_line(diagnostic))
+    runtime_diagnostics = payload.get("runtimeDiagnostics", [])
+    if runtime_diagnostics:
+        lines.append("Runtime metadata diagnostics:")
+        for diagnostic in runtime_diagnostics:
+            if isinstance(diagnostic, Mapping):
+                lines.append(_format_project_diagnostic_line(diagnostic))
     return "\n".join(lines) + "\n"
 
 
