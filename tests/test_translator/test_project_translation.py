@@ -29268,15 +29268,33 @@ def test_runtime_loader_validation_commands_preserve_posix_package_paths_on_wind
 
     directx_adapter = {
         "target": "directx",
-        "packagePath": "artifacts/out/directx/graphics.hlsl",
+        "packagePath": r"artifacts\out\directx\graphics.hlsl",
     }
     vulkan_adapter = {
+        "id": "vulkan:shader",
         "target": "vulkan",
-        "packagePath": "artifacts/out/vulkan/simple.spvasm",
+        "adapterKind": "vulkan-shader-adapter",
+        "artifactFormat": "SPIR-V assembly",
+        "packagePath": r"artifacts\out\vulkan\simple.spvasm",
+        "sourcePath": "out/vulkan/simple.spvasm",
+        "sourceBackend": "cgl",
+        "sourceRemap": {
+            "packagePath": r"source-remaps\out\vulkan\simple.source-remap.json",
+            "sourcePath": "out/vulkan/simple.source-remap.json",
+            "status": "ready",
+        },
+        "hostInterface": {
+            "status": "unavailable",
+            "entryPointCount": 0,
+            "resourceCount": 0,
+        },
+        "requiredTools": ["spirv-as"],
+        "hostResponsibilities": [],
+        "validation": {},
     }
     wgsl_adapter = {
         "target": "wgsl",
-        "packagePath": "artifacts/out/wgsl/simple.wgsl",
+        "packagePath": r"artifacts\out\wgsl\simple.wgsl",
     }
 
     assert project_pipeline._runtime_loader_validation_command(directx_adapter) == [
@@ -29315,6 +29333,42 @@ def test_runtime_loader_validation_commands_preserve_posix_package_paths_on_wind
         "wgsl",
         "artifacts/out/wgsl/simple.wgsl",
     ]
+
+    load_unit = project_pipeline._runtime_loader_manifest_load_unit(
+        vulkan_adapter,
+        [
+            {
+                "kind": "resolve-host-interface-metadata",
+                "severity": "warning",
+                "message": "Resolve host interface metadata.",
+                "adapter": "vulkan:shader",
+                "packagePath": r"artifacts\out\vulkan\simple.spvasm",
+            }
+        ],
+    )
+
+    assert load_unit["packagePath"] == "artifacts/out/vulkan/simple.spvasm"
+    assert load_unit["sourceRemap"]["packagePath"] == (
+        "source-remaps/out/vulkan/simple.source-remap.json"
+    )
+    assert [step["packagePath"] for step in load_unit["loadSteps"]] == [
+        "artifacts/out/vulkan/simple.spvasm",
+        "source-remaps/out/vulkan/simple.source-remap.json",
+        "artifacts/out/vulkan/simple.spvasm",
+    ]
+    assert load_unit["loadSteps"][1]["metadata"]["source"]["path"] == (
+        "source-remaps/out/vulkan/simple.source-remap.json"
+    )
+    assert load_unit["loadSteps"][2]["command"] == [
+        "spirv-as",
+        "artifacts/out/vulkan/simple.spvasm",
+        "-o",
+        project_pipeline.os.devnull,
+    ]
+    assert load_unit["blockers"][0]["packagePath"] == (
+        "artifacts/out/vulkan/simple.spvasm"
+    )
+    assert "\\" not in json.dumps(load_unit)
 
 
 def test_runtime_loader_manifest_reports_directx_dxc_entry_profile_metadata(tmp_path):
