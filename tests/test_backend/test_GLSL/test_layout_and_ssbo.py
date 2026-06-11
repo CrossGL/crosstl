@@ -1,6 +1,7 @@
 import pytest
 
 import crosstl.translator
+from crosstl._crosstl import translate
 from crosstl.backend.GLSL.OpenglAst import BinaryOpNode
 from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
@@ -609,6 +610,47 @@ def test_parse_fragment_else_if_depth_output_roundtrip():
     assert "gl_FragDepth = uv.y;" in glsl
     assert "gl_FragColor" not in glsl
     assert "fragColor" not in glsl
+
+
+def test_fragment_builtin_redeclarations_merge_before_stage_lowering(tmp_path):
+    code = """
+    #version 450 core
+    layout(origin_upper_left) in vec4 gl_FragCoord;
+    layout(pixel_center_integer) in vec4 gl_FragCoord;
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        vec4 i = gl_FragCoord;
+        fragColor = i;
+    }
+    """
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert crossgl.count("vec4 gl_FragCoord") == 1
+    assert "vec4 gl_FragCoord @origin_upper_left @pixel_center_integer;" in crossgl
+
+    shader_path = tmp_path / "fragcoord-redeclarations.frag"
+    shader_path.write_text(code, encoding="utf-8")
+    directx = translate(str(shader_path), backend="directx", format_output=False)
+
+    assert directx.count("float4 gl_FragCoord") == 1
+
+
+def test_conflicting_fragment_builtin_redeclaration_rejected():
+    code = """
+    #version 450 core
+    layout(location = 0) in vec4 gl_FragCoord;
+    layout(location = 1) in vec4 gl_FragCoord;
+
+    void main() {
+    }
+    """
+
+    with pytest.raises(
+        ValueError, match="Conflicting GLSL builtin redeclaration.*gl_FragCoord"
+    ):
+        generate_crossgl(code, "fragment")
 
 
 def test_parse_fragment_switch_default_depth_output_roundtrip():

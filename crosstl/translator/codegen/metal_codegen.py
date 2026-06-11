@@ -588,6 +588,16 @@ class MetalCodeGen:
     )
     METAL_WAVE_NUMERIC_COMPONENT_TYPES = {"float", "half", "int", "uint"}
     METAL_WAVE_INTEGER_COMPONENT_TYPES = {"int", "uint"}
+    METAL_GLSL_SUBGROUP_LANE_BUILTINS = {
+        "gl_SubgroupInvocationID": (
+            "thread_index_in_simdgroup",
+            "uint",
+        ),
+        "gl_SubgroupSize": (
+            "threads_per_simdgroup",
+            "uint",
+        ),
+    }
     METAL_RAY_FLAG_VALUES = {
         "RAY_FLAG_NONE": 0x00,
         "RAY_FLAG_FORCE_OPAQUE": 0x01,
@@ -1221,6 +1231,8 @@ class MetalCodeGen:
             "sv_groupindex": "thread_index_in_threadgroup",
             "gl_WorkGroupSize": "threads_per_threadgroup",
             "gl_NumWorkGroups": "threadgroups_per_grid",
+            "gl_SubgroupInvocationID": "thread_index_in_simdgroup",
+            "gl_SubgroupSize": "threads_per_simdgroup",
             # Ray tracing / payload semantics
             "payload": "payload",
             "mesh_payload": "payload",
@@ -4645,6 +4657,8 @@ class MetalCodeGen:
             ("gl_LocalInvocationIndex", "uint", "thread_index_in_threadgroup"),
             ("gl_WorkGroupSize", "uint3", "threads_per_threadgroup"),
             ("gl_NumWorkGroups", "uint3", "threadgroups_per_grid"),
+            ("gl_SubgroupInvocationID", "uint", "thread_index_in_simdgroup"),
+            ("gl_SubgroupSize", "uint", "threads_per_simdgroup"),
         ]
 
     def compute_builtin_name_for_metal_attribute(self, attribute):
@@ -4662,6 +4676,19 @@ class MetalCodeGen:
             return name
         return self.current_metal_compute_builtin_parameter_names.get(name, name)
 
+    def metal_glsl_subgroup_lane_builtin_diagnostic(self, name):
+        if name in self.local_variable_types:
+            return None
+        builtin = self.METAL_GLSL_SUBGROUP_LANE_BUILTINS.get(name)
+        if builtin is None:
+            return None
+        attribute, result_type = builtin
+        fallback = self.diagnostic_zero_value_for_type(result_type)
+        return (
+            f"{fallback} /* unsupported Metal GLSL subgroup builtin: {name} "
+            f"requires compute-stage {attribute} value */"
+        )
+
     def metal_graphics_builtin_expression_name(self, name):
         if name is None or name in self.local_variable_types:
             return name
@@ -4671,7 +4698,13 @@ class MetalCodeGen:
         graphics_name = self.metal_graphics_builtin_expression_name(name)
         if graphics_name != name:
             return graphics_name
-        return self.metal_compute_builtin_expression_name(name)
+        compute_name = self.metal_compute_builtin_expression_name(name)
+        if compute_name != name:
+            return compute_name
+        diagnostic = self.metal_glsl_subgroup_lane_builtin_diagnostic(name)
+        if diagnostic is not None:
+            return diagnostic
+        return name
 
     def metal_graphics_builtin_result_type(self, name):
         if (
@@ -4707,6 +4740,8 @@ class MetalCodeGen:
             "gl_LocalInvocationIndex": "thread_index_in_threadgroup",
             "gl_WorkGroupSize": "threads_per_threadgroup",
             "gl_NumWorkGroups": "threadgroups_per_grid",
+            "gl_SubgroupInvocationID": "thread_index_in_simdgroup",
+            "gl_SubgroupSize": "threads_per_simdgroup",
         }.get(builtin_name, attribute)
 
     def required_compute_builtin_parameters(
@@ -4737,6 +4772,9 @@ class MetalCodeGen:
             )
             reserved_names.add(name)
             required_parameters.append((name, param_type, attribute))
+        required_attributes = {
+            attribute for _name, _param_type, attribute in required_parameters
+        }
         wave_builtin_parameters = [
             (
                 "WaveGetLaneIndex",
@@ -4754,11 +4792,12 @@ class MetalCodeGen:
         for operation, base_name, param_type, attribute in wave_builtin_parameters:
             if operation not in used_wave_operations:
                 continue
-            if attribute in explicit_stage_builtins:
+            if attribute in explicit_stage_builtins or attribute in required_attributes:
                 continue
             name = self.unique_metal_generated_name(base_name, reserved_names)
             reserved_names.add(name)
             required_parameters.append((name, param_type, attribute))
+            required_attributes.add(attribute)
         return required_parameters
 
     def used_compute_builtin_names(self, body):
@@ -4769,6 +4808,8 @@ class MetalCodeGen:
             "gl_LocalInvocationIndex",
             "gl_WorkGroupSize",
             "gl_NumWorkGroups",
+            "gl_SubgroupInvocationID",
+            "gl_SubgroupSize",
         }
         used_names = set()
         for node in self.iter_ast_nodes(body):

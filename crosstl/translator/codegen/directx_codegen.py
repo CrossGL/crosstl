@@ -10617,9 +10617,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "as a function return semantic"
             )
 
-        if self.hlsl_gl_frag_data_semantic(
-            semantic
-        ) and self.hlsl_render_target_semantic(mapped_semantic):
+        if self.hlsl_flexible_render_target_semantic(semantic, mapped_semantic):
             if array_suffix or not self.hlsl_render_target_type(actual_base_type):
                 raise ValueError(
                     f"DirectX {shader_type} return semantic '{semantic}' maps to "
@@ -10656,9 +10654,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         actual_type = self.map_type(member_type)
         actual_base_type, array_suffix = split_array_type_suffix(actual_type)
-        if self.hlsl_gl_frag_data_semantic(
-            semantic
-        ) and self.hlsl_render_target_semantic(mapped_semantic):
+        if self.hlsl_flexible_render_target_semantic(semantic, mapped_semantic):
             if array_suffix or not self.hlsl_render_target_type(actual_base_type):
                 raise ValueError(
                     f"DirectX struct '{struct_name}' semantic '{semantic}' maps to "
@@ -10737,6 +10733,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return False
         suffix = semantic_key[len("SV_TARGET") :]
         return suffix == "" or suffix.isdigit()
+
+    def hlsl_flexible_render_target_semantic(self, semantic, mapped_semantic):
+        if not self.hlsl_render_target_semantic(mapped_semantic):
+            return False
+        if self.hlsl_gl_frag_data_semantic(semantic):
+            return True
+        return str(semantic).upper().startswith("SV_TARGET")
 
     def hlsl_gl_frag_data_semantic(self, semantic):
         semantic_text = str(semantic)
