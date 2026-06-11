@@ -25895,6 +25895,8 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
     assert payload["project"]["targets"] == ["cgl"]
     assert payload["summary"] == {
         "targetCount": 1,
+        "sourceCount": 1,
+        "variantCount": 0,
         "artifactCount": 1,
         "translatedArtifactCount": 1,
         "failedArtifactCount": 0,
@@ -25902,6 +25904,23 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
         "sourceRemapCount": 1,
         "runtimeReferenceCount": 1,
         "compilerRequestCount": 1,
+        "entryPointCount": 1,
+        "resourceBindingCount": 0,
+        "parameterBlockCount": 0,
+        "dispatchMetadataCount": 0,
+        "artifactsBySource": {"simple.cgl": 1},
+        "artifactsByTarget": {"cgl": 1},
+        "artifactsByVariant": {},
+        "validationStatusCounts": {"ok": 1},
+        "toolchainStatusCounts": {"not-configured": 1},
+        "runtimeDataStatusCounts": {
+            "dispatch": {"not-applicable": 1},
+            "entryPoints": {"available": 1},
+            "hostInterface": {"ready": 1},
+            "parameterBlocks": {"not-applicable": 1},
+            "resourceBindings": {"not-applicable": 1},
+        },
+        "runtimeDiagnosticCount": 0,
     }
     assert len(payload["targets"]) == 1
     assert set(payload["targets"][0]) == (
@@ -25910,7 +25929,45 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
     assert payload["targets"][0]["target"] == "cgl"
     assert payload["targets"][0]["translatedArtifactCount"] == 1
     assert payload["targets"][0]["runtimeReferenceCount"] == 1
+    assert payload["targets"][0]["sourceCount"] == 1
+    assert payload["targets"][0]["entryPointCount"] == 1
+    assert payload["targets"][0]["resourceBindingCount"] == 0
+    assert payload["targets"][0]["parameterBlockCount"] == 0
+    assert payload["targets"][0]["dispatchMetadataCount"] == 0
     assert len(payload["targets"][0]["artifacts"]) == 1
+    assert payload["artifactGroups"] == {
+        "bySource": [
+            {
+                "source": "simple.cgl",
+                "artifactCount": 1,
+                "targets": ["cgl"],
+                "sources": ["simple.cgl"],
+                "variants": [],
+                "artifacts": payload["targets"][0]["artifacts"],
+            }
+        ],
+        "byTarget": [
+            {
+                "target": "cgl",
+                "artifactCount": 1,
+                "targets": ["cgl"],
+                "sources": ["simple.cgl"],
+                "variants": [],
+                "artifacts": payload["targets"][0]["artifacts"],
+            }
+        ],
+        "byVariant": [
+            {
+                "variant": None,
+                "artifactCount": 1,
+                "targets": ["cgl"],
+                "sources": ["simple.cgl"],
+                "variants": [],
+                "artifacts": payload["targets"][0]["artifacts"],
+                "variantLabel": "default",
+            }
+        ],
+    }
     assert len(payload["artifacts"]) == 1
 
     report_artifact = report_payload["artifacts"][0]
@@ -25940,6 +25997,33 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
         "resources": [],
         "diagnostics": [],
     }
+    assert artifact["entryPoints"] == [
+        {"name": "main", "stage": "vertex", "executionConfig": {}}
+    ]
+    assert artifact["resourceBindings"] == []
+    assert artifact["parameterBlocks"] == []
+    assert artifact["dispatch"] == {
+        "status": "not-applicable",
+        "workgroupCount": 0,
+        "workgroups": [],
+        "diagnostics": [],
+    }
+    assert artifact["validation"]["status"] == "ok"
+    assert artifact["validation"]["sourceHashStatus"] == "ok"
+    assert artifact["validation"]["sourceMapStatus"] == "ok"
+    assert artifact["toolchain"]["target"] == "cgl"
+    assert artifact["toolchain"]["status"] == "not-configured"
+    assert artifact["toolchainRuns"] == []
+    assert artifact["runtimeDataStatus"] == {
+        "hostInterface": "ready",
+        "entryPoints": "available",
+        "resourceBindings": "not-applicable",
+        "parameterBlocks": "not-applicable",
+        "dispatch": "not-applicable",
+    }
+    assert artifact["diagnostics"] == []
+    assert payload["runtimeDiagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["runtimeDiagnostics"] == []
 
     assert set(payload["runtimePlan"]) == (
         project_pipeline.RUNTIME_ARTIFACT_MANIFEST_RUNTIME_PLAN_FIELDS
@@ -25953,6 +26037,154 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
     assert payload["runtimePlan"]["runtimeReferencesByPath"] == {"host.cpp": 1}
     assert payload["runtimePlan"]["compilerRequests"][0]["target"] == "cgl"
     assert payload["runtimePlan"]["actionCount"] == 2
+
+
+def test_runtime_artifact_manifest_records_runtime_integration_metadata(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "runtime.cgl").write_text(
+        textwrap.dedent("""
+            shader RuntimeMetadata {
+                layout(set = 1, binding = 2) uniform sampler2D sourceTexture;
+
+                cbuffer Camera {
+                    mat4 viewProj;
+                }
+
+                compute {
+                    layout(local_size_x = 4, local_size_y = 2, local_size_z = 1) in;
+
+                    [numthreads(4, 2, 1)]
+                    void main() {
+                    }
+                }
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            output_dir = "out"
+
+            [project.variants.debug]
+            MODE = "1"
+        """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo))
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    payload = build_runtime_artifact_manifest(report_path)
+
+    assert payload["success"] is True
+    assert payload["summary"]["sourceCount"] == 1
+    assert payload["summary"]["variantCount"] == 1
+    assert payload["summary"]["entryPointCount"] == 1
+    assert payload["summary"]["resourceBindingCount"] == 2
+    assert payload["summary"]["parameterBlockCount"] == 1
+    assert payload["summary"]["dispatchMetadataCount"] == 1
+    assert payload["summary"]["artifactsByVariant"] == {"debug": 1}
+    assert payload["summary"]["runtimeDiagnosticCount"] == 1
+    assert payload["runtimeDiagnosticCounts"] == {"note": 1, "warning": 0, "error": 0}
+    assert payload["runtimeDiagnostics"][0]["code"] == (
+        "project.runtime-manifest.resource-binding-layout-incomplete"
+    )
+    assert payload["artifactGroups"]["byVariant"][0]["variant"] == "debug"
+    assert payload["artifactGroups"]["byVariant"][0]["variantLabel"] == "debug"
+
+    target = payload["targets"][0]
+    assert target["variantCount"] == 1
+    assert target["entryPointCount"] == 1
+    assert target["resourceBindingCount"] == 2
+    assert target["parameterBlockCount"] == 1
+    assert target["dispatchMetadataCount"] == 1
+
+    artifact = payload["artifacts"][0]
+    assert artifact["variant"] == "debug"
+    assert artifact["entryPoints"] == [
+        {
+            "name": "main",
+            "stage": "compute",
+            "executionConfig": {
+                "local_size_x": "4",
+                "local_size_y": "2",
+                "local_size_z": "1",
+                "numthreads": ["4", "2", "1"],
+            },
+        }
+    ]
+    assert artifact["resourceBindings"] == [
+        {
+            "id": "constant-buffer|default|default|Camera|0",
+            "name": "Camera",
+            "kind": "constant-buffer",
+            "type": "Camera",
+            "set": None,
+            "binding": None,
+            "access": "read",
+            "status": "layout-missing",
+            "source": "hostInterface.resources",
+        },
+        {
+            "id": "texture|1|2|sourceTexture|1",
+            "name": "sourceTexture",
+            "kind": "texture",
+            "type": "sampler2D",
+            "set": 1,
+            "binding": 2,
+            "access": None,
+            "status": "bound",
+            "source": "hostInterface.resources",
+        },
+    ]
+    assert artifact["parameterBlocks"] == [
+        {
+            "name": "Camera",
+            "kind": "constant-buffer",
+            "type": "Camera",
+            "set": None,
+            "binding": None,
+            "access": "read",
+            "resourceBinding": "constant-buffer|default|default|Camera|0",
+            "status": "layout-incomplete",
+            "fields": [],
+            "fieldLayoutStatus": "unavailable",
+        }
+    ]
+    assert artifact["dispatch"] == {
+        "status": "available",
+        "workgroupCount": 1,
+        "workgroups": [
+            {
+                "entryPoint": "main",
+                "stage": "compute",
+                "workgroupSize": [4, 2, 1],
+                "source": "entryPoint.executionConfig.numthreads",
+                "executionConfig": {
+                    "local_size_x": "4",
+                    "local_size_y": "2",
+                    "local_size_z": "1",
+                    "numthreads": ["4", "2", "1"],
+                },
+            }
+        ],
+        "diagnostics": [],
+    }
+    assert artifact["runtimeDataStatus"] == {
+        "hostInterface": "ready",
+        "entryPoints": "available",
+        "resourceBindings": "partial",
+        "parameterBlocks": "partial",
+        "dispatch": "available",
+    }
+    assert [diagnostic["code"] for diagnostic in artifact["diagnostics"]] == [
+        "project.runtime-manifest.resource-binding-layout-incomplete"
+    ]
+    assert artifact["validation"]["status"] == "ok"
+    assert artifact["toolchain"]["status"] == "not-configured"
 
 
 def test_runtime_artifact_manifest_invalid_report_is_diagnostic_only(tmp_path):
