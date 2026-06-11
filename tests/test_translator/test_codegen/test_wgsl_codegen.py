@@ -819,8 +819,7 @@ def test_wgsl_codegen_lowers_writeonly_uimage2d_to_storage_texture_store():
         "var dstTexture: texture_storage_2d<rgba32uint, write>;"
     ) in generated
     assert (
-        "textureStore(dstTexture, vec2<i32>(1, 2), "
-        "vec4<u32>(3, 4, 5, 6));"
+        "textureStore(dstTexture, vec2<i32>(1, 2), " "vec4<u32>(3, 4, 5, 6));"
     ) in generated
     assert "imageStore" not in generated
 
@@ -867,8 +866,7 @@ def test_wgsl_codegen_infers_image2d_read_access_from_image_load():
         "var inputImage: texture_storage_2d<rgba32float, read>;"
     ) in generated
     assert (
-        "var color: vec4<f32> = textureLoad(inputImage, vec2<i32>(1, 2));"
-        in generated
+        "var color: vec4<f32> = textureLoad(inputImage, vec2<i32>(1, 2));" in generated
     )
     assert "imageLoad" not in generated
 
@@ -1646,25 +1644,73 @@ def test_wgsl_codegen_rejects_unsupported_storage_buffer_resource_forms(
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+def test_wgsl_codegen_lowers_structured_buffer_dimensions_to_array_length():
+    shader = """
+    shader WGSLStructuredBufferDimensions {
+        StructuredBuffer<float> values;
+        RWStructuredBuffer<uint> counters;
+        compute {
+            void main(uint3 gid @ gl_GlobalInvocationID) {
+                uint valueCount = buffer_dimensions(values);
+                int signedCount = values.GetDimensions();
+                uint counterCount;
+                buffer_dimensions(counters, counterCount);
+                int memberCount;
+                counters.GetDimensions(memberCount);
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var valueCount: u32 = arrayLength(&values);" in generated
+    assert "var signedCount: i32 = i32(arrayLength(&values));" in generated
+    assert "var counterCount: u32;" in generated
+    assert "counterCount = arrayLength(&counters);" in generated
+    assert "var memberCount: i32;" in generated
+    assert "memberCount = i32(arrayLength(&counters));" in generated
+    assert "buffer_dimensions" not in generated
+    assert "GetDimensions" not in generated
+
+
 @pytest.mark.parametrize(
     ("statement", "expected"),
     [
         (
-            "buffer_dimensions(values);",
-            "does not support storage buffer helper buffer_dimensions yet",
+            "uint missing = buffer_dimensions();",
+            r"supports buffer_dimensions\(\) with 1 or 2 arguments; got 0",
         ),
         (
-            "values.GetDimensions();",
-            "does not support storage buffer member helper GetDimensions yet",
+            "uint excess; buffer_dimensions(values, excess, excess);",
+            r"supports buffer_dimensions\(\) with 1 or 2 arguments; got 3",
+        ),
+        (
+            "uint invalid = buffer_dimensions(notBuffer);",
+            r"requires buffer_dimensions\(\) to use a StructuredBuffer or RWStructuredBuffer resource",
+        ),
+        (
+            "values.GetDimensions(memberCount, memberCount);",
+            r"supports StructuredBuffer.GetDimensions\(\) with 0 or 1 arguments; got 2",
+        ),
+        (
+            "values.GetDimensions(floatTarget);",
+            r"requires GetDimensions\(\) output operand to be an integer target",
+        ),
+        (
+            "values.GetDimensions(1u);",
+            r"requires GetDimensions\(\) output operand to be an assignable integer target",
         ),
     ],
 )
-def test_wgsl_codegen_rejects_unsupported_structured_buffer_helpers(
-    statement, expected
-):
+def test_wgsl_codegen_rejects_invalid_structured_buffer_dimensions(statement, expected):
     shader = f"""
-    shader WGSLUnsupportedStructuredBufferHelpers {{
+    shader WGSLInvalidStructuredBufferDimensions {{
         StructuredBuffer<float> values;
+        uint notBuffer;
+        uint memberCount;
+        float floatTarget;
         compute {{
             void main() {{
                 {statement}

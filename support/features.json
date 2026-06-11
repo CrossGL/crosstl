@@ -1859,13 +1859,14 @@
         },
         "wgsl": {
           "status": "supported",
-          "notes": "StructuredBuffer and RWStructuredBuffer globals lower to WGSL storage-buffer arrays with read/read_write access modes, explicit and automatic binding allocation, direct indexed access, buffer_load/buffer_store helper lowering, and HLSL Load/Store member helper lowering. Append/consume buffers, byte-address buffers, dimensions/counter helpers, read-only stores, parameters, and user-struct storage-resource fields produce deterministic diagnostics.",
+          "notes": "StructuredBuffer and RWStructuredBuffer globals lower to WGSL storage-buffer arrays with read/read_write access modes, explicit and automatic binding allocation, direct indexed access, buffer_load/buffer_store helper lowering, HLSL Load/Store member helper lowering, and buffer_dimensions/GetDimensions lowering to WGSL arrayLength. Append/consume buffers, byte-address buffers, counter helpers, read-only stores, parameters, and user-struct storage-resource fields produce deterministic diagnostics.",
           "evidence": [
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_structured_buffers_to_storage_bindings",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_structured_buffer_access_helpers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_structured_buffer_dimensions_to_array_length",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_readonly_structured_buffer_stores",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsupported_storage_buffer_resource_forms",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsupported_structured_buffer_helpers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_invalid_structured_buffer_dimensions",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_structured_buffers_inside_user_structs",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_structured_buffer_parameters"
           ]

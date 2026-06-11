@@ -2669,9 +2669,7 @@ void main() {
     assert generated_code.index("threadgroup int a;") > generated_code.index(
         "kernel void kernel_main"
     )
-    assert generated_code.index("threadgroup int a;") < generated_code.index(
-        "a = 123;"
-    )
+    assert generated_code.index("threadgroup int a;") < generated_code.index("a = 123;")
     assert "a = 123;" in generated_code
     assert "int4 x = int4(a);" in generated_code
     compile_with_metal_if_available(generated_code)

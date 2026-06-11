@@ -276,15 +276,16 @@ class WGSLCodeGen:
         "rwbyteaddressbuffer",
     }
     STRUCTURED_BUFFER_FREE_HELPERS = {
+        "buffer_dimensions",
         "buffer_load",
         "buffer_store",
     }
     UNSUPPORTED_STORAGE_BUFFER_FREE_HELPERS = {
         "buffer_append",
         "buffer_consume",
-        "buffer_dimensions",
     }
     STRUCTURED_BUFFER_MEMBER_HELPERS = {
+        "getdimensions",
         "load",
         "store",
     }
@@ -292,7 +293,6 @@ class WGSLCodeGen:
         "append",
         "consume",
         "decrementcounter",
-        "getdimensions",
         "incrementcounter",
         "load2",
         "load3",
@@ -365,6 +365,20 @@ class WGSLCodeGen:
         "uimage3d": "3d",
         "uimagecube": "2d_array",
         "uimagecubearray": "2d_array",
+    }
+    STORAGE_TEXTURE_DIMENSION_MAP = {
+        "image1d": "1d",
+        "image2d": "2d",
+        "image2darray": "2d_array",
+        "image3d": "3d",
+        "iimage1d": "1d",
+        "iimage2d": "2d",
+        "iimage2darray": "2d_array",
+        "iimage3d": "3d",
+        "uimage1d": "1d",
+        "uimage2d": "2d",
+        "uimage2darray": "2d_array",
+        "uimage3d": "3d",
     }
     STORAGE_TEXTURE_DEFAULT_FORMATS = {
         "image1d": "rgba32float",
@@ -1479,9 +1493,7 @@ class WGSLCodeGen:
         parameters = ", ".join(
             list(leading_parameters)
             + [
-                self.generate_parameter(
-                    param, include_attributes=parameter_attributes
-                )
+                self.generate_parameter(param, include_attributes=parameter_attributes)
                 for param in func.parameters
                 if id(param) not in skip_parameter_ids
             ]
@@ -3110,6 +3122,18 @@ class WGSLCodeGen:
         return f"{mapped_name}({self.generate_expression(node.arguments[0])})"
 
     def generate_structured_buffer_free_helper_call(self, node, helper_name):
+        if helper_name == "buffer_dimensions":
+            if len(node.arguments) not in {1, 2}:
+                raise ValueError(
+                    "WGSL target supports buffer_dimensions() with 1 or 2 "
+                    f"arguments; got {len(node.arguments)}"
+                )
+            resource = node.arguments[0]
+            output = node.arguments[1] if len(node.arguments) == 2 else None
+            return self.generate_structured_buffer_dimensions(
+                resource, output, "buffer_dimensions"
+            )
+
         if helper_name == "buffer_load":
             if len(node.arguments) != 2:
                 raise ValueError(
@@ -3134,6 +3158,17 @@ class WGSLCodeGen:
 
     def generate_structured_buffer_member_helper_call(self, node, helper_name):
         receiver = node.function.object_expr
+        if helper_name == "getdimensions":
+            if len(node.arguments) not in {0, 1}:
+                raise ValueError(
+                    "WGSL target supports StructuredBuffer.GetDimensions() with "
+                    f"0 or 1 arguments; got {len(node.arguments)}"
+                )
+            output = node.arguments[0] if node.arguments else None
+            return self.generate_structured_buffer_dimensions(
+                receiver, output, "GetDimensions"
+            )
+
         if helper_name == "load":
             if len(node.arguments) != 1:
                 raise ValueError(
@@ -3153,6 +3188,45 @@ class WGSLCodeGen:
             f"{self.structured_buffer_index_expression(receiver, node.arguments[0])} = "
             f"{self.generate_expression(node.arguments[1])}"
         )
+
+    def generate_structured_buffer_dimensions(self, resource, output, helper_name):
+        self.require_structured_buffer_resource(resource, helper_name)
+        if output is None:
+            return self.structured_buffer_length_expression(resource)
+        self.require_structured_buffer_dimensions_output(output, helper_name)
+        target_type = self.expression_type(output)
+        length = self.structured_buffer_length_expression_for_target(
+            resource, target_type
+        )
+        return f"{self.generate_expression(output)} = {length}"
+
+    def structured_buffer_length_expression_for_target(self, resource, target_type):
+        length = self.structured_buffer_length_expression(resource)
+        if self.integer_scalar_type(target_type) == "i32":
+            return f"i32({length})"
+        return length
+
+    def structured_buffer_length_expression(self, resource):
+        if isinstance(resource, IdentifierNode) and self.is_pointer_identifier(
+            resource.name
+        ):
+            return f"arrayLength({self.identifier_name(resource.name)})"
+        return f"arrayLength(&{self.generate_expression(resource)})"
+
+    def require_structured_buffer_dimensions_output(self, output, helper_name):
+        if not isinstance(
+            output, (IdentifierNode, MemberAccessNode, ArrayAccessNode, SwizzleNode)
+        ):
+            raise ValueError(
+                "WGSL target requires "
+                f"{helper_name}() output operand to be an assignable integer target"
+            )
+        self.validate_storage_assignment_target(output)
+        if self.integer_scalar_type(self.expression_type(output)) is None:
+            raise ValueError(
+                "WGSL target requires "
+                f"{helper_name}() output operand to be an integer target"
+            )
 
     def structured_buffer_index_expression(self, resource, index):
         if isinstance(resource, IdentifierNode) and self.is_pointer_identifier(
@@ -5172,9 +5246,12 @@ class WGSLCodeGen:
 
     def require_writable_storage_texture_resource(self, resource, function_name):
         resource_type = self.expression_type(resource)
-        if self.STORAGE_TEXTURE_DIMENSION_MAP.get(
-            self.resource_type_name(resource_type) or ""
-        ) is None:
+        if (
+            self.STORAGE_TEXTURE_DIMENSION_MAP.get(
+                self.resource_type_name(resource_type) or ""
+            )
+            is None
+        ):
             raise ValueError(
                 f"WGSL target requires {function_name}() to use a storage image "
                 "resource"
@@ -5188,9 +5265,12 @@ class WGSLCodeGen:
 
     def require_readable_storage_texture_resource(self, resource, function_name):
         resource_type = self.expression_type(resource)
-        if self.STORAGE_TEXTURE_DIMENSION_MAP.get(
-            self.resource_type_name(resource_type) or ""
-        ) is None:
+        if (
+            self.STORAGE_TEXTURE_DIMENSION_MAP.get(
+                self.resource_type_name(resource_type) or ""
+            )
+            is None
+        ):
             raise ValueError(
                 f"WGSL target requires {function_name}() to use a storage image "
                 "resource"
@@ -5523,6 +5603,12 @@ class WGSLCodeGen:
             option_call_type = self.builtin_option_call_type(expr, function_name)
             if option_call_type is not None:
                 return option_call_type
+            if self.semantic_key(function_name) == "buffer_dimensions":
+                return "u32"
+            if isinstance(expr.function, MemberAccessNode) and (
+                self.semantic_key(expr.function.member) == "getdimensions"
+            ):
+                return "u32"
             if self.is_type_constructor_name(function_name):
                 return self.type_name_string(function_name)
             resolved_function = self.resolve_function_overload(
