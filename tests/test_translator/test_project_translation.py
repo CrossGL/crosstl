@@ -10365,6 +10365,122 @@ def test_translate_project_opengl_materializes_mlx_pointer_and_value_bindings(
     assert not re.search(r"\b(?:T|U)\b", output)
 
 
+def test_translate_project_opengl_validates_implicit_metal_matmul_resources(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "metal_performance_testing"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "ShaderParams.h").write_text(
+        textwrap.dedent("""
+            #ifndef _SHADER_PARAMS_H
+            #define _SHADER_PARAMS_H
+
+            typedef struct
+            {
+                unsigned int row_dim_x;
+                unsigned int col_dim_x;
+                unsigned int inner_dim;
+            } MatMulParams;
+
+            #endif
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "mat_mul_simple1.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            #include "ShaderParams.h"
+            using namespace metal;
+
+            kernel void mat_mul_simple1(device const float* A,
+                                        device const float* B,
+                                        device float* X,
+                                        constant MatMulParams& params,
+                                        uint2 id [[ thread_position_in_grid ]])
+            {
+                const uint row_dim_x = params.row_dim_x;
+                const uint col_dim_x = params.col_dim_x;
+                const uint inner_dim = params.inner_dim;
+
+                if ((id.x < col_dim_x) && (id.y < row_dim_x)) {
+                    const uint index = id.y*col_dim_x + id.x;
+                    float sum = 0;
+                    for (uint k = 0; k < inner_dim; ++k) {
+                        const uint index_A = id.y*inner_dim + k;
+                        const uint index_B = k*col_dim_x + id.x;
+                        sum += A[index_A] * B[index_B];
+                    }
+                    X[index] = sum;
+                }
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["metal_performance_testing"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    validator_inputs = []
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/usr/bin/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
+
+    def run_validator(command, **kwargs):
+        assert command == ["glslangValidator", "--stdin", "-S", "comp"]
+        shader_source = kwargs["input"]
+        assert "layout(std430, binding = 0) readonly buffer ABuffer" in shader_source
+        assert "layout(std430, binding = 1) readonly buffer BBuffer" in shader_source
+        assert "layout(std430, binding = 2) buffer XBuffer" in shader_source
+        assert "layout(std140, binding = 3) uniform MatMulParams" in shader_source
+        assert "params.row_dim_x" in shader_source
+        assert "A[index_A]" in shader_source
+        assert "B[index_B]" in shader_source
+        assert "X[index] = sum;" in shader_source
+        validator_inputs.append(shader_source)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_validator)
+
+    report = translate_project(
+        load_project_config(repo),
+        validate=True,
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+    output = (
+        repo
+        / "translated"
+        / "opengl"
+        / "metal_performance_testing"
+        / "mat_mul_simple1.glsl"
+    ).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["validation"]["toolchainRuns"][0]["status"] == "ok"
+    assert payload["validation"]["toolchainRuns"][0]["sourceBackend"] == "metal"
+    assert payload["validation"]["toolchainRuns"][0]["command"] == [
+        "glslangValidator",
+        "--stdin",
+        "-S",
+        "comp",
+    ]
+    assert len(validator_inputs) == 1
+    assert output == validator_inputs[0]
+
+
 def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
     tmp_path,
 ):
