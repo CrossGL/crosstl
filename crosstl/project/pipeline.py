@@ -7050,7 +7050,8 @@ def _webgl_split_stage_artifacts(
             continue
 
         stage_path = _webgl_stage_path(output_path, stage)
-        stage_path.write_text(stage_source, encoding="utf-8", newline="")
+        with stage_path.open("w", encoding="utf-8", newline="") as stage_file:
+            stage_file.write(stage_source)
         stage_artifact = dict(artifact)
         stage_artifact["stage"] = stage_label
         stage_artifact["path"] = _artifact_report_path(stage_path, config)
@@ -13057,6 +13058,10 @@ def _runtime_loader_package_artifact_path(
     return artifact_path
 
 
+def _runtime_loader_command_path(package_path: Any) -> str:
+    return PurePosixPath(str(package_path).replace("\\", "/")).as_posix()
+
+
 def _runtime_loader_directx_entry_profiles(
     adapter: Mapping[str, Any],
     *,
@@ -13092,15 +13097,15 @@ def _runtime_loader_directx_commands(
     package_path = adapter.get("packagePath")
     if not _is_non_empty_string(package_path) or not tools:
         return []
-    command_path = Path(str(package_path))
+    command_path = _runtime_loader_command_path(package_path)
     entry_profiles = _runtime_loader_directx_entry_profiles(
         adapter, package_root=package_root
     )
     tool = tools[0]
     if entry_profiles is None:
-        return [[tool, "-T", "lib_6_3", str(command_path), "-Fo", os.devnull]]
+        return [[tool, "-T", "lib_6_3", command_path, "-Fo", os.devnull]]
     return [
-        _directx_dxc_entry_smoke_command(tool, command_path, entry, profile)
+        [tool, "-T", profile, "-E", entry, command_path, "-Fo", os.devnull]
         for entry, profile in entry_profiles
     ]
 
@@ -13353,13 +13358,24 @@ def _runtime_loader_validation_command(
         return [tools[0], "--stdin", "-S", stage]
 
     if normalized_target == "wgsl":
-        return [tools[0], "--input-kind", "wgsl", str(package_path)]
+        return [
+            tools[0],
+            "--input-kind",
+            "wgsl",
+            _runtime_loader_command_path(package_path),
+        ]
 
     if normalized_target == "directx":
         commands = _runtime_loader_directx_commands(
             adapter, tools, package_root=package_root
         )
         return commands[0] if commands else None
+
+    if normalized_target == "vulkan":
+        command_path = _runtime_loader_command_path(package_path)
+        if PurePosixPath(command_path).suffix.lower() == ".spvasm" and len(tools) > 1:
+            return [tools[1], command_path, "-o", os.devnull]
+        return [tools[0], command_path]
 
     smoke_command = _toolchain_smoke_command(
         normalized_target,
