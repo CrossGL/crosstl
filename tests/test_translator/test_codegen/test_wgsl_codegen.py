@@ -3066,6 +3066,37 @@ def test_wgsl_codegen_lowers_dynamic_sampled_texture_array_sampling():
     assert "return textureSample(textures_1, textures_1_sampler, coords);" in generated
 
 
+def test_wgsl_codegen_lowers_dynamic_sampled_texture_array_lod_sampling():
+    shader = """
+    shader WGSLTextureResourceArrayLod {
+        sampler2D textures[2];
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0, int index @ TEXCOORD1) @ gl_FragColor {
+                return textureLod(textures[index], uv, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "return textures_sample_level(i32(index), uv, 1.0);" in generated
+    assert (
+        "fn textures_sample_level(textures_index: i32, "
+        "coords: vec2<f32>, level: f32) -> vec4<f32>" in generated
+    )
+    assert "case 0:" in generated
+    assert (
+        "return textureSampleLevel(textures_0, textures_0_sampler, coords, level);"
+        in generated
+    )
+    assert "case 1:" in generated
+    assert (
+        "return textureSampleLevel(textures_1, textures_1_sampler, coords, level);"
+        in generated
+    )
+
+
 def test_wgsl_codegen_dispatches_dynamic_sampled_texture_array_function_arguments():
     shader = """
     shader WGSLTextureResourceArrayFunction {

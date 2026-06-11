@@ -3775,6 +3775,10 @@ class WGSLCodeGen:
         for info in self._sampled_texture_array_dispatch_helpers.values():
             if info.get("kind") == "texture_sample":
                 helpers.append(self.generate_sampled_texture_array_sample_helper(info))
+            elif info.get("kind") == "texture_sample_level":
+                helpers.append(
+                    self.generate_sampled_texture_array_sample_level_helper(info)
+                )
             else:
                 helpers.append(
                     self.generate_sampled_texture_array_dispatch_helper(info)
@@ -4072,9 +4076,69 @@ class WGSLCodeGen:
     def sampled_texture_array_sample_helper_name(self, array_name):
         return self.safe_wgsl_identifier(f"{array_name}_sample")
 
+    def generate_sampled_texture_array_sample_level_helper(self, info):
+        array_info = info["array_info"]
+        helper_name = info["helper_name"]
+        coord_type = self.sampled_texture_coordinate_type(array_info["element_type"])
+        lines = [
+            f"fn {helper_name}({array_info['root_name']}_index: i32, "
+            f"coords: {coord_type}, level: f32) -> vec4<f32> {{",
+            f"    switch ({array_info['root_name']}_index) {{",
+        ]
+        for binding in array_info["bindings"]:
+            lines.extend(
+                [
+                    f"        case {binding['index']}: {{",
+                    "            return textureSampleLevel("
+                    f"{binding['texture_name']}, {binding['sampler_name']}, "
+                    "coords, level);",
+                    "        }",
+                ]
+            )
+        first = array_info["bindings"][0]
+        lines.extend(
+            [
+                "        default: {",
+                "            return textureSampleLevel("
+                f"{first['texture_name']}, {first['sampler_name']}, "
+                "coords, level);",
+                "        }",
+                "    }",
+                "}",
+            ]
+        )
+        return "\n".join(lines)
+
+    def generate_sampled_texture_array_sample_level_call(
+        self, texture, coords, level, array_info
+    ):
+        helper_name = self.sampled_texture_array_sample_level_helper_name(
+            array_info["source_name"]
+        )
+        self._sampled_texture_array_dispatch_helpers[helper_name] = {
+            "helper_name": helper_name,
+            "array_info": array_info,
+            "kind": "texture_sample_level",
+        }
+        return (
+            f"{helper_name}(i32({self.generate_expression(texture.index_expr)}), "
+            f"{self.generate_expression(coords)}, {self.generate_expression(level)})"
+        )
+
+    def sampled_texture_array_sample_level_helper_name(self, array_name):
+        return self.safe_wgsl_identifier(f"{array_name}_sample_level")
+
     def generate_texture_sample_level_call(self, function_name, args):
         if len(args) == 3:
             texture, coords, level = args
+            array_info = self.sampled_texture_array_access(texture)
+            if (
+                array_info is not None
+                and self.sampled_texture_array_element_binding(texture) is None
+            ):
+                return self.generate_sampled_texture_array_sample_level_call(
+                    texture, coords, level, array_info
+                )
             return (
                 f"textureSampleLevel({self.generate_expression(texture)}, "
                 f"{self.texture_sampler_expression(texture)}, "

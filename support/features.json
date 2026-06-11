@@ -2038,11 +2038,12 @@
         },
         "wgsl": {
           "status": "partial",
-          "notes": "WGSL partially supports resource arrays by expanding fixed sampled texture arrays into individual module-scope texture/sampler bindings, including dynamic-index switch helpers and selected function-call dispatch. Other resource-array forms remain diagnostic: sampler-only arrays, storage-image arrays, StructuredBuffer/RWStructuredBuffer arrays, arrays of resource-bearing structs, unsized sampled texture arrays, multisampled array texture resources, and resource-array parameters.",
+        "notes": "WGSL partially supports resource arrays by expanding fixed sampled texture arrays into individual module-scope texture/sampler bindings, including dynamic-index switch helpers for plain and explicit-LOD sampling plus selected function-call dispatch. Other resource-array forms remain diagnostic: sampler-only arrays, storage-image arrays, StructuredBuffer/RWStructuredBuffer arrays, arrays of resource-bearing structs, unsized sampled texture arrays, multisampled array texture resources, and resource-array parameters.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_sampled_texture_arrays_to_element_bindings",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_dynamic_sampled_texture_array_sampling",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_dispatches_dynamic_sampled_texture_array_function_arguments",
+          "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_sampled_texture_arrays_to_element_bindings",
+          "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_dynamic_sampled_texture_array_sampling",
+          "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_dynamic_sampled_texture_array_lod_sampling",
+          "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_dispatches_dynamic_sampled_texture_array_function_arguments",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_covers_universal_pbr_fragment_shadow_map_array",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_resource_array_declarations",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_resource_array_parameters",
