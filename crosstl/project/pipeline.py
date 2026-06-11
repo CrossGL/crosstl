@@ -2169,7 +2169,18 @@ INCLUDE_DEPENDENCY_STATUSES = frozenset(
     ("dynamic", "missing", "outside-project", "resolved", "system")
 )
 INCLUDE_DEPENDENCY_RESOLUTION_SOURCES = frozenset(("include-dir", "source"))
-NATIVE_DIRECTIVE_HANDLING_STATUSES = frozenset(("preserved", "unsupported"))
+NATIVE_DIRECTIVE_HANDLING_STATUSES = frozenset(
+    ("preserved", "expanded", "unsupported")
+)
+METAL_MODE_DIRECTIVE_SOURCE_OPTION = "mode_directives"
+METAL_MODE_DIRECTIVE_POLICIES = frozenset(("preserve", "expand", "unsupported"))
+METAL_MODE_DIRECTIVE_POLICY_ALIASES = {
+    "preserve": "preserve",
+    "preserved": "preserve",
+    "expand": "expand",
+    "expanded": "expand",
+    "unsupported": "unsupported",
+}
 DEFINE_PROCESSING_STATUSES = frozenset(("forwarded", "not-requested", "not-supported"))
 INCLUDE_PATH_PROCESSING_STATUSES = frozenset(
     ("forwarded", "not-requested", "not-supported")
@@ -2463,8 +2474,42 @@ def _as_source_options(value: Any, *, field_name: str) -> dict[str, dict[str, An
                     f"{option_path} entries must map option names to strings, "
                     "integers, or booleans"
                 )
+        normalized_options = _normalize_source_options_for_backend(
+            backend_key,
+            normalized_options,
+            option_path=option_path,
+        )
         result[backend_key] = normalized_options
     return result
+
+
+def _normalize_source_options_for_backend(
+    source_backend: str,
+    options: Mapping[str, Any],
+    *,
+    option_path: str,
+) -> dict[str, Any]:
+    normalized = dict(options)
+    if source_backend != "metal" or METAL_MODE_DIRECTIVE_SOURCE_OPTION not in normalized:
+        return normalized
+
+    field_name = f"{option_path}.{METAL_MODE_DIRECTIVE_SOURCE_OPTION}"
+    value = normalized[METAL_MODE_DIRECTIVE_SOURCE_OPTION]
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            f"{field_name} must be one of "
+            f"{', '.join(sorted(METAL_MODE_DIRECTIVE_POLICIES))}"
+        )
+    policy = METAL_MODE_DIRECTIVE_POLICY_ALIASES.get(
+        value.strip().lower().replace("-", "_")
+    )
+    if policy is None:
+        raise ValueError(
+            f"{field_name} must be one of "
+            f"{', '.join(sorted(METAL_MODE_DIRECTIVE_POLICIES))}"
+        )
+    normalized[METAL_MODE_DIRECTIVE_SOURCE_OPTION] = policy
+    return normalized
 
 
 def _variant_defines(variants: Mapping[str, Any]) -> dict[str, dict[str, str]]:
@@ -5051,6 +5096,39 @@ def _unsupported_macro_form_diagnostic(
     )
 
 
+def _unsupported_native_directive_diagnostic(
+    *,
+    relative_path: str,
+    line_number: int,
+    column: int,
+    source_backend: str,
+    kind: str,
+    payload: str,
+    variant: str | None = None,
+) -> ProjectDiagnostic:
+    context = f" for variant {variant}" if variant else ""
+    rendered_payload = payload or "(empty payload)"
+    return ProjectDiagnostic(
+        severity="warning",
+        code="project.scan.unsupported-native-directive",
+        message=(
+            f"Native directive {kind} in {relative_path}:{line_number}{context} "
+            f"is recognized by the {source_backend} frontend but configured as "
+            f"unsupported: {rendered_payload}."
+        ),
+        location=SourceLocation(
+            file=relative_path,
+            line=line_number,
+            column=column,
+            end_line=line_number,
+            end_column=column,
+        ),
+        source_backend=source_backend,
+        variant=variant,
+        missing_capabilities=[f"native.directive.{kind}"],
+    )
+
+
 def _macro_form_label(directive: str, body: str) -> str:
     if directive == "define":
         body = _strip_preprocessor_line_comment(body)
@@ -5067,8 +5145,62 @@ def _macro_form_label(directive: str, body: str) -> str:
     return f"#{directive}"
 
 
+def _metal_mode_directive_policy(config: ProjectConfig) -> str:
+    options = config.source_options.get("metal", {})
+    value = options.get(METAL_MODE_DIRECTIVE_SOURCE_OPTION, "preserve")
+    if isinstance(value, str):
+        policy = METAL_MODE_DIRECTIVE_POLICY_ALIASES.get(
+            value.strip().lower().replace("-", "_")
+        )
+        if policy is not None:
+            return policy
+    return "preserve"
+
+
+def _native_directive_handling_status(
+    config: ProjectConfig,
+    *,
+    source_backend: str,
+    kind: str,
+    default_status: str,
+) -> str:
+    if source_backend == "metal" and kind == "mode":
+        policy = _metal_mode_directive_policy(config)
+        if policy == "preserve":
+            return "preserved"
+        if policy == "expand":
+            return "expanded"
+        return "unsupported"
+    return default_status
+
+
+def _metal_mode_variant_name(payload: str) -> str:
+    normalized = " ".join(payload.split())
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", normalized.lower()).strip("-")
+    if not slug:
+        slug = "empty"
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:8]
+    return f"metal-mode-{slug[:40]}-{digest}"
+
+
+def _native_directive_variant(
+    *,
+    source_backend: str,
+    plan: Mapping[str, str],
+    variant: str | None,
+) -> str | None:
+    if (
+        source_backend == "metal"
+        and plan.get("kind") == "mode"
+        and plan.get("handlingStatus") == "expanded"
+    ):
+        return _metal_mode_variant_name(plan.get("payload", ""))
+    return variant
+
+
 def _source_frontend_native_directive_plan(
     *,
+    config: ProjectConfig,
     source_backend: str,
     directive: str,
     body: str,
@@ -5082,6 +5214,12 @@ def _source_frontend_native_directive_plan(
         return None
     kind = str(raw_plan.get("kind", "")).strip().lower()
     handling_status = str(raw_plan.get("handlingStatus", "")).strip().lower()
+    handling_status = _native_directive_handling_status(
+        config,
+        source_backend=source_backend,
+        kind=kind,
+        default_status=handling_status,
+    )
     if not kind or handling_status not in NATIVE_DIRECTIVE_HANDLING_STATUSES:
         return None
     return {
@@ -5170,6 +5308,7 @@ def _scan_native_macro_semantic_lines(
 
         if (
             _source_frontend_native_directive_plan(
+                config=config,
                 source_backend=source_backend,
                 directive=directive,
                 body=body,
@@ -5212,8 +5351,9 @@ def _scan_native_directive_lines(
     source_backend: str,
     seen: set[tuple[str, int, str, str, str, str | None]],
     variant: str | None = None,
-) -> list[ProjectNativeDirective]:
+) -> tuple[list[ProjectNativeDirective], list[ProjectDiagnostic]]:
     native_directives: list[ProjectNativeDirective] = []
+    diagnostics: list[ProjectDiagnostic] = []
     conditional_stack: list[_IncludeConditionalFrame] = []
     for line_number, line in enumerate(lines, start=1):
         directive_match = PREPROCESSOR_DIRECTIVE_RE.match(line)
@@ -5235,36 +5375,55 @@ def _scan_native_directive_lines(
             continue
 
         plan = _source_frontend_native_directive_plan(
+            config=config,
             source_backend=source_backend,
             directive=directive,
             body=body,
         )
         if plan is None:
             continue
+        directive_variant = _native_directive_variant(
+            source_backend=source_backend,
+            plan=plan,
+            variant=variant,
+        )
         key = (
             relative_path,
             line_number,
             plan["kind"],
             plan["payload"],
             plan["handlingStatus"],
-            variant,
+            directive_variant,
         )
         if key in seen:
             continue
         seen.add(key)
+        column = max(1, line.find("#") + 1)
         native_directives.append(
             ProjectNativeDirective(
                 source=relative_path,
                 source_backend=source_backend,
                 line=line_number,
-                column=max(1, line.find("#") + 1),
+                column=column,
                 kind=plan["kind"],
                 payload=plan["payload"],
                 handling_status=plan["handlingStatus"],
-                variant=variant,
+                variant=directive_variant,
             )
         )
-    return native_directives
+        if plan["handlingStatus"] == "unsupported":
+            diagnostics.append(
+                _unsupported_native_directive_diagnostic(
+                    relative_path=relative_path,
+                    line_number=line_number,
+                    column=column,
+                    source_backend=source_backend,
+                    kind=plan["kind"],
+                    payload=plan["payload"],
+                    variant=directive_variant,
+                )
+            )
+    return native_directives, diagnostics
 
 
 def _scan_native_directive_planning(
@@ -5273,33 +5432,34 @@ def _scan_native_directive_planning(
     relative_path: str,
     *,
     source_backend: str,
-) -> list[ProjectNativeDirective]:
+) -> tuple[list[ProjectNativeDirective], list[ProjectDiagnostic]]:
     source_spec = SOURCE_REGISTRY.get(source_backend)
     if source_spec is None or source_spec.native_directive_classifier is None:
-        return []
+        return [], []
     try:
         lines = source_path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
-        return []
+        return [], []
 
     native_directives: list[ProjectNativeDirective] = []
+    diagnostics: list[ProjectDiagnostic] = []
     seen: set[tuple[str, int, str, str, str, str | None]] = set()
     scan_lines = _mask_preprocessor_block_comments(lines)
     for variant, defines in _variant_jobs(config):
         scan_config = (
             replace(config, defines=defines) if variant is not None else config
         )
-        native_directives.extend(
-            _scan_native_directive_lines(
-                scan_config,
-                scan_lines,
-                relative_path,
-                source_backend=source_backend,
-                seen=seen,
-                variant=variant,
-            )
+        scanned_directives, scanned_diagnostics = _scan_native_directive_lines(
+            scan_config,
+            scan_lines,
+            relative_path,
+            source_backend=source_backend,
+            seen=seen,
+            variant=variant,
         )
-    return native_directives
+        native_directives.extend(scanned_directives)
+        diagnostics.extend(scanned_diagnostics)
+    return native_directives, diagnostics
 
 
 def _scan_unsupported_wgsl_macro_semantics(
@@ -6847,6 +7007,28 @@ def _iter_scan_candidates(config: ProjectConfig) -> list[Path]:
     return sorted(candidates)
 
 
+def _config_with_expanded_native_directive_variants(
+    config: ProjectConfig,
+    native_directives: Sequence[ProjectNativeDirective],
+) -> ProjectConfig:
+    expanded_variants = {
+        directive.variant: {}
+        for directive in native_directives
+        if directive.handling_status == "expanded" and directive.variant
+    }
+    new_variants = {
+        name: defines
+        for name, defines in expanded_variants.items()
+        if name not in config.variants
+    }
+    if not new_variants:
+        return config
+    return replace(
+        config,
+        variants={**dict(config.variants), **new_variants},
+    )
+
+
 def scan_project(
     config_or_root: ProjectConfig | str | os.PathLike[str],
     *,
@@ -6928,7 +7110,7 @@ def scan_project(
             )
             continue
 
-        native_directives.extend(
+        scanned_directives, native_directive_diagnostics = (
             _scan_native_directive_planning(
                 config,
                 path,
@@ -6936,6 +7118,8 @@ def scan_project(
                 source_backend=source_spec.name,
             )
         )
+        native_directives.extend(scanned_directives)
+        diagnostics.extend(native_directive_diagnostics)
         include_dependencies, include_diagnostics = _scan_include_dependencies(
             config, path, relative_path, source_spec.name
         )
@@ -6953,8 +7137,11 @@ def scan_project(
             )
         )
 
+    scan_config = _config_with_expanded_native_directive_variants(
+        config, native_directives
+    )
     diagnostics.extend(
-        _external_corpus_source_backend_mismatch_diagnostics(config, units)
+        _external_corpus_source_backend_mismatch_diagnostics(scan_config, units)
     )
     if not units:
         diagnostics.append(
@@ -6967,7 +7154,7 @@ def scan_project(
             )
         )
     return ProjectScan(
-        config=config,
+        config=scan_config,
         units=units,
         skipped=skipped,
         native_directives=native_directives,
@@ -8692,6 +8879,7 @@ def translate_project(
         selected_targets = ["cgl"]
 
     scan = scan_project(config)
+    config = scan.config
     diagnostics: list[ProjectDiagnostic] = list(scan.diagnostics)
     diagnostics.extend(_target_diagnostics(config, selected_targets))
     artifacts: list[dict[str, Any]] = []
