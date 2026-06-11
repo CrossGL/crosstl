@@ -1980,6 +1980,77 @@ def test_main_preserves_pytest_failures_when_closure_is_explicitly_disabled(
     )
 
 
+def test_main_can_close_pytest_failures_when_docs_probe_blocks_extracted_closure(
+    tmp_path, monkeypatch
+):
+    module = load_sync_module()
+    matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "support-signals.json"
+    plan_path = tmp_path / "support-issue-plan.json"
+    signals = sample_signals()
+    signals["summary"]["docs_probe"] = {
+        "provided": True,
+        "failed": 1,
+        "ok": 3,
+        "total": 4,
+        "linked_documents": 4,
+    }
+    signals["summary"]["pytest_failures"] = {
+        "provided": True,
+        "report_count": 1,
+        "load_error_count": 0,
+        "failed_testcase_count": 0,
+        "categories": {},
+        "backends": {},
+    }
+    matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
+    signals_path.write_text(json.dumps(signals), encoding="utf-8")
+    stale_extracted = issue(
+        76,
+        "extracted:directx:docs.old-candidate:documented_candidate_not_detected",
+        labels=[module.LABEL_MANAGED, module.LABEL_EXTRACTED],
+    )
+    stale_pytest = issue(
+        77,
+        "extracted:directx:ci.pytest.frontend-ir:pytest_failure_summary",
+        labels=[module.LABEL_MANAGED, module.LABEL_EXTRACTED],
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+
+    class InspectClient(FakeClient):
+        def __init__(self, *_args, **_kwargs):
+            super().__init__(existing=[stale_extracted, stale_pytest])
+
+    monkeypatch.setattr(module, "GitHubClient", InspectClient)
+
+    result = module.main(
+        [
+            "--matrix",
+            str(matrix_path),
+            "--signals",
+            str(signals_path),
+            "--repo",
+            "owner/repo",
+            "--inspect-existing",
+            "--dry-run",
+            "--plan-output",
+            str(plan_path),
+        ]
+    )
+
+    assert result == 0
+    report = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert report["close_extracted_issues"] is False
+    assert report["close_pytest_failure_issues"] is True
+    assert report["planned_actions"]["closed"] == 1
+    assert report["planned_actions"]["unchanged"] == 1
+    assert report["planned_action_samples"]["closed"][0]["number"] == 77
+    assert report["planned_action_samples"]["preserved"][0]["number"] == 76
+    assert report["planned_action_samples"]["preserved"][0]["reason"] == (
+        "stale_extracted_preserved"
+    )
+
+
 def test_main_writes_dry_run_plan_with_malformed_matrix_check_report(tmp_path, capsys):
     module = load_sync_module()
     matrix_path = tmp_path / "support-matrix.json"
@@ -2756,6 +2827,34 @@ def test_sync_issues_preserves_stale_extracted_issues_when_signals_are_not_clean
     assert summary["closed"] == 0
     assert summary["unchanged"] == 1
     assert client.closed == []
+
+
+def test_sync_issues_can_close_pytest_failures_when_extracted_closure_is_blocked():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+    stale_extracted = issue(
+        5,
+        "extracted:directx:docs.old-candidate:documented_candidate_not_detected",
+    )
+    stale_pytest = issue(
+        6,
+        "extracted:directx:ci.pytest.frontend-ir:pytest_failure_summary",
+    )
+    client = FakeClient(existing=[stale_extracted, stale_pytest])
+
+    summary = module.sync_issues(
+        client,
+        desired,
+        dry_run=False,
+        manage_sub_issues=False,
+        close_extracted_issues=False,
+        close_pytest_failure_issues=True,
+        throttle_seconds=0,
+    )
+
+    assert summary["closed"] == 1
+    assert summary["unchanged"] == 1
+    assert client.closed[0]["number"] == stale_pytest["number"]
 
 
 def test_signals_allow_extracted_closure_only_for_clean_docs_probe():
