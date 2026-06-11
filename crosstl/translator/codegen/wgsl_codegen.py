@@ -46,11 +46,11 @@ from ..ast import (
     VectorType,
     WhileNode,
 )
+from .enum_utils import generic_enum_specialization_name, generic_type_parts
 from .image_access_contracts import (
     explicit_image_access,
     merge_image_access_requirement,
 )
-from .enum_utils import generic_enum_specialization_name, generic_type_parts
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 
