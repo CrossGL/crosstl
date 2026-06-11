@@ -213,6 +213,37 @@ def test_parse_static_branch_attribute_after_if_condition_from_blender_shader():
     assert if_node.if_chain[0][0].name == "instanced"
 
 
+def test_parse_top_level_materialized_conversion_operator_fragments():
+    code = """
+    inline float softmax_exp_float(float x) {
+        return x;
+    }
+
+    constexpr operator float() const constant {
+        return static_cast<float>(real);
+    }
+
+    inline half softmax_exp_half(half x) {
+        return x;
+    }
+
+    constexpr operator half() const constant {
+        return static_cast<half>(real);
+    }
+
+    inline half use_softmax_exp(half value) {
+        return softmax_exp_half(value);
+    }
+    """
+    ast = parse_ok(code)
+
+    assert [function.name for function in ast.functions] == [
+        "softmax_exp_float",
+        "softmax_exp_half",
+        "use_softmax_exp",
+    ]
+
+
 def test_parse_nested_unbraced_for_loops_from_public_msl_example():
     code = """
     fragment float4 shader_day53(float4 pixPos [[position]]) {

@@ -10320,6 +10320,62 @@ def test_translate_project_materializes_mlx_metal_instantiate_kernel_entries(
     assert "void arange(" not in output
 
 
+def test_translate_project_metal_softmax_materialized_conversion_operator_fragments(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "softmax.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            inline float softmax_exp_float(float x) {
+                return x;
+            }
+
+            kernel void block_softmax_float(
+                const device float* in [[buffer(0)]],
+                device float* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                out[gid] = softmax_exp_float(in[gid]);
+            }
+
+            constexpr operator float() const constant {
+                return static_cast<float>(real);
+            }
+
+            inline half softmax_exp_half(half x) {
+                return x;
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx", "opengl", "vulkan"]
+            output_dir = "translated"
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert "project.translate.metal-parse-failed" not in payload["summary"].get(
+        "diagnosticsByCode", {}
+    )
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+
+
 def test_translate_project_opengl_remaps_mlx_arange_materialized_entry_bindings(
     tmp_path,
 ):
