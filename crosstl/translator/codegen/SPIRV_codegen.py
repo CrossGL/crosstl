@@ -1659,6 +1659,7 @@ class VulkanSPIRVCodeGen:
         """Create an access chain to a struct or array member."""
         id_value = self.get_id()
 
+        indices = [self.access_chain_index(index) for index in indices]
         index_list = " ".join([f"%{index.id}" for index in indices])
         self.emit(
             f"%{id_value} = OpAccessChain %{result_type.id} %{base_id.id} {index_list}"
@@ -1670,6 +1671,42 @@ class VulkanSPIRVCodeGen:
         ):
             self.mark_non_uniform_result(spirv_id)
         return spirv_id
+
+    def access_chain_index(self, index: SpirvId) -> SpirvId:
+        """Return an integer-typed value suitable for OpAccessChain indexes."""
+        index_type = self.registered_value_type(
+            index
+        ) or self.find_registered_type_by_base(index.type.base_type)
+        index_type_name = (
+            self.normalize_primitive_name(index_type.type.base_type)
+            if index_type is not None
+            else self.normalize_primitive_name(index.type.base_type)
+        )
+        if index_type_name in self.INTEGER_TYPE_NAMES:
+            return index
+
+        int_type = self.register_primitive_type("int")
+        coerced = self.coerce_scalar_constant_to_type(index, int_type)
+        if coerced.id != index.id:
+            return coerced
+
+        converted = self.convert_scalar_to_type(index, int_type)
+        converted_type = self.registered_value_type(
+            converted
+        ) or self.find_registered_type_by_base(converted.type.base_type)
+        converted_type_name = (
+            self.normalize_primitive_name(converted_type.type.base_type)
+            if converted_type is not None
+            else self.normalize_primitive_name(converted.type.base_type)
+        )
+        if converted_type_name in self.INTEGER_TYPE_NAMES:
+            return converted
+
+        self.emit(
+            "; WARNING: OpAccessChain index could not be converted to an integer; "
+            "using 0"
+        )
+        return self.register_constant(0, int_type)
 
     def composite_extract(
         self, composite: SpirvId, member_type: SpirvId, member_index: int
@@ -14898,9 +14935,7 @@ class VulkanSPIRVCodeGen:
         if source_metadata is None and source_storage_buffer_metadata is None:
             return False
 
-        declared_alias_type_name = self.storage_buffer_resource_type_name(
-            var_type_name
-        )
+        declared_alias_type_name = self.storage_buffer_resource_type_name(var_type_name)
         inferred_alias_type_name = self.storage_buffer_expression_type_name(
             initial_value
         )
@@ -14988,9 +15023,7 @@ class VulkanSPIRVCodeGen:
         if storage_class == "Private" and initial_value is not None:
             initializer = self.process_constant_expression(initial_value, var_type)
             if initializer is not None:
-                initializer = self.coerce_scalar_constant_to_type(
-                    initializer, var_type
-                )
+                initializer = self.coerce_scalar_constant_to_type(initializer, var_type)
 
         if storage_class == "Input":
             var_id = self.global_interface_builtin_variable(node, "Input", var_type)
@@ -18554,11 +18587,9 @@ class VulkanSPIRVCodeGen:
         if type_info is not None and type_info.get("kind") == "storage_buffer_pointer":
             return True
 
-        return (
-            metadata.get("kind") == "structured_buffer"
-            and metadata.get("buffer_kind")
-            in {"StructuredBuffer", "RWStructuredBuffer", "StorageBufferPointer"}
-        )
+        return metadata.get("kind") == "structured_buffer" and metadata.get(
+            "buffer_kind"
+        ) in {"StructuredBuffer", "RWStructuredBuffer", "StorageBufferPointer"}
 
     def record_storage_buffer_pointer_offset_alias(
         self, source_pointer: SpirvId, alias_pointer: SpirvId, index: SpirvId
@@ -22298,6 +22329,7 @@ class VulkanSPIRVCodeGen:
             "SV_GROUPID": "gl_WorkGroupID",
             "SV_GROUPINDEX": "gl_LocalInvocationIndex",
             "SV_VERTEXID": "gl_VertexID",
+            "GL_VERTEXINDEX": "gl_VertexID",
             "SV_INSTANCEID": "gl_InstanceID",
             "SV_PRIMITIVEID": "gl_PrimitiveID",
             "SV_ISFRONTFACE": "gl_FrontFacing",
