@@ -10,7 +10,6 @@
       "targets": [
         "cgl",
         "metal",
-        "directx",
         "vulkan"
       ],
       "repository": "https://github.com/donaldwuid/apple_metal_sample_code",

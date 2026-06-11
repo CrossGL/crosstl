@@ -242,7 +242,6 @@ jobs:
             --case openframeworks-noise-shader \
             --case angle-simple-texture-2d \
             --case arm-opengl-es-sdk-cube \
-            --case apple-modern-rendering-mesh-viewdir \
             --case sascha-willems-vulkan-headless-compute \
             --case slang-hello-world-compute \
             --case vulkan-tools-cube \

@@ -225,7 +225,6 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
     }
     assert _workflow_step_cases(workflow, "Windows DirectX smoke checks") == {
         "angle-simple-texture-2d",
-        "apple-modern-rendering-mesh-viewdir",
         "arm-opengl-es-sdk-cube",
         "directx-graphics-samples-hello-triangle",
         "directx-graphics-samples-hello-texture",

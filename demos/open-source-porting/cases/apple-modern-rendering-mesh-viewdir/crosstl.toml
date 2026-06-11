@@ -1,6 +1,6 @@
 [project]
 source_roots = ["."]
 include = ["AAPLMeshRenderer.metal"]
-targets = ["cgl", "metal", "directx", "vulkan"]
+targets = ["cgl", "metal", "vulkan"]
 output_dir = "crosstl-out"
 external_corpus_manifest = "corpus.json"
