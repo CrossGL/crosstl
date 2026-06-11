@@ -224,6 +224,31 @@ def test_metal_reserved_stage_keyword_local_identifier_is_escaped():
     compile_with_metal_if_available(generated_code)
 
 
+def test_binary_expression_precedence_preserves_grouping_in_metal():
+    shader = """
+    shader MetalExpressionGrouping {
+        compute {
+            void main() {
+                vec3 nearPoint = vec3(1.0, 2.0, 3.0);
+                vec3 farPoint = vec3(4.0, 5.0, 6.0);
+                float t = -nearPoint.y / (farPoint.y - nearPoint.y);
+                vec3 pos = nearPoint + t * (farPoint - nearPoint);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float t = -nearPoint.y / (farPoint.y - nearPoint.y);" in generated_code
+    assert (
+        "__attribute__((unused)) float3 pos = nearPoint + "
+        "float3(t) * (farPoint - nearPoint);"
+    ) in generated_code
+    assert "float t = -nearPoint.y / farPoint.y - nearPoint.y;" not in generated_code
+    assert "float3(t) * farPoint - nearPoint" not in generated_code
+
+
 def test_glsl_fragment_output_named_fragment_escapes_metal_keyword(tmp_path):
     shader = """
     #version 330
