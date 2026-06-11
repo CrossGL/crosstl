@@ -50,9 +50,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 10,
-        "endOffset": 179,
+        "endOffset": 178,
         "file": "crosstl-out/metal/grid.metal",
-        "length": 27,
+        "length": 26,
         "line": 9,
         "offset": 152
       },
@@ -72,11 +72,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 11,
-        "endOffset": 206,
+        "endOffset": 205,
         "file": "crosstl-out/metal/grid.metal",
         "length": 27,
         "line": 10,
-        "offset": 179
+        "offset": 178
       },
       "original": {
         "column": 1,
@@ -94,11 +94,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 12,
-        "endOffset": 245,
+        "endOffset": 244,
         "file": "crosstl-out/metal/grid.metal",
         "length": 39,
         "line": 11,
-        "offset": 206
+        "offset": 205
       },
       "original": {
         "column": 1,
@@ -116,11 +116,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 13,
-        "endOffset": 319,
+        "endOffset": 318,
         "file": "crosstl-out/metal/grid.metal",
         "length": 74,
         "line": 12,
-        "offset": 245
+        "offset": 244
       },
       "original": {
         "column": 1,
@@ -138,11 +138,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 14,
-        "endOffset": 365,
+        "endOffset": 364,
         "file": "crosstl-out/metal/grid.metal",
         "length": 46,
         "line": 13,
-        "offset": 319
+        "offset": 318
       },
       "original": {
         "column": 1,
@@ -160,11 +160,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 15,
-        "endOffset": 421,
+        "endOffset": 420,
         "file": "crosstl-out/metal/grid.metal",
         "length": 56,
         "line": 14,
-        "offset": 365
+        "offset": 364
       },
       "original": {
         "column": 1,
@@ -182,11 +182,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 20,
-        "endOffset": 530,
+        "endOffset": 529,
         "file": "crosstl-out/metal/grid.metal",
         "length": 21,
         "line": 19,
-        "offset": 509
+        "offset": 508
       },
       "original": {
         "column": 1,
@@ -204,11 +204,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 21,
-        "endOffset": 603,
+        "endOffset": 602,
         "file": "crosstl-out/metal/grid.metal",
         "length": 73,
         "line": 20,
-        "offset": 530
+        "offset": 529
       },
       "original": {
         "column": 1,
@@ -226,11 +226,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 22,
-        "endOffset": 684,
+        "endOffset": 683,
         "file": "crosstl-out/metal/grid.metal",
         "length": 81,
         "line": 21,
-        "offset": 603
+        "offset": 602
       },
       "original": {
         "column": 1,
@@ -248,11 +248,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 23,
-        "endOffset": 710,
+        "endOffset": 709,
         "file": "crosstl-out/metal/grid.metal",
         "length": 26,
         "line": 22,
-        "offset": 684
+        "offset": 683
       },
       "original": {
         "column": 1,

@@ -2,7 +2,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
-uint collatz(uint n)  {
+uint collatz(uint n) {
     int i = 0;
     if (n == 0) {
         return uint(0);
@@ -21,7 +21,7 @@ uint collatz(uint n)  {
     return i;
 }
 
-uint collatz_unwrap_or(uint n, uint _rust_option_fallback)  {
+uint collatz_unwrap_or(uint n, uint _rust_option_fallback) {
     int i = 0;
     if (n == 0) {
         return _rust_option_fallback;

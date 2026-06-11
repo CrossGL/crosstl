@@ -15,13 +15,13 @@ struct Uniforms {
     float timeValY;
     float2 mouse;
 };
-float4 rand(float2 A, float2 B, float2 C, float2 D)  {
+float4 rand(float2 A, float2 B, float2 C, float2 D) {
     float2 s = float2(12.9898, 78.233);
     float4 tmp = float4(dot(A, s), dot(B, s), dot(C, s), dot(D, s));
     return fract(sin(tmp) * 43758.5453) * 2.0 - 1.0;
 }
 
-float noise(float2 coord, float d)  {
+float noise(float2 coord, float d) {
     float2 C[4];
     float d1 = 1.0 / d;
     C[0] = floor(coord * float2(d)) * d1;

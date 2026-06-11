@@ -72,9 +72,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 12,
-        "endOffset": 268,
+        "endOffset": 267,
         "file": "crosstl-out/metal/cube.frag.metal",
-        "length": 36,
+        "length": 35,
         "line": 11,
         "offset": 232
       },
@@ -94,11 +94,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 13,
-        "endOffset": 299,
+        "endOffset": 298,
         "file": "crosstl-out/metal/cube.frag.metal",
         "length": 31,
         "line": 12,
-        "offset": 268
+        "offset": 267
       },
       "original": {
         "column": 1,
@@ -116,11 +116,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 14,
-        "endOffset": 330,
+        "endOffset": 329,
         "file": "crosstl-out/metal/cube.frag.metal",
         "length": 31,
         "line": 13,
-        "offset": 299
+        "offset": 298
       },
       "original": {
         "column": 1,
@@ -138,11 +138,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 16,
-        "endOffset": 398,
+        "endOffset": 397,
         "file": "crosstl-out/metal/cube.frag.metal",
         "length": 55,
         "line": 15,
-        "offset": 343
+        "offset": 342
       },
       "original": {
         "column": 1,
@@ -160,11 +160,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 22,
-        "endOffset": 609,
+        "endOffset": 607,
         "file": "crosstl-out/metal/cube.frag.metal",
         "length": 91,
         "line": 21,
-        "offset": 518
+        "offset": 516
       },
       "original": {
         "column": 1,
@@ -182,11 +182,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 26,
-        "endOffset": 705,
+        "endOffset": 702,
         "file": "crosstl-out/metal/cube.frag.metal",
         "length": 55,
         "line": 25,
-        "offset": 650
+        "offset": 647
       },
       "original": {
         "column": 1,
@@ -204,11 +204,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 29,
-        "endOffset": 727,
+        "endOffset": 724,
         "file": "crosstl-out/metal/cube.frag.metal",
         "length": 19,
         "line": 28,
-        "offset": 708
+        "offset": 705
       },
       "original": {
         "column": 1,
@@ -226,11 +226,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 31,
-        "endOffset": 853,
+        "endOffset": 850,
         "file": "crosstl-out/metal/cube.frag.metal",
         "length": 23,
         "line": 30,
-        "offset": 830
+        "offset": 827
       },
       "original": {
         "column": 1,
@@ -248,11 +248,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 32,
-        "endOffset": 891,
+        "endOffset": 888,
         "file": "crosstl-out/metal/cube.frag.metal",
         "length": 38,
         "line": 31,
-        "offset": 853
+        "offset": 850
       },
       "original": {
         "column": 1,
@@ -270,11 +270,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 33,
-        "endOffset": 929,
+        "endOffset": 926,
         "file": "crosstl-out/metal/cube.frag.metal",
         "length": 38,
         "line": 32,
-        "offset": 891
+        "offset": 888
       },
       "original": {
         "column": 1,
@@ -292,11 +292,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 34,
-        "endOffset": 975,
+        "endOffset": 972,
         "file": "crosstl-out/metal/cube.frag.metal",
         "length": 46,
         "line": 33,
-        "offset": 929
+        "offset": 926
       },
       "original": {
         "column": 1,
@@ -314,11 +314,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 35,
-        "endOffset": 1026,
+        "endOffset": 1023,
         "file": "crosstl-out/metal/cube.frag.metal",
         "length": 51,
         "line": 34,
-        "offset": 975
+        "offset": 972
       },
       "original": {
         "column": 1,
@@ -336,11 +336,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 36,
-        "endOffset": 1153,
+        "endOffset": 1150,
         "file": "crosstl-out/metal/cube.frag.metal",
         "length": 127,
         "line": 35,
-        "offset": 1026
+        "offset": 1023
       },
       "original": {
         "column": 1,

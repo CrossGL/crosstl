@@ -28,11 +28,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 16,
-        "endOffset": 464,
+        "endOffset": 463,
         "file": "crosstl-out/metal/SpriteEffect.metal",
         "length": 21,
         "line": 15,
-        "offset": 443
+        "offset": 442
       },
       "original": {
         "column": 1,
@@ -50,11 +50,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 17,
-        "endOffset": 535,
+        "endOffset": 534,
         "file": "crosstl-out/metal/SpriteEffect.metal",
         "length": 71,
         "line": 16,
-        "offset": 464
+        "offset": 463
       },
       "original": {
         "column": 1,
@@ -72,11 +72,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 18,
-        "endOffset": 561,
+        "endOffset": 560,
         "file": "crosstl-out/metal/SpriteEffect.metal",
         "length": 26,
         "line": 17,
-        "offset": 535
+        "offset": 534
       },
       "original": {
         "column": 1,
@@ -94,11 +94,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 19,
-        "endOffset": 593,
+        "endOffset": 592,
         "file": "crosstl-out/metal/SpriteEffect.metal",
         "length": 32,
         "line": 18,
-        "offset": 561
+        "offset": 560
       },
       "original": {
         "column": 1,
@@ -116,11 +116,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 23,
-        "endOffset": 701,
+        "endOffset": 683,
         "file": "crosstl-out/metal/SpriteEffect.metal",
-        "length": 86,
+        "length": 69,
         "line": 22,
-        "offset": 615
+        "offset": 614
       },
       "original": {
         "column": 1,
@@ -138,11 +138,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 24,
-        "endOffset": 807,
+        "endOffset": 789,
         "file": "crosstl-out/metal/SpriteEffect.metal",
         "length": 106,
         "line": 23,
-        "offset": 701
+        "offset": 683
       },
       "original": {
         "column": 1,
@@ -160,11 +160,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 28,
-        "endOffset": 967,
+        "endOffset": 949,
         "file": "crosstl-out/metal/SpriteEffect.metal",
         "length": 138,
         "line": 27,
-        "offset": 829
+        "offset": 811
       },
       "original": {
         "column": 1,

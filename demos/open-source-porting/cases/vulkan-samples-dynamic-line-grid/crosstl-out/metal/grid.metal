@@ -6,7 +6,7 @@ struct FragmentInput {
     float3 nearPoint [[attribute(0)]];
     float3 farPoint [[attribute(1)]];
 };
-float4 grid(float3 pos)  {
+float4 grid(float3 pos) {
     float2 coord = pos.xz;
     float2 derivative = fwidth(coord);
     float2 gridLine = abs(fract(coord - float2(0.5)) - 0.5) / derivative;

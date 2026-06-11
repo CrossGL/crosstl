@@ -6,11 +6,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 44,
-        "endOffset": 795,
+        "endOffset": 793,
         "file": "crosstl-out/metal/lib.metal",
         "length": 18,
         "line": 43,
-        "offset": 777
+        "offset": 775
       },
       "original": {
         "column": 1,
@@ -28,11 +28,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 45,
-        "endOffset": 904,
+        "endOffset": 902,
         "file": "crosstl-out/metal/lib.metal",
         "length": 109,
         "line": 44,
-        "offset": 795
+        "offset": 793
       },
       "original": {
         "column": 1,
@@ -50,11 +50,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 46,
-        "endOffset": 933,
+        "endOffset": 931,
         "file": "crosstl-out/metal/lib.metal",
         "length": 29,
         "line": 45,
-        "offset": 904
+        "offset": 902
       },
       "original": {
         "column": 1,
@@ -72,11 +72,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 47,
-        "endOffset": 1014,
+        "endOffset": 1012,
         "file": "crosstl-out/metal/lib.metal",
         "length": 81,
         "line": 46,
-        "offset": 933
+        "offset": 931
       },
       "original": {
         "column": 1,

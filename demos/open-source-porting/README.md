@@ -51,13 +51,13 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `godot-betsy-alpha-stitch` | `godotengine/godot` at `3df26a02c446710c979daa541b74f87edeca81b0` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Removes the Godot shader-section marker so the compute shader is standalone GLSL. |
 | `libgdx-batch-shader` | `libgdx/libgdx` at `846d63a746e4604a7699133f803ff844fdc8c9fe` | Apache-2.0 | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream batch shader pair unchanged apart from line-ending and trailing-whitespace normalization. |
 | `lonelydevil-vulkan-tutorial-triangle` | `lonelydevil/vulkan-tutorial-C-implementation` at `780ff146a6eccd7064a10e86363f3c2f7323825d` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream triangle shader pair unchanged. |
-| `monogame-sprite-effect` | `MonoGame/MonoGame` at `d4893ac09e06bc203792d01d6f151f1891cc1ab5` | MS-PL and MIT | DirectX/HLSL | CrossGL, Metal, DirectX, Vulkan | Uses the upstream SpriteEffect source and macro include with whitespace normalization. OpenGL sampler lowering is tracked in issue #900; Metal warning cleanup is tracked in issue #917. |
+| `monogame-sprite-effect` | `MonoGame/MonoGame` at `d4893ac09e06bc203792d01d6f151f1891cc1ab5` | MS-PL and MIT | DirectX/HLSL | CrossGL, Metal, DirectX, Vulkan | Uses the upstream SpriteEffect source and macro include with whitespace normalization. OpenGL reserved-identifier lowering is tracked in issue #947. |
 | `spirv-cross-round-fragment` | `KhronosGroup/SPIRV-Cross` at `146679ff8255a6068518685599d7fb8761d1b570` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream fragment reference shader unchanged. |
 | `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. |
 | `angle-simple-texture-2d` | `google/angle` at `52232eaf409a28d77947df5622af274e1ef770c6` | BSD-style | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses extracted upstream SimpleTexture2D shader strings. |
-| `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, Metal, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. OpenGL stage-input lowering is tracked in issue #896. |
+| `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. Target backend lowering is tracked in issue #951. |
 | `arm-opengl-es-sdk-cube` | `ARM-software/opengl-es-sdk-for-android` at `c3caf759bb2e71fa9a118b3e3abd996cf00e660a` | MIT | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream cube shader pair unchanged. |
-| `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. OpenGL constant-parameter lowering is tracked in issue #924, and DirectX buffer-resource lowering is tracked in issue #925. |
+| `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. OpenGL resource lowering is tracked in issue #948, and DirectX buffer-resource lowering is tracked in issue #949. |
 | `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, Metal, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. Host launch and memory-management integration remain outside the demo scope. |
 | `nvpro-vk-mini-samples-rectangle` | `nvpro-samples/vk_mini_samples` at `994ac9f446ef44962c563b9600c8e9f117a3725d` | Apache-2.0 | GLSL | CrossGL, Metal, OpenGL, Vulkan | Uses the upstream rectangle shader pair unchanged. |
 | `ogl-samples-flat-color` | `g-truc/ogl-samples` at `38cada7a9458864265e25415ae61586d500ff5fc` | MIT | GLSL | CrossGL, Metal, OpenGL, Vulkan | Uses the upstream GLSL 330 flat-color shader pair unchanged. |
@@ -111,9 +111,9 @@ The `MonoGame/MonoGame` SpriteEffect case keeps the upstream effect source and
 macro include semantically unchanged, with indentation normalized by repository
 formatting. DirectX output is checked after issue #869 restored valid HLSL
 resource declarations. Metal output was retested after issue #873 closed and is
-now checked. OpenGL is excluded because the generated GLSL still retains
-HLSL-style sampler declarations and stage structs, tracked in issue #900. The
-Metal artifact compiles, with remaining warning cleanup tracked in issue #917.
+now checked, and warning cleanup was retested after issue #917 closed. OpenGL
+remains excluded because generated GLSL still uses a reserved parameter name,
+tracked in issue #947.
 
 The `openframeworks/openFrameworks` noise shader pair keeps the upstream shader
 statements unchanged, with indentation and trailing whitespace normalized by
@@ -152,9 +152,9 @@ retested after issue #922 closed and is now checked for DirectX output
 alongside CrossGL, OpenGL, Metal, and Vulkan.
 
 The `donaldwuid/apple_metal_sample_code` mesh view-direction slice is checked
-for CrossGL, Metal, DirectX, and Vulkan output after issue #930 restored
-scalar-vector constructor lowering for generated HLSL. OpenGL remains excluded
-because stage-input lowering is tracked in issue #896.
+through CrossGL. Target backend artifacts remain excluded because generated
+OpenGL, DirectX, and SPIR-V output does not yet preserve the returned
+`viewDir` value; that semantic lowering issue is tracked in issue #951.
 
 The `DiligentGraphics/DiligentSamples` Tutorial02 Cube shaders from
 `Tutorials/Tutorial02_Cube/assets/cube.vsh` and
@@ -253,9 +253,9 @@ issue #768 closed and is now checked for OpenGL, Metal, and Vulkan output.
 
 The `bkvogel/metal_performance_testing` matmul kernel is checked for CrossGL,
 Metal, and Vulkan output. OpenGL remains excluded because generated compute
-input parameters are not lowered to valid GLSL declarations, tracked in issue
-#924. DirectX remains excluded because Metal buffer parameters still lower to
-raw HLSL pointer parameters, tracked in issue #925.
+input parameters still lack valid GLSL resource declarations, tracked in issue
+#948. DirectX remains excluded because Metal buffer parameters still lower to
+raw HLSL pointer parameters, tracked in issue #949.
 
 The `SaschaWillems/Vulkan` headless compute shader was retested after issue
 #780 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan output.

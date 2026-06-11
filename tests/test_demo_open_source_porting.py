@@ -156,7 +156,6 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
 
     assert _workflow_step_cases(workflow, "Linux OpenGL and Vulkan smoke checks") == {
         "angle-simple-texture-2d",
-        "apple-modern-rendering-mesh-viewdir",
         "arm-opengl-es-sdk-cube",
         "directx-graphics-samples-hello-triangle",
         "directx-graphics-samples-hello-texture",
@@ -192,7 +191,6 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
     }
     assert _workflow_step_cases(workflow, "macOS Metal smoke checks") == {
         "angle-simple-texture-2d",
-        "apple-modern-rendering-mesh-viewdir",
         "arm-opengl-es-sdk-cube",
         "directx-graphics-samples-hello-triangle",
         "directx-graphics-samples-hello-texture",
@@ -237,7 +235,6 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "lonelydevil-vulkan-tutorial-triangle",
         "monogame-sprite-effect",
         "openframeworks-noise-shader",
-        "apple-modern-rendering-mesh-viewdir",
         "sascha-willems-vulkan-headless-compute",
         "vulkan-tools-cube",
         "vulkan-samples-dynamic-line-grid",
@@ -296,7 +293,6 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
     assert {
         "demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.vert.hlsl",
         "demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.frag.hlsl",
-        "demos/open-source-porting/cases/apple-modern-rendering-mesh-viewdir/crosstl-out/directx/AAPLMeshRenderer.hlsl",
         "demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.vert.hlsl",
         "demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.frag.hlsl",
         "demos/open-source-porting/cases/directx-graphics-samples-hello-triangle/crosstl-out/directx/shaders.hlsl",

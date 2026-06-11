@@ -2,7 +2,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
-float3 tonemap(float3 color)  {
+float3 tonemap(float3 color) {
     return color;
 }
 

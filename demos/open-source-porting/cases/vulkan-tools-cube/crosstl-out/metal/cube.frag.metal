@@ -8,7 +8,7 @@ struct FragmentInput {
     float4 texcoord [[attribute(0)]];
     float3 frag_pos [[attribute(1)]];
 };
-float linearToSrgb(float linear)  {
+float linearToSrgb(float linear) {
     if (linear <= 0.0031308) {
         return linear * 12.92;
     } else {
@@ -17,11 +17,11 @@ float linearToSrgb(float linear)  {
     return float(0) /* fallback for unmatched generated control flow */;
 }
 
-float3 linearToSrgb(float3 linear)  {
+float3 linearToSrgb(float3 linear) {
     return float3(linearToSrgb(linear.r), linearToSrgb(linear.g), linearToSrgb(linear.b));
 }
 
-float4 linearToSrgb(float4 linear)  {
+float4 linearToSrgb(float4 linear) {
     return float4(linearToSrgb(linear.rgb), linear.a);
 }
 

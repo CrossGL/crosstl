@@ -11,7 +11,7 @@ struct VSOutput {
 struct HlslProgramConstants {
     float4x4 MatrixTransform;
 };
-VSOutput SpriteVertexShader(float4 position [[attribute(0)]], float4 color [[user(Color0)]], float2 texCoord [[attribute(5)]], constant HlslProgramConstants& hlslProgramConstants)  {
+VSOutput SpriteVertexShader(float4 position [[attribute(0)]], float4 color [[user(Color0)]], float2 texCoord [[attribute(5)]], constant HlslProgramConstants& hlslProgramConstants) {
     VSOutput output;
     output.position = position * hlslProgramConstants.MatrixTransform;
     output.color = color;
@@ -19,7 +19,7 @@ VSOutput SpriteVertexShader(float4 position [[attribute(0)]], float4 color [[use
     return output;
 }
 
-float4 SpritePixelShader(VSOutput input, texture2d<float> Texture)  [[gl_FragData]] {
+float4 SpritePixelShader(VSOutput input, texture2d<float> Texture) {
     return Texture.sample(sampler(mag_filter::linear, min_filter::linear), input.texCoord) * input.color;
 }
 
