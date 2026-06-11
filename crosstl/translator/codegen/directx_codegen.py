@@ -13,6 +13,7 @@ from ..ast import (
     ConstructorNode,
     ContinueNode,
     DoWhileNode,
+    ExpressionNode,
     ForInNode,
     ForNode,
     FunctionCallNode,
@@ -6177,6 +6178,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return None
 
     def hlsl_byte_address_vector_helper_width(self, func_name):
+        if not isinstance(func_name, str):
+            return None
         for prefix in ("buffer_load", "buffer_store"):
             if not func_name.startswith(prefix):
                 continue
@@ -6184,6 +6187,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if suffix in {"2", "3", "4"}:
                 return int(suffix)
         return None
+
+    def hlsl_buffer_helper_names(self):
+        return {
+            "buffer_append",
+            "buffer_consume",
+            "buffer_decrement_counter",
+            "buffer_dimensions",
+            "buffer_increment_counter",
+            "buffer_load",
+            "buffer_load2",
+            "buffer_load3",
+            "buffer_load4",
+            "buffer_store",
+            "buffer_store2",
+            "buffer_store3",
+            "buffer_store4",
+        }
 
     def hlsl_value_shape_label(self, vtype):
         type_name = self.type_name_string(vtype)
@@ -6239,6 +6259,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def validate_buffer_call_access(self, func_name, args):
+        if func_name not in self.hlsl_buffer_helper_names():
+            return
+
         helper_arg_counts = {
             "buffer_append": 2,
             "buffer_consume": 1,
@@ -6374,6 +6397,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def generate_buffer_call(self, func_name, args):
         """Render canonical CrossGL buffer operations as HLSL resource methods."""
+        if func_name not in self.hlsl_buffer_helper_names():
+            return None
+
         self.validate_buffer_call_access(func_name, args)
 
         vector_load_methods = {
@@ -20478,14 +20504,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if hasattr(type_node, "value"):
             value = type_node.value
             return str(value).lower() if isinstance(value, bool) else str(value)
+        if isinstance(type_node, ExpressionNode):
+            return self.expression_to_string(type_node)
         generic_args = getattr(type_node, "generic_args", [])
-        if hasattr(type_node, "name") and generic_args:
+        type_name = getattr(type_node, "name", None)
+        if type_name is not None and generic_args:
             args = ", ".join(
                 self.convert_type_node_to_string(arg) for arg in generic_args
             )
-            return f"{type_node.name}<{args}>"
-        if hasattr(type_node, "name"):
-            return type_node.name
+            return f"{type_name}<{args}>"
+        if type_name is not None:
+            return type_name
         elif hasattr(type_node, "rows") and hasattr(type_node, "cols"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
             if type_node.rows == type_node.cols:

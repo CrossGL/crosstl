@@ -12,11 +12,16 @@ from crosstl.translator.ast import (
     BlockNode,
     ExecutionModel,
     FunctionNode,
+    GenericParameterNode,
+    IdentifierNode,
+    LiteralNode,
+    NamedType,
     PrimitiveType,
     ShaderNode,
     ShaderStage,
     StructMemberNode,
     StructNode,
+    UnaryOpNode,
     create_legacy_shader_node,
 )
 from crosstl.translator.codegen.directx_codegen import (
@@ -6514,6 +6519,55 @@ def test_generic_struct_concrete_constructor_and_member_access():
     assert "Box<" not in generated_code
     assert "PairBox<" not in generated_code
     assert "ConstructorNode(" not in generated_code
+
+
+def test_hlsl_generic_struct_value_expression_type_arguments_render():
+    shader_ast = ShaderNode(
+        "GenericValueExpressionTypeArgument",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Tile",
+                [StructMemberNode("value", NamedType("T"))],
+                generic_params=[
+                    GenericParameterNode("T"),
+                    GenericParameterNode("N"),
+                ],
+            ),
+            StructNode(
+                "Wrapper",
+                [
+                    StructMemberNode(
+                        "tile",
+                        NamedType(
+                            "Tile",
+                            [
+                                PrimitiveType("float"),
+                                UnaryOpNode(
+                                    "-",
+                                    LiteralNode(1, PrimitiveType("int")),
+                                ),
+                            ],
+                        ),
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = HLSLCodeGen().generate(shader_ast)
+
+    assert "struct Tile_float_1" in generated_code
+    assert "float value;" in generated_code
+    assert "Tile_float_1 tile;" in generated_code
+    assert "UnaryOpNode" not in generated_code
+
+
+def test_hlsl_buffer_call_ignores_unresolved_non_helper_callee():
+    codegen = HLSLCodeGen()
+    codegen.local_variable_types["payload"] = "RWByteAddressBuffer"
+
+    assert codegen.generate_buffer_call(None, [IdentifierNode("payload")]) is None
 
 
 def test_hlsl_orders_generic_specialized_struct_dependencies_before_users():
