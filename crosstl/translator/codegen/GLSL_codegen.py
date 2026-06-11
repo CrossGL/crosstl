@@ -909,6 +909,8 @@ class GLSLCodeGen:
         self.current_stage_parameter_aliases = {}
         self.stage_parameter_output_aliases = {}
         self.stage_entry_functions_by_stage = {}
+        self.stage_entry_resource_parameter_aliases = {}
+        self.stage_entry_resource_declaration_names = set()
         self.current_identifier_aliases = {}
         self.current_mesh_output_parameters = {}
         self.current_mesh_output_topology = None
@@ -2326,6 +2328,8 @@ class GLSLCodeGen:
         self.current_stage_output_member_map = {}
         self.current_stage_parameter_aliases = {}
         self.stage_entry_functions_by_stage = {}
+        self.stage_entry_resource_parameter_aliases = {}
+        self.stage_entry_resource_declaration_names = set()
         self.current_identifier_aliases = {}
         self.current_target_stage = target_stage
         self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
@@ -5655,6 +5659,11 @@ class GLSLCodeGen:
         image_format_parameters = {}
         image_access_parameters = {}
         resource_aliases = getattr(func, "_glsl_resource_aliases", {}) or {}
+        stage_entry_resource_aliases = (
+            self.stage_entry_resource_parameter_aliases.get(id(func), {})
+            if shader_type is not None
+            else {}
+        )
         unsupported_buffer_array_info = (
             self.unsupported_structured_buffer_array_functions.get(func.name, {})
         )
@@ -5684,6 +5693,7 @@ class GLSLCodeGen:
         self.current_structured_buffer_array_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
         self.current_structured_buffer_access_parameters = {}
+        self.current_identifier_aliases.update(stage_entry_resource_aliases)
         for alias_name, binding in resource_aliases.items():
             self.local_variable_types[alias_name] = binding.get("type")
         for index, p in enumerate(param_list):
@@ -5698,10 +5708,19 @@ class GLSLCodeGen:
             else:
                 raw_param_type = "float"
             self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
+            stage_resource_alias = stage_entry_resource_aliases.get(p.name)
+            if stage_resource_alias:
+                self.local_variable_types[stage_resource_alias] = (
+                    self.type_name_string(raw_param_type)
+                )
             self.validate_resource_access_metadata_operands(p)
             self.record_structured_buffer_access_metadata(
                 p.name, raw_param_type, p, parameter=True
             )
+            if stage_resource_alias:
+                self.record_structured_buffer_access_metadata(
+                    stage_resource_alias, raw_param_type, p, parameter=True
+                )
 
             if index in unsupported_buffer_array_indices:
                 continue
@@ -6210,6 +6229,26 @@ class GLSLCodeGen:
         }
         parameters = []
         seen = set()
+        declarations_by_name = {}
+        used_names = {
+            self.resource_node_name(node)
+            for node in getattr(ast, "global_variables", []) or []
+            if self.resource_node_name(node)
+        }
+
+        def stage_entry_alias_name(func, param_name):
+            entry_name = sanitize_type_name(getattr(func, "name", "") or "entry")
+            base_name = sanitize_type_name(param_name) or "resource"
+            alias = f"{entry_name}_{base_name}"
+            if not alias or alias[0].isdigit():
+                alias = f"entry_{alias}"
+            candidate = alias
+            suffix = 2
+            while candidate in used_names:
+                candidate = f"{alias}_{suffix}"
+                suffix += 1
+            used_names.add(candidate)
+            return candidate
 
         def add_parameters(func):
             for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
@@ -6217,7 +6256,38 @@ class GLSLCodeGen:
                     continue
                 if not self.is_stage_entry_resource_parameter(param):
                     continue
-                parameters.append(param)
+                name = self.resource_node_name(param)
+                identity = self.resource_declaration_identity(param)
+                binding = self.explicit_resource_binding_index(param)
+                declaration = param
+                declaration_name = name
+                existing = declarations_by_name.get(name)
+                if name and identity is not None and existing is not None:
+                    if (
+                        existing["identity"] != identity
+                        or existing["binding"] != binding
+                    ):
+                        declaration = deepcopy(param)
+                        declaration_name = stage_entry_alias_name(func, name)
+                        declaration.name = declaration_name
+                        self.stage_entry_resource_parameter_aliases.setdefault(
+                            id(func), {}
+                        )[name] = declaration_name
+                if declaration_name and identity is not None:
+                    declarations_by_name.setdefault(
+                        declaration_name,
+                        {
+                            "identity": self.resource_declaration_identity(
+                                declaration
+                            ),
+                            "binding": self.explicit_resource_binding_index(
+                                declaration
+                            ),
+                        },
+                    )
+                    used_names.add(declaration_name)
+                    self.stage_entry_resource_declaration_names.add(declaration_name)
+                parameters.append(declaration)
                 seen.add(id(param))
 
         for func in getattr(ast, "functions", []) or []:
@@ -10896,6 +10966,8 @@ class GLSLCodeGen:
         if isinstance(expr, str):
             return expr
         if hasattr(expr, "name") and isinstance(expr.name, str):
+            if expr.name in self.current_identifier_aliases:
+                return self.current_identifier_aliases[expr.name]
             return expr.name
         if isinstance(expr, ArrayAccessNode) or (
             hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__)
@@ -15418,6 +15490,21 @@ class GLSLCodeGen:
                 )
             if self.should_remap_descriptor_array_target_binding(node, resource_count):
                 continue
+            if self.resource_binding_range_conflicts(
+                used_bindings,
+                namespace,
+                binding,
+                resource_count,
+                var_name,
+            ):
+                if self.should_remap_stage_entry_resource_binding_conflict(
+                    used_bindings,
+                    namespace,
+                    binding,
+                    resource_count,
+                    var_name,
+                ):
+                    continue
             self.reserve_resource_binding_range(
                 used_bindings,
                 "OpenGL",
@@ -15458,6 +15545,50 @@ class GLSLCodeGen:
                 return binding
             binding = conflict_end + 1
 
+    def resource_binding_range_conflict_names(
+        self, used_bindings, namespace, start, count, name=None
+    ):
+        count = max(count or 1, 1)
+        end = start + count - 1
+        conflicts = []
+        for used_start, used_end, used_name in used_bindings.get(namespace, []):
+            if start <= used_end and used_start <= end:
+                if (
+                    name is not None
+                    and used_start == start
+                    and used_end == end
+                    and used_name == name
+                ):
+                    continue
+                conflicts.append(used_name)
+        return conflicts
+
+    def resource_binding_range_conflicts(
+        self, used_bindings, namespace, start, count, name=None
+    ):
+        return bool(
+            self.resource_binding_range_conflict_names(
+                used_bindings, namespace, start, count, name
+            )
+        )
+
+    def should_remap_stage_entry_resource_binding_conflict(
+        self, used_bindings, namespace, start, count, name
+    ):
+        if name not in self.stage_entry_resource_declaration_names:
+            return False
+        conflicts = self.resource_binding_range_conflict_names(
+            used_bindings,
+            namespace,
+            start,
+            count,
+            name,
+        )
+        return bool(conflicts) and all(
+            used_name in self.stage_entry_resource_declaration_names
+            for used_name in conflicts
+        )
+
     def opengl_resource_binding_for_declaration(
         self, node, used_bindings, binding_cursors, namespace, count
     ):
@@ -15466,7 +15597,18 @@ class GLSLCodeGen:
             return self.next_available_resource_binding(
                 used_bindings, binding_cursors, namespace, count
             )
-        if self.should_remap_descriptor_array_target_binding(node, count):
+        node_name = self.resource_node_name(node)
+        should_remap_overlap = self.should_remap_stage_entry_resource_binding_conflict(
+            used_bindings,
+            namespace,
+            explicit_binding,
+            count,
+            node_name,
+        )
+        if (
+            self.should_remap_descriptor_array_target_binding(node, count)
+            or should_remap_overlap
+        ):
             return self.next_available_resource_binding_from(
                 used_bindings, namespace, explicit_binding, count
             )
