@@ -1,0 +1,292 @@
+{
+  "generatedFile": "crosstl-out/directx/headless.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 41,
+        "file": "crosstl-out/directx/headless.hlsl",
+        "length": 40,
+        "line": 2,
+        "offset": 1
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 195,
+        "file": "headless.comp",
+        "length": 58,
+        "line": 9,
+        "offset": 137
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 107,
+        "file": "crosstl-out/directx/headless.hlsl",
+        "length": 25,
+        "line": 5,
+        "offset": 82
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 221,
+        "file": "headless.comp",
+        "length": 25,
+        "line": 11,
+        "offset": 196
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 127,
+        "file": "crosstl-out/directx/headless.hlsl",
+        "length": 20,
+        "line": 6,
+        "offset": 107
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 234,
+        "file": "headless.comp",
+        "length": 13,
+        "line": 12,
+        "offset": 221
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 170,
+        "file": "crosstl-out/directx/headless.hlsl",
+        "length": 19,
+        "line": 9,
+        "offset": 151
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 265,
+        "file": "headless.comp",
+        "length": 16,
+        "line": 15,
+        "offset": 249
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 189,
+        "file": "crosstl-out/directx/headless.hlsl",
+        "length": 19,
+        "line": 10,
+        "offset": 170
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 281,
+        "file": "headless.comp",
+        "length": 16,
+        "line": 16,
+        "offset": 265
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 226,
+        "file": "crosstl-out/directx/headless.hlsl",
+        "length": 37,
+        "line": 11,
+        "offset": 189
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 312,
+        "file": "headless.comp",
+        "length": 31,
+        "line": 17,
+        "offset": 281
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 252,
+        "file": "crosstl-out/directx/headless.hlsl",
+        "length": 26,
+        "line": 12,
+        "offset": 226
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 332,
+        "file": "headless.comp",
+        "length": 20,
+        "line": 18,
+        "offset": 312
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 274,
+        "file": "crosstl-out/directx/headless.hlsl",
+        "length": 22,
+        "line": 13,
+        "offset": 252
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 348,
+        "file": "headless.comp",
+        "length": 16,
+        "line": 19,
+        "offset": 332
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 295,
+        "file": "crosstl-out/directx/headless.hlsl",
+        "length": 21,
+        "line": 14,
+        "offset": 274
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 363,
+        "file": "headless.comp",
+        "length": 15,
+        "line": 20,
+        "offset": 348
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 426,
+        "file": "crosstl-out/directx/headless.hlsl",
+        "length": 65,
+        "line": 21,
+        "offset": 361
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 436,
+        "file": "headless.comp",
+        "length": 39,
+        "line": 27,
+        "offset": 397
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 468,
+        "file": "crosstl-out/directx/headless.hlsl",
+        "length": 42,
+        "line": 22,
+        "offset": 426
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 436,
+        "file": "headless.comp",
+        "length": 39,
+        "line": 27,
+        "offset": 397
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 506,
+        "file": "crosstl-out/directx/headless.hlsl",
+        "length": 38,
+        "line": 23,
+        "offset": 468
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 467,
+        "file": "headless.comp",
+        "length": 31,
+        "line": 28,
+        "offset": 436
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 590,
+        "file": "crosstl-out/directx/headless.hlsl",
+        "length": 62,
+        "line": 26,
+        "offset": 528
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 520,
+        "file": "headless.comp",
+        "length": 43,
+        "line": 30,
+        "offset": 477
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

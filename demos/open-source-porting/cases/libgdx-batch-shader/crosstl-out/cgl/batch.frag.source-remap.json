@@ -5,22 +5,154 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 17,
-        "endOffset": 332,
+        "endLine": 4,
+        "endOffset": 59,
         "file": "crosstl-out/cgl/batch.frag.cgl",
-        "length": 332,
-        "line": 1,
-        "offset": 0
+        "length": 18,
+        "line": 3,
+        "offset": 41
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 13,
-        "endOffset": 202,
+        "endLine": 8,
+        "endOffset": 98,
         "file": "batch.frag",
-        "length": 202,
-        "line": 1,
-        "offset": 0
+        "length": 22,
+        "line": 7,
+        "offset": 76
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 81,
+        "file": "crosstl-out/cgl/batch.frag.cgl",
+        "length": 22,
+        "line": 4,
+        "offset": 59
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 124,
+        "file": "batch.frag",
+        "length": 26,
+        "line": 8,
+        "offset": 98
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 114,
+        "file": "crosstl-out/cgl/batch.frag.cgl",
+        "length": 25,
+        "line": 7,
+        "offset": 89
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 75,
+        "file": "batch.frag",
+        "length": 29,
+        "line": 5,
+        "offset": 46
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 182,
+        "file": "crosstl-out/cgl/batch.frag.cgl",
+        "length": 52,
+        "line": 10,
+        "offset": 130
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 200,
+        "file": "batch.frag",
+        "length": 61,
+        "line": 11,
+        "offset": 139
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 209,
+        "file": "crosstl-out/cgl/batch.frag.cgl",
+        "length": 27,
+        "line": 11,
+        "offset": 182
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 200,
+        "file": "batch.frag",
+        "length": 61,
+        "line": 11,
+        "offset": 139
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 289,
+        "file": "crosstl-out/cgl/batch.frag.cgl",
+        "length": 80,
+        "line": 12,
+        "offset": 209
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 200,
+        "file": "batch.frag",
+        "length": 61,
+        "line": 11,
+        "offset": 139
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 318,
+        "file": "crosstl-out/cgl/batch.frag.cgl",
+        "length": 29,
+        "line": 13,
+        "offset": 289
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 200,
+        "file": "batch.frag",
+        "length": 61,
+        "line": 11,
+        "offset": 139
       }
     }
   ],

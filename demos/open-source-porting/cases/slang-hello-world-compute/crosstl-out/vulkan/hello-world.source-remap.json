@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/vulkan/hello-world.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 14,
+        "endLine": 84,
+        "endOffset": 2185,
+        "file": "crosstl-out/vulkan/hello-world.spvasm",
+        "length": 2185,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 303,
+        "file": "hello-world.slang",
+        "length": 303,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

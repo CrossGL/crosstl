@@ -5,22 +5,242 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 51,
-        "endOffset": 1298,
+        "endLine": 3,
+        "endOffset": 37,
         "file": "crosstl-out/cgl/lib.cgl",
-        "length": 1298,
-        "line": 1,
-        "offset": 0
+        "length": 23,
+        "line": 2,
+        "offset": 14
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 52,
-        "endOffset": 1504,
+        "endLine": 6,
+        "endOffset": 161,
         "file": "lib.rs",
-        "length": 1504,
-        "line": 1,
-        "offset": 0
+        "length": 17,
+        "line": 5,
+        "offset": 144
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 73,
+        "file": "crosstl-out/cgl/lib.cgl",
+        "length": 36,
+        "line": 3,
+        "offset": 37
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 191,
+        "file": "lib.rs",
+        "length": 30,
+        "line": 6,
+        "offset": 161
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 107,
+        "file": "crosstl-out/cgl/lib.cgl",
+        "length": 34,
+        "line": 4,
+        "offset": 73
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 682,
+        "file": "lib.rs",
+        "length": 44,
+        "line": 21,
+        "offset": 638
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 130,
+        "file": "crosstl-out/cgl/lib.cgl",
+        "length": 23,
+        "line": 5,
+        "offset": 107
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 701,
+        "file": "lib.rs",
+        "length": 19,
+        "line": 22,
+        "offset": 682
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 495,
+        "file": "crosstl-out/cgl/lib.cgl",
+        "length": 24,
+        "line": 20,
+        "offset": 471
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 41,
+        "endOffset": 1154,
+        "file": "lib.rs",
+        "length": 12,
+        "line": 40,
+        "offset": 1142
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 524,
+        "file": "crosstl-out/cgl/lib.cgl",
+        "length": 22,
+        "line": 23,
+        "offset": 502
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 593,
+        "file": "lib.rs",
+        "length": 35,
+        "line": 18,
+        "offset": 558
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 546,
+        "file": "crosstl-out/cgl/lib.cgl",
+        "length": 22,
+        "line": 24,
+        "offset": 524
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 46,
+        "endOffset": 1254,
+        "file": "lib.rs",
+        "length": 16,
+        "line": 45,
+        "offset": 1238
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 666,
+        "file": "crosstl-out/cgl/lib.cgl",
+        "length": 120,
+        "line": 25,
+        "offset": 546
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 48,
+        "endOffset": 1389,
+        "file": "lib.rs",
+        "length": 89,
+        "line": 47,
+        "offset": 1300
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 702,
+        "file": "crosstl-out/cgl/lib.cgl",
+        "length": 36,
+        "line": 26,
+        "offset": 666
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 50,
+        "endOffset": 1424,
+        "file": "lib.rs",
+        "length": 31,
+        "line": 49,
+        "offset": 1393
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 791,
+        "file": "crosstl-out/cgl/lib.cgl",
+        "length": 89,
+        "line": 27,
+        "offset": 702
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 51,
+        "endOffset": 1502,
+        "file": "lib.rs",
+        "length": 78,
+        "line": 50,
+        "offset": 1424
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 33,
+        "endOffset": 896,
+        "file": "crosstl-out/cgl/lib.cgl",
+        "length": 23,
+        "line": 32,
+        "offset": 873
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 701,
+        "file": "lib.rs",
+        "length": 19,
+        "line": 22,
+        "offset": 682
       }
     }
   ],

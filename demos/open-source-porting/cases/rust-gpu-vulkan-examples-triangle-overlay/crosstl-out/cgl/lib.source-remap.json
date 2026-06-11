@@ -5,22 +5,88 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 12,
-        "endOffset": 255,
+        "endLine": 3,
+        "endOffset": 47,
         "file": "crosstl-out/cgl/lib.cgl",
-        "length": 255,
-        "line": 1,
-        "offset": 0
+        "length": 33,
+        "line": 2,
+        "offset": 14
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 10,
-        "endOffset": 180,
+        "endLine": 4,
+        "endOffset": 39,
         "file": "lib.rs",
-        "length": 180,
-        "line": 1,
-        "offset": 0
+        "length": 27,
+        "line": 3,
+        "offset": 12
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 121,
+        "file": "crosstl-out/cgl/lib.cgl",
+        "length": 23,
+        "line": 5,
+        "offset": 98
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 125,
+        "file": "lib.rs",
+        "length": 44,
+        "line": 7,
+        "offset": 81
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 181,
+        "file": "crosstl-out/cgl/lib.cgl",
+        "length": 60,
+        "line": 6,
+        "offset": 121
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 125,
+        "file": "lib.rs",
+        "length": 44,
+        "line": 7,
+        "offset": 81
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 236,
+        "file": "crosstl-out/cgl/lib.cgl",
+        "length": 55,
+        "line": 7,
+        "offset": 181
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 178,
+        "file": "lib.rs",
+        "length": 53,
+        "line": 8,
+        "offset": 125
       }
     }
   ],

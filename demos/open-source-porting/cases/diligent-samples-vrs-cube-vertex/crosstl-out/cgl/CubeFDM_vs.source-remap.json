@@ -5,22 +5,308 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 35,
-        "endOffset": 664,
+        "endLine": 2,
+        "endOffset": 18,
         "file": "crosstl-out/cgl/CubeFDM_vs.cgl",
-        "length": 664,
+        "length": 18,
         "line": 1,
         "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 20,
-        "endOffset": 375,
+        "endLine": 2,
+        "endOffset": 18,
         "file": "CubeFDM_vs.glsl",
-        "length": 375,
+        "length": 18,
         "line": 1,
         "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 58,
+        "file": "crosstl-out/cgl/CubeFDM_vs.cgl",
+        "length": 25,
+        "line": 4,
+        "offset": 33
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 54,
+        "file": "CubeFDM_vs.glsl",
+        "length": 35,
+        "line": 3,
+        "offset": 19
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 84,
+        "file": "crosstl-out/cgl/CubeFDM_vs.cgl",
+        "length": 26,
+        "line": 5,
+        "offset": 58
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 82,
+        "file": "CubeFDM_vs.glsl",
+        "length": 26,
+        "line": 5,
+        "offset": 56
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 114,
+        "file": "crosstl-out/cgl/CubeFDM_vs.cgl",
+        "length": 30,
+        "line": 6,
+        "offset": 84
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 115,
+        "file": "CubeFDM_vs.glsl",
+        "length": 33,
+        "line": 6,
+        "offset": 82
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 132,
+        "file": "crosstl-out/cgl/CubeFDM_vs.cgl",
+        "length": 18,
+        "line": 7,
+        "offset": 114
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 173,
+        "file": "CubeFDM_vs.glsl",
+        "length": 58,
+        "line": 7,
+        "offset": 115
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 191,
+        "file": "crosstl-out/cgl/CubeFDM_vs.cgl",
+        "length": 30,
+        "line": 11,
+        "offset": 161
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 212,
+        "file": "CubeFDM_vs.glsl",
+        "length": 35,
+        "line": 10,
+        "offset": 177
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 220,
+        "file": "crosstl-out/cgl/CubeFDM_vs.cgl",
+        "length": 29,
+        "line": 12,
+        "offset": 191
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 246,
+        "file": "CubeFDM_vs.glsl",
+        "length": 34,
+        "line": 11,
+        "offset": 212
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 284,
+        "file": "crosstl-out/cgl/CubeFDM_vs.cgl",
+        "length": 30,
+        "line": 16,
+        "offset": 254
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 283,
+        "file": "CubeFDM_vs.glsl",
+        "length": 36,
+        "line": 13,
+        "offset": 247
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 320,
+        "file": "crosstl-out/cgl/CubeFDM_vs.cgl",
+        "length": 36,
+        "line": 17,
+        "offset": 284
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 348,
+        "file": "CubeFDM_vs.glsl",
+        "length": 50,
+        "line": 17,
+        "offset": 298
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 377,
+        "file": "crosstl-out/cgl/CubeFDM_vs.cgl",
+        "length": 26,
+        "line": 21,
+        "offset": 351
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 82,
+        "file": "CubeFDM_vs.glsl",
+        "length": 26,
+        "line": 5,
+        "offset": 56
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 407,
+        "file": "crosstl-out/cgl/CubeFDM_vs.cgl",
+        "length": 30,
+        "line": 22,
+        "offset": 377
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 115,
+        "file": "CubeFDM_vs.glsl",
+        "length": 33,
+        "line": 6,
+        "offset": 82
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 425,
+        "file": "crosstl-out/cgl/CubeFDM_vs.cgl",
+        "length": 18,
+        "line": 23,
+        "offset": 407
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 173,
+        "file": "CubeFDM_vs.glsl",
+        "length": 58,
+        "line": 7,
+        "offset": 115
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 590,
+        "file": "crosstl-out/cgl/CubeFDM_vs.cgl",
+        "length": 72,
+        "line": 29,
+        "offset": 518
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 348,
+        "file": "CubeFDM_vs.glsl",
+        "length": 50,
+        "line": 17,
+        "offset": 298
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 627,
+        "file": "crosstl-out/cgl/CubeFDM_vs.cgl",
+        "length": 37,
+        "line": 30,
+        "offset": 590
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 373,
+        "file": "CubeFDM_vs.glsl",
+        "length": 25,
+        "line": 18,
+        "offset": 348
       }
     }
   ],

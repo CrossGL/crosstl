@@ -1,0 +1,116 @@
+{
+  "generatedFile": "crosstl-out/opengl/lib.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 55,
+        "file": "crosstl-out/opengl/lib.glsl",
+        "length": 13,
+        "line": 3,
+        "offset": 42
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 343,
+        "file": "lib.rs",
+        "length": 71,
+        "line": 15,
+        "offset": 272
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 163,
+        "file": "crosstl-out/opengl/lib.glsl",
+        "length": 27,
+        "line": 8,
+        "offset": 136
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 104,
+        "file": "lib.rs",
+        "length": 34,
+        "line": 4,
+        "offset": 70
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 282,
+        "file": "crosstl-out/opengl/lib.glsl",
+        "length": 39,
+        "line": 15,
+        "offset": 243
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 210,
+        "file": "lib.rs",
+        "length": 38,
+        "line": 10,
+        "offset": 172
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 325,
+        "file": "crosstl-out/opengl/lib.glsl",
+        "length": 43,
+        "line": 16,
+        "offset": 282
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 252,
+        "file": "lib.rs",
+        "length": 42,
+        "line": 11,
+        "offset": 210
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 435,
+        "file": "crosstl-out/opengl/lib.glsl",
+        "length": 45,
+        "line": 23,
+        "offset": 390
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 391,
+        "file": "lib.rs",
+        "length": 48,
+        "line": 16,
+        "offset": 343
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

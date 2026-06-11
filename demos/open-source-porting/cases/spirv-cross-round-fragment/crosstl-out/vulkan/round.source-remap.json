@@ -1,0 +1,72 @@
+{
+  "generatedFile": "crosstl-out/vulkan/round.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 297,
+        "file": "crosstl-out/vulkan/round.spvasm",
+        "length": 23,
+        "line": 11,
+        "offset": 274
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 47,
+        "file": "round.frag",
+        "length": 33,
+        "line": 3,
+        "offset": 14
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 320,
+        "file": "crosstl-out/vulkan/round.spvasm",
+        "length": 23,
+        "line": 12,
+        "offset": 297
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 81,
+        "file": "round.frag",
+        "length": 34,
+        "line": 4,
+        "offset": 47
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 572,
+        "file": "crosstl-out/vulkan/round.spvasm",
+        "length": 26,
+        "line": 20,
+        "offset": 546
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 81,
+        "file": "round.frag",
+        "length": 34,
+        "line": 4,
+        "offset": 47
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

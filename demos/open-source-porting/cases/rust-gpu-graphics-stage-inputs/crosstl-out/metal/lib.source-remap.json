@@ -1,0 +1,358 @@
+{
+  "generatedFile": "crosstl-out/metal/lib.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 81,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 32,
+        "line": 5,
+        "offset": 49
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 104,
+        "file": "lib.rs",
+        "length": 34,
+        "line": 4,
+        "offset": 70
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 154,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 33,
+        "line": 10,
+        "offset": 121
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 172,
+        "file": "lib.rs",
+        "length": 36,
+        "line": 9,
+        "offset": 136
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 244,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 54,
+        "line": 14,
+        "offset": 190
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 172,
+        "file": "lib.rs",
+        "length": 36,
+        "line": 9,
+        "offset": 136
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 275,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 31,
+        "line": 15,
+        "offset": 244
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 172,
+        "file": "lib.rs",
+        "length": 36,
+        "line": 9,
+        "offset": 136
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 318,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 43,
+        "line": 16,
+        "offset": 275
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 210,
+        "file": "lib.rs",
+        "length": 38,
+        "line": 10,
+        "offset": 172
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 360,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 42,
+        "line": 17,
+        "offset": 318
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 252,
+        "file": "lib.rs",
+        "length": 42,
+        "line": 11,
+        "offset": 210
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 404,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 44,
+        "line": 18,
+        "offset": 360
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 172,
+        "file": "lib.rs",
+        "length": 36,
+        "line": 9,
+        "offset": 136
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 517,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 30,
+        "line": 24,
+        "offset": 487
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 343,
+        "file": "lib.rs",
+        "length": 71,
+        "line": 15,
+        "offset": 272
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 550,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 33,
+        "line": 25,
+        "offset": 517
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 343,
+        "file": "lib.rs",
+        "length": 71,
+        "line": 15,
+        "offset": 272
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 585,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 31,
+        "line": 28,
+        "offset": 554
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 343,
+        "file": "lib.rs",
+        "length": 71,
+        "line": 15,
+        "offset": 272
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 622,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 37,
+        "line": 29,
+        "offset": 585
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 343,
+        "file": "lib.rs",
+        "length": 71,
+        "line": 15,
+        "offset": 272
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 33,
+        "endOffset": 721,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 95,
+        "line": 32,
+        "offset": 626
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 343,
+        "file": "lib.rs",
+        "length": 71,
+        "line": 15,
+        "offset": 272
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 34,
+        "endOffset": 757,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 36,
+        "line": 33,
+        "offset": 721
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 343,
+        "file": "lib.rs",
+        "length": 71,
+        "line": 15,
+        "offset": 272
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 35,
+        "endOffset": 793,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 36,
+        "line": 34,
+        "offset": 757
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 343,
+        "file": "lib.rs",
+        "length": 71,
+        "line": 15,
+        "offset": 272
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 842,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 49,
+        "line": 35,
+        "offset": 793
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 391,
+        "file": "lib.rs",
+        "length": 48,
+        "line": 16,
+        "offset": 343
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 37,
+        "endOffset": 884,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 42,
+        "line": 36,
+        "offset": 842
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 343,
+        "file": "lib.rs",
+        "length": 71,
+        "line": 15,
+        "offset": 272
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

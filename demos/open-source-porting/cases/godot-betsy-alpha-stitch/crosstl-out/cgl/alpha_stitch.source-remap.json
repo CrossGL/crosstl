@@ -5,22 +5,154 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 18,
-        "endOffset": 557,
+        "endLine": 2,
+        "endOffset": 13,
         "file": "crosstl-out/cgl/alpha_stitch.cgl",
-        "length": 557,
+        "length": 13,
         "line": 1,
         "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 21,
-        "endOffset": 760,
+        "endLine": 6,
+        "endOffset": 240,
         "file": "alpha_stitch.glsl",
-        "length": 760,
-        "line": 1,
-        "offset": 0
+        "length": 13,
+        "line": 5,
+        "offset": 227
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 63,
+        "file": "crosstl-out/cgl/alpha_stitch.cgl",
+        "length": 35,
+        "line": 4,
+        "offset": 28
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 364,
+        "file": "alpha_stitch.glsl",
+        "length": 47,
+        "line": 11,
+        "offset": 317
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 100,
+        "file": "crosstl-out/cgl/alpha_stitch.cgl",
+        "length": 37,
+        "line": 5,
+        "offset": 63
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 413,
+        "file": "alpha_stitch.glsl",
+        "length": 49,
+        "line": 12,
+        "offset": 364
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 168,
+        "file": "crosstl-out/cgl/alpha_stitch.cgl",
+        "length": 68,
+        "line": 6,
+        "offset": 100
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 491,
+        "file": "alpha_stitch.glsl",
+        "length": 78,
+        "line": 13,
+        "offset": 413
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 355,
+        "file": "crosstl-out/cgl/alpha_stitch.cgl",
+        "length": 84,
+        "line": 12,
+        "offset": 271
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 583,
+        "file": "alpha_stitch.glsl",
+        "length": 77,
+        "line": 16,
+        "offset": 506
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 443,
+        "file": "crosstl-out/cgl/alpha_stitch.cgl",
+        "length": 88,
+        "line": 13,
+        "offset": 355
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 664,
+        "file": "alpha_stitch.glsl",
+        "length": 81,
+        "line": 17,
+        "offset": 583
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 543,
+        "file": "crosstl-out/cgl/alpha_stitch.cgl",
+        "length": 100,
+        "line": 14,
+        "offset": 443
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 758,
+        "file": "alpha_stitch.glsl",
+        "length": 93,
+        "line": 19,
+        "offset": 665
       }
     }
   ],

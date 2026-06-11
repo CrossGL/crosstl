@@ -5,22 +5,44 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 30,
-        "endOffset": 505,
+        "endLine": 22,
+        "endOffset": 348,
         "file": "crosstl-out/cgl/AAPLMeshRenderer.cgl",
-        "length": 505,
-        "line": 1,
-        "offset": 0
+        "length": 76,
+        "line": 21,
+        "offset": 272
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 11,
-        "endOffset": 344,
+        "endLine": 6,
+        "endOffset": 163,
         "file": "AAPLMeshRenderer.metal",
-        "length": 344,
-        "line": 1,
-        "offset": 0
+        "length": 49,
+        "line": 5,
+        "offset": 114
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 464,
+        "file": "crosstl-out/cgl/AAPLMeshRenderer.cgl",
+        "length": 91,
+        "line": 23,
+        "offset": 373
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 326,
+        "file": "AAPLMeshRenderer.metal",
+        "length": 80,
+        "line": 8,
+        "offset": 246
       }
     }
   ],

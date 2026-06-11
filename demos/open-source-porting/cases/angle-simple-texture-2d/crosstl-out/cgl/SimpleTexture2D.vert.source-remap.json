@@ -5,22 +5,132 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 21,
-        "endOffset": 395,
+        "endLine": 4,
+        "endOffset": 60,
         "file": "crosstl-out/cgl/SimpleTexture2D.vert.cgl",
-        "length": 395,
-        "line": 1,
-        "offset": 0
+        "length": 21,
+        "line": 3,
+        "offset": 39
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 17,
-        "endOffset": 402,
+        "endLine": 10,
+        "endOffset": 275,
         "file": "SimpleTexture2D.vert",
-        "length": 402,
-        "line": 1,
-        "offset": 0
+        "length": 27,
+        "line": 9,
+        "offset": 248
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 81,
+        "file": "crosstl-out/cgl/SimpleTexture2D.vert.cgl",
+        "length": 21,
+        "line": 4,
+        "offset": 60
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 302,
+        "file": "SimpleTexture2D.vert",
+        "length": 27,
+        "line": 10,
+        "offset": 275
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 136,
+        "file": "crosstl-out/cgl/SimpleTexture2D.vert.cgl",
+        "length": 21,
+        "line": 8,
+        "offset": 115
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 327,
+        "file": "SimpleTexture2D.vert",
+        "length": 25,
+        "line": 11,
+        "offset": 302
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 172,
+        "file": "crosstl-out/cgl/SimpleTexture2D.vert.cgl",
+        "length": 36,
+        "line": 9,
+        "offset": 136
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 371,
+        "file": "SimpleTexture2D.vert",
+        "length": 30,
+        "line": 14,
+        "offset": 341
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 312,
+        "file": "crosstl-out/cgl/SimpleTexture2D.vert.cgl",
+        "length": 47,
+        "line": 15,
+        "offset": 265
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 371,
+        "file": "SimpleTexture2D.vert",
+        "length": 30,
+        "line": 14,
+        "offset": 341
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 358,
+        "file": "crosstl-out/cgl/SimpleTexture2D.vert.cgl",
+        "length": 46,
+        "line": 16,
+        "offset": 312
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 400,
+        "file": "SimpleTexture2D.vert",
+        "length": 29,
+        "line": 15,
+        "offset": 371
       }
     }
   ],

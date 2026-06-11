@@ -1,0 +1,182 @@
+{
+  "generatedFile": "crosstl-out/directx/SpriteEffect.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 53,
+        "file": "crosstl-out/directx/SpriteEffect.hlsl",
+        "length": 34,
+        "line": 3,
+        "offset": 19
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 497,
+        "file": "SpriteEffect.fx",
+        "length": 39,
+        "line": 24,
+        "offset": 458
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 218,
+        "file": "crosstl-out/directx/SpriteEffect.hlsl",
+        "length": 26,
+        "line": 9,
+        "offset": 192
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 423,
+        "file": "SpriteEffect.fx",
+        "length": 49,
+        "line": 17,
+        "offset": 374
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 349,
+        "file": "crosstl-out/directx/SpriteEffect.hlsl",
+        "length": 21,
+        "line": 11,
+        "offset": 328
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 34,
+        "endOffset": 775,
+        "file": "SpriteEffect.fx",
+        "length": 21,
+        "line": 33,
+        "offset": 754
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 403,
+        "file": "crosstl-out/directx/SpriteEffect.hlsl",
+        "length": 54,
+        "line": 12,
+        "offset": 349
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 35,
+        "endOffset": 829,
+        "file": "SpriteEffect.fx",
+        "length": 54,
+        "line": 34,
+        "offset": 775
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 429,
+        "file": "crosstl-out/directx/SpriteEffect.hlsl",
+        "length": 26,
+        "line": 13,
+        "offset": 403
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 855,
+        "file": "SpriteEffect.fx",
+        "length": 26,
+        "line": 35,
+        "offset": 829
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 461,
+        "file": "crosstl-out/directx/SpriteEffect.hlsl",
+        "length": 32,
+        "line": 14,
+        "offset": 429
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 37,
+        "endOffset": 887,
+        "file": "SpriteEffect.fx",
+        "length": 32,
+        "line": 36,
+        "offset": 855
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 538,
+        "file": "crosstl-out/directx/SpriteEffect.hlsl",
+        "length": 55,
+        "line": 18,
+        "offset": 483
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 42,
+        "endOffset": 964,
+        "file": "SpriteEffect.fx",
+        "length": 54,
+        "line": 41,
+        "offset": 910
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 613,
+        "file": "crosstl-out/directx/SpriteEffect.hlsl",
+        "length": 75,
+        "line": 19,
+        "offset": 538
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 44,
+        "endOffset": 1032,
+        "file": "SpriteEffect.fx",
+        "length": 66,
+        "line": 43,
+        "offset": 966
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

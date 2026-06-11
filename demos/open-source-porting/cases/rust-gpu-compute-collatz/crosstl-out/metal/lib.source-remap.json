@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/metal/lib.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 44,
+        "endOffset": 795,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 18,
+        "line": 43,
+        "offset": 777
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 593,
+        "file": "lib.rs",
+        "length": 35,
+        "line": 18,
+        "offset": 558
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 45,
+        "endOffset": 904,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 109,
+        "line": 44,
+        "offset": 795
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 48,
+        "endOffset": 1389,
+        "file": "lib.rs",
+        "length": 89,
+        "line": 47,
+        "offset": 1300
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 46,
+        "endOffset": 933,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 29,
+        "line": 45,
+        "offset": 904
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 50,
+        "endOffset": 1424,
+        "file": "lib.rs",
+        "length": 31,
+        "line": 49,
+        "offset": 1393
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 47,
+        "endOffset": 1014,
+        "file": "crosstl-out/metal/lib.metal",
+        "length": 81,
+        "line": 46,
+        "offset": 933
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 51,
+        "endOffset": 1502,
+        "file": "lib.rs",
+        "length": 78,
+        "line": 50,
+        "offset": 1424
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

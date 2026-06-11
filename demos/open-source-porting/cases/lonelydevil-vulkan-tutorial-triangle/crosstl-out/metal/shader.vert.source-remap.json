@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/metal/shader.vert.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 110,
+        "file": "crosstl-out/metal/shader.vert.metal",
+        "length": 39,
+        "line": 6,
+        "offset": 71
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 53,
+        "file": "shader.vert",
+        "length": 39,
+        "line": 3,
+        "offset": 14
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 147,
+        "file": "crosstl-out/metal/shader.vert.metal",
+        "length": 37,
+        "line": 7,
+        "offset": 110
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 286,
+        "file": "shader.vert",
+        "length": 54,
+        "line": 18,
+        "offset": 232
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 523,
+        "file": "crosstl-out/metal/shader.vert.metal",
+        "length": 72,
+        "line": 14,
+        "offset": 451
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 286,
+        "file": "shader.vert",
+        "length": 54,
+        "line": 18,
+        "offset": 232
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 572,
+        "file": "crosstl-out/metal/shader.vert.metal",
+        "length": 49,
+        "line": 15,
+        "offset": 523
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 321,
+        "file": "shader.vert",
+        "length": 35,
+        "line": 19,
+        "offset": 286
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

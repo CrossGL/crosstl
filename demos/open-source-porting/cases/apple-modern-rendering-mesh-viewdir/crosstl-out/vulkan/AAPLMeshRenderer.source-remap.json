@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/vulkan/AAPLMeshRenderer.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 217,
+        "file": "crosstl-out/vulkan/AAPLMeshRenderer.spvasm",
+        "length": 50,
+        "line": 8,
+        "offset": 167
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 163,
+        "file": "AAPLMeshRenderer.metal",
+        "length": 49,
+        "line": 5,
+        "offset": 114
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 425,
+        "file": "crosstl-out/vulkan/AAPLMeshRenderer.spvasm",
+        "length": 55,
+        "line": 15,
+        "offset": 370
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 163,
+        "file": "AAPLMeshRenderer.metal",
+        "length": 49,
+        "line": 5,
+        "offset": 114
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 471,
+        "file": "crosstl-out/vulkan/AAPLMeshRenderer.spvasm",
+        "length": 46,
+        "line": 16,
+        "offset": 425
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 163,
+        "file": "AAPLMeshRenderer.metal",
+        "length": 49,
+        "line": 5,
+        "offset": 114
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 529,
+        "file": "crosstl-out/vulkan/AAPLMeshRenderer.spvasm",
+        "length": 41,
+        "line": 18,
+        "offset": 488
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 163,
+        "file": "AAPLMeshRenderer.metal",
+        "length": 49,
+        "line": 5,
+        "offset": 114
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

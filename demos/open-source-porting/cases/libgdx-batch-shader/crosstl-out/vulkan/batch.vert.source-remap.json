@@ -1,0 +1,50 @@
+{
+  "generatedFile": "crosstl-out/vulkan/batch.vert.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 458,
+        "file": "crosstl-out/vulkan/batch.vert.spvasm",
+        "length": 33,
+        "line": 16,
+        "offset": 425
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 260,
+        "file": "batch.vert",
+        "length": 42,
+        "line": 13,
+        "offset": 218
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 660,
+        "file": "crosstl-out/vulkan/batch.vert.spvasm",
+        "length": 25,
+        "line": 22,
+        "offset": 635
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 260,
+        "file": "batch.vert",
+        "length": 42,
+        "line": 13,
+        "offset": 218
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/metal/neg1.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 128,
+        "file": "crosstl-out/metal/neg1.metal",
+        "length": 31,
+        "line": 7,
+        "offset": 97
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 104,
+        "file": "neg1.hlsl",
+        "length": 38,
+        "line": 4,
+        "offset": 66
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 212,
+        "file": "crosstl-out/metal/neg1.metal",
+        "length": 80,
+        "line": 10,
+        "offset": 132
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 104,
+        "file": "neg1.hlsl",
+        "length": 38,
+        "line": 4,
+        "offset": 66
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 244,
+        "file": "crosstl-out/metal/neg1.metal",
+        "length": 32,
+        "line": 11,
+        "offset": 212
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 104,
+        "file": "neg1.hlsl",
+        "length": 38,
+        "line": 4,
+        "offset": 66
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 264,
+        "file": "crosstl-out/metal/neg1.metal",
+        "length": 20,
+        "line": 12,
+        "offset": 244
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 124,
+        "file": "neg1.hlsl",
+        "length": 18,
+        "line": 6,
+        "offset": 106
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

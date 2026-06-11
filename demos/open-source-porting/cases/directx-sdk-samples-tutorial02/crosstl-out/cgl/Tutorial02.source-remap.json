@@ -5,22 +5,88 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 19,
-        "endOffset": 308,
+        "endLine": 3,
+        "endOffset": 35,
         "file": "crosstl-out/cgl/Tutorial02.cgl",
-        "length": 308,
-        "line": 1,
-        "offset": 0
+        "length": 21,
+        "line": 2,
+        "offset": 14
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 24,
-        "endOffset": 874,
+        "endLine": 10,
+        "endOffset": 392,
         "file": "Tutorial02.fxh",
-        "length": 874,
-        "line": 1,
-        "offset": 0
+        "length": 17,
+        "line": 9,
+        "offset": 375
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 111,
+        "file": "crosstl-out/cgl/Tutorial02.cgl",
+        "length": 63,
+        "line": 4,
+        "offset": 48
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 530,
+        "file": "Tutorial02.fxh",
+        "length": 49,
+        "line": 11,
+        "offset": 481
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 251,
+        "file": "crosstl-out/cgl/Tutorial02.cgl",
+        "length": 68,
+        "line": 12,
+        "offset": 183
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 796,
+        "file": "Tutorial02.fxh",
+        "length": 50,
+        "line": 20,
+        "offset": 746
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 292,
+        "file": "crosstl-out/cgl/Tutorial02.cgl",
+        "length": 41,
+        "line": 13,
+        "offset": 251
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 872,
+        "file": "Tutorial02.fxh",
+        "length": 74,
+        "line": 22,
+        "offset": 798
       }
     }
   ],

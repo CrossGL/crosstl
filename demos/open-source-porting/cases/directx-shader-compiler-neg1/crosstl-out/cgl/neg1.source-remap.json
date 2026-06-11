@@ -5,22 +5,44 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 11,
-        "endOffset": 135,
+        "endLine": 5,
+        "endOffset": 95,
         "file": "crosstl-out/cgl/neg1.cgl",
-        "length": 135,
-        "line": 1,
-        "offset": 0
+        "length": 43,
+        "line": 4,
+        "offset": 52
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 8,
-        "endOffset": 126,
+        "endLine": 5,
+        "endOffset": 104,
         "file": "neg1.hlsl",
-        "length": 126,
-        "line": 1,
-        "offset": 0
+        "length": 38,
+        "line": 4,
+        "offset": 66
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 119,
+        "file": "crosstl-out/cgl/neg1.cgl",
+        "length": 24,
+        "line": 5,
+        "offset": 95
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 124,
+        "file": "neg1.hlsl",
+        "length": 18,
+        "line": 6,
+        "offset": 106
       }
     }
   ],

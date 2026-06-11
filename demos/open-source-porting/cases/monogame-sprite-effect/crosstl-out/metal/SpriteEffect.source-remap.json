@@ -1,0 +1,182 @@
+{
+  "generatedFile": "crosstl-out/metal/SpriteEffect.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 257,
+        "file": "crosstl-out/metal/SpriteEffect.metal",
+        "length": 30,
+        "line": 12,
+        "offset": 227
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 423,
+        "file": "SpriteEffect.fx",
+        "length": 49,
+        "line": 17,
+        "offset": 374
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 464,
+        "file": "crosstl-out/metal/SpriteEffect.metal",
+        "length": 21,
+        "line": 15,
+        "offset": 443
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 34,
+        "endOffset": 775,
+        "file": "SpriteEffect.fx",
+        "length": 21,
+        "line": 33,
+        "offset": 754
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 535,
+        "file": "crosstl-out/metal/SpriteEffect.metal",
+        "length": 71,
+        "line": 16,
+        "offset": 464
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 35,
+        "endOffset": 829,
+        "file": "SpriteEffect.fx",
+        "length": 54,
+        "line": 34,
+        "offset": 775
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 561,
+        "file": "crosstl-out/metal/SpriteEffect.metal",
+        "length": 26,
+        "line": 17,
+        "offset": 535
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 855,
+        "file": "SpriteEffect.fx",
+        "length": 26,
+        "line": 35,
+        "offset": 829
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 593,
+        "file": "crosstl-out/metal/SpriteEffect.metal",
+        "length": 32,
+        "line": 18,
+        "offset": 561
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 37,
+        "endOffset": 887,
+        "file": "SpriteEffect.fx",
+        "length": 32,
+        "line": 36,
+        "offset": 855
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 701,
+        "file": "crosstl-out/metal/SpriteEffect.metal",
+        "length": 86,
+        "line": 22,
+        "offset": 615
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 42,
+        "endOffset": 964,
+        "file": "SpriteEffect.fx",
+        "length": 54,
+        "line": 41,
+        "offset": 910
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 807,
+        "file": "crosstl-out/metal/SpriteEffect.metal",
+        "length": 106,
+        "line": 23,
+        "offset": 701
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 44,
+        "endOffset": 1032,
+        "file": "SpriteEffect.fx",
+        "length": 66,
+        "line": 43,
+        "offset": 966
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 967,
+        "file": "crosstl-out/metal/SpriteEffect.metal",
+        "length": 138,
+        "line": 27,
+        "offset": 829
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 338,
+        "file": "SpriteEffect.fx",
+        "length": 29,
+        "line": 11,
+        "offset": 309
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

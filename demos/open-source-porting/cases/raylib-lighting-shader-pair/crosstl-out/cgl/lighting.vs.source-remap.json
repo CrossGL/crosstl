@@ -5,22 +5,308 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 37,
-        "endOffset": 859,
+        "endLine": 2,
+        "endOffset": 13,
         "file": "crosstl-out/cgl/lighting.vs.cgl",
-        "length": 859,
+        "length": 13,
         "line": 1,
         "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 33,
-        "endOffset": 749,
+        "endLine": 2,
+        "endOffset": 13,
         "file": "lighting.vs",
-        "length": 749,
+        "length": 13,
         "line": 1,
         "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 103,
+        "file": "crosstl-out/cgl/lighting.vs.cgl",
+        "length": 25,
+        "line": 6,
+        "offset": 78
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 89,
+        "file": "lighting.vs",
+        "length": 24,
+        "line": 5,
+        "offset": 65
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 148,
+        "file": "crosstl-out/cgl/lighting.vs.cgl",
+        "length": 22,
+        "line": 8,
+        "offset": 126
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 132,
+        "file": "lighting.vs",
+        "length": 21,
+        "line": 7,
+        "offset": 111
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 228,
+        "file": "crosstl-out/cgl/lighting.vs.cgl",
+        "length": 23,
+        "line": 13,
+        "offset": 205
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 318,
+        "file": "lighting.vs",
+        "length": 23,
+        "line": 16,
+        "offset": 295
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 248,
+        "file": "crosstl-out/cgl/lighting.vs.cgl",
+        "length": 20,
+        "line": 14,
+        "offset": 228
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 338,
+        "file": "lighting.vs",
+        "length": 20,
+        "line": 17,
+        "offset": 318
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 305,
+        "file": "crosstl-out/cgl/lighting.vs.cgl",
+        "length": 36,
+        "line": 16,
+        "offset": 269
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 747,
+        "file": "lighting.vs",
+        "length": 49,
+        "line": 31,
+        "offset": 698
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 350,
+        "file": "crosstl-out/cgl/lighting.vs.cgl",
+        "length": 14,
+        "line": 20,
+        "offset": 336
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 175,
+        "file": "lighting.vs",
+        "length": 18,
+        "line": 10,
+        "offset": 157
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 369,
+        "file": "crosstl-out/cgl/lighting.vs.cgl",
+        "length": 19,
+        "line": 21,
+        "offset": 350
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 198,
+        "file": "lighting.vs",
+        "length": 23,
+        "line": 11,
+        "offset": 175
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 389,
+        "file": "crosstl-out/cgl/lighting.vs.cgl",
+        "length": 20,
+        "line": 22,
+        "offset": 369
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 222,
+        "file": "lighting.vs",
+        "length": 24,
+        "line": 12,
+        "offset": 198
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 564,
+        "file": "crosstl-out/cgl/lighting.vs.cgl",
+        "length": 82,
+        "line": 28,
+        "offset": 482
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 525,
+        "file": "lighting.vs",
+        "length": 61,
+        "line": 25,
+        "offset": 464
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 616,
+        "file": "crosstl-out/cgl/lighting.vs.cgl",
+        "length": 52,
+        "line": 29,
+        "offset": 564
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 560,
+        "file": "lighting.vs",
+        "length": 35,
+        "line": 26,
+        "offset": 525
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 662,
+        "file": "crosstl-out/cgl/lighting.vs.cgl",
+        "length": 46,
+        "line": 30,
+        "offset": 616
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 589,
+        "file": "lighting.vs",
+        "length": 29,
+        "line": 27,
+        "offset": 560
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 752,
+        "file": "crosstl-out/cgl/lighting.vs.cgl",
+        "length": 90,
+        "line": 31,
+        "offset": 662
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 658,
+        "file": "lighting.vs",
+        "length": 69,
+        "line": 28,
+        "offset": 589
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 33,
+        "endOffset": 822,
+        "file": "crosstl-out/cgl/lighting.vs.cgl",
+        "length": 70,
+        "line": 32,
+        "offset": 752
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 747,
+        "file": "lighting.vs",
+        "length": 49,
+        "line": 31,
+        "offset": 698
       }
     }
   ],

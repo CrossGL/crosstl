@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/vulkan/SpriteEffect.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 14,
+        "endLine": 77,
+        "endOffset": 1932,
+        "file": "crosstl-out/vulkan/SpriteEffect.spvasm",
+        "length": 1932,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 47,
+        "endOffset": 1100,
+        "file": "SpriteEffect.fx",
+        "length": 1100,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}
