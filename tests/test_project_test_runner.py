@@ -1,0 +1,211 @@
+import subprocess
+import sys
+from pathlib import Path
+
+from crosstl.project import (
+    PROJECT_TEST_RUNNER_INSPECTION_KIND,
+    PROJECT_TEST_RUNNER_PLAN_KIND,
+    PROJECT_TEST_RUNNER_REPORT_KIND,
+    build_project_test_runner_plan,
+    execute_project_test_runner_plan,
+    inspect_project_test_runner_plan,
+)
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _artifact_report(tmp_path, artifacts):
+    return {
+        "kind": "crosstl-runtime-artifact-manifest",
+        "project": {"root": str(tmp_path), "targets": ["opengl"]},
+        "artifacts": artifacts,
+    }
+
+
+def _artifact(**overrides):
+    artifact = {
+        "id": "opengl|kernels/add.cgl|debug",
+        "source": "kernels/add.cgl",
+        "path": "out/opengl/add.glsl",
+        "target": "opengl",
+        "stage": "compute",
+        "variant": "debug",
+        "status": "translated",
+        "entryPoints": [{"name": "main", "stage": "compute"}],
+        "resourceBindings": [
+            {"name": "lhs", "kind": "buffer", "binding": 0},
+            {"name": "out", "kind": "buffer", "binding": 1},
+        ],
+        "dispatch": {
+            "status": "available",
+            "workgroups": [{"entryPoint": "main", "workgroupSize": [1, 1, 1]}],
+        },
+    }
+    artifact.update(overrides)
+    return artifact
+
+
+def _manifest(missing_tool="crosstl-test-runner-tool-that-does-not-exist"):
+    return {
+        "kind": "crosstl-project-runtime-test-manifest",
+        "adapters": [
+            {
+                "id": "opengl-native",
+                "target": "opengl",
+                "executor": "opengl-native",
+                "platformRequirements": {"requiredTools": [missing_tool]},
+            }
+        ],
+        "tests": [
+            {
+                "id": "add-fixture",
+                "selector": {
+                    "source": "kernels/add.cgl",
+                    "target": "opengl",
+                    "variant": "debug",
+                },
+                "adapter": "opengl-native",
+                "inputs": [{"name": "lhs", "values": [1.0]}],
+                "expectedOutputs": [{"name": "out", "values": [2.0]}],
+                "metadata": {"upstreamTestName": "project.tests.test_add"},
+            }
+        ],
+    }
+
+
+def test_project_test_runner_plan_records_handoff_commands_and_provenance(tmp_path):
+    missing_tool = "crosstl-test-runner-tool-that-does-not-exist"
+    package_path = tmp_path / "runtime-package.json"
+
+    plan = build_project_test_runner_plan(
+        _artifact_report(tmp_path, [_artifact(toolchainRuns=[{"stderr": "warn"}])]),
+        _manifest(missing_tool),
+        handoff_packages=[package_path],
+        selected_targets=["OpenGL"],
+        test_commands=[
+            {
+                "name": "upstream add",
+                "command": [sys.executable, "-c", "print('ok')"],
+                "targets": ["opengl"],
+                "adapter": "opengl-native",
+                "fixture": "add-fixture",
+                "expectedArtifacts": ["out/opengl/add.glsl"],
+            }
+        ],
+        expected_artifacts=["out/opengl/add.glsl"],
+        project_root=tmp_path,
+    )
+
+    assert plan["kind"] == PROJECT_TEST_RUNNER_PLAN_KIND
+    assert plan["selectedTargets"] == ["opengl"]
+    assert plan["runtimeHandoffPackages"][0]["available"] is False
+    assert plan["testCommands"][0]["status"] == "skipped"
+    assert missing_tool in plan["testCommands"][0]["diagnostics"][0]["missingTools"]
+    runtime_test = plan["runtimeTests"][0]
+    assert runtime_test["provenance"]["sourceFile"] == "kernels/add.cgl"
+    assert runtime_test["provenance"]["generatedArtifact"] == "out/opengl/add.glsl"
+    assert runtime_test["provenance"]["backend"] == "opengl"
+    assert runtime_test["provenance"]["upstreamTestName"] == "project.tests.test_add"
+
+
+def test_project_test_runner_executes_available_project_command(tmp_path):
+    output_file = tmp_path / "command-output.txt"
+    plan = build_project_test_runner_plan(
+        _artifact_report(tmp_path, [_artifact()]),
+        test_commands=[
+            {
+                "name": "write output",
+                "command": [
+                    sys.executable,
+                    "-c",
+                    f"from pathlib import Path; Path({str(output_file)!r}).write_text('ok')",
+                ],
+                "targets": ["opengl"],
+                "expectedArtifacts": [str(output_file)],
+            }
+        ],
+        project_root=tmp_path,
+    )
+
+    report = execute_project_test_runner_plan(
+        plan,
+        project_root=tmp_path,
+        run_runtime_tests=False,
+    )
+
+    assert report["kind"] == PROJECT_TEST_RUNNER_REPORT_KIND
+    assert report["success"] is True
+    assert report["results"][0]["status"] == "passed"
+    assert report["results"][0]["logs"][0]["returncode"] == 0
+    assert output_file.read_text(encoding="utf-8") == "ok"
+
+
+def test_project_test_runner_inspection_summarizes_unavailable_adapters(tmp_path):
+    plan = build_project_test_runner_plan(
+        _artifact_report(tmp_path, [_artifact()]),
+        _manifest(),
+        project_root=tmp_path,
+    )
+
+    inspection = inspect_project_test_runner_plan(plan)
+
+    assert inspection["kind"] == PROJECT_TEST_RUNNER_INSPECTION_KIND
+    assert inspection["summary"]["unavailableAdapterCount"] == 1
+    assert inspection["summary"]["runtimeTestCount"] == 1
+
+
+def test_project_cli_test_runner_plan_text_uses_mlx_fixture(tmp_path):
+    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    artifact_report = fixture_dir / "reduced_binary_add.artifacts.json"
+    fixture_metadata = fixture_dir / "reduced_binary_add.fixture-metadata.json"
+    manifest_path = tmp_path / "runtime-test-manifest.json"
+
+    manifest_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "runtime-test-manifest",
+            str(artifact_report),
+            str(fixture_metadata),
+            "--project-root",
+            str(ROOT),
+            "--output",
+            str(manifest_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert manifest_result.returncode == 0, manifest_result.stderr
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "test-runner-plan",
+            str(artifact_report),
+            "--runtime-test-manifest",
+            str(manifest_path),
+            "--handoff-package",
+            str(tmp_path / "host-integration"),
+            "--target",
+            "metal",
+            "--project-root",
+            str(ROOT),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Project test-runner plan:" in result.stdout
+    assert "Selected targets: metal" in result.stdout
+    assert "mlx.core.add reduced f32" in result.stdout
+    assert "Runtime handoff packages:" in result.stdout

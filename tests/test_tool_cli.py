@@ -32,6 +32,9 @@ TOOLS = [
                 "plan-runtime",
                 "runtime-manifest",
                 "runtime-test-manifest",
+                "test-runner-plan",
+                "inspect-test-runner-plan",
+                "execute-test-runner",
                 "package-runtime",
                 "inspect-runtime-package",
                 "plan-host-bindings",
@@ -133,6 +136,38 @@ TOOLS = [
             (
                 "usage:",
                 "--project-root",
+                "--format",
+                "--output",
+            ),
+        ),
+        (
+            ("test-runner-plan",),
+            (
+                "usage:",
+                "--runtime-test-manifest",
+                "--handoff-package",
+                "--target",
+                "--test-config",
+                "--expected-artifact",
+                "--project-root",
+                "--format",
+                "--output",
+            ),
+        ),
+        (
+            ("inspect-test-runner-plan",),
+            (
+                "usage:",
+                "--format",
+                "--output",
+            ),
+        ),
+        (
+            ("execute-test-runner",),
+            (
+                "usage:",
+                "--project-root",
+                "--no-runtime-tests",
                 "--format",
                 "--output",
             ),
