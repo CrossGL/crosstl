@@ -14621,6 +14621,79 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_index_helper_pointer_aliases_preserve_storage_buffer_provenance(
+        self, tmp_path
+    ):
+        source_code = """
+        shader IndexHelperPointerAliasProvenance {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer int* shape;
+                layout(set = 0, binding = 1) buffer int* lhsStrides;
+                layout(set = 0, binding = 2) buffer int* rhsStrides;
+                layout(set = 0, binding = 3) buffer float* outValues;
+
+                uint elem_to_loc(
+                    uint elem,
+                    int* shape_arg,
+                    int* strides_arg,
+                    int ndim
+                ) {
+                    return uint(shape_arg[0]) + uint(strides_arg[0]) + elem + uint(ndim);
+                }
+
+                uint elem_to_loc(
+                    uint elem,
+                    int* shape_arg,
+                    int* lhs_strides_arg,
+                    int* rhs_strides_arg,
+                    int ndim
+                ) {
+                    return uint(shape_arg[0]) + uint(lhs_strides_arg[0])
+                        + uint(rhs_strides_arg[0]) + elem + uint(ndim);
+                }
+
+                void main() {
+                    int* shape_alias = shape;
+                    int* lhs_alias = lhsStrides;
+                    int* rhs_alias = rhsStrides + 1;
+                    uint offset = elem_to_loc(
+                        0u,
+                        shape_alias,
+                        lhs_alias,
+                        rhs_alias,
+                        1
+                    );
+                    outValues[0] = float(offset);
+                    return;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        shape_var = spirv_named_variable(spv_code, "shape", storage_class="Uniform")
+        lhs_var = spirv_named_variable(spv_code, "lhsStrides", storage_class="Uniform")
+        rhs_var = spirv_named_variable(spv_code, "rhsStrides", storage_class="Uniform")
+        out_var = spirv_named_variable(spv_code, "outValues", storage_class="Uniform")
+
+        for variable in (shape_var, lhs_var, rhs_var, out_var):
+            assert re.search(
+                rf"OpAccessChain %\d+ {re.escape(variable)} %\d+ %\d+",
+                spv_code,
+            )
+        assert "elem_to_loc" not in spv_code
+        assert "storage-buffer-function-overload" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "runtime-array aggregate values" not in spv_code
+        assert "Unknown type int*" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_storage_buffer_pointer_overloads_preserve_resource_type_with_extra_args(
         self, tmp_path
     ):
