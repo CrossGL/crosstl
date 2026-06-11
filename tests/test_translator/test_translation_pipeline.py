@@ -944,6 +944,33 @@ def test_metal_max_total_threads_metadata_translates_to_vulkan(tmp_path):
     assert "return semantic" not in generated
 
 
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_metal_max_total_threads_metadata_is_not_return_semantic_for_void_compute(
+    tmp_path, target
+):
+    source_path = _write_source(
+        tmp_path,
+        "mlx-void-compute-max-total-threads.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        [[max_total_threads_per_threadgroup(1024)]]
+        kernel void pinned_kernel(
+            device float* out [[buffer(0)]],
+            uint index [[thread_position_in_grid]]) {
+            out[index] = 1.0;
+        }
+        """,
+    )
+
+    generated = crosstl.translate(str(source_path), backend=target, format_output=False)
+
+    _assert_generated_output_is_usable(generated)
+    assert "return semantic" not in generated
+    assert "max_total_threads_per_threadgroup" not in generated
+
+
 def test_hlsl_hello_const_buffers_vertex_semantics_lower_to_metal_attributes(
     tmp_path,
 ):
@@ -1088,6 +1115,32 @@ def test_hlsl_struct_inout_pixel_entry_generates_valid_glsl_and_metal(tmp_path):
 
     _compile_glslang_if_available(opengl, "fragment")
     _compile_metal_if_available(metal)
+
+
+def test_glsl_es_legacy_fragcolor_lowers_to_non_reserved_opengl_output(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "Cube_cube.frag",
+        """
+        precision lowp float;
+        varying vec3 vv3colour;
+        void main() { gl_FragColor = vec4(vv3colour, 1.0); }
+        """,
+    )
+
+    opengl = crosstl.translate(
+        str(source_path),
+        backend="opengl",
+        source_backend="opengl",
+        format_output=False,
+    )
+
+    assert "layout(location = 0) out vec4 fragColor;" in opengl
+    assert "fragColor = vec4(vv3colour, 1.0);" in opengl
+    assert "vec4 gl_FragColor;" not in opengl
+    assert "gl_FragColor" not in opengl
+
+    _compile_glslang_if_available(opengl, "fragment")
 
 
 @pytest.mark.parametrize(

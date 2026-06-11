@@ -3782,6 +3782,30 @@ class MetalCodeGen:
                 reserved_parameter_names.add(name)
                 self.current_metal_graphics_builtin_parameter_names[builtin_name] = name
 
+        if shader_type == "fragment":
+            explicit_stage_builtins = self.explicit_graphics_stage_builtin_parameters(
+                param_list, shader_type
+            )
+            if explicit_stage_builtins.get("position"):
+                self.current_metal_graphics_builtin_parameter_names["gl_FragCoord"] = (
+                    explicit_stage_builtins["position"]
+                )
+            reserved_builtin_names = set(reserved_parameter_names)
+            reserved_builtin_names.update(
+                self.metal_function_local_variable_names(func)
+            )
+            for (
+                builtin_name,
+                name,
+                param_type,
+                attribute,
+            ) in self.required_metal_fragment_builtin_parameters(
+                func, reserved_builtin_names, explicit_stage_builtins
+            ):
+                params.append(f"{param_type} {name} [[{attribute}]]")
+                reserved_parameter_names.add(name)
+                self.current_metal_graphics_builtin_parameter_names[builtin_name] = name
+
         if shader_type == "compute":
             existing_param_names = {getattr(p, "name", None) for p in param_list}
             explicit_stage_builtins = self.explicit_compute_stage_builtin_parameters(
@@ -4480,6 +4504,8 @@ class MetalCodeGen:
             return None
         if name == "gl_VertexIndex":
             return "uint"
+        if name == "gl_FragCoord":
+            return "float4"
         return None
 
     def metal_compute_builtin_result_type(self, name):
@@ -4765,15 +4791,21 @@ class MetalCodeGen:
             ("gl_VertexIndex", "uint", "vertex_id"),
         ]
 
+    def metal_fragment_builtin_parameter_specs(self):
+        return [
+            ("gl_FragCoord", "float4", "position"),
+        ]
+
     def explicit_graphics_stage_builtin_parameters(self, parameters, stage_name):
-        if stage_name != "vertex":
+        if stage_name == "vertex":
+            builtin_specs = self.metal_vertex_builtin_parameter_specs()
+        elif stage_name == "fragment":
+            builtin_specs = self.metal_fragment_builtin_parameter_specs()
+        else:
             return {}
         stage_parameters = {}
         builtin_attributes = {
-            attribute
-            for _builtin_name, _param_type, attribute in (
-                self.metal_vertex_builtin_parameter_specs()
-            )
+            attribute for _builtin_name, _param_type, attribute in builtin_specs
         }
         for parameter in parameters or []:
             semantic = self.semantic_from_node(parameter)
@@ -4803,6 +4835,38 @@ class MetalCodeGen:
 
     def used_metal_vertex_builtin_names(self, body):
         builtin_names = {"gl_VertexIndex"}
+        used_names = set()
+        for node in self.iter_ast_nodes(body):
+            class_name = node.__class__.__name__
+            if "Identifier" not in class_name:
+                continue
+            name = getattr(node, "name", "")
+            base_name = name.split(".", 1)[0]
+            if base_name in builtin_names:
+                used_names.add(base_name)
+        return used_names
+
+    def required_metal_fragment_builtin_parameters(
+        self, func, reserved_names=None, explicit_stage_builtins=None
+    ):
+        used_names = self.used_metal_fragment_builtin_names(getattr(func, "body", []))
+        reserved_names = set(reserved_names or ())
+        explicit_stage_builtins = explicit_stage_builtins or {}
+        required_parameters = []
+        for (
+            builtin_name,
+            param_type,
+            attribute,
+        ) in self.metal_fragment_builtin_parameter_specs():
+            if builtin_name not in used_names or attribute in explicit_stage_builtins:
+                continue
+            name = self.unique_metal_generated_name("_crossglFragCoord", reserved_names)
+            reserved_names.add(name)
+            required_parameters.append((builtin_name, name, param_type, attribute))
+        return required_parameters
+
+    def used_metal_fragment_builtin_names(self, body):
+        builtin_names = {"gl_FragCoord"}
         used_names = set()
         for node in self.iter_ast_nodes(body):
             class_name = node.__class__.__name__

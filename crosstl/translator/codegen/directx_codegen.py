@@ -3436,6 +3436,32 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 param_names.add(name)
                 self.local_variable_types[name] = param_type
+        elif effective_shader_type == "fragment":
+            explicit_stage_builtins = self.explicit_hlsl_fragment_builtin_parameters(
+                param_list
+            )
+            for builtin_name, parameter_name in explicit_stage_builtins.items():
+                if parameter_name:
+                    self.current_identifier_aliases[builtin_name] = parameter_name
+            reserved_builtin_names = set(param_names)
+            reserved_builtin_names.update(self.function_scope_variable_types(func))
+            for (
+                builtin_name,
+                name,
+                param_type,
+                semantic,
+            ) in self.required_hlsl_fragment_builtin_parameters(
+                func, reserved_builtin_names, explicit_stage_builtins
+            ):
+                declaration = f"{param_type} {name}"
+                if semantic:
+                    declaration += f" : {semantic}"
+                params_str = self.append_hlsl_parameter_declaration(
+                    params_str, declaration
+                )
+                param_names.add(name)
+                self.local_variable_types[name] = param_type
+                self.current_identifier_aliases[builtin_name] = name
         shader_map = {"vertex": "VSMain", "fragment": "PSMain", "compute": "CSMain"}
         shader_attr_map = {
             "geometry": "geometry",
@@ -4300,6 +4326,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
         if isinstance(expr, VariableNode):
             return self.variable_type_by_name(getattr(expr, "name", None))
+        if isinstance(expr, IdentifierNode) or (
+            hasattr(expr, "__class__") and "Identifier" in str(expr.__class__)
+        ):
+            name = getattr(expr, "name", None)
+            builtin_type = self.hlsl_graphics_builtin_result_type(name)
+            if builtin_type is not None:
+                return builtin_type
+            return self.variable_type_by_name(name)
         if isinstance(expr, bool):
             return "bool"
         if isinstance(expr, (int, float)):
@@ -5588,6 +5622,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def hlsl_identifier_name(self, name):
         return self.current_identifier_aliases.get(name, name)
+
+    def hlsl_graphics_builtin_result_type(self, name):
+        if name == "gl_FragCoord" and name in self.current_identifier_aliases:
+            return "float4"
+        return None
 
     def hlsl_declaration_identifier_name(self, name):
         if not isinstance(name, str):
@@ -7974,6 +8013,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "compute",
             "domain",
             "fragment",
+            "max_total_threads_per_threadgroup",
             "maxvertexcount",
             "maxtessfactor",
             "numthreads",
@@ -13397,6 +13437,50 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return [
             parameter for parameter in builtin_parameters if parameter[0] in used_names
         ]
+
+    def explicit_hlsl_fragment_builtin_parameters(self, parameters):
+        stage_parameters = {}
+        for parameter in parameters or []:
+            semantic = self.hlsl_canonical_semantic(self.semantic_from_node(parameter))
+            if semantic == "SV_Position":
+                stage_parameters["gl_FragCoord"] = getattr(parameter, "name", None)
+        return stage_parameters
+
+    def used_hlsl_fragment_builtin_names(self, body):
+        builtin_names = {"gl_FragCoord"}
+        used_names = set()
+        for node in self.walk_ast(body):
+            class_name = node.__class__.__name__
+            if "Identifier" not in class_name and class_name != "VariableNode":
+                continue
+            name = getattr(node, "name", "")
+            base_name = name.split(".", 1)[0]
+            if base_name in builtin_names:
+                used_names.add(base_name)
+        return used_names
+
+    def required_hlsl_fragment_builtin_parameters(
+        self, func, reserved_names=None, explicit_stage_builtins=None
+    ):
+        used_names = self.used_hlsl_fragment_builtin_names(getattr(func, "body", []))
+        reserved_names = set(reserved_names or ())
+        explicit_stage_builtins = explicit_stage_builtins or {}
+        builtin_parameters = [
+            ("gl_FragCoord", "float4", "SV_Position"),
+        ]
+        required_parameters = []
+        for builtin_name, param_type, semantic in builtin_parameters:
+            if (
+                builtin_name not in used_names
+                or builtin_name in explicit_stage_builtins
+            ):
+                continue
+            name = self.hlsl_unique_local_identifier(
+                "_crossglFragCoord", reserved_names
+            )
+            reserved_names.add(name)
+            required_parameters.append((builtin_name, name, param_type, semantic))
+        return required_parameters
 
     def used_hlsl_compute_builtin_names(self, body):
         builtin_names = {
