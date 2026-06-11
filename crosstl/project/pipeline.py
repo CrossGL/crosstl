@@ -1282,12 +1282,13 @@ REPORT_ARTIFACT_TEMPLATE_MATERIALIZATION_FIELDS = frozenset(
         "specializationCount",
         "configuredParameterCount",
         "configuredParameters",
+        "configuredParameterSources",
         "specializations",
         "unsupported",
     )
 )
 REPORT_ARTIFACT_TEMPLATE_SPECIALIZATION_FIELDS = frozenset(
-    ("name", "materializedName", "parameters", "source")
+    ("name", "materializedName", "parameters", "parameterSources", "source")
 )
 REPORT_ARTIFACT_TEMPLATE_UNSUPPORTED_FIELDS = frozenset(
     (
@@ -1302,6 +1303,16 @@ REPORT_ARTIFACT_TEMPLATE_UNSUPPORTED_FIELDS = frozenset(
 )
 REPORT_ARTIFACT_TEMPLATE_DECLARATION_FIELDS = frozenset(
     ("file", "line", "column", "name")
+)
+TEMPLATE_PARAMETER_SOURCE_VALUES = frozenset(
+    (
+        "call-site",
+        "config",
+        "project-variant",
+        "source-default",
+        "source-instantiation",
+        "variant-manifest",
+    )
 )
 REPORT_UNIT_FIELDS = frozenset(
     (
@@ -7492,6 +7503,17 @@ def _variant_jobs(
     ]
 
 
+def _variant_define_sources(
+    config: ProjectConfig,
+    variant: str | None,
+) -> dict[str, str]:
+    sources = {name: "config" for name in config.defines}
+    if variant is not None:
+        for name in config.variants.get(variant, {}):
+            sources[name] = "project-variant"
+    return sources
+
+
 def _selected_variant_names(variants: Sequence[str] | str | None) -> list[str] | None:
     if variants is None:
         return None
@@ -8266,12 +8288,22 @@ def _materialized_template_specialization_record(
     name: str,
     materialized_name: str,
     parameters: Mapping[str, str],
+    parameter_sources: Mapping[str, str] | None = None,
     source: str,
 ) -> dict[str, Any]:
+    sources = {
+        parameter: str(
+            parameter_sources.get(parameter, source)
+            if parameter_sources is not None
+            else source
+        )
+        for parameter in parameters
+    }
     return {
         "name": name,
         "materializedName": materialized_name,
         "parameters": dict(sorted(parameters.items())),
+        "parameterSources": dict(sorted(sources.items())),
         "source": source,
     }
 
@@ -8679,6 +8711,7 @@ def _template_materialization_metadata(
     *,
     specializations: Sequence[Mapping[str, Any]],
     configured_parameters: Mapping[str, str],
+    configured_parameter_sources: Mapping[str, str],
     unsupported: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     return {
@@ -8686,9 +8719,26 @@ def _template_materialization_metadata(
         "specializationCount": len(specializations),
         "configuredParameterCount": len(configured_parameters),
         "configuredParameters": dict(sorted(configured_parameters.items())),
+        "configuredParameterSources": dict(
+            sorted(configured_parameter_sources.items())
+        ),
         "specializations": [dict(specialization) for specialization in specializations],
         "unsupported": [dict(record) for record in unsupported],
     }
+
+
+def _template_specialization_source(
+    parameter_sources: Mapping[str, str],
+    *,
+    fallback: str,
+) -> str:
+    sources = {source for source in parameter_sources.values() if source}
+    if len(sources) == 1:
+        return next(iter(sources))
+    for source in ("variant-manifest", "project-variant", "config", "source-default"):
+        if source in sources:
+            return source
+    return fallback
 
 
 def _template_materialization_unsupported_message(
@@ -8732,6 +8782,7 @@ def _project_template_materialization_for_artifact(
     target: str,
     variant: str | None,
     defines: Mapping[str, str],
+    define_sources: Mapping[str, str] | None = None,
     include_paths: Sequence[str],
     source_options: Mapping[str, Any],
 ) -> ProjectTemplateMaterializedSource | None:
@@ -8758,6 +8809,12 @@ def _project_template_materialization_for_artifact(
         name: str(defines[name])
         for name in sorted(source_template_parameters)
         if name in defines
+    }
+    configured_parameter_sources = {
+        name: str(define_sources.get(name, "config"))
+        if define_sources is not None
+        else "config"
+        for name in configured_parameters
     }
     parser_defines = {
         name: str(value)
@@ -8837,11 +8894,15 @@ def _project_template_materialization_for_artifact(
             template,
             normalized_arguments,
         )
+        parameter_sources = {
+            parameter: "source-instantiation" for parameter in parameters
+        }
         specializations.append(
             _materialized_template_specialization_record(
                 name=template.name,
                 materialized_name=materialized_name,
                 parameters=parameters,
+                parameter_sources=parameter_sources,
                 source="source-instantiation",
             )
         )
@@ -8890,11 +8951,13 @@ def _project_template_materialization_for_artifact(
             template,
             normalized_arguments,
         )
+        parameter_sources = {parameter: "call-site" for parameter in parameters}
         specializations.append(
             _materialized_template_specialization_record(
                 name=function_name,
                 materialized_name=materialized_name,
                 parameters=parameters,
+                parameter_sources=parameter_sources,
                 source="call-site",
             )
         )
@@ -8911,6 +8974,7 @@ def _project_template_materialization_for_artifact(
     replacements: list[tuple[int, int, str]] = []
     unsupported: list[dict[str, Any]] = []
     used_configured_parameters: dict[str, str] = {}
+    used_configured_parameter_sources: dict[str, str] = {}
     default_call_replacements: dict[str, str] = {}
     materialized_call_replacements: dict[str, str] = {}
     current_template_spans = preprocessor._find_template_declaration_spans(
@@ -8933,6 +8997,10 @@ def _project_template_materialization_for_artifact(
             **default_parameters,
             **configured_parameters,
         }
+        base_parameter_sources = {
+            **{parameter: "source-default" for parameter in default_parameters},
+            **configured_parameter_sources,
+        }
         required_signature = _template_required_signature(
             preprocessor,
             template,
@@ -8948,6 +9016,13 @@ def _project_template_materialization_for_artifact(
         available_parameters = {
             **base_parameters,
             **manifest_parameters,
+        }
+        available_parameter_sources = {
+            **base_parameter_sources,
+            **{
+                parameter: "variant-manifest"
+                for parameter in manifest_parameters
+            },
         }
         if all(
             parameter in available_parameters
@@ -8968,13 +9043,11 @@ def _project_template_materialization_for_artifact(
             )
             if has_configured_parameters or has_manifest_parameters:
                 materialized_name = template.name
-                source_kind = "variant-manifest" if has_manifest_parameters else "config"
             else:
                 materialized_name = preprocessor._template_specialization_identifier(
                     template.name,
                     arguments,
                 )
-                source_kind = "source-default"
                 default_call_replacements[template.name] = materialized_name
             materialized_call_replacements[template.name] = materialized_name
             materialized_source = preprocessor._materialize_template_function_with_name(
@@ -8988,6 +9061,20 @@ def _project_template_materialization_for_artifact(
                 parameter: available_parameters[parameter]
                 for parameter in template.template_parameters
             }
+            parameter_sources = {
+                parameter: available_parameter_sources[parameter]
+                for parameter in template.template_parameters
+            }
+            source_kind = _template_specialization_source(
+                parameter_sources,
+                fallback=(
+                    "variant-manifest"
+                    if has_manifest_parameters
+                    else "config"
+                    if has_configured_parameters
+                    else "source-default"
+                ),
+            )
             used_configured_parameters.update(
                 {
                     parameter: configured_parameters[parameter]
@@ -9002,11 +9089,26 @@ def _project_template_materialization_for_artifact(
                     if parameter in manifest_parameters
                 }
             )
+            used_configured_parameter_sources.update(
+                {
+                    parameter: configured_parameter_sources[parameter]
+                    for parameter in template.template_parameters
+                    if parameter in configured_parameter_sources
+                }
+            )
+            used_configured_parameter_sources.update(
+                {
+                    parameter: "variant-manifest"
+                    for parameter in template.template_parameters
+                    if parameter in manifest_parameters
+                }
+            )
             specializations.append(
                 _materialized_template_specialization_record(
                     name=template.name,
                     materialized_name=materialized_name,
                     parameters=parameters,
+                    parameter_sources=parameter_sources,
                     source=source_kind,
                 )
             )
@@ -9068,9 +9170,14 @@ def _project_template_materialization_for_artifact(
         name: used_configured_parameters[name]
         for name in sorted(used_configured_parameters)
     }
+    configured_source_payload = {
+        name: used_configured_parameter_sources[name]
+        for name in sorted(used_configured_parameter_sources)
+    }
     metadata = _template_materialization_metadata(
         specializations=specializations,
         configured_parameters=configured_payload,
+        configured_parameter_sources=configured_source_payload,
         unsupported=unsupported,
     )
     if not specializations and not unsupported and not stripped_diagnostic_helpers:
@@ -9602,6 +9709,7 @@ def translate_project(
                             target=target,
                             variant=variant,
                             defines=defines,
+                            define_sources=_variant_define_sources(config, variant),
                             include_paths=include_paths,
                             source_options=source_options,
                         )
@@ -26621,20 +26729,28 @@ def _template_specialization_contract_reasons(
     for field_name in ("name", "materializedName"):
         if not _is_non_empty_string(value.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
+    parameters = value.get("parameters")
+    parameter_reasons = _string_mapping_contract_reasons(
+        f"{prefix}.parameters", parameters
+    )
+    reasons.extend(parameter_reasons)
+    expected_parameters = (
+        set(parameters)
+        if not parameter_reasons and isinstance(parameters, Mapping)
+        else None
+    )
     reasons.extend(
-        _string_mapping_contract_reasons(f"{prefix}.parameters", value.get("parameters"))
+        _template_parameter_source_mapping_contract_reasons(
+            f"{prefix}.parameterSources",
+            value.get("parameterSources"),
+            expected_parameters=expected_parameters,
+        )
     )
     source = value.get("source")
-    if source not in {
-        "call-site",
-        "config",
-        "source-default",
-        "source-instantiation",
-        "variant-manifest",
-    }:
+    if source not in TEMPLATE_PARAMETER_SOURCE_VALUES:
         reasons.append(
-            f"{prefix}.source must be call-site, config, source-default, "
-            "source-instantiation, or variant-manifest"
+            f"{prefix}.source must be one of "
+            f"{', '.join(sorted(TEMPLATE_PARAMETER_SOURCE_VALUES))}"
         )
     return reasons
 
@@ -26662,6 +26778,26 @@ def _template_source_declaration_contract_reasons(
             or field_value <= 0
         ):
             reasons.append(f"{prefix}.{field_name} must be a positive integer")
+    return reasons
+
+
+def _template_parameter_source_mapping_contract_reasons(
+    prefix: str,
+    value: Any,
+    *,
+    expected_parameters: set[str] | None = None,
+) -> list[str]:
+    reasons = _string_mapping_contract_reasons(prefix, value)
+    if reasons:
+        return reasons
+    for parameter, source in value.items():
+        if source not in TEMPLATE_PARAMETER_SOURCE_VALUES:
+            reasons.append(
+                f"{_mapping_key_path(prefix, parameter)} must be one of "
+                f"{', '.join(sorted(TEMPLATE_PARAMETER_SOURCE_VALUES))}"
+            )
+    if expected_parameters is not None and set(value) != expected_parameters:
+        reasons.append(f"{prefix} keys must match parameters")
     return reasons
 
 
@@ -26725,6 +26861,19 @@ def _artifact_template_materialization_contract_reasons(
         f"{prefix}.configuredParameters", configured_parameters
     )
     reasons.extend(configured_parameter_reasons)
+    configured_parameter_names = (
+        set(configured_parameters)
+        if not configured_parameter_reasons
+        and isinstance(configured_parameters, Mapping)
+        else None
+    )
+    reasons.extend(
+        _template_parameter_source_mapping_contract_reasons(
+            f"{prefix}.configuredParameterSources",
+            materialization.get("configuredParameterSources"),
+            expected_parameters=configured_parameter_names,
+        )
+    )
     configured_parameter_count = materialization.get("configuredParameterCount")
     if not _is_non_negative_int(configured_parameter_count):
         reasons.append(f"{prefix}.configuredParameterCount must be a non-negative integer")
