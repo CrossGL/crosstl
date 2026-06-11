@@ -137,6 +137,32 @@ class TestHipCodeGen:
         assert "blockIdx" not in result
         assert "blockDim" not in result
 
+    def test_hip_pointer_kernel_lowers_to_directx_resources(self, tmp_path):
+        source_path = tmp_path / "add_kernel.hip"
+        source_path.write_text("""
+            __global__ void add(float* a, const float* b) {
+                int global_idx = threadIdx.x + blockIdx.x * blockDim.x;
+                a[global_idx] += b[global_idx];
+            }
+            """)
+
+        result = translate(str(source_path), backend="directx", format_output=False)
+
+        assert "RWStructuredBuffer<float> a : register(u0);" in result
+        assert "StructuredBuffer<float> b : register(t1);" in result
+        assert (
+            "void CSMain(uint3 groupThreadID : SV_GroupThreadID, "
+            "uint3 groupID : SV_GroupID)"
+        ) in result
+        assert "int global_idx = (groupThreadID.x +" in result
+        assert "(groupID.x * uint3(1, 1, 1).x));" in result
+        assert "a[global_idx] += b[global_idx];" in result
+        assert "float a[] : group" not in result
+        assert "float b[] : group" not in result
+        assert "gl_LocalInvocationID" not in result
+        assert "gl_WorkGroupID" not in result
+        assert "gl_WorkGroupSize" not in result
+
     def test_hip_kernel_is_preserved_as_spirv_compute_entry(self, tmp_path):
         source_path = tmp_path / "scale.hip"
         source_path.write_text("""

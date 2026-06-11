@@ -31,6 +31,9 @@ from crosstl.translator.codegen.directx_codegen import (
 )
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from tests.test_backend.test_SPIRV.test_codegen import (
+    SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
+)
 
 
 def tokenize_code(code: str) -> List:
@@ -348,6 +351,31 @@ def test_glsl_pervertex_position_output_lowers_to_hlsl_sv_position(tmp_path):
     assert "float4 gl_Position: TEXCOORD" not in generated_code
     assert "float3 outColor: TEXCOORD0;" in generated_code
     assert generated_code.count(": TEXCOORD0") == 1
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_spirv_pervertex_position_output_lowers_to_hlsl_vertex_contract(tmp_path):
+    shader_path = tmp_path / "glpervertex.vert.spvasm"
+    shader_path.write_text(
+        SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
+        encoding="utf-8",
+    )
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+    )
+
+    assert "struct VertexInput" in generated_code
+    assert "float4 ua_position: TEXCOORD0;" in generated_code
+    assert "struct VertexOutput" in generated_code
+    assert "float4 position: SV_POSITION;" in generated_code
+    assert "VertexOutput VSMain(VertexInput input)" in generated_code
+    assert "output.position = input.ua_position;" in generated_code
+    assert "return output;" in generated_code
+    assert "gl_Position" not in generated_code
+    assert "_ua_position" not in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
@@ -1863,8 +1891,7 @@ def test_hlsl_stage_entry_buffer_pointer_params_promote_to_resources():
     assert "RWStructuredBuffer<float> B : register(u2);" in generated_code
     assert "RWStructuredBuffer<float> X : register(u3);" in generated_code
     assert (
-        "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)"
-        in generated_code
+        "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)" in generated_code
     )
     assert "float* A" not in generated_code
     assert "float* B" not in generated_code
@@ -6409,6 +6436,46 @@ def test_tuple_enum_constructor_wrong_arity_raises():
         ValueError, match="Enum constructor MaybeInt::Value expects 1 arguments, got 0"
     ):
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_builtin_option_helpers_lower_to_hlsl_structs():
+    shader = """
+    shader BuiltinOptionDirectX {
+        Option<uint> collatz(uint n) {
+            if (n == 0) {
+                return None;
+            }
+            return Some(n);
+        }
+
+        uint read_option(Option<uint> item) {
+            match item {
+                Option::Some(value) => { return value; },
+                Option::Absent => { return 0; }
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "static const int Option_Some = 0;" in generated_code
+    assert "static const int Option_Absent = 1;" in generated_code
+    assert "struct Option_uint {" in generated_code
+    assert "Option_uint Option_uint_Some_make(uint payload0)" in generated_code
+    assert "Option_uint Option_uint_Absent_make()" in generated_code
+    assert "Option_uint collatz(uint n)" in generated_code
+    assert "uint read_option(Option_uint item)" in generated_code
+    assert "return Option_uint_Absent_make();" in generated_code
+    assert "return Option_uint_Some_make(n);" in generated_code
+    assert "uint value = item.Some_0;" in generated_code
+    assert "if ((item.variant == Option_Some))" in generated_code
+    assert "else if ((item.variant == Option_Absent))" in generated_code
+    assert "Option<" not in generated_code
+    assert "Option::" not in generated_code
+    assert re.search(r"\bSome\s*\(", generated_code) is None
+    assert "None" not in generated_code
+    assert "auto value" not in generated_code
 
 
 def test_generic_enum_struct_concrete_match_and_constructors():

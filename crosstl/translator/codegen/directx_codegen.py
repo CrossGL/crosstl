@@ -1,5 +1,6 @@
 """CrossGL-to-HLSL code generator."""
 
+from copy import deepcopy
 from hashlib import sha1
 
 from ..ast import (
@@ -7,6 +8,7 @@ from ..ast import (
     ArrayLiteralNode,
     ArrayNode,
     AssignmentNode,
+    AttributeNode,
     BinaryOpNode,
     BlockNode,
     BreakNode,
@@ -31,6 +33,7 @@ from ..ast import (
     RayTracingOpNode,
     ReferenceType,
     ReturnNode,
+    StructMemberNode,
     StructNode,
     SwitchNode,
     SwizzleNode,
@@ -1030,9 +1033,131 @@ class HLSLCodeGen:
         """Generate HLSL source for a single requested shader stage."""
         return self.generate_program(ast, target_stage=shader_type)
 
+    def with_hlsl_builtin_option_prelude(self, ast):
+        if not self.hlsl_ast_needs_builtin_option(ast):
+            return ast
+        if self.hlsl_ast_declares_type(ast, "Option"):
+            return ast
+
+        self.hlsl_builtin_option_available = True
+        ast = deepcopy(ast)
+        prelude_ast = self.parse_hlsl_builtin_option_prelude()
+        ast.structs = list(getattr(prelude_ast, "structs", []) or []) + list(
+            getattr(ast, "structs", []) or []
+        )
+        ast.functions = list(getattr(prelude_ast, "functions", []) or []) + list(
+            getattr(ast, "functions", []) or []
+        )
+        return ast
+
+    def parse_hlsl_builtin_option_prelude(self):
+        from ..lexer import Lexer
+        from ..parser import Parser
+
+        source = """
+        shader DirectXBuiltinOption {
+            generic<T> struct Option {
+                enum OptionType { Some(T), Absent }
+                OptionType variant;
+            }
+
+            generic<T> bool is_Some(Option<T> item) {
+                return item.variant == Option::Some;
+            }
+
+            generic<T> bool is_None(Option<T> item) {
+                return item.variant == Option::Absent;
+            }
+
+            generic<T> T unwrap_Some(Option<T> item) {
+                return item.Some_0;
+            }
+        }
+        """
+        return Parser(Lexer(source).tokens).parse()
+
+    def hlsl_ast_declares_type(self, ast, type_name):
+        return any(
+            getattr(struct, "name", None) == type_name
+            for struct in getattr(ast, "structs", []) or []
+        )
+
+    def hlsl_ast_needs_builtin_option(self, ast):
+        option_helpers = {"is_Some", "is_None", "unwrap_Some"}
+        for node in self.walk_ast(ast):
+            if self.hlsl_node_type_uses_builtin_option(node):
+                return True
+            if self.function_call_name(node) in option_helpers:
+                return True
+        return False
+
+    def hlsl_node_type_uses_builtin_option(self, node):
+        for attr in (
+            "return_type",
+            "param_type",
+            "var_type",
+            "vtype",
+            "member_type",
+            "const_type",
+            "constructor_type",
+        ):
+            if self.hlsl_type_uses_builtin_option(getattr(node, attr, None)):
+                return True
+        return False
+
+    def hlsl_type_uses_builtin_option(self, type_value):
+        type_name = self.type_name_string(type_value)
+        if not isinstance(type_name, str):
+            return False
+        base_name, generic_args = generic_type_parts(type_name)
+        return base_name.rsplit("::", 1)[-1] == "Option" and bool(generic_args)
+
+    def hlsl_builtin_option_payload_type(self, type_value):
+        type_name = self.type_name_string(type_value)
+        if not isinstance(type_name, str):
+            return None
+
+        base_name, generic_args = generic_type_parts(type_name)
+        if base_name.rsplit("::", 1)[-1] == "Option" and len(generic_args) == 1:
+            return generic_args[0]
+
+        for specialization in getattr(
+            self, "generic_enum_specializations", {}
+        ).values():
+            if (
+                specialization.get("struct_name") == type_name
+                and str(specialization.get("base_name")).rsplit("::", 1)[-1] == "Option"
+            ):
+                generic_params = specialization.get("definition", {}).get(
+                    "generic_params", []
+                )
+                if not generic_params:
+                    return None
+                return specialization.get("substitutions", {}).get(generic_params[0])
+        return None
+
+    def hlsl_builtin_option_call_type(self, node, func_name):
+        if not getattr(self, "hlsl_builtin_option_available", False):
+            return None
+
+        base_name = str(func_name).rsplit("::", 1)[-1]
+        if base_name == "Some":
+            return self.current_expression_expected_type
+        if base_name in {"is_Some", "is_None"}:
+            return "bool"
+        if base_name == "unwrap_Some":
+            args = list(getattr(node, "arguments", getattr(node, "args", [])) or [])
+            if len(args) != 1:
+                return None
+            option_type = self.expression_result_type(args[0])
+            return self.hlsl_builtin_option_payload_type(option_type)
+        return None
+
     def generate_program(self, ast, target_stage=None):
         """Render an AST to HLSL, optionally filtering stage entry points."""
         target_stage = normalize_stage_name(target_stage)
+        self.hlsl_builtin_option_available = False
+        ast = self.with_hlsl_builtin_option_prelude(ast)
 
         self.texture_variables = set()
         self.sampler_variables = set()
@@ -1074,6 +1199,7 @@ class HLSLCodeGen:
         self.current_function_name = None
         self.current_function_return_type = None
         self.current_expression_expected_type = None
+        self.current_hlsl_stage_output_lowering = None
         self.allow_hlsl_byteaddress_interlocked_member_expression = False
         self.local_variable_types = {}
         self.global_variable_types = {}
@@ -1113,6 +1239,27 @@ class HLSLCodeGen:
         structs = deduplicate_named_declarations(
             list(getattr(ast, "structs", []) or [])
             + collect_stage_local_structs(ast, target_stage),
+            "struct",
+        )
+        self.hlsl_stage_output_lowerings = self.collect_hlsl_stage_output_lowerings(
+            ast, target_stage, structs
+        )
+        if any(
+            lowering.get("struct_name") is not None
+            for lowering in self.hlsl_stage_output_lowerings.values()
+        ):
+            structs = [
+                struct
+                for struct in structs
+                if not self.hlsl_should_omit_lowered_spirv_pervertex_struct(struct)
+            ]
+        structs = deduplicate_named_declarations(
+            structs
+            + [
+                struct
+                for lowering in self.hlsl_stage_output_lowerings.values()
+                for struct in lowering["structs"]
+            ],
             "struct",
         )
         self.structs_by_name = {
@@ -1179,8 +1326,24 @@ class HLSLCodeGen:
         self.vertex_entry_output_struct_names = (
             self.collect_hlsl_vertex_entry_output_struct_names(ast, target_stage)
         )
+        self.vertex_entry_output_struct_names.update(
+            {
+                lowering["struct_name"]
+                for lowering in self.hlsl_stage_output_lowerings.values()
+                if lowering["stage_name"] == "vertex"
+                and lowering.get("struct_name") is not None
+            }
+        )
         self.vertex_entry_input_struct_names = (
             self.collect_hlsl_vertex_entry_input_struct_names(ast, target_stage)
+        )
+        self.vertex_entry_input_struct_names.update(
+            {
+                lowering["input_struct_name"]
+                for lowering in self.hlsl_stage_output_lowerings.values()
+                if lowering["stage_name"] == "vertex"
+                and lowering.get("input_struct_name") is not None
+            }
         )
         self.fragment_entry_input_struct_names = (
             self.collect_hlsl_fragment_entry_input_struct_names(ast, target_stage)
@@ -2127,6 +2290,9 @@ class HLSLCodeGen:
                             shader_type=stage_name,
                             execution_config=getattr(stage, "execution_config", None),
                             entry_name=stage_entry_names.get(id(stage.entry_point)),
+                            stage_output_lowering=self.hlsl_stage_output_lowerings.get(
+                                id(stage)
+                            ),
                         )
                     finally:
                         self.current_hlsl_available_functions = (
@@ -3350,6 +3516,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         shader_type=None,
         execution_config=None,
         entry_name=None,
+        stage_output_lowering=None,
     ):
         """Render a function or stage entry point with HLSL semantics."""
         code = ""
@@ -3379,6 +3546,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         previous_local_variable_types = self.local_variable_types
         previous_identifier_aliases = self.current_identifier_aliases
         previous_identifier_reserved_names = self.current_identifier_reserved_names
+        previous_stage_output_lowering = self.current_hlsl_stage_output_lowering
         previous_function_name = self.current_function_name
         previous_generic_function_substitutions = (
             self.current_generic_function_substitutions
@@ -3413,9 +3581,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.current_function_name = getattr(func, "name", None) or entry_name
         self.local_variable_types = {}
         self.current_identifier_aliases = {}
+        self.current_hlsl_stage_output_lowering = stage_output_lowering
         self.current_identifier_reserved_names = (
             self.collect_hlsl_function_identifier_names(func)
         )
+        if stage_output_lowering is not None:
+            self.current_identifier_aliases.update(stage_output_lowering["aliases"])
+            for local_name_key in ("local_name", "input_local_name"):
+                local_name = stage_output_lowering.get(local_name_key)
+                if local_name is not None:
+                    self.current_identifier_reserved_names.add(local_name)
         if hasattr(func, "qualifiers") and func.qualifiers:
             qualifier = func.qualifiers[0] if func.qualifiers else None
         else:
@@ -3672,6 +3847,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         else:
             raw_return_type = "void"
             return_type = "void"
+        if (
+            stage_output_lowering is not None
+            and stage_output_lowering.get("struct_name") is not None
+            and self.map_type(return_type) == "void"
+        ):
+            raw_return_type = stage_output_lowering["struct_name"]
+            return_type = stage_output_lowering["struct_name"]
         self.current_function_return_type = raw_return_type
         declaration_return_type = (
             f"{self.hlsl_precise_modifier_prefix(func)}{return_type}"
@@ -3696,6 +3878,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.local_variable_types = previous_local_variable_types
             self.current_identifier_aliases = previous_identifier_aliases
             self.current_identifier_reserved_names = previous_identifier_reserved_names
+            self.current_hlsl_stage_output_lowering = previous_stage_output_lowering
             self.current_generic_function_substitutions = (
                 previous_generic_function_substitutions
             )
@@ -3722,6 +3905,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 effective_shader_type,
                 return_type,
             )
+        if (
+            stage_output_lowering is not None
+            and stage_output_lowering.get("struct_name") is not None
+        ):
+            return_semantic = None
         body = getattr(func, "body", None)
         if effective_shader_type is None and body is None:
             function_name = self.hlsl_function_declaration_name(func, entry_name)
@@ -3735,6 +3923,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.local_variable_types = previous_local_variable_types
             self.current_identifier_aliases = previous_identifier_aliases
             self.current_identifier_reserved_names = previous_identifier_reserved_names
+            self.current_hlsl_stage_output_lowering = previous_stage_output_lowering
             self.current_generic_function_substitutions = (
                 previous_generic_function_substitutions
             )
@@ -3783,6 +3972,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.validate_hlsl_stage_parameter_requirements(func, effective_shader_type)
             if effective_shader_type == "compute":
                 code += self.generate_compute_numthreads(execution_config)
+            if (
+                stage_output_lowering is not None
+                and stage_output_lowering.get("input_struct_name") is not None
+            ):
+                input_name = stage_output_lowering["input_local_name"]
+                input_declaration = (
+                    f"{stage_output_lowering['input_struct_name']} {input_name}"
+                )
+                params_str = self.append_hlsl_parameter_declaration(
+                    params_str, input_declaration
+                )
+                self.local_variable_types[input_name] = stage_output_lowering[
+                    "input_struct_name"
+                ]
             code += wave_size_attribute
             code += waveops_helper_lanes_attribute
             function_name = entry_name or shader_map[effective_shader_type]
@@ -3840,6 +4043,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return_type != "void" and not self.statement_body_terminates(body)
         )
         try:
+            if stage_output_lowering is not None:
+                output_name = stage_output_lowering.get("local_name")
+                output_type = stage_output_lowering.get("struct_name")
+                if output_name is not None and output_type is not None:
+                    code += f"{'    ' * (indent + 1)}{output_type} {output_name};\n"
+                    self.local_variable_types[output_name] = output_type
             for statement in parameter_prologue_statements:
                 code += f"{'    ' * (indent + 1)}{statement}\n"
             code += self.generate_statement_body(body, indent + 1)
@@ -3848,7 +4057,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 previous_hlsl_visible_int_constants
             )
         if needs_fallthrough_return:
-            fallback = self.hlsl_default_value_expression(raw_return_type)
+            if (
+                stage_output_lowering is not None
+                and stage_output_lowering.get("local_name") is not None
+            ):
+                fallback = stage_output_lowering["local_name"]
+            else:
+                fallback = self.hlsl_default_value_expression(raw_return_type)
             code += f"{'    ' * (indent + 1)}return {fallback};\n"
         self.current_sampler_parameters = previous_sampler_parameters
         self.current_texture_parameters = previous_texture_parameters
@@ -3866,6 +4081,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.local_variable_types = previous_local_variable_types
         self.current_identifier_aliases = previous_identifier_aliases
         self.current_identifier_reserved_names = previous_identifier_reserved_names
+        self.current_hlsl_stage_output_lowering = previous_stage_output_lowering
         self.current_generic_function_substitutions = (
             previous_generic_function_substitutions
         )
@@ -4092,6 +4308,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         f"{self.generate_expression_with_expected(stmt.value, self.current_function_return_type)};\n"
                     )
             else:
+                stage_output_lowering = self.current_hlsl_stage_output_lowering
+                if (
+                    stage_output_lowering is not None
+                    and stage_output_lowering.get("local_name") is not None
+                ):
+                    return (
+                        f"{indent_str}return {stage_output_lowering['local_name']};\n"
+                    )
                 return f"{indent_str}return;\n"
 
         elif hasattr(stmt, "__class__") and "ExpressionStatement" in str(
@@ -4184,6 +4408,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         vtype = getattr(stmt, "var_type", None)
         if vtype is None:
             vtype = getattr(stmt, "vtype", None)
+        vtype_name = self.type_name_string(vtype)
+        if isinstance(vtype_name, str) and vtype_name.strip().lower() in {
+            "auto",
+            "let",
+        }:
+            inferred_type = self.expression_result_type(
+                getattr(stmt, "initial_value", None)
+            )
+            if inferred_type is not None:
+                return inferred_type
         if vtype is None:
             vtype = self.expression_result_type(getattr(stmt, "initial_value", None))
         return vtype or "float"
@@ -4625,6 +4859,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            option_call_type = self.hlsl_builtin_option_call_type(expr, func_name)
+            if option_call_type is not None:
+                return option_call_type
             if func_name in self.HLSL_WAVE_INTRINSIC_ARITIES:
                 return self.hlsl_wave_intrinsic_return_type(func_name, args)
             if func_name in self.HLSL_NONUNIFORM_RESOURCE_INDEX_NAMES:
@@ -5292,11 +5529,51 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             declaration = f"{declaration} = {value}"
         return declaration
 
+    def is_hlsl_builtin_option_none_expression(self, expr):
+        if not getattr(self, "hlsl_builtin_option_available", False):
+            return False
+        if isinstance(expr, str):
+            return expr.rsplit("::", 1)[-1] == "None"
+        name = getattr(expr, "name", None)
+        return isinstance(name, str) and name.rsplit("::", 1)[-1] == "None"
+
+    def hlsl_builtin_option_constructor_name(self, func_name):
+        if not getattr(self, "hlsl_builtin_option_available", False):
+            return func_name
+        base_name = str(func_name).rsplit("::", 1)[-1]
+        if base_name == "Some":
+            return "Option::Some"
+        if base_name == "None":
+            return "Option::Absent"
+        return func_name
+
+    def generate_hlsl_builtin_option_none_value(self):
+        if not getattr(self, "hlsl_builtin_option_available", False):
+            return None
+        return generate_enum_constructor_call(self, "Option::Absent", [])
+
+    def generate_hlsl_builtin_option_none_comparison(self, left, op, right):
+        if op not in {"==", "!="}:
+            return None
+        left_is_none = self.is_hlsl_builtin_option_none_expression(left)
+        right_is_none = self.is_hlsl_builtin_option_none_expression(right)
+        if left_is_none == right_is_none:
+            return None
+
+        subject = right if left_is_none else left
+        subject_expr = self.generate_expression(subject)
+        operator = "==" if op == "==" else "!="
+        return f"({subject_expr}.variant {operator} Option_Absent)"
+
     def generate_expression(self, expr):
         """Render a CrossGL AST expression into HLSL expression syntax."""
         if expr is None:
             return ""
         elif isinstance(expr, str):
+            if self.is_hlsl_builtin_option_none_expression(expr):
+                none_value = self.generate_hlsl_builtin_option_none_value()
+                if none_value is not None:
+                    return none_value
             return expr
         elif isinstance(expr, bool):
             return "true" if expr else "false"
@@ -5325,6 +5602,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return str(value)
             return str(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
+            if self.is_hlsl_builtin_option_none_expression(expr):
+                none_value = self.generate_hlsl_builtin_option_none_value()
+                if none_value is not None:
+                    return none_value
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
@@ -5334,6 +5615,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return enum_value
             return self.hlsl_identifier_name(name)
         elif isinstance(expr, VariableNode):
+            if self.is_hlsl_builtin_option_none_expression(expr):
+                none_value = self.generate_hlsl_builtin_option_none_value()
+                if none_value is not None:
+                    return none_value
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
@@ -5345,6 +5630,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             left = self.generate_expression(getattr(expr, "left", ""))
             right = self.generate_expression(getattr(expr, "right", ""))
             op = getattr(expr, "operator", getattr(expr, "op", "+"))
+            option_none_comparison = self.generate_hlsl_builtin_option_none_comparison(
+                getattr(expr, "left", ""),
+                self.map_operator(op),
+                getattr(expr, "right", ""),
+            )
+            if option_none_comparison is not None:
+                return option_none_comparison
             if self.hlsl_binary_multiply_uses_mul(expr):
                 return f"mul({left}, {right})"
             return f"({left} {self.map_operator(op)} {right})"
@@ -5412,6 +5704,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 callee = self.hlsl_function_call_name(func_expr)
             else:
                 callee = self.generate_expression(func_expr)
+
+            original_func_name = self.hlsl_builtin_option_constructor_name(func_name)
+            if original_func_name != func_name:
+                func_name = original_func_name
+                callee = original_func_name
 
             byteaddress_interlocked_call = (
                 self.generate_hlsl_byteaddress_interlocked_member_call(
@@ -13589,6 +13886,262 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if entry_point is not None:
                 functions.append(entry_point)
         return functions
+
+    def collect_hlsl_stage_output_lowerings(self, ast, target_stage, existing_structs):
+        if not stage_matches(target_stage, "vertex"):
+            return {}
+
+        used_struct_names = {
+            getattr(struct, "name", "")
+            for struct in existing_structs
+            if getattr(struct, "name", "")
+        }
+        lowerings = {}
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if stage_name != "vertex" or not stage_matches(target_stage, stage_name):
+                continue
+
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is None:
+                continue
+
+            referenced_names = self.hlsl_referenced_identifier_names(entry_point)
+            stage_inputs = []
+            stage_outputs = []
+            for variable in getattr(stage, "local_variables", []) or []:
+                name = getattr(variable, "name", None)
+                if not name or name not in referenced_names:
+                    continue
+                if self.hlsl_stage_local_variable_direction(variable) == "input":
+                    stage_inputs.append(variable)
+                elif self.hlsl_stage_local_variable_direction(variable) == "output":
+                    stage_outputs.append(variable)
+
+            if not stage_inputs and not stage_outputs:
+                continue
+
+            raw_return_type = self.type_name_string(
+                getattr(entry_point, "return_type", getattr(entry_point, "vtype", None))
+            )
+            can_lower_outputs = (
+                not raw_return_type or self.map_type(raw_return_type) == "void"
+            )
+            if not can_lower_outputs:
+                stage_outputs = []
+
+            input_struct = None
+            input_struct_name = None
+            input_local_name = None
+            input_aliases = {}
+            if stage_inputs:
+                input_struct_name = self.hlsl_unique_stage_io_struct_name(
+                    "VertexInput", "SPIRVVertexInput", used_struct_names
+                )
+                used_struct_names.add(input_struct_name)
+                input_local_name = self.hlsl_unique_stage_io_local_name(
+                    entry_point, "input", "spirvInput"
+                )
+                input_members, input_aliases = self.hlsl_stage_io_struct_members(
+                    stage_inputs, input_local_name
+                )
+                input_struct = StructNode(input_struct_name, input_members)
+
+            output_struct = None
+            output_struct_name = None
+            output_local_name = None
+            output_aliases = {}
+            if stage_outputs:
+                output_struct_name = self.hlsl_unique_stage_io_struct_name(
+                    "VertexOutput", "SPIRVVertexOutput", used_struct_names
+                )
+                used_struct_names.add(output_struct_name)
+                output_local_name = self.hlsl_unique_stage_io_local_name(
+                    entry_point, "output", "spirvOutput"
+                )
+                output_members, output_aliases = self.hlsl_stage_io_struct_members(
+                    stage_outputs, output_local_name
+                )
+                output_struct = StructNode(output_struct_name, output_members)
+
+            if input_struct is None and output_struct is None:
+                continue
+
+            lowerings[id(stage)] = {
+                "stage_name": stage_name,
+                "input_struct_name": input_struct_name,
+                "input_local_name": input_local_name,
+                "struct_name": output_struct_name,
+                "local_name": output_local_name,
+                "structs": [
+                    struct
+                    for struct in (input_struct, output_struct)
+                    if struct is not None
+                ],
+                "aliases": {**input_aliases, **output_aliases},
+            }
+
+        return lowerings
+
+    def hlsl_should_omit_lowered_spirv_pervertex_struct(self, struct_node):
+        if getattr(struct_node, "name", None) != "gl_PerVertex":
+            return False
+
+        builtin_members = {
+            "gl_Position",
+            "gl_PointSize",
+            "gl_ClipDistance",
+            "gl_CullDistance",
+        }
+        member_names = {
+            getattr(member, "name", None)
+            for member in getattr(struct_node, "members", []) or []
+            if getattr(member, "name", None)
+        }
+        return bool(member_names) and member_names <= builtin_members
+
+    def hlsl_referenced_identifier_names(self, func):
+        names = set()
+        for node in self.walk_ast(getattr(func, "body", None)):
+            if isinstance(node, IdentifierNode):
+                name = getattr(node, "name", None)
+            elif isinstance(node, VariableNode):
+                name = getattr(node, "name", None)
+            else:
+                continue
+            if name:
+                names.add(name)
+        return names
+
+    def hlsl_stage_local_variable_direction(self, variable):
+        for attr in getattr(variable, "attributes", []) or []:
+            name = str(getattr(attr, "name", "")).lower()
+            if name == "input":
+                return "input"
+            if name == "output":
+                return "output"
+        qualifiers = {
+            str(qualifier).lower() for qualifier in getattr(variable, "qualifiers", [])
+        }
+        if "in" in qualifiers:
+            return "input"
+        if "out" in qualifiers:
+            return "output"
+        return None
+
+    def hlsl_unique_stage_io_struct_name(self, preferred, fallback, used_names):
+        if preferred not in used_names:
+            return preferred
+        if fallback not in used_names:
+            return fallback
+        index = 2
+        while f"{fallback}{index}" in used_names:
+            index += 1
+        return f"{fallback}{index}"
+
+    def hlsl_unique_stage_io_local_name(self, entry_point, preferred, fallback):
+        used_names = self.collect_hlsl_function_identifier_names(entry_point)
+        used_names.update(self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES)
+        if preferred not in used_names:
+            return preferred
+        if fallback not in used_names:
+            return fallback
+        index = 2
+        while f"{fallback}{index}" in used_names:
+            index += 1
+        return f"{fallback}{index}"
+
+    def hlsl_stage_io_struct_members(self, variables, local_name):
+        members = []
+        aliases = {}
+        used_member_names = set()
+        for variable in variables:
+            field_name = self.hlsl_stage_io_field_name(variable, used_member_names)
+            used_member_names.add(field_name)
+            member = StructMemberNode(
+                field_name,
+                getattr(variable, "var_type", getattr(variable, "vtype", None)),
+                attributes=self.hlsl_stage_io_member_attributes(variable),
+            )
+            members.append(member)
+            aliases[variable.name] = f"{local_name}.{field_name}"
+        return members, aliases
+
+    def hlsl_stage_io_field_name(self, variable, used_names):
+        semantic = self.hlsl_stage_io_variable_semantic(variable)
+        builtin_names = {
+            "gl_Position": "position",
+            "gl_PointSize": "pointSize",
+            "gl_ClipDistance": "clipDistance",
+            "gl_CullDistance": "cullDistance",
+        }
+        base_name = builtin_names.get(semantic)
+        if base_name is None:
+            base_name = str(getattr(variable, "name", "value") or "value")
+            base_name = base_name.lstrip("_") or "value"
+        candidate = self.hlsl_sanitized_identifier(base_name)
+        while (
+            candidate in used_names
+            or candidate in self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES
+        ):
+            candidate += "_"
+        return candidate
+
+    def hlsl_sanitized_identifier(self, name):
+        text = "".join(
+            char if (char.isalnum() or char == "_") else "_"
+            for char in str(name or "value")
+        )
+        text = text or "value"
+        if text[0].isdigit():
+            text = f"value_{text}"
+        return text
+
+    def hlsl_stage_io_variable_semantic(self, variable):
+        for attr in getattr(variable, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            normalized = str(attr_name).lower()
+            if normalized in {
+                "input",
+                "output",
+                "in",
+                "out",
+                "highp",
+                "mediump",
+                "lowp",
+            }:
+                continue
+            if attr_name in self.semantic_map or normalized == "location":
+                return self.semantic_attribute_name(attr)
+        return None
+
+    def hlsl_stage_io_member_attributes(self, variable):
+        retained = []
+        for attr in getattr(variable, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            normalized = str(attr_name).lower()
+            if normalized in {
+                "input",
+                "output",
+                "in",
+                "out",
+                "highp",
+                "mediump",
+                "lowp",
+            }:
+                continue
+            if attr_name in self.semantic_map or normalized in {
+                "location",
+                "centroid",
+                "flat",
+                "noperspective",
+                "sample",
+                "smooth",
+            }:
+                retained.append(
+                    AttributeNode(attr_name, list(getattr(attr, "arguments", []) or []))
+                )
+        return retained
 
     def collect_hlsl_vertex_entry_output_struct_names(self, ast, target_stage=None):
         if not stage_matches(target_stage, "vertex"):
