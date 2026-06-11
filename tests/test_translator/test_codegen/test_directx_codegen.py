@@ -231,6 +231,34 @@ def test_glsl_fragment_fragcoord_lowers_to_hlsl_position_input(tmp_path):
     assert "_crossglFragCoord.y" in generated_code
 
 
+def test_glsl_fragment_input_locations_lower_to_distinct_hlsl_semantics(tmp_path):
+    shader = """
+    #version 450
+    layout(location = 0) in vec3 nearPoint;
+    layout(location = 1) in vec3 farPoint;
+    layout(location = 0) out vec4 outColor;
+
+    void main() {
+        outColor = vec4(nearPoint + farPoint, 1.0);
+    }
+    """
+    shader_path = tmp_path / "line_grid.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "float3 nearPoint: TEXCOORD0;" in generated_code
+    assert "float3 farPoint: TEXCOORD1;" in generated_code
+    assert ": location" not in generated_code
+    assert generated_code.count(": TEXCOORD0") == 1
+    assert generated_code.count(": TEXCOORD1") == 1
+
+
 def test_directx_user_defined_synchronization_names_are_not_lowered():
     shader = """
     shader SynchronizationShadowing {
