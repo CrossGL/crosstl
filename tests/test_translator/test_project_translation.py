@@ -35000,7 +35000,7 @@ def test_runtime_host_loader_scaffolds_preserve_loader_step_metadata(tmp_path):
 def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files(
     tmp_path,
 ):
-    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
+    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("cuda",))
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
     loader_manifest_path.write_text(
         json.dumps(
@@ -35094,7 +35094,7 @@ def test_runtime_host_loader_scaffolds_sanitize_target_and_unit_paths(tmp_path):
 
 
 def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds(tmp_path):
-    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
+    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("cuda",))
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
     loader_manifest_path.write_text(
         json.dumps(
@@ -35284,7 +35284,7 @@ def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file(
 
 def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units(tmp_path):
     _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = inspect_runtime_host_loader_scaffolds(
@@ -35467,7 +35467,7 @@ def test_plan_runtime_host_loader_consumption_reports_ready_units(tmp_path):
 
 def test_plan_runtime_host_loader_consumption_carries_blocked_units(tmp_path):
     _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = plan_runtime_host_loader_consumption(
@@ -35632,7 +35632,7 @@ def test_build_runtime_host_integration_handoff_writes_ready_bundle(tmp_path):
 
 def test_build_runtime_host_integration_handoff_writes_blocked_bundle(tmp_path):
     repo, plan_path, _ = _write_host_loader_consumption_plan_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
     handoff_dir = repo / "host-integration"
 
@@ -35643,7 +35643,7 @@ def test_build_runtime_host_integration_handoff_writes_blocked_bundle(tmp_path):
     assert payload["summary"]["blockedLoaderUnitCount"] == 1
     assert payload["targets"][0]["status"] == "blocked"
     assert payload["actions"][0]["kind"] == "resolve-loader-scaffold-blockers"
-    assert (handoff_dir / "targets" / "vulkan.integration.json").is_file()
+    assert (handoff_dir / "targets" / "cuda.integration.json").is_file()
 
 
 def test_build_runtime_host_integration_handoff_rejects_wrong_plan_kind(tmp_path):
@@ -35887,7 +35887,7 @@ def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch(
 
 def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle(tmp_path):
     _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = inspect_runtime_host_integration_handoff(
@@ -35900,7 +35900,7 @@ def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle(tmp_pat
     assert payload["summary"]["readyTargetCount"] == 0
     assert payload["summary"]["blockedTargetCount"] == 1
     assert payload["summary"]["failedTargetCount"] == 0
-    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["target"] == "cuda"
     assert payload["targets"][0]["status"] == "blocked"
     assert payload["targets"][0]["targetStatus"] == "blocked"
     assert payload["targets"][0]["loaderUnitCount"] == 1
@@ -36089,7 +36089,7 @@ def test_plan_runtime_host_integration_execution_reports_ready_steps(tmp_path):
 
 def test_plan_runtime_host_integration_execution_carries_blocked_steps(tmp_path):
     _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = plan_runtime_host_integration_execution(
@@ -36105,7 +36105,7 @@ def test_plan_runtime_host_integration_execution_carries_blocked_steps(tmp_path)
     assert payload["summary"]["blockedLoaderUnitCount"] == 1
     assert payload["summary"]["stepCount"] == 1
     assert payload["summary"]["blockedStepCount"] == 1
-    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["target"] == "cuda"
     assert payload["targets"][0]["status"] == "blocked"
     assert payload["targets"][0]["blockedStepCount"] == 1
     assert payload["steps"][0]["kind"] == "resolve-loader-scaffold-blockers"
@@ -36340,7 +36340,7 @@ def test_execute_runtime_host_integration_reports_blocked_steps_without_failure(
     tmp_path,
 ):
     _, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = execute_runtime_host_integration(plan_path)
