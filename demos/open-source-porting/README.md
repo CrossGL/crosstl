@@ -70,7 +70,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `rocm-examples-add-kernel` | `ROCm/rocm-examples` at `cf369da68f209c315074204bd0eb61d1a5c015d1` | MIT | HIP | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream sphinx-marked add-kernel slice. Host HIP runtime setup remains outside the demo scope. |
 | `raylib-base-fragment` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream base fragment shader unchanged. |
 | `raylib-base-vertex` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream base vertex shader unchanged. |
-| `raylib-lighting-shader-pair` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream lighting vertex and fragment shaders unchanged. DirectX validation is tracked in issue #1271. |
+| `raylib-lighting-shader-pair` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream lighting vertex and fragment shaders unchanged. |
 | `renderdoc-vktext-fragment` | `baldurk/renderdoc` at `6660344c3d8024dc5107afa2115c5035ceb85533` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Vulkan text fragment shader unchanged. |
 | `rust-gpu-compute-collatz` | `Rust-GPU/rust-gpu` at `36e3348cdc2f824afec64b3b5af5d369d98a4c0d` | Apache-2.0 OR MIT | Rust-GPU | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream compute shader unchanged. |
 | `rust-gpu-graphics-stage-inputs` | `Rust-GPU/rust-gpu` at `36e3348cdc2f824afec64b3b5af5d369d98a4c0d` | Apache-2.0 OR MIT | Rust-GPU | CrossGL, OpenGL, Metal, Vulkan | Uses a reduced graphics shader slice that keeps the plain vertex input and fragment color path. DirectX validation is tracked in issue #1278. |
@@ -205,12 +205,11 @@ The `ARM-software/opengl-es-sdk-for-android` cube shaders are checked for
 CrossGL, OpenGL, Metal, DirectX, and Vulkan output after issue #820 restored
 legacy `gl_FragColor` lowering.
 
-The `raysan5/raylib` base shader cases are checked for CrossGL, OpenGL, Metal,
-DirectX, and Vulkan output. The lighting shader pair is checked for CrossGL,
-OpenGL, Metal, and Vulkan output. DirectX output remains excluded until issue
-#1271 resolves vector truncation for matrix-vector results. The demo still
-leaves raylib's host-side uniform, texture, and material binding setup outside
-the translated artifact set.
+The `raysan5/raylib` base shader cases and lighting shader pair are checked for
+CrossGL, OpenGL, Metal, DirectX, and Vulkan output after issue #1271 restored
+DirectX vector truncation for matrix-vector results. The demo still leaves
+raylib's host-side uniform, texture, and material binding setup outside the
+translated artifact set.
 
 The `baldurk/renderdoc` Vulkan text fragment shader is checked for CrossGL,
 OpenGL, Metal, DirectX, and Vulkan output. RenderDoc's UI text atlas setup and

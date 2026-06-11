@@ -1,0 +1,226 @@
+{
+  "generatedFile": "crosstl-out/directx/lighting.vs.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 97,
+        "file": "crosstl-out/directx/lighting.vs.hlsl",
+        "length": 38,
+        "line": 4,
+        "offset": 59
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 89,
+        "file": "lighting.vs",
+        "length": 24,
+        "line": 5,
+        "offset": 65
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 168,
+        "file": "crosstl-out/directx/lighting.vs.hlsl",
+        "length": 35,
+        "line": 6,
+        "offset": 133
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 132,
+        "file": "lighting.vs",
+        "length": 21,
+        "line": 7,
+        "offset": 111
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 265,
+        "file": "crosstl-out/directx/lighting.vs.hlsl",
+        "length": 36,
+        "line": 10,
+        "offset": 229
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 318,
+        "file": "lighting.vs",
+        "length": 23,
+        "line": 16,
+        "offset": 295
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 298,
+        "file": "crosstl-out/directx/lighting.vs.hlsl",
+        "length": 33,
+        "line": 11,
+        "offset": 265
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 338,
+        "file": "lighting.vs",
+        "length": 20,
+        "line": 17,
+        "offset": 318
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 369,
+        "file": "crosstl-out/directx/lighting.vs.hlsl",
+        "length": 37,
+        "line": 13,
+        "offset": 332
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 747,
+        "file": "lighting.vs",
+        "length": 49,
+        "line": 31,
+        "offset": 698
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 661,
+        "file": "crosstl-out/directx/lighting.vs.hlsl",
+        "length": 84,
+        "line": 24,
+        "offset": 577
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 525,
+        "file": "lighting.vs",
+        "length": 61,
+        "line": 25,
+        "offset": 464
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 709,
+        "file": "crosstl-out/directx/lighting.vs.hlsl",
+        "length": 48,
+        "line": 25,
+        "offset": 661
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 560,
+        "file": "lighting.vs",
+        "length": 35,
+        "line": 26,
+        "offset": 525
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 751,
+        "file": "crosstl-out/directx/lighting.vs.hlsl",
+        "length": 42,
+        "line": 26,
+        "offset": 709
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 589,
+        "file": "lighting.vs",
+        "length": 29,
+        "line": 27,
+        "offset": 560
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 843,
+        "file": "crosstl-out/directx/lighting.vs.hlsl",
+        "length": 92,
+        "line": 27,
+        "offset": 751
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 658,
+        "file": "lighting.vs",
+        "length": 69,
+        "line": 28,
+        "offset": 589
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 913,
+        "file": "crosstl-out/directx/lighting.vs.hlsl",
+        "length": 70,
+        "line": 28,
+        "offset": 843
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 747,
+        "file": "lighting.vs",
+        "length": 49,
+        "line": 31,
+        "offset": 698
+      }
+    }
+  ],
+  "schemaVersion": 1
+}
