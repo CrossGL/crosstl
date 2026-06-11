@@ -238,6 +238,34 @@ def test_glsl_fragment_fragcoord_lowers_to_hlsl_position_input(tmp_path):
     assert "_crossglFragCoord.y" in generated_code
 
 
+def test_glsl_input_attachment_reports_unsupported_hlsl_diagnostic(tmp_path):
+    shader = """
+    #version 450
+    layout(input_attachment_index = 0, set = 0, binding = 0)
+    uniform subpassInput sceneColor;
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        fragColor = subpassLoad(sceneColor);
+    }
+    """
+    shader_path = tmp_path / "input-attachment.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "unsupported HLSL input attachment declaration" in generated_code
+    assert "unsupported HLSL input attachment load" in generated_code
+    assert "subpassInput sceneColor" not in generated_code
+    assert "subpassLoad(sceneColor)" not in generated_code
+    assert "float4(0.0, 0.0, 0.0, 0.0)" in generated_code
+
+
 def test_glsl_fragment_input_locations_lower_to_distinct_hlsl_semantics(tmp_path):
     shader = """
     #version 450

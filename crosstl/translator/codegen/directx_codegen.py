@@ -1,5 +1,6 @@
 """CrossGL-to-HLSL code generator."""
 
+import re
 from copy import deepcopy
 from hashlib import sha1
 
@@ -1767,6 +1768,14 @@ class HLSLCodeGen:
                 )
                 code += self.unsupported_glsl_buffer_block_variable_placeholder(
                     "HLSL", vtype, var_name
+                )
+                continue
+
+            if self.is_input_attachment_type_name(vtype):
+                code += (
+                    "/* unsupported HLSL input attachment declaration: "
+                    f"'{var_name}' uses {self.type_name_string(vtype)}; "
+                    "subpassInput resources require Vulkan subpass lowering */\n"
                 )
                 continue
 
@@ -4969,6 +4978,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.image_atomic_result_type(func_name, args[0])
             if func_name == "imageLoad" and args:
                 return self.image_load_result_type(args[0])
+            if func_name == "subpassLoad":
+                return "vec4"
             if func_name == "textureSamplePosition":
                 return "vec2"
             if is_texture_query_lod_operation(func_name):
@@ -5776,6 +5787,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if unsupported_call is not None:
                 return unsupported_call
+
+            input_attachment_call = self.unsupported_input_attachment_call(func_name)
+            if input_attachment_call is not None:
+                return input_attachment_call
 
             synchronization_call = self.synchronization_function_call(func_name, args)
             if synchronization_call is not None:
@@ -21194,6 +21209,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return f"{mapped_type}({', '.join(member_values)})"
 
         return default_value_expression(self, base_type)
+
+    def is_input_attachment_type_name(self, vtype):
+        type_name = self.type_name_string(vtype)
+        return bool(re.fullmatch(r"[iu]?subpassInput(?:MS)?", str(type_name or "")))
+
+    def unsupported_input_attachment_call(self, func_name):
+        if func_name != "subpassLoad":
+            return None
+        fallback_type = self.current_expression_expected_type or "vec4"
+        fallback = self.diagnostic_zero_value_for_type(fallback_type)
+        return (
+            "/* unsupported HLSL input attachment load: "
+            "subpassLoad requires Vulkan subpass input lowering */ "
+            f"{fallback}"
+        )
 
     def unsupported_glsl_buffer_block_access_value(self, expr):
         name = self.unsupported_glsl_buffer_block_access_name(expr)

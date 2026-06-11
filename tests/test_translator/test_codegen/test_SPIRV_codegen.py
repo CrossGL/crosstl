@@ -247,6 +247,40 @@ def assert_spirv_function_variables_are_first_block_declarations(spv_code):
             function_start = None
 
 
+def test_glsl_input_attachment_lowers_to_spirv_subpass_data(tmp_path):
+    shader = """
+    #version 450
+    layout(input_attachment_index = 3, set = 1, binding = 2)
+    uniform subpassInput sceneColor;
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        fragColor = subpassLoad(sceneColor);
+    }
+    """
+    shader_path = tmp_path / "input-attachment.frag"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="vulkan",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    scene_color_id = spirv_named_variable(
+        generated, "sceneColor", storage_class="UniformConstant"
+    )
+    assert re.search(r"%\d+ = OpTypeImage %\d+ SubpassData 0 0 0 2 Unknown", generated)
+    assert "OpTypePointer UniformConstant" in generated
+    assert f"OpDecorate {scene_color_id} DescriptorSet 1" in generated
+    assert f"OpDecorate {scene_color_id} Binding 2" in generated
+    assert f"OpDecorate {scene_color_id} InputAttachmentIndex 3" in generated
+    assert "OpImageRead" in generated
+    assert "subpassLoad" not in generated
+    assert "Unknown type subpassInput" not in generated
+
+
 def assert_spirv_module_validates(spv_code, tmp_path, target_env=None):
     spirv_as = shutil.which("spirv-as")
     spirv_val = shutil.which("spirv-val")

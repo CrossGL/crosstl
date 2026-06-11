@@ -2190,6 +2190,12 @@ class MetalCodeGen:
                 )
                 self.sampler_variables.append((node, binding, array_size))
                 sampler_register = max(sampler_register, binding + resource_count)
+            elif self.is_input_attachment_type_name(vtype):
+                code += (
+                    "/* unsupported Metal input attachment declaration: "
+                    f"'{var_name}' uses {self.type_name_string(vtype)}; "
+                    "subpassInput resources require Vulkan subpass lowering */\n"
+                )
             else:
                 mapped_type = self.map_type(vtype)
                 declaration = format_c_style_array_declaration(mapped_type, var_name)
@@ -3480,6 +3486,21 @@ class MetalCodeGen:
         if base_type.startswith("bool") or base_type.startswith("bvec"):
             return f"{base_type}(false)"
         return f"{base_type}(0)"
+
+    def is_input_attachment_type_name(self, vtype):
+        type_name = self.type_name_string(vtype)
+        return bool(re.fullmatch(r"[iu]?subpassInput(?:MS)?", str(type_name or "")))
+
+    def unsupported_input_attachment_call(self, func_name):
+        if func_name != "subpassLoad":
+            return None
+        fallback_type = self.current_expression_expected_type or "vec4"
+        fallback = self.metal_default_value_expression(fallback_type)
+        return (
+            "/* unsupported Metal input attachment load: "
+            "subpassLoad requires Vulkan subpass input lowering */ "
+            f"{fallback}"
+        )
 
     def generate_function(
         self,
@@ -7831,6 +7852,8 @@ class MetalCodeGen:
                 return unsupported_functions[func_name].get("return_type")
             if func_name == "imageLoad" and args:
                 return self.image_load_result_type(args[0])
+            if func_name == "subpassLoad":
+                return "vec4"
             if func_name in {
                 "float",
                 "half",
@@ -8935,6 +8958,10 @@ class MetalCodeGen:
             )
             if unsupported_call is not None:
                 return unsupported_call
+
+            input_attachment_call = self.unsupported_input_attachment_call(func_name)
+            if input_attachment_call is not None:
+                return input_attachment_call
 
             enum_constructor = generate_enum_constructor_call(
                 self, func_name, expr.args

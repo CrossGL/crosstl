@@ -174,6 +174,34 @@ def test_glsl_fragment_fragcoord_lowers_to_metal_position_input(tmp_path):
     compile_with_metal_if_available(generated_code)
 
 
+def test_glsl_input_attachment_reports_unsupported_metal_diagnostic(tmp_path):
+    shader = """
+    #version 450
+    layout(input_attachment_index = 0, set = 0, binding = 0)
+    uniform subpassInput sceneColor;
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        fragColor = subpassLoad(sceneColor);
+    }
+    """
+    shader_path = tmp_path / "input-attachment.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "unsupported Metal input attachment declaration" in generated_code
+    assert "unsupported Metal input attachment load" in generated_code
+    assert "constant subpassInput sceneColor" not in generated_code
+    assert "subpassLoad(sceneColor)" not in generated_code
+    assert "float4(0)" in generated_code
+
+
 def test_metal_reserved_stage_keyword_local_identifier_is_escaped():
     shader = """
     shader ReservedStageKeywordLocal {
