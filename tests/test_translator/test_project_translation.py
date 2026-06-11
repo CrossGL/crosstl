@@ -11178,6 +11178,7 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
         "variant",
         "error",
         "stage",
+        "templateMaterialization",
     }
     assert set(artifact["sourceHash"]) == project_pipeline.REPORT_HASH_FIELDS
     assert isinstance(artifact["sourceSizeBytes"], int)
