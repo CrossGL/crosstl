@@ -156,48 +156,22 @@ def _smoke_covers_target(invocations, case_name: str, target: str) -> bool:
 
 
 def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
+    runner = _load_demo_runner()
     workflow = (ROOT / ".github" / "workflows" / "demo.yml").read_text(encoding="utf-8")
 
-    assert _workflow_step_cases(workflow, "Linux OpenGL and Vulkan smoke checks") == {
-        "angle-simple-texture-2d",
-        "apple-modern-rendering-mesh-viewdir",
-        "arm-opengl-es-sdk-cube",
-        "directx-graphics-samples-hello-const-buffers",
-        "directx-graphics-samples-hello-triangle",
-        "directx-graphics-samples-hello-texture",
-        "directx-shader-compiler-groupshared-splat",
-        "directx-shader-compiler-neg1",
-        "directx-sdk-samples-tutorial02",
-        "diligent-samples-tutorial02-cube",
-        "diligent-samples-vrs-cube",
-        "glslang-push-constant-vertex",
-        "glslang-spec-constant-vertex",
-        "godot-betsy-alpha-stitch",
-        "libgdx-batch-shader",
-        "lonelydevil-vulkan-tutorial-triangle",
-        "monogame-sprite-effect",
-        "metal-performance-testing-matmul",
-        "nvidia-cuda-samples-vector-add",
-        "nvpro-vk-mini-samples-rectangle",
-        "ogl-samples-flat-color",
-        "opencl-sdk-saxpy",
-        "openframeworks-noise-shader",
-        "rocm-examples-add-kernel",
-        "raylib-base-fragment",
-        "raylib-base-vertex",
-        "raylib-lighting-shader-pair",
-        "renderdoc-vktext-fragment",
-        "rust-gpu-compute-collatz",
-        "rust-gpu-graphics-stage-inputs",
-        "rust-gpu-vulkan-examples-triangle-overlay",
-        "sascha-willems-vulkan-conservative-triangle",
-        "sascha-willems-vulkan-headless-compute",
-        "slang-hello-world-compute",
-        "spirv-cross-round-fragment",
-        "spirv-tools-basic-src",
-        "vulkan-tools-cube",
-        "vulkan-samples-dynamic-line-grid",
-    }
+    def cases_for_target(target: str) -> set[str]:
+        return {
+            case_dir.name
+            for case_dir in CASE_ROOT.iterdir()
+            if case_dir.is_dir() and target in runner._case_targets(case_dir)
+        }
+
+    assert _workflow_step_cases(
+        workflow, "Linux OpenGL smoke checks"
+    ) == cases_for_target("opengl")
+    assert _workflow_step_cases(
+        workflow, "Linux Vulkan smoke checks"
+    ) == cases_for_target("vulkan")
     assert _workflow_step_cases(workflow, "macOS Metal smoke checks") == {
         "angle-simple-texture-2d",
         "apple-modern-rendering-mesh-viewdir",
@@ -283,8 +257,8 @@ def test_open_source_demo_workflow_covers_platform_targets():
     runner = _load_demo_runner()
     workflow = (ROOT / ".github" / "workflows" / "demo.yml").read_text(encoding="utf-8")
     linux_invocations = _workflow_run_demo_invocations(
-        workflow, "Linux OpenGL and Vulkan smoke checks"
-    )
+        workflow, "Linux OpenGL smoke checks"
+    ) + _workflow_run_demo_invocations(workflow, "Linux Vulkan smoke checks")
     macos_invocations = _workflow_run_demo_invocations(
         workflow, "macOS Metal smoke checks"
     )

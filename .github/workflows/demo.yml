@@ -79,7 +79,7 @@ jobs:
             --reports-dir support/generated/demo-reports
         shell: bash
 
-      - name: Linux OpenGL and Vulkan smoke checks
+      - name: Linux OpenGL smoke checks
         if: runner.os == 'Linux'
         run: |
           python demos/open-source-porting/run_demo.py \
@@ -89,21 +89,21 @@ jobs:
             --case angle-simple-texture-2d \
             --case apple-modern-rendering-mesh-viewdir \
             --case arm-opengl-es-sdk-cube \
-            --case directx-graphics-samples-hello-const-buffers \
-            --case directx-graphics-samples-hello-triangle \
-            --case directx-graphics-samples-hello-texture \
-            --case directx-shader-compiler-groupshared-splat \
-            --case directx-shader-compiler-neg1 \
-            --case directx-sdk-samples-tutorial02 \
             --case diligent-samples-tutorial02-cube \
             --case diligent-samples-vrs-cube \
+            --case directx-graphics-samples-hello-const-buffers \
+            --case directx-graphics-samples-hello-texture \
+            --case directx-graphics-samples-hello-triangle \
+            --case directx-sdk-samples-tutorial02 \
+            --case directx-shader-compiler-groupshared-splat \
+            --case directx-shader-compiler-neg1 \
             --case glslang-push-constant-vertex \
             --case glslang-spec-constant-vertex \
             --case godot-betsy-alpha-stitch \
             --case libgdx-batch-shader \
             --case lonelydevil-vulkan-tutorial-triangle \
-            --case monogame-sprite-effect \
             --case metal-performance-testing-matmul \
+            --case monogame-sprite-effect \
             --case nvidia-cuda-samples-vector-add \
             --case nvpro-vk-mini-samples-rectangle \
             --case ogl-samples-flat-color \
@@ -114,6 +114,54 @@ jobs:
             --case raylib-base-vertex \
             --case raylib-lighting-shader-pair \
             --case renderdoc-vktext-fragment \
+            --case rocm-examples-add-kernel \
+            --case rust-gpu-graphics-stage-inputs \
+            --case rust-gpu-vulkan-examples-triangle-overlay \
+            --case sascha-willems-vulkan-conservative-triangle \
+            --case sascha-willems-vulkan-headless-compute \
+            --case slang-hello-world-compute \
+            --case spirv-cross-round-fragment \
+            --case spirv-tools-basic-src \
+            --case vulkan-samples-dynamic-line-grid \
+            --case vulkan-tools-cube \
+            --target opengl \
+            --reports-dir support/generated/demo-reports/linux-opengl
+        shell: bash
+
+      - name: Linux Vulkan smoke checks
+        if: runner.os == 'Linux'
+        run: |
+          python demos/open-source-porting/run_demo.py \
+            --check \
+            --run-toolchains \
+            --require-toolchain-runs \
+            --case angle-simple-texture-2d \
+            --case apple-modern-rendering-mesh-viewdir \
+            --case arm-opengl-es-sdk-cube \
+            --case diligent-samples-tutorial02-cube \
+            --case diligent-samples-vrs-cube \
+            --case directx-graphics-samples-hello-const-buffers \
+            --case directx-graphics-samples-hello-texture \
+            --case directx-graphics-samples-hello-triangle \
+            --case directx-sdk-samples-tutorial02 \
+            --case directx-shader-compiler-groupshared-splat \
+            --case directx-shader-compiler-neg1 \
+            --case glslang-push-constant-vertex \
+            --case glslang-spec-constant-vertex \
+            --case godot-betsy-alpha-stitch \
+            --case libgdx-batch-shader \
+            --case metal-performance-testing-matmul \
+            --case monogame-sprite-effect \
+            --case nvidia-cuda-samples-vector-add \
+            --case nvpro-vk-mini-samples-rectangle \
+            --case ogl-samples-flat-color \
+            --case opencl-sdk-saxpy \
+            --case openframeworks-noise-shader \
+            --case raylib-base-fragment \
+            --case raylib-base-vertex \
+            --case raylib-lighting-shader-pair \
+            --case renderdoc-vktext-fragment \
+            --case rocm-examples-add-kernel \
             --case rust-gpu-compute-collatz \
             --case rust-gpu-graphics-stage-inputs \
             --case rust-gpu-vulkan-examples-triangle-overlay \
@@ -122,11 +170,9 @@ jobs:
             --case slang-hello-world-compute \
             --case spirv-cross-round-fragment \
             --case spirv-tools-basic-src \
-            --case vulkan-tools-cube \
             --case vulkan-samples-dynamic-line-grid \
-            --target opengl \
             --target vulkan \
-            --reports-dir support/generated/demo-reports/linux-opengl-vulkan
+            --reports-dir support/generated/demo-reports/linux-vulkan
         shell: bash
 
       - name: macOS Metal smoke checks
