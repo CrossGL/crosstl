@@ -35418,6 +35418,100 @@ def test_translate_project_opencl_targets_do_not_leak_resource_parameter_syntax(
     assert "kernel void kernel_scale(" in outputs["metal"]
 
 
+def test_translate_project_cuda_pointer_parameters_lower_to_opengl_buffers(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "vectorAdd.cu").write_text(
+        textwrap.dedent("""
+            extern "C" __global__ void vectorAdd(const float *A,
+                                                  const float *B,
+                                                  float *C,
+                                                  int numElements) {
+                int i = blockDim.x * blockIdx.x + threadIdx.x;
+                if (i < numElements) {
+                    C[i] = A[i] + B[i];
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("opengl", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "layout(std430, binding = 0) buffer ABuffer { float A[]; };" in output
+    assert "layout(std430, binding = 1) buffer BBuffer { float B[]; };" in output
+    assert "layout(std430, binding = 2) buffer CBuffer { float C[]; };" in output
+    assert "uniform vectorAdd_numElements_Args" in output
+    assert "void main()" in output
+    assert "void vectorAdd(float A[]" not in output
+    assert "float A[], float B[]" not in output
+
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_hip_pointer_parameters_lower_to_opengl_buffers(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "add_kernel.hip").write_text(
+        textwrap.dedent("""
+            #include <hip/hip_runtime.h>
+
+            __global__ void addKernel(const float *A,
+                                      const float *B,
+                                      float *C,
+                                      int N) {
+                int i = hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x;
+                if (i < N) {
+                    C[i] = A[i] + B[i];
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("opengl", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert (
+        "layout(std430, binding = 0) readonly buffer ABuffer { float A[]; };"
+        in output
+    )
+    assert (
+        "layout(std430, binding = 1) readonly buffer BBuffer { float B[]; };"
+        in output
+    )
+    assert "layout(std430, binding = 2) buffer CBuffer { float C[]; };" in output
+    assert "layout(std140, binding = 3) uniform addKernel_N_Args" in output
+    assert "void main()" in output
+    assert "void addKernel(float A[]" not in output
+    assert "float A[], float B[]" not in output
+
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
 def test_translate_project_opencl_directx_allocates_generated_parameter_bindings(
     tmp_path,
 ):
