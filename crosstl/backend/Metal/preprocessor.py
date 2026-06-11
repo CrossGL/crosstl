@@ -194,18 +194,25 @@ class MetalPreprocessor(HLSLPreprocessor):
             template = templates_by_name.get(instantiation.function_name)
             if template is None:
                 continue
+            template_arguments = self._template_arguments_with_defaults(
+                code,
+                template,
+                instantiation.template_arguments,
+            )
             key = (
                 instantiation.function_name,
                 tuple(
                     self._normalize_template_argument_text(argument)
-                    for argument in instantiation.template_arguments
+                    for argument in template_arguments
                 ),
                 instantiation.host_name,
             )
             if key in seen:
                 continue
             seen.add(key)
-            materialized = self._materialize_template_function(template, instantiation)
+            materialized = self._materialize_template_function(
+                code, template, instantiation
+            )
             if materialized:
                 template.materializations.append(materialized)
 
@@ -475,15 +482,21 @@ class MetalPreprocessor(HLSLPreprocessor):
 
     def _materialize_template_function(
         self,
+        code: str,
         template: _MetalTemplateFunction,
         instantiation: _MLXKernelInstantiation,
     ) -> str:
         function_identifier = self._materialized_function_identifier(
             instantiation.host_name, template.name
         )
-        return self._materialize_template_function_with_name(
+        template_arguments = self._template_arguments_with_defaults(
+            code,
             template,
             instantiation.template_arguments,
+        )
+        return self._materialize_template_function_with_name(
+            template,
+            template_arguments,
             function_identifier,
             host_name=instantiation.host_name,
         )
@@ -980,6 +993,27 @@ class MetalPreprocessor(HLSLPreprocessor):
             if len(tokens) >= 2 and tokens[0] in {"typename", "class"}:
                 names.add(tokens[-1])
         return names
+
+    def _template_arguments_with_defaults(
+        self,
+        code: str,
+        template: _MetalTemplateFunction,
+        template_arguments: List[str],
+    ) -> List[str]:
+        del code
+        arguments = list(template_arguments)
+        if self._template_arguments_satisfy_parameters(template, arguments):
+            return arguments
+
+        defaults = getattr(template, "template_parameter_defaults", {}) or {}
+        for parameter in template.template_parameters[len(arguments) :]:
+            if parameter in template.variadic_template_parameters:
+                break
+            default = defaults.get(parameter)
+            if default is None:
+                break
+            arguments.append(default)
+        return arguments
 
     def _template_argument_bindings(
         self,
