@@ -232,8 +232,8 @@ The `microsoft/DirectX-Graphics-Samples` HelloConstBuffers shader from
 `Samples/Desktop/D3D12HelloWorld/src/HelloConstBuffers/shaders.hlsl` at
 `31ae3c91160d8634264004cdaf4e41a99c41243e` was tested as a candidate. It was
 retested after issue #812 closed and now emits directly compilable Metal
-attribute bindings for the candidate shader. It remains documented here as a
-candidate for a future demo expansion rather than a current checked case.
+attribute bindings. The shader is checked for CrossGL, OpenGL, Metal, DirectX,
+and Vulkan output.
 
 The `shader-slang/slang` default-parameter compute shader from
 `tests/compute/default-parameter.slang` at
