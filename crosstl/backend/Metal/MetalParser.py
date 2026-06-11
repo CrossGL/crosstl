@@ -227,12 +227,45 @@ STAGE_ATTRIBUTE_NAMES = {
 }
 
 
+class MetalParserError(SyntaxError):
+    def __init__(
+        self,
+        message,
+        *,
+        token=None,
+        declaration_context=None,
+        file_path=None,
+    ):
+        line = getattr(token, "line", None)
+        column = getattr(token, "column", None)
+        rendered = message
+        if declaration_context:
+            rendered = f"{rendered} in {declaration_context}"
+        if line is not None and column is not None:
+            rendered = f"{rendered} at line {line}, column {column}"
+        super().__init__(rendered)
+        self.raw_message = message
+        self.token = token
+        self.declaration_context = declaration_context
+        self.project_diagnostic_code = "project.translate.metal-parse-failed"
+        self.missing_capabilities = ["metal.parser"]
+        if line is not None and column is not None:
+            self.source_location = {
+                "file": file_path,
+                "line": line,
+                "column": column,
+                "end_line": line,
+                "end_column": column + max(1, len(str(token[1]))),
+            }
+
+
 class MetalParser:
     """Parse Metal tokens into the Metal backend shader AST."""
 
-    def __init__(self, tokens):
+    def __init__(self, tokens, file_path=None):
         self.tokens = tokens
         self.pos = 0
+        self.file_path = file_path
         self.current_token = (
             self.tokens[self.pos] if self.pos < len(self.tokens) else ("EOF", None)
         )
@@ -339,6 +372,8 @@ class MetalParser:
         self.pending_block_scope_names = []
         self.known_variable_templates = set()
         self.known_function_templates = set()
+        self.known_value_template_parameters = set()
+        self.declaration_context_stack = []
         self.namespace_aliases = {}
 
     def skip_comments(self):
@@ -359,7 +394,37 @@ class MetalParser:
             )
             self.skip_comments()
         else:
-            raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
+            raise self.syntax_error(
+                f"Expected {token_type}, got {self.current_token[0]}"
+            )
+
+    def syntax_error(self, message, token=None):
+        return MetalParserError(
+            message,
+            token=token if token is not None else self.current_token,
+            declaration_context=self.current_declaration_context(),
+            file_path=self.file_path,
+        )
+
+    def current_declaration_context(self):
+        if not self.declaration_context_stack:
+            return None
+        return self.declaration_context_stack[-1]
+
+    def annotate_syntax_error(self, exc):
+        return MetalParserError(
+            str(exc),
+            token=self.current_token,
+            declaration_context=self.current_declaration_context(),
+            file_path=self.file_path,
+        )
+
+    def push_declaration_context(self, context):
+        self.declaration_context_stack.append(context)
+
+    def pop_declaration_context(self):
+        if self.declaration_context_stack:
+            self.declaration_context_stack.pop()
 
     def peek(self, offset=1):
         idx = self.pos + offset
@@ -369,9 +434,14 @@ class MetalParser:
 
     def parse(self):
         ensure_metal_parse_recursion_limit()
-        shader = self.parse_shader()
-        self.eat("EOF")
-        return shader
+        try:
+            shader = self.parse_shader()
+            self.eat("EOF")
+            return shader
+        except MetalParserError:
+            raise
+        except SyntaxError as exc:
+            raise self.annotate_syntax_error(exc) from exc
 
     def parse_shader(self):
         functions = []
@@ -704,10 +774,16 @@ class MetalParser:
             for kind, name in template_parameters
             if kind in {"typename", "class"} and name
         }
+        template_value_names = {
+            name for kind, name in template_parameters if kind == "value" and name
+        }
         added_type_names = template_type_names - self.known_types
         self.known_types.update(added_type_names)
+        added_value_names = template_value_names - self.known_value_template_parameters
+        self.known_value_template_parameters.update(added_value_names)
 
         try:
+            self.push_declaration_context("template declaration")
             if self.current_token[0] in {"STRUCT", "CLASS"}:
                 struct = (
                     self.parse_struct()
@@ -722,6 +798,11 @@ class MetalParser:
                 return struct
 
             if not self.is_function_definition():
+                function_template_name = self.template_function_declaration_name_at(
+                    self.pos
+                )
+                if function_template_name:
+                    self.known_function_templates.add(function_template_name)
                 variable_template_name = self.template_variable_declaration_name_at(
                     self.pos
                 )
@@ -739,7 +820,10 @@ class MetalParser:
                 function.template_parameters = template_parameters
             return function
         finally:
+            if sys.exc_info()[0] is None:
+                self.pop_declaration_context()
             self.known_types.difference_update(added_type_names)
+            self.known_value_template_parameters.difference_update(added_value_names)
 
     def parse_template_prefix(self):
         self.eat("IDENTIFIER")
@@ -841,6 +925,54 @@ class MetalParser:
         if idx + 1 < len(self.tokens) and self.tokens[idx + 1][0] == "LPAREN":
             return None
         return name
+
+    def template_function_declaration_name_at(self, idx):
+        idx = self.skip_leading_attribute_tokens_at(idx)
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+            idx += 1
+            idx = self.skip_leading_attribute_tokens_at(idx)
+        if idx >= len(self.tokens):
+            return None
+
+        if idx < len(self.tokens) and self.tokens[idx][0] in STAGE_TOKENS:
+            idx += 1
+            idx = self.skip_leading_attribute_tokens_at(idx)
+            while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+                idx += 1
+                idx = self.skip_leading_attribute_tokens_at(idx)
+
+        if idx >= len(self.tokens) or self.tokens[idx][0] not in TYPE_TOKENS:
+            return None
+
+        idx += 1
+        idx = self.skip_scoped_type_suffix_at(idx)
+        if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+            idx = self.skip_template_argument_list_at(idx)
+
+        while idx < len(self.tokens):
+            if self.is_qualifier_token_at(idx):
+                idx += 1
+                continue
+            if self.tokens[idx][0] in {"MULTIPLY", "BITWISE_AND"}:
+                idx += 1
+                continue
+            break
+
+        idx = self.skip_leading_attribute_tokens_at(idx)
+        if idx >= len(self.tokens) or not self.is_name_token_at(idx):
+            return None
+        name = self.tokens[idx][1]
+        idx += 1
+        if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+            idx = self.skip_template_argument_list_at(idx)
+        if idx >= len(self.tokens) or self.tokens[idx][0] != "LPAREN":
+            return None
+        end = self.skip_balanced_tokens_at(idx, "LPAREN", "RPAREN")
+        return (
+            name
+            if end < len(self.tokens) and self.tokens[end][0] == "SEMICOLON"
+            else None
+        )
 
     def skip_template_declaration(self):
         paren_depth = 0
@@ -2060,6 +2192,7 @@ class MetalParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return None
+        self.push_declaration_context(f"struct {name}")
         base_types = []
         if self.current_token[0] == "COLON":
             base_types = self.parse_struct_base_clause()
@@ -2075,6 +2208,7 @@ class MetalParser:
         struct_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
             name
         )
+        self.pop_declaration_context()
         return struct_node
 
     def parse_class(self, pre_alignas=None):
@@ -2099,6 +2233,7 @@ class MetalParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return None
+        self.push_declaration_context(f"class {name}")
         base_types = []
         if self.current_token[0] == "COLON":
             base_types = self.parse_struct_base_clause()
@@ -2115,6 +2250,7 @@ class MetalParser:
         class_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
             name
         )
+        self.pop_declaration_context()
         return class_node
 
     def parse_struct_base_clause(self):
@@ -2165,6 +2301,7 @@ class MetalParser:
             return None
         if not name:
             raise SyntaxError("Expected union name")
+        self.push_declaration_context(f"union {name}")
         self.eat("LBRACE")
 
         members = self.parse_struct_members()
@@ -2175,6 +2312,7 @@ class MetalParser:
         union_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
             name
         )
+        self.pop_declaration_context()
         return union_node
 
     def parse_trailing_aggregate_declarations(self, aggregate_type):
@@ -2530,6 +2668,7 @@ class MetalParser:
             template_args = self.parse_template_argument_suffix()
             name += f"<{self.format_generic_type_tokens(template_args)}>"
 
+        self.push_declaration_context(f"function {name}")
         self.eat("LPAREN")
         params = self.parse_parameters()
         self.eat("RPAREN")
@@ -2548,16 +2687,18 @@ class MetalParser:
 
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
+            self.pop_declaration_context()
             return None
         if self.is_defaulted_or_deleted_function_declaration():
             self.skip_defaulted_or_deleted_function_declaration()
+            self.pop_declaration_context()
             return None
         self.pending_block_scope_names.append(
             {param.name for param in params if getattr(param, "name", None)}
         )
         body = self.parse_block()
 
-        return FunctionNode(
+        function = FunctionNode(
             return_type=return_type,
             name=name,
             params=params,
@@ -2566,6 +2707,8 @@ class MetalParser:
             attributes=attributes,
             qualifier=qualifier,  # Also store as single qualifier for backward compatibility
         )
+        self.pop_declaration_context()
+        return function
 
     def is_defaulted_or_deleted_function_declaration(self):
         return (
@@ -3716,6 +3859,11 @@ class MetalParser:
                 follow_token_types=TEMPLATE_IDENTIFIER_SUFFIX_FOLLOW_TOKENS,
                 require_type_like_argument=False,
             )
+        if self.template_argument_list_has_numeric_value_expression(self.pos):
+            return self.template_argument_list_followed_by_call(
+                follow_token_types=TEMPLATE_IDENTIFIER_SUFFIX_FOLLOW_TOKENS,
+                require_type_like_argument=False,
+            )
         return self.template_argument_list_followed_by_call(
             follow_token_types=TEMPLATE_IDENTIFIER_SUFFIX_FOLLOW_TOKENS,
             require_type_like_argument=True,
@@ -3736,6 +3884,60 @@ class MetalParser:
             follow_token_types=TEMPLATE_VARIABLE_SUFFIX_FOLLOW_TOKENS,
             require_type_like_argument=True,
         )
+
+    def template_argument_list_has_numeric_value_expression(self, idx):
+        if idx >= len(self.tokens) or self.tokens[idx][0] != "LESS_THAN":
+            return False
+        depth = 0
+        saw_value_token = False
+        saw_value_operator = False
+        value_operator_tokens = {
+            "PLUS",
+            "MINUS",
+            "MULTIPLY",
+            "DIVIDE",
+            "MOD",
+            "SHIFT_LEFT",
+            "SHIFT_RIGHT",
+            "BITWISE_AND",
+            "BITWISE_OR",
+            "BITWISE_XOR",
+            "AND",
+            "OR",
+            "EQUAL",
+            "NOT_EQUAL",
+            "LESS_EQUAL",
+            "GREATER_EQUAL",
+            "QUESTION",
+            "COLON",
+        }
+        while idx < len(self.tokens):
+            token_type, token_value = self.tokens[idx]
+            if depth > 0 and token_type in {"SEMICOLON", "LBRACE", "RBRACE", "EOF"}:
+                return False
+            if token_type == "LESS_THAN":
+                depth += 1
+            elif token_type == "SHIFT_RIGHT" and depth >= 2:
+                depth -= 2
+                if depth == 0:
+                    return saw_value_token and saw_value_operator
+            elif token_type == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    return saw_value_token and saw_value_operator
+            elif depth > 0:
+                if token_type == "NUMBER" or (
+                    token_type == "IDENTIFIER"
+                    and (
+                        token_value in self.known_value_template_parameters
+                        or self.is_known_local_variable_name(token_value)
+                    )
+                ):
+                    saw_value_token = True
+                elif token_type in value_operator_tokens:
+                    saw_value_operator = True
+            idx += 1
+        return False
 
     def is_variable_template_name(self, name):
         if not isinstance(name, str):

@@ -329,6 +329,25 @@ KEYWORDS = {
 }
 
 
+class MetalToken(tuple):
+    """Two-item token tuple carrying optional source position metadata."""
+
+    def __new__(
+        cls,
+        token_type: str,
+        text: str,
+        *,
+        line: Optional[int] = None,
+        column: Optional[int] = None,
+        offset: Optional[int] = None,
+    ):
+        token = tuple.__new__(cls, (token_type, text))
+        token.line = line
+        token.column = column
+        token.offset = offset
+        return token
+
+
 class MetalLexer:
     """Tokenize Metal Shading Language source for the Metal parser."""
 
@@ -361,7 +380,11 @@ class MetalLexer:
     def token_generator(self) -> Iterator[Tuple[str, str]]:
         """Yield Metal tokens while skipping whitespace and comments."""
         pos = 0
+        line = 1
+        column = 1
         while pos < self._length:
+            start_line = line
+            start_column = column
             token = self._next_token(pos)
             if token is None:
                 line_num = self.code[:pos].count("\n") + 1
@@ -377,11 +400,27 @@ class MetalLexer:
                 token_type = KEYWORDS[text]
 
             if token_type not in SKIP_TOKENS:
-                yield (token_type, text)
+                yield MetalToken(
+                    token_type,
+                    text,
+                    line=start_line,
+                    column=start_column,
+                    offset=pos,
+                )
 
+            line, column = self._advance_position(text, line, column)
             pos = new_pos
 
-        yield ("EOF", "")
+        yield MetalToken("EOF", "", line=line, column=column, offset=pos)
+
+    def _advance_position(self, text: str, line: int, column: int) -> Tuple[int, int]:
+        for char in text:
+            if char == "\n":
+                line += 1
+                column = 1
+            else:
+                column += 1
+        return line, column
 
     def _next_token(self, pos: int) -> Optional[Tuple[int, str, str]]:
         """Match the next token at ``pos`` and return its end offset."""
