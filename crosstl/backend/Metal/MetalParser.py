@@ -1730,7 +1730,7 @@ class MetalParser:
                     alignas_specs,
                     [node],
                 )
-            self.eat("SEMICOLON")
+            self.eat_statement_semicolon()
             return node
 
         if self.current_token[0] == "LPAREN":
@@ -1770,7 +1770,7 @@ class MetalParser:
                 [var_node],
             )
 
-        self.eat("SEMICOLON")
+        self.eat_statement_semicolon()
         return var_node
 
     def parse_remaining_global_variable_declarations(
@@ -2112,6 +2112,35 @@ class MetalParser:
             "valid after the first character",
             token=token,
         )
+
+    def invalid_adjacent_numeric_suffix_error(self, token):
+        fragment = self.adjacent_numeric_suffix_fragment()
+        return self.syntax_error(
+            "Invalid adjacent numeric suffix fragment "
+            f"'{fragment}': generated numeric suffixes must be part of "
+            "the identifier or a valid member name, not a standalone "
+            "numeric token",
+            token=token,
+        )
+
+    def adjacent_numeric_suffix_fragment(self):
+        fragment = str(self.current_token[1])
+        idx = self.pos + 1
+        while idx < len(self.tokens) and self.tokens[idx][0] in {
+            "IDENTIFIER",
+            "NUMBER",
+        }:
+            value = str(self.tokens[idx][1])
+            if not value.startswith("_"):
+                break
+            fragment += value
+            idx += 1
+        return fragment
+
+    def eat_statement_semicolon(self):
+        if self.current_token[0] == "NUMBER":
+            raise self.invalid_adjacent_numeric_suffix_error(self.current_token)
+        self.eat("SEMICOLON")
 
     def declarator_pointer_token_suffix(self, token_type):
         return "*" if token_type == "MULTIPLY" else "&"
@@ -3276,7 +3305,7 @@ class MetalParser:
                 return self.parse_remaining_variable_declarations(
                     base_vtype, qualifiers, [node]
                 )
-            self.eat("SEMICOLON")
+            self.eat_statement_semicolon()
             return node
 
         if self.current_token[0] == "LPAREN":
@@ -3299,7 +3328,7 @@ class MetalParser:
             return node
 
         expr = self.parse_expression()
-        self.eat("SEMICOLON")
+        self.eat_statement_semicolon()
         return expr
 
     def parse_remaining_variable_declarations(self, vtype, qualifiers, nodes):
@@ -3343,7 +3372,7 @@ class MetalParser:
             else:
                 nodes.append(var_node)
 
-        self.eat("SEMICOLON")
+        self.eat_statement_semicolon()
         return nodes
 
     def parse_if_statement(self):
@@ -3483,7 +3512,7 @@ class MetalParser:
             self.eat("SEMICOLON")
             return ReturnNode(None)
         value = self.parse_expression(allow_comma=True)
-        self.eat("SEMICOLON")
+        self.eat_statement_semicolon()
         return ReturnNode(value)
 
     def parse_while_statement(self):
@@ -3507,7 +3536,7 @@ class MetalParser:
 
     def parse_expression_statement(self):
         expr = self.parse_expression(allow_comma=True)
-        self.eat("SEMICOLON")
+        self.eat_statement_semicolon()
         return expr
 
     def parse_expression(self, allow_comma=False):
