@@ -4539,6 +4539,50 @@ def test_scan_project_represents_metal_mode_directive_without_macro_warning(tmp_
     ]
 
 
+def test_scan_project_represents_metal_name_directive_without_macro_warning(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.metal").write_text(
+        textwrap.dedent("""
+            #define instantiate_named(name, type, group_size, bits) \\
+                instantiate_kernel( \\
+                    #name "_" #type "_gs_" #group_size "_b_" #bits, \\
+                    name, type, group_size, bits)
+            kernel void main0() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["metal"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+    assert payload["nativeDirectives"] == [
+        {
+            "source": "shaders/kernel.metal",
+            "sourceBackend": "metal",
+            "line": 3,
+            "column": 9,
+            "kind": "name",
+            "payload": '"_" #type "_gs_" #group_size "_b_" #bits',
+            "handlingStatus": "preserved",
+        }
+    ]
+
+
 def test_scan_project_unknown_metal_directive_keeps_macro_native_warning(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
