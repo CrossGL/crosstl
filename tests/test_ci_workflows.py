@@ -305,8 +305,8 @@ def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
     )
     assert '"${demo_test_files[@]}"' in demo
     assert '-k "$demo_selector"' in demo
-    assert 'demo_test_files[$index]="${demo_test_files[$index]%$\'\\r\'}"' in demo
-    assert 'demo_selector="${demo_selector%$\'\\r\'}"' in demo
+    assert "demo_test_files[$index]=\"${demo_test_files[$index]%$'\\r'}\"" in demo
+    assert "demo_selector=\"${demo_selector%$'\\r'}\"" in demo
     for selector in demo_selectors:
         assert selector not in demo
     assert (

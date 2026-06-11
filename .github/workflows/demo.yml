@@ -54,7 +54,7 @@ permissions:
   contents: read
 
 jobs:
-  demo:
+  open-source-porting:
     name: Open-Source Porting Demo (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
