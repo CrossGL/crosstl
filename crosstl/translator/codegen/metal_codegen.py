@@ -20458,6 +20458,8 @@ class MetalCodeGen:
         )
 
     def validate_texture_call_arity(self, func_name, args):
+        if self.is_packed_shadow_texture_sample_call(func_name, args):
+            return
         validate_texture_operation_arity(
             "Metal",
             func_name,
@@ -21164,6 +21166,138 @@ class MetalCodeGen:
 
     def unsupported_texture_compare_call(self, func_name, reason):
         return unsupported_texture_compare_scalar_expression("Metal", func_name, reason)
+
+    def is_depth_texture_resource(self, texture_type):
+        return self.resource_base_type(texture_type).startswith("depth")
+
+    def is_packed_shadow_texture_sample_call(self, func_name, args):
+        if func_name not in {
+            "texture",
+            "textureLod",
+            "textureOffset",
+            "textureLodOffset",
+        }:
+            return False
+        if not args:
+            return False
+        return self.is_depth_texture_resource(
+            self.texture_argument_resource_type(args[0])
+        )
+
+    def packed_shadow_compare_coord_args(self, texture_type, coord):
+        texture_type = self.resource_base_type(texture_type)
+        if texture_type.startswith("depth2d_array<"):
+            return [
+                self.vector_component(coord, "xy"),
+                f"uint({self.vector_component(coord, 'z')})",
+            ], self.vector_component(coord, "w")
+        if texture_type.startswith("depth2d<"):
+            return [self.vector_component(coord, "xy")], self.vector_component(
+                coord, "z"
+            )
+        if texture_type.startswith("depthcube_array<"):
+            return [
+                self.vector_component(coord, "xyz"),
+                f"uint({self.vector_component(coord, 'w')})",
+            ], None
+        if texture_type.startswith("depthcube<"):
+            return [self.vector_component(coord, "xyz")], self.vector_component(
+                coord, "w"
+            )
+        return None, None
+
+    def generate_packed_shadow_texture_sample_call(
+        self, func_name, texture_name, sampler_arg, coord, extra_args, texture_type
+    ):
+        if not self.is_depth_texture_resource(texture_type):
+            return None
+
+        coord_args, packed_compare = self.packed_shadow_compare_coord_args(
+            texture_type, coord
+        )
+        if coord_args is None:
+            return self.unsupported_texture_compare_call(
+                func_name, "requires supported shadow texture coordinates"
+            )
+
+        is_cube_array = self.resource_base_type(texture_type).startswith(
+            "depthcube_array<"
+        )
+        sample_options = []
+        trailing_args = []
+
+        if func_name == "texture":
+            if is_cube_array:
+                if len(extra_args) not in {1, 2}:
+                    return self.unsupported_texture_compare_call(
+                        func_name,
+                        "cube-array shadow sampling requires compare and optional bias arguments",
+                    )
+                compare = self.generate_expression(extra_args[0])
+                if len(extra_args) == 2:
+                    bias = self.generate_expression(extra_args[1])
+                    sample_options.append(f"bias({bias})")
+            else:
+                if len(extra_args) > 1:
+                    return self.unsupported_texture_compare_call(
+                        func_name,
+                        "packed shadow sampling accepts at most one bias argument",
+                    )
+                compare = packed_compare
+                if extra_args:
+                    bias = self.generate_expression(extra_args[0])
+                    sample_options.append(f"bias({bias})")
+        elif func_name == "textureLod":
+            if is_cube_array:
+                if len(extra_args) != 2:
+                    return self.unsupported_texture_compare_call(
+                        func_name,
+                        "cube-array shadow LOD sampling requires compare and lod arguments",
+                    )
+                compare = self.generate_expression(extra_args[0])
+                lod_arg = extra_args[1]
+            else:
+                if len(extra_args) != 1:
+                    return self.unsupported_texture_compare_call(
+                        func_name,
+                        "packed shadow LOD sampling requires one lod argument",
+                    )
+                compare = packed_compare
+                lod_arg = extra_args[0]
+            sample_options.append(f"level({self.generate_expression(lod_arg)})")
+        elif func_name == "textureOffset":
+            if is_cube_array or not self.texture_compare_offset_supported(texture_type):
+                return self.unsupported_texture_compare_call(
+                    func_name, texture_compare_offset_capability_error("Metal")
+                )
+            if len(extra_args) not in {1, 2}:
+                return self.unsupported_texture_compare_call(
+                    func_name,
+                    "packed shadow offset sampling requires offset and optional bias arguments",
+                )
+            compare = packed_compare
+            if len(extra_args) == 2:
+                bias = self.generate_expression(extra_args[1])
+                sample_options.append(f"bias({bias})")
+            trailing_args.append(self.generate_expression(extra_args[0]))
+        elif func_name == "textureLodOffset":
+            if is_cube_array or not self.texture_compare_offset_supported(texture_type):
+                return self.unsupported_texture_compare_call(
+                    func_name, texture_compare_offset_capability_error("Metal")
+                )
+            if len(extra_args) != 2:
+                return self.unsupported_texture_compare_call(
+                    func_name,
+                    "packed shadow LOD offset sampling requires lod and offset arguments",
+                )
+            compare = packed_compare
+            sample_options.append(f"level({self.generate_expression(extra_args[0])})")
+            trailing_args.append(self.generate_expression(extra_args[1]))
+        else:
+            return None
+
+        args = [sampler_arg] + coord_args + [compare] + sample_options + trailing_args
+        return f"{texture_name}.sample_compare({', '.join(args)})"
 
     def texture_compare_projected_coord_args(self, texture_type, coord_arg, coord):
         texture_type = self.resource_base_type(texture_type)
@@ -22313,6 +22447,17 @@ class MetalCodeGen:
         )
         if storage_image_operation is not None:
             return storage_image_operation
+
+        packed_shadow_call = self.generate_packed_shadow_texture_sample_call(
+            func_name,
+            texture_name,
+            sampler_arg,
+            coord,
+            extra_args,
+            texture_type,
+        )
+        if packed_shadow_call is not None:
+            return packed_shadow_call
 
         is_array_texture = self.is_array_texture_resource(texture_type)
         if is_array_texture:
