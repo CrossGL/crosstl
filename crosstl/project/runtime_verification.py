@@ -4367,26 +4367,42 @@ def _runtime_adapter_contract_from_artifact(
         artifact.get("runtimeAdapter", artifact.get("adapterContract")),
         field_name="artifact.runtimeAdapter",
     )
+    host_interface = (
+        artifact.get("hostInterface")
+        if isinstance(artifact.get("hostInterface"), Mapping)
+        else {}
+    )
+    entry_point_records = _runtime_record_sequence(artifact.get("entryPoints"))
+    if not entry_point_records and isinstance(host_interface, Mapping):
+        entry_point_records = _runtime_record_sequence(
+            host_interface.get("entryPoints")
+        )
+    resource_records = _runtime_record_sequence(artifact.get("resourceBindings"))
+    if not resource_records and isinstance(host_interface, Mapping):
+        resource_records = _runtime_record_sequence(host_interface.get("resources"))
     entry_points = tuple(
         _parse_runtime_entry_point(
             entry_point, field_name=f"artifact.entryPoints[{index}]"
         )
-        for index, entry_point in enumerate(
-            _runtime_record_sequence(artifact.get("entryPoints"))
-        )
+        for index, entry_point in enumerate(entry_point_records)
         if isinstance(entry_point, Mapping)
     )
     resource_bindings = tuple(
         _parse_runtime_resource_binding(
             binding, field_name=f"artifact.resourceBindings[{index}]"
         )
-        for index, binding in enumerate(
-            _runtime_record_sequence(artifact.get("resourceBindings"))
-        )
+        for index, binding in enumerate(resource_records)
         if isinstance(binding, Mapping)
     )
     artifact_payload = {
-        "specializationConstants": artifact.get("specializationConstants", []),
+        "specializationConstants": [
+            *list(_runtime_record_sequence(artifact.get("specializationConstants"))),
+            *(
+                list(_runtime_record_sequence(host_interface.get("constants")))
+                if isinstance(host_interface, Mapping)
+                else []
+            ),
+        ],
         "functionConstants": artifact.get("functionConstants", []),
     }
     manifest_contract = RuntimeAdapterContract(
@@ -4416,7 +4432,7 @@ def _runtime_dispatch_geometry_from_artifact(
 ) -> RuntimeDispatchGeometry | None:
     dispatch = artifact.get("dispatch")
     if not isinstance(dispatch, Mapping):
-        return None
+        return _runtime_dispatch_geometry_from_host_interface(artifact)
     for index, workgroup in enumerate(
         _runtime_record_sequence(dispatch.get("workgroups"))
     ):
@@ -4450,6 +4466,57 @@ def _runtime_dispatch_geometry_from_artifact(
             dispatch, field_name="artifact.dispatch"
         )
     return None
+
+
+def _runtime_dispatch_geometry_from_host_interface(
+    artifact: Mapping[str, Any],
+) -> RuntimeDispatchGeometry | None:
+    host_interface = artifact.get("hostInterface")
+    if not isinstance(host_interface, Mapping):
+        return None
+    for index, entry_point in enumerate(
+        _runtime_record_sequence(host_interface.get("entryPoints"))
+    ):
+        if (
+            not isinstance(entry_point, Mapping)
+            or entry_point.get("stage") != "compute"
+        ):
+            continue
+        execution_config = entry_point.get("executionConfig")
+        execution_config = (
+            dict(execution_config) if isinstance(execution_config, Mapping) else {}
+        )
+        workgroup_size = _runtime_host_interface_workgroup_size(execution_config)
+        payload: dict[str, Any] = {
+            "entryPoint": entry_point.get("name"),
+            "metadata": {
+                "source": "hostInterface.entryPoints",
+                "status": host_interface.get("status"),
+                "entryPointIndex": index,
+                "executionConfig": execution_config,
+            },
+        }
+        if workgroup_size:
+            payload["workgroupSize"] = workgroup_size
+        return _parse_runtime_dispatch_geometry(
+            payload, field_name=f"artifact.hostInterface.entryPoints[{index}]"
+        )
+    return None
+
+
+def _runtime_host_interface_workgroup_size(
+    execution_config: Mapping[str, Any],
+) -> list[Any]:
+    for field_name in ("workgroupSize", "workgroup_size", "numthreads", "local_size"):
+        value = execution_config.get(field_name)
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            return list(value)
+    local_size_fields = ("local_size_x", "local_size_y", "local_size_z")
+    if any(field_name in execution_config for field_name in local_size_fields):
+        return [execution_config.get(field_name, 1) for field_name in local_size_fields]
+    return []
 
 
 def _merge_runtime_adapter_contract(

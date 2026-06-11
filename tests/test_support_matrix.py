@@ -947,7 +947,7 @@ def test_project_runtime_loader_manifest_is_first_class_support_feature():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
-            "test_runtime_loader_manifest_reports_blocked_host_interface_metadata"
+            "test_runtime_loader_manifest_uses_reflected_vulkan_host_interface"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
