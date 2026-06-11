@@ -7183,9 +7183,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             proxy.add_annotation("directx.relocatable_binding", True)
             proxy.add_annotation(
                 "directx.binding_provenance",
-                self.directx_stage_entry_parameter_binding_provenance(
-                    parameter, func
-                ),
+                self.directx_stage_entry_parameter_binding_provenance(parameter, func),
             )
         return proxy
 
@@ -7198,8 +7196,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
         return bool(
             "register" not in attr_names
-            and attr_names
-            & {"binding", "buffer", "sampler", "texture", "uav"}
+            and attr_names & {"binding", "buffer", "sampler", "texture", "uav"}
         )
 
     def directx_stage_entry_parameter_binding_provenance(self, parameter, func):
@@ -14337,10 +14334,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return False
         if self.directx_relocatable_binding_annotation(node):
             return True
-        return (
-            "binding" in attr_names
-            and "set" in attr_names
-        )
+        return "binding" in attr_names and "set" in attr_names
 
     def directx_relocatable_binding_annotation(self, node):
         if not hasattr(node, "get_annotation"):

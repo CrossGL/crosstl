@@ -6933,8 +6933,8 @@ def test_translate_project_records_include_dependency_processing_for_all_source_
     include_dir.mkdir()
     include_dir.joinpath("shared.inc").write_text("// shared\n", encoding="utf-8")
     scenarios = {
-        "resolved": '#include <shared.inc>\n',
-        "system": '#include <runtime_system.h>\n',
+        "resolved": "#include <shared.inc>\n",
+        "system": "#include <runtime_system.h>\n",
         "missing": '#include "missing.inc"\n',
     }
     source_names = sorted(SOURCE_REGISTRY.names())

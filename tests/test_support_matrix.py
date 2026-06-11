@@ -1343,11 +1343,13 @@ def test_project_include_resolution_documents_status_reporting():
             "GLSL/Vulkan and unresolved local/dynamic/outside-project forms "
             "are reported as rejected"
         ) in backend_support["notes"]
-        assert "source frontends without include-path support are explicitly reported" in (
-            backend_support["notes"]
+        assert (
+            "source frontends without include-path support are explicitly reported"
+            in (backend_support["notes"])
         )
-        assert "HLSL-style preprocessing preserves unresolved angle system includes" in (
-            backend_support["notes"]
+        assert (
+            "HLSL-style preprocessing preserves unresolved angle system includes"
+            in (backend_support["notes"])
         )
         assert (
             "OpenGL/GLSL translation with a resolved angle include and "

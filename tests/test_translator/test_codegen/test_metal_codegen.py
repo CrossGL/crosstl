@@ -21451,8 +21451,7 @@ def test_metal_array_texture_types_split_coordinates_and_layers():
     )
     assert "tex.gather(s, uvLayer.xy, uint(uvLayer.z))" in generated_code
     assert (
-        "tex.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(0))"
-        in generated_code
+        "tex.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(0))" in generated_code
     )
     assert (
         "float sampleShadowArray(depth2d_array<float> tex, sampler s, float3 uvLayer, float depth)"
@@ -22823,14 +22822,12 @@ def test_metal_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_memb
     )
     assert (
         "float4 fetched = colorMap.read("
-        "uint2((input.pixel + input.offset)), uint(int(input.lod)));"
-        in generated_code
+        "uint2((input.pixel + input.offset)), uint(int(input.lod)));" in generated_code
     )
     assert (
         "float4 fetchedLayer = layerMap.read("
         "uint2((input.pixelLayer.xy + input.offset)), "
-        "uint(input.pixelLayer.z), uint(int(input.lod)));"
-        in generated_code
+        "uint(input.pixelLayer.z), uint(int(input.lod)));" in generated_code
     )
     assert "textureOffset(" not in generated_code
     assert "textureLodOffset(" not in generated_code

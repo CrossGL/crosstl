@@ -21814,9 +21814,7 @@ class MetalCodeGen:
         if is_texel_fetch_basic_operation(func_name) and len(args) >= 3:
             if self.is_cube_texture_resource(texture_type):
                 return self.unsupported_cube_texel_fetch_call(func_name, texture_type)
-            texel_coord, layer = self.texture_read_coordinate_parts(
-                texture_type, coord
-            )
+            texel_coord, layer = self.texture_read_coordinate_parts(texture_type, coord)
             if self.is_multisample_texture_resource(texture_type):
                 sample = self.unsigned_coordinate_expression(
                     self.generate_expression(args[2]), 1
@@ -21869,9 +21867,7 @@ class MetalCodeGen:
                 texel_coord,
                 layer,
                 dimensions,
-            ) = self.texture_read_coordinate_components(
-                texture_type, coord
-            )
+            ) = self.texture_read_coordinate_components(texture_type, coord)
             if layer is not None:
                 offset_coord = self.unsigned_coordinate_expression(
                     f"({texel_coord} + {offset})", dimensions

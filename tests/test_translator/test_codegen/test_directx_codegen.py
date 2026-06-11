@@ -89,8 +89,7 @@ def test_directx_unresolved_texture_source_type_raises_project_diagnostic():
 
     diagnostic = excinfo.value
     assert (
-        diagnostic.project_diagnostic_code
-        == "project.translate.unresolved-source-type"
+        diagnostic.project_diagnostic_code == "project.translate.unresolved-source-type"
     )
     assert diagnostic.missing_capabilities == ("directx.type-inference",)
     message = str(diagnostic)
@@ -10273,7 +10272,9 @@ def test_directx_function_local_threadgroup_duplicate_names_are_disambiguated():
     }
     """
 
-    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
 
     assert "groupshared uint main_scratch[4];" in generated
     assert "groupshared uint main_scratch_[4];" in generated
