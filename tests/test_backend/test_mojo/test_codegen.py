@@ -2016,6 +2016,9 @@ def test_modular_vector_addition_nested_gpu_launch_codegen():
     assert "var vector_length = output.dim_size(0);" in generated_code
     assert "void vector_addition_gpu_kernel(int length) @ parameter" in generated_code
     assert "var tid = ((block_dim.x * block_idx.x) + thread_idx.x);" in generated_code
+    assert "gl_WorkGroupID" not in generated_code
+    assert "gl_WorkGroupSize" not in generated_code
+    assert "gl_LocalInvocationID" not in generated_code
     assert "var idx = IndexList[output.rank](tid);" in generated_code
     assert "output.store[1](idx, result);" in generated_code
     assert (
@@ -3857,6 +3860,7 @@ def test_gpu_tile_tensor_multi_index_access_codegen():
         in generated_code
     )
     assert "let value = tile[thread_idx.y, thread_idx.x];" in generated_code
+    assert "gl_LocalInvocationID" not in generated_code
 
 
 def test_parenthesized_call_indexing_codegen():
