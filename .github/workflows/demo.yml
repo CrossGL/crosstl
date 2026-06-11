@@ -250,6 +250,7 @@ jobs:
             demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/metal/Cube_cube.frag.metal \
             demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/metal/Cube_cube.vert.metal \
             demos/open-source-porting/cases/directx-graphics-samples-hello-const-buffers/crosstl-out/metal/shaders.metal \
+            demos/open-source-porting/cases/directx-graphics-samples-hello-triangle/crosstl-out/metal/shaders.metal \
             demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/metal/shaders.metal \
             demos/open-source-porting/cases/directx-shader-compiler-groupshared-splat/crosstl-out/metal/SplatGroupSharedScalar.metal \
             demos/open-source-porting/cases/directx-shader-compiler-neg1/crosstl-out/metal/neg1.metal \
@@ -286,6 +287,7 @@ jobs:
             demos/open-source-porting/cases/rust-gpu-compute-collatz/crosstl-out/metal/lib.metal \
             demos/open-source-porting/cases/rust-gpu-graphics-stage-inputs/crosstl-out/metal/lib.metal \
             demos/open-source-porting/cases/rust-gpu-vulkan-examples-triangle-overlay/crosstl-out/metal/lib.metal \
+            demos/open-source-porting/cases/sascha-willems-vulkan-conservative-triangle/crosstl-out/metal/triangle.metal \
             demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/metal/headless.metal \
             demos/open-source-porting/cases/slang-default-parameter-compute/crosstl-out/metal/default-parameter.metal \
             demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/metal/hello-world.metal \

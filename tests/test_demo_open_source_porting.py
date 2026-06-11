@@ -298,11 +298,6 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
     assert {
         str(path.relative_to(ROOT))
         for path in CASE_ROOT.glob("*/crosstl-out/metal/*.metal")
-        if path.parts[-4]
-        not in {
-            "directx-graphics-samples-hello-triangle",
-            "sascha-willems-vulkan-conservative-triangle",
-        }
     } == metal_paths
     assert all((ROOT / path).is_file() for path in metal_paths)
 
