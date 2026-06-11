@@ -11637,9 +11637,7 @@ class VulkanSPIRVCodeGen:
     def is_bound_uniform_value_parameter(
         self, param, execution_model: Optional[str]
     ) -> bool:
-        if execution_model != "GLCompute":
-            return False
-        if self.explicit_interface_integer_attribute(param, "binding") is None:
+        if self.explicit_descriptor_binding(param) is None:
             return False
         qualifiers = self.parameter_qualifier_names(param)
         qualifiers.update(self.resource_parameter_qualifier_names(param))
@@ -11648,12 +11646,14 @@ class VulkanSPIRVCodeGen:
 
         param_type = getattr(param, "param_type", getattr(param, "vtype", None))
         type_name = self.type_name_from_value(param_type)
-        return self.normalize_primitive_name(type_name) in {
-            "float",
-            "double",
-            "int",
-            "uint",
-        }
+        type_name = self.normalize_reference_type_name(type_name)
+        if type_name is None:
+            return False
+        return not (
+            self.is_resource_type_name(type_name)
+            or self.is_structured_buffer_declared_type_name(type_name)
+            or self.pointer_pointee_type_name_from_string(type_name) is not None
+        )
 
     def is_storage_resource_parameter(self, param) -> bool:
         qualifiers = self.resource_parameter_qualifier_names(param)
@@ -12270,6 +12270,7 @@ class VulkanSPIRVCodeGen:
         if type_str is None:
             type_str = "None"
 
+        type_str = self.normalize_reference_type_name(type_str)
         type_str = self.normalize_generic_vector_type(type_str)
         type_str = self.normalize_hlsl_matrix_type(type_str)
 
@@ -12483,6 +12484,18 @@ class VulkanSPIRVCodeGen:
 
         pointee = type_str[:-1].strip()
         return pointee or None
+
+    def normalize_reference_type_name(self, type_name) -> Optional[str]:
+        """Return the value type for CrossGL reference spelling such as &T or T&."""
+        if type_name is None:
+            return None
+
+        type_str = str(type_name).strip()
+        while type_str.startswith("&"):
+            type_str = type_str[1:].strip()
+        while type_str.endswith("&"):
+            type_str = type_str[:-1].strip()
+        return type_str or None
 
     def atomic_element_type_name(self, type_name) -> Optional[str]:
         """Return the scalar payload type for atomic<T> aliases."""
@@ -14840,7 +14853,7 @@ class VulkanSPIRVCodeGen:
 
     def resource_descriptor_slot(self, node: VariableNode) -> Tuple[int, int]:
         descriptor_set = self.resource_descriptor_set(node)
-        explicit_binding = self.explicit_interface_integer_attribute(node, "binding")
+        explicit_binding = self.explicit_descriptor_binding(node)
 
         if explicit_binding is not None:
             key = (descriptor_set, explicit_binding)
@@ -14879,9 +14892,7 @@ class VulkanSPIRVCodeGen:
 
     def reserve_explicit_resource_bindings(self, ast: ShaderNode):
         for node in self.global_descriptor_binding_nodes(ast):
-            explicit_binding = self.explicit_interface_integer_attribute(
-                node, "binding"
-            )
+            explicit_binding = self.explicit_descriptor_binding(node)
             if explicit_binding is None:
                 continue
 
@@ -14893,6 +14904,12 @@ class VulkanSPIRVCodeGen:
                     f"binding {explicit_binding}"
                 )
             self.reserved_resource_bindings.add(key)
+
+    def explicit_descriptor_binding(self, node: VariableNode) -> Optional[int]:
+        binding = self.explicit_interface_integer_attribute(node, "binding")
+        if binding is not None:
+            return binding
+        return self.explicit_interface_integer_attribute(node, "buffer")
 
     def global_descriptor_binding_nodes(self, ast: ShaderNode):
         yield from self.global_resource_nodes(ast)
@@ -16220,6 +16237,7 @@ class VulkanSPIRVCodeGen:
         type_name = self.type_name_from_value(type_name)
         if type_name is None:
             return None
+        type_name = self.normalize_reference_type_name(type_name)
         type_name = self.normalize_generic_vector_type(type_name)
         type_name = self.normalize_hlsl_matrix_type(type_name)
         return re.sub(r"\s+", "", str(type_name))
@@ -19317,6 +19335,14 @@ class VulkanSPIRVCodeGen:
         array_info = self.array_type_info_from_type(array_type)
         if array_info is not None:
             return array_info[0]
+
+        vector_info = self.vector_type_info_from_type(array_type)
+        if vector_info is not None:
+            return vector_info[0]
+
+        matrix_info = self.matrix_type_info_from_type(array_type)
+        if matrix_info is not None:
+            return matrix_info[0]
 
         return None
 
