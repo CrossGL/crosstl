@@ -1,6 +1,6 @@
 [project]
 source_roots = ["."]
 include = ["flat-color.vert", "flat-color.frag"]
-targets = ["cgl", "metal", "opengl", "vulkan"]
+targets = ["cgl", "metal", "opengl", "directx", "vulkan"]
 output_dir = "crosstl-out"
 external_corpus_manifest = "corpus.json"
