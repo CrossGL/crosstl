@@ -196,6 +196,7 @@ class VulkanSPIRVCodeGen:
         self.variable_value_types = {}
         self.value_types = {}
         self.constants = {}
+        self.constant_values_by_id = {}
         self.literal_int_constants = {}
         self.literal_scalar_constants = {}
         self.vector_constants = {}
@@ -702,6 +703,7 @@ class VulkanSPIRVCodeGen:
         spirv_id = SpirvId(id_value, type_id.type, f"{type_name}_{value}")
         self.value_types[id_value] = type_id
         self.constants[key] = spirv_id
+        self.constant_values_by_id[id_value] = value
         return spirv_id
 
     def spirv_constant_literal_text(
@@ -14985,6 +14987,10 @@ class VulkanSPIRVCodeGen:
         initial_value = getattr(node, "initial_value", None)
         if storage_class == "Private" and initial_value is not None:
             initializer = self.process_constant_expression(initial_value, var_type)
+            if initializer is not None:
+                initializer = self.coerce_scalar_constant_to_type(
+                    initializer, var_type
+                )
 
         if storage_class == "Input":
             var_id = self.global_interface_builtin_variable(node, "Input", var_type)
@@ -20044,6 +20050,34 @@ class VulkanSPIRVCodeGen:
         if value is not None and self.is_constant_instruction(value):
             return value
         return None
+
+    def coerce_scalar_constant_to_type(
+        self, value: SpirvId, target_type: SpirvId
+    ) -> SpirvId:
+        source_type = self.value_types.get(value.id)
+        if source_type is not None and source_type.id == target_type.id:
+            return value
+
+        literal_value = self.constant_values_by_id.get(value.id)
+        if literal_value is None or isinstance(literal_value, bool):
+            return value
+
+        target_type = self.ensure_registered_type(target_type)
+        target_type_name = self.normalize_primitive_name(target_type.type.base_type)
+        if target_type_name in {"float", "double"} and isinstance(
+            literal_value, (int, float)
+        ):
+            return self.register_constant(float(literal_value), target_type)
+        if (
+            target_type_name in self.INTEGER_TYPE_NAMES
+            and isinstance(literal_value, (int, float))
+            and float(literal_value).is_integer()
+        ):
+            int_value = int(literal_value)
+            if target_type_name in self.UNSIGNED_INTEGER_TYPES and int_value < 0:
+                return value
+            return self.register_constant(int_value, target_type)
+        return value
 
     def process_constant_struct_constructor(
         self, callee_name, expr, target_type: SpirvId

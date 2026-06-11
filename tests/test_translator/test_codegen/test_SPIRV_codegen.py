@@ -2225,6 +2225,63 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "WARNING" not in spv_code
 
+    def test_private_global_named_scalar_initializers_match_declared_types(
+        self, tmp_path
+    ):
+        source_code = """
+        const int THREAD_SCOPE_SYSTEM = 0;
+
+        shader PrivateGlobalNamedInitializers {
+            float thread_scope_system = THREAD_SCOPE_SYSTEM;
+            uint thread_scope_device = THREAD_SCOPE_SYSTEM;
+
+            compute {
+                void main() {
+                    memoryBarrier();
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0", spv_code)
+
+        assert float_type is not None
+        assert uint_type is not None
+
+        float_var = spirv_named_variable(
+            spv_code, "thread_scope_system", storage_class="Private"
+        )
+        uint_var = spirv_named_variable(
+            spv_code, "thread_scope_device", storage_class="Private"
+        )
+        float_initializer = re.search(
+            rf"{re.escape(float_var)} = OpVariable %\d+ Private (?P<init>%\d+)",
+            spv_code,
+        )
+        uint_initializer = re.search(
+            rf"{re.escape(uint_var)} = OpVariable %\d+ Private (?P<init>%\d+)",
+            spv_code,
+        )
+
+        assert float_initializer is not None
+        assert uint_initializer is not None
+        assert re.search(
+            rf"{re.escape(float_initializer.group('init'))} = OpConstant "
+            rf"{re.escape(float_type.group(1))} 0.0",
+            spv_code,
+        )
+        assert re.search(
+            rf"{re.escape(uint_initializer.group('init'))} = OpConstant "
+            rf"{re.escape(uint_type.group(1))} 0",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_compound_assignments_handle_member_and_precise_array_targets(self):
         source_code = """
         shader CompoundSubtargets {
