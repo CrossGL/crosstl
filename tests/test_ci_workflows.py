@@ -1801,7 +1801,19 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert re.search(r"translate-project\b[\s\S]*validation_flag", harness)
     assert '"--run-toolchains"' in harness
     assert '"--validate"' in harness
-    for resolved_issue_number in (1184, 1203, 1204, 1206, 1205, 1207, 1218, 1222):
+    for resolved_issue_number in (
+        1184,
+        1203,
+        1204,
+        1206,
+        1205,
+        1207,
+        1218,
+        1222,
+        1238,
+        1239,
+        1240,
+    ):
         assert (
             f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
             not in mlx_porting
@@ -1810,7 +1822,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
             f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
             in harness
         )
-    for tracked_issue_number in (1239, 1240):
+    for tracked_issue_number in (1248,):
         assert (
             f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}"
             not in mlx_porting

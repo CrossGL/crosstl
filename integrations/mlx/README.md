@@ -14,8 +14,7 @@ The current harness verifies:
 - DirectX and Vulkan artifact generation for the current reduced frontier:
   `arange.metal`, `binary_two.metal`, `fence.metal`, `random.metal`, and
   `ternary.metal`;
-- artifact manifest validation for that DirectX/Vulkan frontier, with Vulkan
-  validator clean-pass currently tracked separately;
+- Vulkan assembly and validator checks when SPIR-V tools are available;
 - OpenGL artifact generation for `arange.metal`.
 
 The last completed full-corpus scout against the same pinned MLX revision
@@ -64,14 +63,13 @@ The harness writes reports, generated artifacts, and command logs under
 
 ## Current Translator Gaps
 
-The current DirectX/Vulkan frontier generates all expected artifacts, but the
-Vulkan artifacts do not yet pass a full `spirv-as` plus `spirv-val` check.
-CrossGL/crosstl#1239 tracks invalid complex helper calls in generated SPIR-V,
-and CrossGL/crosstl#1240 tracks the fence helper initializer type mismatch.
-The next full-corpus scout should update the translated artifact counts and add
-new issue-backed blockers only when there are concrete repros. Host runtime
-integration gaps should be handled in MLX-specific integration code or
-downstream runtime adapters, not hidden as shader translation successes.
+CrossGL/crosstl#1248 tracks full-corpus Metal template materialization
+scalability after a scout run spent excessive time in type-environment
+resolution. The next full-corpus scout should update the translated artifact
+counts after that work lands, or add new issue-backed blockers only when there
+are concrete repros. Host runtime integration gaps should be handled in
+MLX-specific integration code or downstream runtime adapters, not hidden as
+shader translation successes.
 
 ## Resolved Frontier Issues
 
@@ -110,4 +108,7 @@ closed by the latest mainline helper-template, softmax parser, and SPIR-V
 pointer-overload fixes. CrossGL/crosstl#1205, CrossGL/crosstl#1207,
 CrossGL/crosstl#1218, and CrossGL/crosstl#1222 are also closed by the current
 mainline OpenGL template, SIMD helper, steel attention diagnostic, and steel GEMM
-materialization fixes.
+materialization fixes. CrossGL/crosstl#1238, CrossGL/crosstl#1239, and
+CrossGL/crosstl#1240 are closed by the assembled SPIR-V validation, complex
+helper call, and fence initializer fixes that restored the reduced frontier's
+Vulkan validator pass.

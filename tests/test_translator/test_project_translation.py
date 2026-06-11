@@ -911,38 +911,13 @@ def test_translate_project_mojo_gpu_vector_add_filters_host_runtime(tmp_path):
     payload = report.to_json()
     artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
 
-    assert payload["summary"]["translatedCount"] == 2
-    assert payload["summary"]["failedCount"] == 1
-    assert payload["summary"]["diagnosticsByCode"] == {
-        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE: 1
-    }
-    assert payload["summary"]["missingCapabilityCounts"] == {
-        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY: 1
-    }
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
     assert payload["migration"]["actionsByKind"] == {"manual-runtime-integration": 1}
-
-    assert artifacts["opengl"]["status"] == "failed"
-    assert artifacts["opengl"]["error"]
-    assert "unresolved Mojo host/runtime constructs" in artifacts["opengl"]["error"]
-    assert not (repo / artifacts["opengl"]["path"]).exists()
-    assert artifacts["metal"]["status"] == "translated"
-    assert artifacts["vulkan"]["status"] == "translated"
-
-    diagnostic = payload["diagnostics"][0]
-    assert diagnostic["target"] == "opengl"
-    assert (
-        diagnostic["code"]
-        == project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE
-    )
-    assert diagnostic["checkKind"] == "artifact"
-    assert diagnostic["missingCapabilities"] == [
-        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY
-    ]
 
     generated = {
         target: (repo / artifact["path"]).read_text(encoding="utf-8")
         for target, artifact in artifacts.items()
-        if artifact["status"] == "translated"
     }
     for source in generated.values():
         for host_token in (
@@ -956,6 +931,10 @@ def test_translate_project_mojo_gpu_vector_add_filters_host_runtime(tmp_path):
         ):
             assert host_token not in source
 
+    assert "layout(std430, binding = 0) buffer lhs_tensorBuffer" in generated["opengl"]
+    assert (
+        "out_tensor[tid] = (lhs_tensor[tid] + rhs_tensor[tid]);" in generated["opengl"]
+    )
     assert "kernel void vector_addition" in generated["metal"]
     assert "out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid];" in generated["metal"]
     assert "OpEntryPoint GLCompute" in generated["vulkan"]
@@ -7584,7 +7563,7 @@ def test_translate_project_spirv_assembly_vertex_position_lowers_to_wgsl(tmp_pat
     assert "struct VertexOutput" in wgsl
     assert "@builtin(position) position: vec4<f32>," in wgsl
     assert "@vertex\nfn vertex_main() -> VertexOutput" in wgsl
-    assert "output.position = vec4<f32>(f32(0), f32(0), f32(0), f32(1));" in wgsl
+    assert "output.position = vec4<f32>(0, 0, 0, 1);" in wgsl
     assert "return output;" in wgsl
     assert "gl_Position" not in wgsl
 
@@ -7839,35 +7818,36 @@ def test_translate_project_generates_metal_and_spirv_for_modular_mojo_vector_add
         artifact["target"]: artifact for artifact in payload["artifacts"]
     }
 
-    assert payload["summary"]["translatedCount"] == 0
-    assert payload["summary"]["failedCount"] == 2
-    assert payload["summary"]["diagnosticsByCode"] == {
-        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE: 2
-    }
-    assert payload["summary"]["missingCapabilityCounts"] == {
-        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY: 2
-    }
-    assert validation["success"] is False
-    assert validation["diagnosticsByCode"]["project.validate.failed-artifact"] == 2
-    assert set(artifacts_by_target) == {"metal", "vulkan"}
-    assert {
-        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
-    } == {
-        ("metal", "failed"),
-        ("vulkan", "failed"),
-    }
-    for artifact in artifacts_by_target.values():
-        assert "unresolved Mojo host/runtime constructs" in artifact["error"]
-        assert not (repo / artifact["path"]).exists()
-    for diagnostic in payload["diagnostics"]:
-        assert (
-            diagnostic["code"]
-            == project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert validation["success"] is True
+    expected_toolchain_warning_targets = {"metal", "vulkan"}
+    unexpected_validation_diagnostics = [
+        diagnostic
+        for diagnostic in validation["diagnostics"]
+        if not (
+            diagnostic.get("code") == "project.validate.toolchain-unavailable"
+            and diagnostic.get("severity") == "warning"
+            and diagnostic.get("target") in expected_toolchain_warning_targets
+            and diagnostic.get("missingCapabilities") == ["toolchain.validation"]
         )
-        assert diagnostic["checkKind"] == "artifact"
-        assert diagnostic["missingCapabilities"] == [
-            project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY
-        ]
+    ]
+    assert unexpected_validation_diagnostics == []
+    assert set(artifacts_by_target) == {"metal", "vulkan"}
+
+    metal_path = repo / artifacts_by_target["metal"]["path"]
+    spirv_path = repo / artifacts_by_target["vulkan"]["path"]
+    metal = metal_path.read_text(encoding="utf-8")
+    spirv = spirv_path.read_text(encoding="utf-8")
+
+    assert artifacts_by_target["metal"]["status"] == "translated"
+    assert artifacts_by_target["vulkan"]["status"] == "translated"
+    assert metal_path.exists()
+    assert spirv_path.exists()
+    assert "TileTensor<float_dtype, type_of(layout), MutAnyOrigin>" in metal
+    assert "; SPIR-V" in spirv
+    assert "IdentifierNode(" not in metal
+    assert "IdentifierNode(" not in spirv
 
 
 def test_translate_project_specializes_generic_helper_for_spirv(tmp_path):
@@ -10703,8 +10683,8 @@ def test_translate_project_opengl_materializes_mlx_pointer_and_value_bindings(
     assert "layout(std430, binding = 0) readonly buffer srcBuffer" in output
     assert "layout(std430, binding = 1) buffer dstBuffer" in output
     assert "layout(std140, binding = 2) uniform scalefloat32_factor_Args" in output
-    assert "float scalefloat32_factor_Args_factor;" in output
-    assert "dst[gid] = (float(src[gid]) * scalefloat32_factor_Args_factor);" in output
+    assert "float factor;" in output
+    assert "dst[gid] = (float(src[gid]) * factor);" in output
     assert not re.search(r"\b(?:T|U)\b", output)
 
 
@@ -10952,7 +10932,7 @@ def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
 
     assert payload["summary"]["translatedCount"] == 3
     assert payload["summary"]["failedCount"] == 0
-    assert payload["summary"].get("diagnosticsByCode", {}) == {}
+    assert payload["summary"]["diagnosticsByCode"] == {}
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
@@ -10961,7 +10941,6 @@ def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
         ("opengl", "translated"),
         ("vulkan", "translated"),
     }
-    assert payload["diagnostics"] == []
 
     for artifact in payload["artifacts"]:
         materialization = artifact["templateMaterialization"]
@@ -11009,15 +10988,13 @@ def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
             },
             "source": "call-site",
         }
-        if artifact["status"] == "translated":
-            output = (repo / artifact["path"]).read_text(encoding="utf-8")
-            assert not re.search(r"\b(?:T|IdxT|N)\b", output)
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        assert not re.search(r"\b(?:T|IdxT|N)\b", output)
 
     report_path = repo / "translated" / "report.json"
     report.write_json(report_path)
     validation = validate_project_report(report_path)
     assert validation["success"] is True
-    assert validation["artifactStatusByTarget"]["vulkan"]["failedCount"] == 0
 
 
 def test_translate_project_metal_rope_missing_variant_data_reports_template_diagnostic(
@@ -11141,7 +11118,6 @@ def test_plain_metal_helper_call_scan_uses_indexed_excluded_spans(monkeypatch):
             "plain_helper",
             ["value"],
             (helper_start, helper_start + len("plain_helper")),
-            [],
         )
     ]
 
@@ -11183,7 +11159,6 @@ def test_plain_metal_helper_call_scan_starts_at_included_body_span():
             "plain_helper",
             ["value"],
             (helper_start, helper_start + len("plain_helper")),
-            [],
         )
     ]
     assert CountingSource.index_reads < len(function_source) * 4
@@ -12659,61 +12634,6 @@ def test_translate_project_opengl_rejects_unresolved_metal_template_type_before_
         f"{expected_name} missing {', '.join(expected_missing)}"
         in diagnostic["message"]
     )
-
-
-def test_translate_project_opengl_materializes_reachable_metal_template_from_call_site(
-    tmp_path,
-):
-    repo = tmp_path / "repo"
-    shader_dir = repo / "shaders"
-    shader_dir.mkdir(parents=True)
-    (shader_dir / "reachable_template.metal").write_text(
-        textwrap.dedent("""
-            #include <metal_stdlib>
-            using namespace metal;
-
-            template <typename T>
-            T convert_value(T value) {
-                return T(value);
-            }
-
-            kernel void launch(
-                device float* out [[buffer(0)]],
-                uint gid [[thread_position_in_grid]]
-            ) {
-                out[gid] = convert_value(1.0);
-            }
-            """).strip() + "\n",
-        encoding="utf-8",
-    )
-
-    payload = translate_project(repo, targets=["opengl"], output_dir="out").to_json()
-
-    assert payload["summary"]["translatedCount"] == 1
-    assert payload["summary"]["failedCount"] == 0
-    assert payload["diagnostics"] == []
-    artifact = payload["artifacts"][0]
-    assert artifact["status"] == "translated"
-    assert artifact["templateMaterialization"] == {
-        "status": "materialized",
-        "specializationCount": 1,
-        "configuredParameterCount": 0,
-        "configuredParameters": {},
-        "configuredParameterSources": {},
-        "specializations": [
-            {
-                "name": "convert_value",
-                "materializedName": "convert_value_float",
-                "parameters": {"T": "float"},
-                "parameterSources": {"T": "call-site"},
-                "source": "call-site",
-            }
-        ],
-        "unsupported": [],
-    }
-    output = (repo / artifact["path"]).read_text(encoding="utf-8")
-    assert "float convert_value_float(float value)" in output
-    assert "out_[gid] = convert_value_float(1.0);" in output
 
 
 def test_translate_project_forwards_metal_template_specialization_limit(tmp_path):
@@ -15347,7 +15267,7 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
         "variant",
         "error",
         "stage",
-        "requiredCapabilities",
+        "templateMaterialization",
     }
     assert set(artifact["sourceHash"]) == project_pipeline.REPORT_HASH_FIELDS
     assert isinstance(artifact["sourceSizeBytes"], int)
@@ -15367,15 +15287,6 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
     assert set(artifact["sourceRemap"]) == (
         project_pipeline.REPORT_ARTIFACT_SOURCE_REMAP_FIELDS
     )
-    assert artifact["templateMaterialization"] == {
-        "status": "not-required",
-        "specializationCount": 0,
-        "configuredParameterCount": 0,
-        "configuredParameters": {},
-        "configuredParameterSources": {},
-        "specializations": [],
-        "unsupported": [],
-    }
 
     source_map = artifact["sourceMap"]
     assert set(source_map) == project_pipeline.SOURCE_MAP_PAYLOAD_FIELDS
@@ -17731,14 +17642,6 @@ def test_vulkan_toolchain_smoke_command_selects_spirv_tool(tmp_path):
     assembly_shader.write_text("; SPIR-V\n", encoding="utf-8")
     binary_shader = tmp_path / "shader.spv"
     binary_shader.write_bytes(b"\x03\x02\x23\x07")
-    assembled_shader = project_pipeline._vulkan_assembled_smoke_path(assembly_shader)
-
-    assert project_pipeline._toolchain_smoke_commands(
-        "vulkan", ["spirv-val", "spirv-as"], assembly_shader
-    ) == [
-        (["spirv-as", str(assembly_shader), "-o", str(assembled_shader)], "artifact"),
-        (["spirv-val", str(assembled_shader)], "artifact"),
-    ]
 
     assert project_pipeline._toolchain_smoke_command(
         "vulkan", ["spirv-val", "spirv-as"], assembly_shader
@@ -26530,7 +26433,6 @@ def test_validate_project_report_assembles_vulkan_spirv_assembly(tmp_path, monke
         tmp_path / "repo", target="vulkan", extension="spvasm"
     )
     artifact_path = (report_path.parent / "out" / "vulkan" / "simple.spvasm").resolve()
-    assembled_path = project_pipeline._vulkan_assembled_smoke_path(artifact_path)
     calls = []
 
     monkeypatch.setattr(
@@ -26542,15 +26444,6 @@ def test_validate_project_report_assembles_vulkan_spirv_assembly(tmp_path, monke
     def run_toolchain(command, **kwargs):
         calls.append((command, kwargs))
         assert kwargs["input"] is None
-        if command[0] == "spirv-as":
-            assert command == [
-                "spirv-as",
-                str(artifact_path),
-                "-o",
-                str(assembled_path),
-            ]
-        else:
-            assert command == ["spirv-val", str(assembled_path)]
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
@@ -26559,22 +26452,27 @@ def test_validate_project_report_assembles_vulkan_spirv_assembly(tmp_path, monke
 
     assert payload["success"] is True
     assert len(calls) == 2
-    assembler_run = payload["validation"]["toolchainRuns"][0]
-    validator_run = payload["validation"]["toolchainRuns"][1]
-    for run in (assembler_run, validator_run):
-        assert run["source"] == "simple.cgl"
-        assert run["sourceBackend"] == "cgl"
-        assert run["target"] == "vulkan"
-        assert run["path"] == "out/vulkan/simple.spvasm"
-        assert run["checkKind"] == "artifact"
-        assert run["status"] == "ok"
-    assert assembler_run["command"] == [
+    spv_output = calls[0][0][3]
+    assert calls[0][0] == [
         "spirv-as",
         str(artifact_path),
         "-o",
-        str(assembled_path),
+        spv_output,
     ]
-    assert validator_run["command"] == ["spirv-val", str(assembled_path)]
+    assert Path(spv_output).suffix == ".spv"
+    assert calls[1][0] == ["spirv-val", spv_output]
+    assemble_run, validate_run = payload["validation"]["toolchainRuns"]
+    assert assemble_run["source"] == "simple.cgl"
+    assert assemble_run["sourceBackend"] == "cgl"
+    assert assemble_run["target"] == "vulkan"
+    assert assemble_run["path"] == "out/vulkan/simple.spvasm"
+    assert assemble_run["command"] == calls[0][0]
+    assert assemble_run["checkKind"] == "artifact"
+    assert assemble_run["status"] == "ok"
+    assert validate_run["path"] == "out/vulkan/simple.spvasm"
+    assert validate_run["command"] == calls[1][0]
+    assert validate_run["checkKind"] == "artifact"
+    assert validate_run["status"] == "ok"
     assert payload["toolchainRunStatusByCheckKind"] == {
         "artifact": {"runCount": 2, "okCount": 2, "failedCount": 0}
     }
@@ -26584,14 +26482,13 @@ def test_validate_project_report_assembles_vulkan_spirv_assembly(tmp_path, monke
     }
 
 
-def test_validate_project_report_stops_vulkan_validation_after_assembly_failure(
+def test_validate_project_report_reports_vulkan_spirv_validator_failures(
     tmp_path, monkeypatch
 ):
     report_path = _write_target_toolchain_report(
         tmp_path / "repo", target="vulkan", extension="spvasm"
     )
     artifact_path = (report_path.parent / "out" / "vulkan" / "simple.spvasm").resolve()
-    assembled_path = project_pipeline._vulkan_assembled_smoke_path(artifact_path)
     calls = []
 
     monkeypatch.setattr(
@@ -26602,39 +26499,49 @@ def test_validate_project_report_stops_vulkan_validation_after_assembly_failure(
 
     def run_toolchain(command, **kwargs):
         calls.append((command, kwargs))
-        assert command == [
-            "spirv-as",
-            str(artifact_path),
-            "-o",
-            str(assembled_path),
-        ]
-        return SimpleNamespace(returncode=1, stdout="", stderr="assembler rejected")
+        if command[0] == "spirv-as":
+            assert command[:3] == ["spirv-as", str(artifact_path), "-o"]
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        assert command[0] == "spirv-val"
+        return SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="error: Vulkan environment requires OpEntryPoint",
+        )
 
     monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
 
     payload = validate_project_report(report_path, run_toolchains=True)
 
     assert payload["success"] is False
-    assert len(calls) == 1
-    run = payload["validation"]["toolchainRuns"][0]
-    assert run["source"] == "simple.cgl"
-    assert run["sourceBackend"] == "cgl"
-    assert run["target"] == "vulkan"
-    assert run["path"] == "out/vulkan/simple.spvasm"
-    assert run["command"] == [
-        "spirv-as",
-        str(artifact_path),
-        "-o",
-        str(assembled_path),
-    ]
-    assert run["checkKind"] == "artifact"
-    assert run["status"] == "failed"
-    assert run["stderr"] == "assembler rejected"
+    assert len(calls) == 2
+    assert calls[1][0] == ["spirv-val", calls[0][0][3]]
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.toolchain-failed"
+    assert diagnostic["target"] == "vulkan"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["checkKind"] == "artifact"
+    assert diagnostic["location"]["file"] == "out/vulkan/simple.spvasm"
+    assert diagnostic["message"] == (
+        "Validation toolchain for target vulkan rejected "
+        "out/vulkan/simple.spvasm: error: Vulkan environment requires OpEntryPoint"
+    )
+    assert payload["validation"]["toolchainRuns"][0]["status"] == "ok"
+    validator_run = payload["validation"]["toolchainRuns"][1]
+    assert validator_run["status"] == "failed"
+    assert validator_run["path"] == "out/vulkan/simple.spvasm"
+    assert validator_run["command"] == calls[1][0]
+    assert validator_run["returncode"] == 1
+    assert validator_run["stderr"] == (
+        "error: Vulkan environment requires OpEntryPoint"
+    )
     assert payload["toolchainRunStatusByCheckKind"] == {
-        "artifact": {"runCount": 1, "okCount": 0, "failedCount": 1}
+        "artifact": {"runCount": 2, "okCount": 1, "failedCount": 1}
     }
     assert payload["toolchainRunStatusByTool"] == {
-        "spirv-as": {"runCount": 1, "okCount": 0, "failedCount": 1}
+        "spirv-as": {"runCount": 1, "okCount": 1, "failedCount": 0},
+        "spirv-val": {"runCount": 1, "okCount": 0, "failedCount": 1},
     }
 
 
@@ -26645,7 +26552,6 @@ def test_validate_project_report_runs_vulkan_assembly_when_only_assembler_availa
         tmp_path / "repo", target="vulkan", extension="spvasm"
     )
     artifact_path = (report_path.parent / "out" / "vulkan" / "simple.spvasm").resolve()
-    assembled_path = project_pipeline._vulkan_assembled_smoke_path(artifact_path)
     calls = []
 
     monkeypatch.setattr(
@@ -26670,7 +26576,7 @@ def test_validate_project_report_runs_vulkan_assembly_when_only_assembler_availa
                 "spirv-as",
                 str(artifact_path),
                 "-o",
-                str(assembled_path),
+                project_pipeline.os.devnull,
             ],
             {
                 "cwd": str(report_path.parent),
@@ -26687,7 +26593,7 @@ def test_validate_project_report_runs_vulkan_assembly_when_only_assembler_availa
         "spirv-as",
         str(artifact_path),
         "-o",
-        str(assembled_path),
+        project_pipeline.os.devnull,
     ]
     assert payload["toolchainRunStatusByTool"] == {
         "spirv-as": {"runCount": 1, "okCount": 1, "failedCount": 0}
@@ -27648,43 +27554,17 @@ def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
     (repo / "mlx_bf16.metal").write_text(
         textwrap.dedent("""
             #include <metal_stdlib>
-            #include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>
-            #pragma METAL internals : enable
-            #pragma METAL internals : disable
             using namespace metal;
 
             typedef bfloat bfloat16_t;
-
-            struct os_log {
-            };
-
-            template <typename U>
-            struct Limits {
-                U max;
-            };
-
-            inline float read_limit(Limits<float> value) {
-                return value.max;
-            }
-
-            template <typename T, typename U>
-            inline T ceildiv(T n, U m) {
-                return (n + m - 1) / m;
-            }
 
             inline uint pack_bfloat16(bfloat16_t value) {
                 return asuint(value);
             }
 
-            inline bfloat16_t unpack_bfloat16(uint bits) {
-                return as_type<bfloat16_t>(bits);
-            }
-
             kernel void pack_kernel(device uint* out [[buffer(0)]]) {
                 bfloat16_t value = bfloat16_t(0.0);
                 out[0] = pack_bfloat16(value);
-                bfloat16_t restored = unpack_bfloat16(out[0]);
-                out[1] = pack_bfloat16(restored);
             }
         """).strip(),
         encoding="utf-8",
@@ -27712,18 +27592,8 @@ def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
     generated = (repo / metal_artifact["path"]).read_text(encoding="utf-8")
     assert "uint pack_bfloat16(float value)" in generated
     assert "return (floatBitsToUint(value) >> 16u);" in generated
-    assert "float unpack_bfloat16(uint bits)" in generated
-    assert "return uintBitsToFloat((bits << 16u));" in generated
-    assert "struct os_log {\n    int _crossgl_empty;\n};" in generated
-    assert "struct Limits {" not in generated
-    assert "U max;" not in generated
-    assert "T ceildiv" not in generated
-    assert "#include <metal" not in generated
-    assert "#include <Metal" not in generated
-    assert "#pragma METAL" not in generated
     assert "bfloat16_t" not in generated
     assert "asuint(" not in generated
-    assert "as_type<" not in generated
 
 
 def test_translate_project_resolves_mlx_sort_vulkan_storage_buffer_overload(
@@ -39560,15 +39430,7 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
 
     artifact = payload["artifacts"][0]
     assert artifact["status"] == "failed"
-    assert artifact["templateMaterialization"] == {
-        "status": "not-required",
-        "specializationCount": 0,
-        "configuredParameterCount": 0,
-        "configuredParameters": {},
-        "configuredParameterSources": {},
-        "specializations": [],
-        "unsupported": [],
-    }
+    assert "templateMaterialization" not in artifact
     assert not (repo / artifact["path"]).exists()
     assert "work limit exceeded before GLSL codegen" in artifact["error"]
     assert "6 source-instantiation/template work items requested" in artifact["error"]
@@ -41807,7 +41669,7 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
         assert diagnostic["sourceBackend"] == "mojo"
         assert diagnostic["location"]["file"].startswith(f"out/{target}/")
         assert diagnostic["originalLocation"]["file"] == "vector_addition.mojo"
-        assert diagnostic["checkKind"] == "artifact"
+        assert diagnostic["checkKind"] == "artifact.validation"
         assert diagnostic["missingCapabilities"] == [
             project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY
         ]

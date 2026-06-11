@@ -9425,41 +9425,6 @@ def _plain_template_call_replacements(
     return replacements
 
 
-def _metal_template_is_entry(template: Any) -> bool:
-    from crosstl.backend.Metal.preprocessor import METAL_ENTRY_FUNCTION_RE
-
-    header = template.source.split("{", 1)[0]
-    return METAL_ENTRY_FUNCTION_RE.search(header) is not None
-
-
-def _metal_template_referenced_from_spans(
-    preprocessor: Any,
-    source: str,
-    template: Any,
-    spans: Sequence[tuple[int, int]],
-) -> bool:
-    for start, end in spans:
-        references = preprocessor._find_function_references(
-            source[start:end],
-            {template.name},
-        )
-        if template.name in references:
-            return True
-    return False
-
-
-def _template_materialization_not_required_metadata() -> dict[str, Any]:
-    return {
-        "status": "not-required",
-        "specializationCount": 0,
-        "configuredParameterCount": 0,
-        "configuredParameters": {},
-        "configuredParameterSources": {},
-        "specializations": [],
-        "unsupported": [],
-    }
-
-
 def _explicit_template_call_replacements(
     preprocessor: Any,
     source: str,
@@ -11198,19 +11163,7 @@ def _metal_statement_semicolon(
     return None
 
 
-def _materialized_template_suffix(arguments: Sequence[str]) -> str:
-    parts = [
-        re.sub(r"[^A-Za-z0-9_]+", "_", str(argument)).strip("_")
-        for argument in arguments
-    ]
-    parts = [part for part in parts if part]
-    return "_".join(parts)
-
-
-def _metal_concrete_using_alias_type(
-    preprocessor: Any,
-    alias_type: str,
-) -> str | None:
+def _metal_concrete_using_alias_type(alias_type: str) -> str | None:
     alias_type = str(alias_type or "").strip()
     if alias_type.startswith("typename "):
         alias_type = alias_type[len("typename ") :].strip()
@@ -11218,19 +11171,6 @@ def _metal_concrete_using_alias_type(
         return None
     if any(character in alias_type for character in "{};="):
         return None
-    angle_start = alias_type.find("<")
-    angle_end = preprocessor._find_matching_angle(alias_type, angle_start)
-    if angle_end is None:
-        return None
-    if alias_type[angle_end + 1 :].strip():
-        return None
-    base_type = alias_type[:angle_start].strip()
-    arguments = preprocessor._split_top_level_commas(
-        alias_type[angle_start + 1 : angle_end]
-    )
-    suffix = _materialized_template_suffix(arguments)
-    if suffix and base_type.endswith(f"_{suffix}"):
-        return base_type
     return alias_type
 
 
@@ -11391,10 +11331,7 @@ def _inline_metal_concrete_using_template_aliases(
             i += consumed
             continue
         raw_alias_type = source[j + 1 : semicolon]
-        alias_type = _metal_concrete_using_alias_type(
-            preprocessor,
-            raw_alias_type,
-        )
+        alias_type = _metal_concrete_using_alias_type(raw_alias_type)
         if alias_type is None:
             dependent_match = re.fullmatch(
                 r"\s*typename\s+([A-Za-z_][A-Za-z0-9_]*)::"
@@ -12265,17 +12202,6 @@ def _project_template_materialization_for_artifact(
     )
     for template in remaining_templates:
         if (
-            current_reachable_function_spans is not None
-            and not _metal_template_is_entry(template)
-            and not _metal_template_referenced_from_spans(
-                preprocessor,
-                materialized,
-                template,
-                current_reachable_function_spans,
-            )
-        ):
-            continue
-        if (
             template.name in explicit_template_names
             or template.name in inherited_template_names
             or template.name in inferred_plain_template_names
@@ -13060,9 +12986,6 @@ def translate_project(
                             else None
                         ),
                     },
-                    "templateMaterialization": (
-                        _template_materialization_not_required_metadata()
-                    ),
                 }
                 if required_capabilities:
                     artifact["requiredCapabilities"] = list(required_capabilities)
@@ -13112,7 +13035,7 @@ def translate_project(
                     artifacts.append(artifact)
                     continue
                 if template_materialization is not None:
-                    artifact["templateMaterialization"] = (
+                    artifact["templateMaterialization"] = dict(
                         template_materialization.metadata
                     )
                     diagnostics.extend(template_materialization.diagnostics)
@@ -14055,7 +13978,7 @@ def _mojo_unresolved_target_construct_diagnostics(
             ),
             original_location=SourceLocation(file=str(artifact.get("source", ""))),
             **_artifact_diagnostic_context(artifact),
-            check_kind="artifact",
+            check_kind="artifact.validation",
             missing_capabilities=[MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY],
         )
     ]
@@ -30929,10 +30852,8 @@ def _artifact_template_materialization_contract_reasons(
         REPORT_ARTIFACT_TEMPLATE_MATERIALIZATION_FIELDS,
     )
     status = materialization.get("status")
-    if status not in {"materialized", "not-required", "unsupported"}:
-        reasons.append(
-            f"{prefix}.status must be materialized, not-required, or unsupported"
-        )
+    if status not in {"materialized", "unsupported"}:
+        reasons.append(f"{prefix}.status must be materialized or unsupported")
 
     configured_parameters = materialization.get("configuredParameters")
     configured_parameter_reasons = _string_mapping_contract_reasons(
@@ -30994,25 +30915,14 @@ def _artifact_template_materialization_contract_reasons(
                     record,
                 )
             )
-    if (
-        status in {"materialized", "not-required"}
-        and isinstance(unsupported, list)
-        and unsupported
-    ):
-        reasons.append(f"{prefix}.unsupported must be empty when status is {status}")
+    if status == "materialized" and isinstance(unsupported, list) and unsupported:
+        reasons.append(
+            f"{prefix}.unsupported must be empty when status is materialized"
+        )
     if status == "unsupported" and isinstance(unsupported, list) and not unsupported:
         reasons.append(
             f"{prefix}.unsupported must not be empty when status is unsupported"
         )
-    if status == "not-required":
-        if isinstance(specializations, list) and specializations:
-            reasons.append(
-                f"{prefix}.specializations must be empty when status is not-required"
-            )
-        if isinstance(configured_parameters, Mapping) and configured_parameters:
-            reasons.append(
-                f"{prefix}.configuredParameters must be empty when status is not-required"
-            )
     return reasons
 
 
@@ -31708,21 +31618,16 @@ def _run_toolchain_smoke(
             continue
         if not artifact_path.is_file():
             continue
-        smoke_commands = _toolchain_smoke_commands(
-            target, tools, artifact_path, artifact=artifact
-        )
-        cleanup_paths = _toolchain_smoke_cleanup_paths(target, artifact_path)
-        try:
-            vulkan_spvasm_assembled = False
+        with tempfile.TemporaryDirectory(prefix="crosstl-toolchain-") as temp_dir:
+            smoke_commands = _toolchain_smoke_commands(
+                target,
+                tools,
+                artifact_path,
+                artifact=artifact,
+                temp_dir=Path(temp_dir),
+            )
             for command, check_kind in smoke_commands:
                 if not command or not shutil.which(command[0]):
-                    continue
-                if (
-                    target == "vulkan"
-                    and artifact_path.suffix.lower() == ".spvasm"
-                    and command[:1] == [tools[0]]
-                    and not vulkan_spvasm_assembled
-                ):
                     continue
                 try:
                     stdin = (
@@ -31769,25 +31674,8 @@ def _run_toolchain_smoke(
                 if artifact.get("variant") is not None:
                     run["variant"] = artifact["variant"]
                 runs.append(run)
-                if (
-                    target == "vulkan"
-                    and artifact_path.suffix.lower() == ".spvasm"
-                    and command[:1] == [tools[1]]
-                ):
-                    vulkan_spvasm_assembled = returncode == 0
-                if (
-                    target == "vulkan"
-                    and artifact_path.suffix.lower() == ".spvasm"
-                    and command[:1] == [tools[1]]
-                    and returncode != 0
-                ):
+                if returncode != 0:
                     break
-        finally:
-            for cleanup_path in cleanup_paths:
-                try:
-                    cleanup_path.unlink()
-                except FileNotFoundError:
-                    pass
     return runs
 
 
@@ -31797,6 +31685,7 @@ def _toolchain_smoke_commands(
     artifact_path: Path,
     *,
     artifact: Mapping[str, Any] | None = None,
+    temp_dir: Path | None = None,
 ) -> list[tuple[list[str], str]]:
     if target == "directx":
         return [
@@ -31812,16 +31701,12 @@ def _toolchain_smoke_commands(
             return [
                 ([tools[0], "--stdin", "-S", stage], "artifact") for stage in stages
             ]
-    if (
-        target == "vulkan"
-        and artifact_path.suffix.lower() == ".spvasm"
-        and len(tools) > 1
-    ):
-        binary_path = _vulkan_assembled_smoke_path(artifact_path)
-        return [
-            ([tools[1], str(artifact_path), "-o", str(binary_path)], "artifact"),
-            ([tools[0], str(binary_path)], "artifact"),
-        ]
+    if target == "vulkan" and artifact_path.suffix.lower() == ".spvasm":
+        return _vulkan_spirv_assembly_smoke_commands(
+            tools,
+            artifact_path,
+            temp_dir=temp_dir,
+        )
     smoke_command = _toolchain_smoke_command(
         target,
         tools,
@@ -31857,16 +31742,23 @@ def _toolchain_smoke_command(
     return list(availability_command), "tool-availability"
 
 
-def _vulkan_assembled_smoke_path(artifact_path: Path) -> Path:
-    return artifact_path.with_suffix(f"{artifact_path.suffix}.spv")
-
-
-def _toolchain_smoke_cleanup_paths(
-    target: str, artifact_path: Path
-) -> tuple[Path, ...]:
-    if target == "vulkan" and artifact_path.suffix.lower() == ".spvasm":
-        return (_vulkan_assembled_smoke_path(artifact_path),)
-    return ()
+def _vulkan_spirv_assembly_smoke_commands(
+    tools: Sequence[str], artifact_path: Path, *, temp_dir: Path | None = None
+) -> list[tuple[list[str], str]]:
+    if len(tools) < 2:
+        return []
+    validator = tools[0]
+    assembler = tools[1]
+    assembler_command = [assembler, str(artifact_path), "-o", os.devnull]
+    if not shutil.which(assembler) or not shutil.which(validator):
+        return [(assembler_command, "artifact")]
+    if temp_dir is None:
+        temp_dir = Path(tempfile.gettempdir())
+    output_path = temp_dir / f"{artifact_path.stem}.spv"
+    return [
+        ([assembler, str(artifact_path), "-o", str(output_path)], "artifact"),
+        ([validator, str(output_path)], "artifact"),
+    ]
 
 
 def _toolchain_smoke_stdin(target: str, command: Sequence[str], artifact_path: Path):
