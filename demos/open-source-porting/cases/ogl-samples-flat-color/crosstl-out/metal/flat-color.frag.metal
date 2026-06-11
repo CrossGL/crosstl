@@ -12,4 +12,3 @@ fragment float4 fragment_main(constant Uniforms& uniforms [[buffer(0)]]) {
     Color = uniforms.Diffuse;
     return Color;
 }
-

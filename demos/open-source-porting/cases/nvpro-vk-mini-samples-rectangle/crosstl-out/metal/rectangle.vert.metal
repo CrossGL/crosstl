@@ -17,4 +17,3 @@ vertex VertexOutput vertex_main(VertexInput input [[stage_in]]) {
     output.outFragColor = input.inColor;
     return output;
 }
-

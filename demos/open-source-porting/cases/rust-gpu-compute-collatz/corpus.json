@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "Rust-GPU compute Collatz shader",
+  "description": "Pinned Rust-GPU compute shader used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "rust-gpu-compute-collatz",
+      "path": "lib.rs",
+      "sourceBackend": "rust",
+      "targets": ["cgl", "metal", "vulkan"],
+      "repository": "https://github.com/Rust-GPU/rust-gpu",
+      "commit": "36e3348cdc2f824afec64b3b5af5d369d98a4c0d",
+      "sourceUrl": "https://github.com/Rust-GPU/rust-gpu/blob/36e3348cdc2f824afec64b3b5af5d369d98a4c0d/examples/shaders/compute-shader/src/lib.rs"
+    }
+  ]
+}

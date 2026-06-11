@@ -18,4 +18,3 @@ vertex VertexOutput vertex_main(VertexInput input [[stage_in]], constant Uniform
     output.gl_Position = uniforms.MVP * input.Position;
     return output;
 }
-

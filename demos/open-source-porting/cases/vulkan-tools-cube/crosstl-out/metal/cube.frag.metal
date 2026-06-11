@@ -35,4 +35,3 @@ fragment float4 fragment_main(FragmentInput input [[stage_in]], texture2d<float>
     uFragColor = linearToSrgb(float4(light) * tex.sample(sampler(mag_filter::linear, min_filter::linear), input.texcoord.xy));
     return uFragColor;
 }
-

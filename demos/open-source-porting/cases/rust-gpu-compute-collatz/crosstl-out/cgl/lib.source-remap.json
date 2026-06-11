@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/lib.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 51,
+        "endOffset": 1298,
+        "file": "crosstl-out/cgl/lib.cgl",
+        "length": 1298,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 52,
+        "endOffset": 1504,
+        "file": "lib.rs",
+        "length": 1504,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

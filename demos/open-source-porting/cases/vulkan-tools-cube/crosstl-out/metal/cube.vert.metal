@@ -24,4 +24,3 @@ vertex VertexOutput vertex_main(uint _crossglVertexID [[vertex_id]], constant Un
     output.frag_pos = output.gl_Position.xyz;
     return output;
 }
-
