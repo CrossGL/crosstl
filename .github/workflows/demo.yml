@@ -235,6 +235,7 @@ jobs:
             --case directx-sdk-samples-tutorial02 \
             --case libgdx-batch-shader \
             --case lonelydevil-vulkan-tutorial-triangle \
+            --case monogame-sprite-effect \
             --case vulkan-samples-dynamic-line-grid \
             --case angle-simple-texture-2d \
             --case arm-opengl-es-sdk-cube \
@@ -268,6 +269,8 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/directx-sdk-samples-tutorial02/crosstl-out/directx/Tutorial02.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.vert.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.frag.hlsl PSMain ps_6_0
+          compile_hlsl demos/open-source-porting/cases/monogame-sprite-effect/crosstl-out/directx/SpriteEffect.hlsl SpriteVertexShader vs_6_0
+          compile_hlsl demos/open-source-porting/cases/monogame-sprite-effect/crosstl-out/directx/SpriteEffect.hlsl SpritePixelShader ps_6_0
           compile_hlsl demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.vert.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.frag.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.vert.hlsl VSMain vs_6_0
