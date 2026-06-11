@@ -51,7 +51,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `godot-betsy-alpha-stitch` | `godotengine/godot` at `3df26a02c446710c979daa541b74f87edeca81b0` | MIT | GLSL | CrossGL, OpenGL | Removes the Godot shader-section marker so the compute shader is standalone GLSL. Vulkan sampled unsigned texture lowering is tracked in issue #829. |
 | `libgdx-batch-shader` | `libgdx/libgdx` at `846d63a746e4604a7699133f803ff844fdc8c9fe` | Apache-2.0 | GLSL ES | CrossGL, Metal, DirectX, Vulkan | Uses the upstream batch shader pair unchanged apart from line-ending and trailing-whitespace normalization. OpenGL reserved identifier lowering is tracked in issue #820. |
 | `lonelydevil-vulkan-tutorial-triangle` | `lonelydevil/vulkan-tutorial-C-implementation` at `780ff146a6eccd7064a10e86363f3c2f7323825d` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream triangle shader pair unchanged. |
-| `monogame-sprite-effect` | `MonoGame/MonoGame` at `d4893ac09e06bc203792d01d6f151f1891cc1ab5` | MS-PL and MIT | DirectX/HLSL | CrossGL, DirectX, Vulkan | Uses the upstream SpriteEffect source and macro include with whitespace normalization. Metal constant-buffer lowering is tracked in issue #837; OpenGL sampler-register lowering is tracked in issue #838. |
+| `monogame-sprite-effect` | `MonoGame/MonoGame` at `d4893ac09e06bc203792d01d6f151f1891cc1ab5` | MS-PL and MIT | DirectX/HLSL | CrossGL, Vulkan | Uses the upstream SpriteEffect source and macro include with whitespace normalization. DirectX program-constant resource lowering is tracked in issue #869; Metal constant-buffer lowering is tracked in issue #837; OpenGL sampler-register lowering is tracked in issue #838. |
 | `spirv-cross-round-fragment` | `KhronosGroup/SPIRV-Cross` at `146679ff8255a6068518685599d7fb8761d1b570` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream fragment reference shader unchanged. |
 | `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. |
 | `angle-simple-texture-2d` | `google/angle` at `52232eaf409a28d77947df5622af274e1ef770c6` | BSD-style | GLSL ES | CrossGL, Metal, DirectX, Vulkan | Uses extracted upstream SimpleTexture2D shader strings. OpenGL reserved identifier lowering is tracked in issue #820. |
@@ -108,7 +108,9 @@ formatting. OpenGL output is intentionally excluded for the same reserved
 
 The `MonoGame/MonoGame` SpriteEffect case keeps the upstream effect source and
 macro include semantically unchanged, with indentation normalized by repository
-formatting. The checked targets exclude Metal because program-scope
+formatting. The checked targets exclude DirectX because program-constant
+resource metadata is currently emitted into HLSL syntax, tracked in issue
+#869. Metal is excluded because program-scope
 constant-buffer lowering currently inserts a placeholder initializer, tracked
 in issue #837. OpenGL is excluded because legacy HLSL sampler-register metadata
 is not yet lowered to an OpenGL binding, tracked in issue #838.

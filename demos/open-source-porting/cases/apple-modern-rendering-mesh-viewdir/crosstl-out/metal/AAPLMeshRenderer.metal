@@ -10,6 +10,8 @@ struct Input {
 };
 struct Output {
     half3 viewDir;
+    /* CrossGL fallback: Metal vertex entry points require a position output even when the GLSL source did not write gl_Position. */
+    float4 __crossgl_position [[position]];
 };
 // Vertex Shader
 struct main_vertex_Input {

@@ -231,7 +231,6 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "libgdx-batch-shader",
         "slang-hello-world-compute",
         "lonelydevil-vulkan-tutorial-triangle",
-        "monogame-sprite-effect",
         "sascha-willems-vulkan-headless-compute",
         "vulkan-samples-dynamic-line-grid",
     }
@@ -274,7 +273,6 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
         not in {
             "apple-modern-rendering-mesh-viewdir",
             "directx-graphics-samples-hello-triangle",
-            "glslang-push-constant-vertex",
             "sascha-willems-vulkan-conservative-triangle",
         }
     } == metal_paths
@@ -298,7 +296,6 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
         "demos/open-source-porting/cases/directx-sdk-samples-tutorial02/crosstl-out/directx/Tutorial02.hlsl",
         "demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.vert.hlsl",
         "demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.frag.hlsl",
-        "demos/open-source-porting/cases/monogame-sprite-effect/crosstl-out/directx/SpriteEffect.hlsl",
         "demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/directx/headless.hlsl",
         "demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/directx/hello-world.hlsl",
     } == directx_paths

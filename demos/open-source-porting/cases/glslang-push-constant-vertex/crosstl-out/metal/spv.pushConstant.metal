@@ -4,6 +4,8 @@ using namespace metal;
 
 struct VertexOutput {
     float4 color;
+    /* CrossGL fallback: Metal vertex entry points require a position output even when the GLSL source did not write gl_Position. */
+    float4 __crossgl_position [[position]];
 };
 // Constant Buffers
 struct Material {
@@ -27,5 +29,7 @@ vertex VertexOutput vertex_main(constant Material& material [[buffer(0)]]) {
             break;
         }
     }
-    return output;
+    VertexOutput _crossglReturn = output;
+    _crossglReturn.__crossgl_position = float4(0.0, 0.0, 0.0, 1.0);
+    return _crossglReturn;
 }

@@ -4,8 +4,10 @@ shader main {
         vec4 color @ Color0;
         vec2 texCoord @ TexCoord0;
     }
+    @ hlsl_program_constant
     @ register(s0)
     sampler2D Texture;
+    @ hlsl_program_constant
     @ register(vs, c0)
     mat4 MatrixTransform;
     VSOutput SpriteVertexShader(vec4 position @ Position, vec4 color @ Color0, vec2 texCoord @ TexCoord0) {
