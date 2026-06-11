@@ -11583,6 +11583,74 @@ def test_glsl_lowers_metal_simd_group_helpers_to_khr_subgroup_builtins():
     assert "__metal_simd" not in generated
 
 
+def test_glsl_elides_empty_metal_simd_helper_placeholders_and_lowers_calls():
+    code = """
+    shader GLSLMetalSimdHelperPlaceholders {
+        float simd_max(float data) {}
+        float simd_min(float data) {}
+        float simd_prefix_exclusive_product(float data) {}
+        float simd_prefix_exclusive_sum(float data) {}
+
+        compute {
+            void main() {
+                float value = simd_max(1.0);
+                value = simd_min(value);
+                value = simd_prefix_exclusive_product(value);
+                value = simd_prefix_exclusive_sum(value);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "#extension GL_KHR_shader_subgroup_basic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_arithmetic : require" in generated
+    for helper_name in [
+        "simd_max",
+        "simd_min",
+        "simd_prefix_exclusive_product",
+        "simd_prefix_exclusive_sum",
+    ]:
+        assert f"float {helper_name}(float data)" not in generated
+    for expected in [
+        "float value = subgroupMax(1.0);",
+        "value = subgroupMin(value);",
+        "value = subgroupExclusiveMul(value);",
+        "value = subgroupExclusiveAdd(value);",
+    ]:
+        assert expected in generated
+    assert not re.search(
+        r"\b(?:float|int|uint|bool)\s+simd_\w+\([^)]*\)\s*\{\s*\}", generated
+    )
+
+
+def test_glsl_unsupported_empty_metal_simd_helper_placeholder_returns_diagnostic():
+    code = """
+    shader GLSLUnsupportedMetalSimdHelperPlaceholder {
+        float simd_shuffle_down(float data) {}
+
+        compute {
+            void main() {
+                float value = simd_shuffle_down(1.0);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "float simd_shuffle_down(float data)" in generated
+    assert (
+        "return /* GLSL wave intrinsic diagnostic: simd_shuffle_down "
+        "has no OpenGL subgroup equivalent */ 0.0;"
+    ) in generated
+    assert "float value = simd_shuffle_down(1.0);" in generated
+    assert not re.search(r"\bfloat\s+simd_shuffle_down\([^)]*\)\s*\{\s*\}", generated)
+
+
 def test_glsl_metal_simd_group_helper_diagnostics_replace_unresolved_calls():
     code = """
     shader GLSLMetalSimdGroupHelperDiagnostics {
