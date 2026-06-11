@@ -1852,13 +1852,16 @@
           ]
         },
         "wgsl": {
-          "status": "partial",
-          "notes": "CrossGL sampled texture globals lower to WGSL texture bindings plus companion sampler bindings, standalone sampler globals lower to sampler bindings, stage-local resource declarations are emitted at module scope, and texture parameters receive companion sampler parameters with call-site sampler injection. Resource arrays, texture handles inside user structs, comparison samplers, storage images, and duplicate binding diagnostics remain deterministic diagnostics or future work.",
+          "status": "supported",
+          "notes": "StructuredBuffer and RWStructuredBuffer globals lower to WGSL storage-buffer arrays with read/read_write access modes, explicit and automatic binding allocation, direct indexed access, buffer_load/buffer_store helper lowering, and HLSL Load/Store member helper lowering. Append/consume buffers, byte-address buffers, dimensions/counter helpers, read-only stores, parameters, and user-struct storage-resource fields produce deterministic diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_sampled_texture_resources_and_calls",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_explicit_sampler_texture_calls",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_emits_stage_local_resource_declarations",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_structured_buffers_to_storage_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_structured_buffer_access_helpers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_readonly_structured_buffer_stores",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsupported_storage_buffer_resource_forms",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsupported_structured_buffer_helpers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_structured_buffers_inside_user_structs",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_structured_buffer_parameters"
           ]
         }
       }
