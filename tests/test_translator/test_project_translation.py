@@ -10861,7 +10861,7 @@ def test_translate_project_bounds_mlx_like_large_plain_helper_graph(tmp_path):
                 T scales[8];
                 T values[8];
             }};
-            """).strip() for index in range(500))
+            """).strip() for index in range(900))
     (shader_dir / "fp_quantized_nax_graph.metal").write_text(
         textwrap.dedent(f"""
             #include <metal_stdlib>
@@ -10907,6 +10907,91 @@ def test_translate_project_bounds_mlx_like_large_plain_helper_graph(tmp_path):
         ]
         assert len(helper_records) == helper_count
         assert helper_records[-1]["materializedName"] == "graph_helper_95_float"
+
+
+def test_metal_plain_template_call_scan_uses_indexed_spans(monkeypatch):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source, excluded_spans, included_span = _large_excluded_span_scan_source(
+        "helper(0.0)",
+        "helper(1.0)",
+    )
+
+    preprocessor = MetalPreprocessor()
+
+    def fail_linear_span_lookup(*args):
+        raise AssertionError("plain helper scan should use indexed spans")
+
+    monkeypatch.setattr(preprocessor, "_containing_span", fail_linear_span_lookup)
+
+    replacements = project_pipeline._plain_template_call_replacements(
+        preprocessor,
+        source,
+        {"helper": "helper_float"},
+        excluded_spans,
+        [included_span],
+    )
+
+    helper_start = source.index("helper(1.0)")
+    assert replacements == [
+        (helper_start, helper_start + len("helper"), "helper_float")
+    ]
+
+
+def test_metal_explicit_template_call_scan_uses_indexed_spans(monkeypatch):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source, excluded_spans, included_span = _large_excluded_span_scan_source(
+        "helper<float>(0.0)",
+        "helper<float>(1.0)",
+    )
+
+    preprocessor = MetalPreprocessor()
+
+    def fail_linear_span_lookup(*args):
+        raise AssertionError("explicit helper scan should use indexed spans")
+
+    monkeypatch.setattr(preprocessor, "_containing_span", fail_linear_span_lookup)
+
+    replacements = project_pipeline._explicit_template_call_replacements(
+        preprocessor,
+        source,
+        {"helper": "helper_float"},
+        excluded_spans,
+        [included_span],
+    )
+
+    helper_start = source.index("helper<float>(1.0)")
+    helper_end = source.index(">(1.0)", helper_start) + 1
+    assert replacements == [(helper_start, helper_end, "helper_float")]
+
+
+def _large_excluded_span_scan_source(
+    outside_call: str,
+    included_call: str,
+) -> tuple[str, list[tuple[int, int]], tuple[int, int]]:
+    chunks = []
+    excluded_spans = []
+    offset = 0
+    for index in range(5000):
+        chunk = textwrap.dedent(f"""
+            template <typename T>
+            struct Excluded{index} {{
+                T value;
+            }};
+            """)
+        chunks.append(chunk)
+        excluded_spans.append((offset, offset + len(chunk)))
+        offset += len(chunk)
+
+    outside = f"void untouched() {{ {outside_call}; }}\n"
+    chunks.append(outside)
+    offset += len(outside)
+    included_start = offset
+    included = f"void entry() {{ float value = {included_call}; }}\n"
+    chunks.append(included)
+    source = "".join(chunks)
+    return source, excluded_spans, (included_start, included_start + len(included))
 
 
 def test_translate_project_opengl_uses_metal_default_template_helper_type(
@@ -38779,9 +38864,7 @@ def test_translate_project_metal_multi_entry_instantiations_scope_vulkan_binding
         artifact for artifact in payload["artifacts"] if artifact["target"] == "vulkan"
     )
     output = (repo / vulkan_artifact["path"]).read_text(encoding="utf-8")
-    assert sorted(
-        re.findall(r'OpEntryPoint GLCompute %\d+ "([^"]+)"', output)
-    ) == [
+    assert sorted(re.findall(r'OpEntryPoint GLCompute %\d+ "([^"]+)"', output)) == [
         "rope_float32",
         "rope_freqs_float32",
     ]
