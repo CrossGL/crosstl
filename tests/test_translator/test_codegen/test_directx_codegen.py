@@ -19,7 +19,10 @@ from crosstl.translator.ast import (
     StructNode,
     create_legacy_shader_node,
 )
-from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+from crosstl.translator.codegen.directx_codegen import (
+    DirectXUnresolvedSourceTypeError,
+    HLSLCodeGen,
+)
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -66,6 +69,35 @@ def hlsl_scalar_vector_zero_diagnostics(code: str):
     return [
         match.group(0) for match in HLSL_SCALAR_VECTOR_ZERO_DIAGNOSTIC.finditer(code)
     ]
+
+
+def test_directx_unresolved_texture_source_type_raises_project_diagnostic():
+    shader = """
+    shader MissingTextureType {
+        compute {
+            void main() {
+                vec4 color = texture(missingTex, vec2(0.0));
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(shader))
+
+    with pytest.raises(DirectXUnresolvedSourceTypeError) as excinfo:
+        generate_code(ast)
+
+    diagnostic = excinfo.value
+    assert (
+        diagnostic.project_diagnostic_code
+        == "project.translate.unresolved-source-type"
+    )
+    assert diagnostic.missing_capabilities == ("directx.type-inference",)
+    message = str(diagnostic)
+    assert "missingTex" in message
+    assert "operation 'texture'" in message
+    assert "function 'main'" in message
+    assert "NoneType" not in message
 
 
 def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics():
