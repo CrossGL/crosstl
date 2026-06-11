@@ -7841,6 +7841,52 @@ def test_option_result_constructor_conversion():
         pytest.fail(f"Option/Result constructor conversion failed: {e}")
 
 
+def test_option_constructors_lower_to_specialized_opengl_helpers(tmp_path):
+    code = """
+    fn collatz(n: u32) -> Option<u32> {
+        if n == 0u32 {
+            return None;
+        }
+        return Some(n);
+    }
+
+    fn read_option(item: Option<u32>) -> u32 {
+        match item {
+            Some(value) => { return value; },
+            None => { return 0u32; }
+        }
+    }
+
+    #[spirv(compute(threads(1, 1, 1)))]
+    pub fn main() {
+        let value = read_option(collatz(7u32));
+    }
+    """
+    rust_file = tmp_path / "collatz.rs"
+    rust_file.write_text(code, encoding="utf-8")
+
+    result = crosstl.translate(
+        str(rust_file),
+        backend="opengl",
+        source_backend="rust",
+        format_output=False,
+    )
+
+    assert "struct Option_u32" in result
+    assert "Option_u32 collatz(uint n)" in result
+    assert "return Option_u32_None_make();" in result
+    assert "return Option_u32_Some_make(n);" in result
+    assert "is_Some_u32(item)" in result
+    assert "(item.variant == Option_None)" in result
+    assert "uint value = unwrap_Some_u32(item);" in result
+    assert "Option<" not in result
+    assert "Option::" not in result
+    assert re.search(r"\bSome\s*\(", result) is None
+    assert "return None;" not in result
+    assert "== None" not in result
+    assert "auto value" not in result
+
+
 def test_option_result_payload_match_conversion():
     code = """
     fn test_payload_match(maybe: Option<i32>, result: Result<i32, i32>) -> i32 {

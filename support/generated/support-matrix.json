@@ -1205,7 +1205,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 984
+        "test_count": 985
       },
       "translator_codegen": {
         "exists": true,
