@@ -1300,6 +1300,7 @@ REPORT_ARTIFACT_FIELDS = frozenset(
         "sourceMap",
         "sourceRemap",
         "templateMaterialization",
+        "requiredCapabilities",
     )
 )
 WEBGL_PROJECT_STAGE_LABEL_BY_GLSLANG = {
@@ -1564,6 +1565,12 @@ PLACEHOLDER_DIAGNOSTIC_MISSING_CODE = (
 )
 PLACEHOLDER_MISSING_CAPABILITY = "target.native-placeholder-lowering"
 PLACEHOLDER_DIAGNOSTIC_CAPABILITY = "project.placeholder-diagnostics"
+GLSL_FRAGMENT_INVOCATION_DENSITY_EXTENSION = "GL_EXT_fragment_invocation_density"
+GLSL_FRAGMENT_INVOCATION_DENSITY_BUILTIN = "gl_FragSizeEXT"
+GLSL_FRAGMENT_INVOCATION_DENSITY_CAPABILITIES = (
+    "glsl.extension.GL_EXT_fragment_invocation_density",
+    "glsl.builtin.gl_FragSizeEXT",
+)
 MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE = (
     "project.translate.mojo-unresolved-host-construct"
 )
@@ -6977,6 +6984,21 @@ class ProjectTranslationUnit:
                 dict(dependency) for dependency in self.include_dependencies
             ]
         return payload
+
+
+def _required_capabilities_for_unit(unit: ProjectTranslationUnit) -> list[str]:
+    if unit.source_backend != "opengl":
+        return []
+    try:
+        source = unit.path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    if (
+        GLSL_FRAGMENT_INVOCATION_DENSITY_EXTENSION not in source
+        and GLSL_FRAGMENT_INVOCATION_DENSITY_BUILTIN not in source
+    ):
+        return []
+    return list(GLSL_FRAGMENT_INVOCATION_DENSITY_CAPABILITIES)
 
 
 @dataclass(frozen=True)
@@ -12491,6 +12513,7 @@ def translate_project(
     preserve_source_suffix = _artifact_source_suffix_pairs(scan.units, selected_targets)
 
     for unit in scan.units:
+        required_capabilities = _required_capabilities_for_unit(unit)
         source_supports_defines = _source_frontend_supports_lexer_keyword(
             unit.source_backend, "defines"
         )
@@ -12568,6 +12591,8 @@ def translate_project(
                         ),
                     },
                 }
+                if required_capabilities:
+                    artifact["requiredCapabilities"] = list(required_capabilities)
                 if variant is not None:
                     artifact["variant"] = variant
                 if output_dir_blocked:
@@ -30874,6 +30899,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                             stage,
                         )
                     )
+            if "requiredCapabilities" in artifact:
+                reasons.extend(
+                    _string_list_contract_reasons(
+                        f"artifacts[{index}].requiredCapabilities",
+                        artifact.get("requiredCapabilities"),
+                    )
+                )
             if isinstance(project, Mapping):
                 reasons.extend(
                     _artifact_defines_contract_reasons(
