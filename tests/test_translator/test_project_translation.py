@@ -39587,7 +39587,7 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
             output_dir = "out"
 
             [project.source_options.metal]
-            max_template_specializations = 4
+            max_template_materialization_work = 4
             """).strip(),
         encoding="utf-8",
     )
@@ -39625,7 +39625,7 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
     assert "work limit exceeded before GLSL codegen" in artifact["error"]
     assert "6 source-instantiation/template work items requested" in artifact["error"]
     assert (
-        "limit 4 from project.source_options.metal.max_template_specializations"
+        "limit 4 from project.source_options.metal.max_template_materialization_work"
         in artifact["error"]
     )
     assert "First source declaration: bounded_source_instantiations.metal:9:1" in (
@@ -39646,6 +39646,157 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
     assert diagnostic["location"]["line"] == 9
     assert diagnostic["location"]["column"] == 1
     assert "work limit exceeded before GLSL codegen" in diagnostic["message"]
+
+
+def test_metal_project_materialization_default_work_budget_scales_source_instantiations(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    instantiations = "\n".join(
+        f'instantiate_kernel("launch_f32_{index}", launch, float)'
+        for index in range(260)
+    )
+    source = textwrap.dedent(f"""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template <typename T>
+        T adjust_value(T value) {{
+            return value + T(1);
+        }}
+
+        template <typename T>
+        [[kernel]] void launch(
+            device T* out [[buffer(0)]],
+            uint gid [[thread_position_in_grid]]
+        ) {{
+            out[gid] = adjust_value(T(gid));
+        }}
+
+        {instantiations}
+        """).strip() + "\n"
+    source_path = repo / "large_source_instantiations.metal"
+    source_path.write_text(source, encoding="utf-8")
+    unit = project_pipeline.ProjectTranslationUnit(
+        path=source_path,
+        relative_path="large_source_instantiations.metal",
+        source_backend="metal",
+        extension=".metal",
+        source_hash={"sha256": "test"},
+        source_size_bytes=len(source.encode("utf-8")),
+    )
+
+    materialized = project_pipeline._project_template_materialization_for_artifact(
+        unit=unit,
+        target="opengl",
+        variant=None,
+        defines={},
+        define_sources={},
+        include_paths=[],
+        source_options={},
+    )
+
+    assert materialized is not None
+    assert list(materialized.diagnostics) == []
+    assert materialized.metadata["status"] == "materialized"
+    assert materialized.metadata["unsupported"] == []
+    assert (
+        sum(
+            1
+            for record in materialized.metadata["specializations"]
+            if record.get("hostName", "").startswith("launch_f32_")
+        )
+        == 260
+    )
+    assert any(
+        record["materializedName"] == "adjust_value_float"
+        for record in materialized.metadata["specializations"]
+    )
+
+
+def test_translate_project_applies_metal_target_source_pattern_materialization_work_limit(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    source = textwrap.dedent("""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template <typename T>
+        T adjust_value(T value) {
+            return value + T(1);
+        }
+
+        template <typename T>
+        [[kernel]] void launch(
+            device T* out [[buffer(0)]],
+            uint gid [[thread_position_in_grid]]
+        ) {
+            out[gid] = adjust_value(T(gid));
+        }
+
+        instantiate_kernel("launch_f32_a", launch, float)
+        instantiate_kernel("launch_f32_b", launch, float)
+        instantiate_kernel("launch_f32_c", launch, float)
+        """).strip() + "\n"
+    (shader_dir / "p.metal").write_text(source, encoding="utf-8")
+    (shader_dir / "q.metal").write_text(source, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "out"
+
+            [project.source_options.metal]
+            max_template_materialization_work = 4
+
+            [project.source_options.metal.target_options.opengl.source_patterns."shaders/p.metal"]
+            max_template_materialization_work = 8
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    artifacts = {artifact["source"]: artifact for artifact in payload["artifacts"]}
+
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
+    assert payload["project"]["sourceOptions"] == {
+        "metal": {
+            "max_template_materialization_work": 4,
+            "target_options": {
+                "opengl": {
+                    "source_patterns": {
+                        "shaders/p.metal": {
+                            "max_template_materialization_work": 8
+                        }
+                    }
+                }
+            },
+        }
+    }
+    assert artifacts["shaders/p.metal"]["status"] == "translated"
+    assert (repo / "out" / "opengl" / "shaders" / "p.glsl").exists()
+    assert artifacts["shaders/q.metal"]["status"] == "failed"
+    assert not (repo / artifacts["shaders/q.metal"]["path"]).exists()
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.metal-template-specialization"
+    )
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert (
+        "limit 4 from project.source_options.metal.max_template_materialization_work"
+        in diagnostic["message"]
+    )
 
 
 def test_translate_project_metal_implicit_type_environment_cache_bounds_repeated_work(
