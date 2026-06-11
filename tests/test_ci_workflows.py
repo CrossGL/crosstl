@@ -1827,7 +1827,9 @@ def test_docs_workflow_builds_doxygen_and_sphinx():
     assert re.search(r"\bpull_request\s*:", docs)
     assert "workflow_dispatch:" in docs
     assert 'python-version: "3.12"' in docs
-    assert "sudo apt-get update && sudo apt-get install -y doxygen" in docs
+    assert "packages.microsoft.com" in docs
+    assert "sudo apt-get update" in docs
+    assert "sudo apt-get install -y doxygen" in docs
     assert "pip install -r docs/requirements.txt" in docs
     assert "make -C docs doxygen" in docs
     assert "make -C docs html" in docs
