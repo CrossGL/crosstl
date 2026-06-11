@@ -12,10 +12,12 @@ on:
       - "crosstl/project/**"
       - "demos/open-source-porting/**"
       - "docs/source/project-porting.rst"
+      - "support/demo-ci-metadata.json"
       - "support/generated/project-porting-roadmap.json"
       - "tests/test_demo_open_source_porting.py"
       - "tests/test_project_test_runner.py"
       - "tests/test_translator/test_project_translation.py"
+      - "tools/demo_ci_metadata.py"
       - "tools/pytest_failure_summary.py"
   pull_request:
     branches:
@@ -25,10 +27,12 @@ on:
       - "crosstl/project/**"
       - "demos/open-source-porting/**"
       - "docs/source/project-porting.rst"
+      - "support/demo-ci-metadata.json"
       - "support/generated/project-porting-roadmap.json"
       - "tests/test_demo_open_source_porting.py"
       - "tests/test_project_test_runner.py"
       - "tests/test_translator/test_project_translation.py"
+      - "tools/demo_ci_metadata.py"
       - "tools/pytest_failure_summary.py"
   workflow_dispatch:
 
@@ -65,9 +69,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p support/generated/demo-reports/${{ matrix.os }}
+          readarray -t demo_test_files < <(python tools/demo_ci_metadata.py emit-pytest-files)
+          demo_selector="$(python tools/demo_ci_metadata.py emit-pytest-selector)"
           python -m pytest -q \
-            tests/test_translator/test_project_translation.py \
-            -k "monogame_sprite_entries or monogame_entries_not_empty_generic_wrapper or cuda_vector_add_demo_directx_outputs_valid_hlsl" \
+            "${demo_test_files[@]}" \
+            -k "$demo_selector" \
             --junitxml support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-pytest.xml
 
       - name: Write demo failure summary

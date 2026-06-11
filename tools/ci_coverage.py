@@ -143,6 +143,7 @@ SUPPORT_ISSUE_SYNC_REQUIRED_PATH_FILTERS = [
     "examples/test.py",
     "support/**",
     "tools/ci_coverage.py",
+    "tools/demo_ci_metadata.py",
     "tools/pytest_failure_summary.py",
     "tools/support_ci_summary.py",
     "tools/support_matrix.py",
