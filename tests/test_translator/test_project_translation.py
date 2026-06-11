@@ -134,6 +134,58 @@ def assert_directx_vertex_validates_if_available(hlsl_code, tmp_path):
     assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
 
 
+def assert_directx_compute_validates_if_available(hlsl_code, tmp_path):
+    shader_path = tmp_path / "shader.hlsl"
+    shader_path.write_text(hlsl_code, encoding="utf-8")
+
+    glslang = shutil.which("glslangValidator")
+    if glslang:
+        output_path = tmp_path / "shader.spv"
+        compile_result = subprocess.run(
+            [
+                glslang,
+                "-D",
+                "-V",
+                "-S",
+                "comp",
+                "-e",
+                "CSMain",
+                str(shader_path),
+                "-o",
+                str(output_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert compile_result.returncode == 0, (
+            compile_result.stdout + compile_result.stderr
+        )
+        return
+
+    dxc = shutil.which("dxc")
+    if not dxc:
+        return
+
+    output_path = tmp_path / "shader.dxil"
+    compile_result = subprocess.run(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
+
+
 def assert_guarded_glsl_validates_if_available(glsl_code, tmp_path):
     glslang = shutil.which("glslangValidator")
     if not glslang:
@@ -36754,6 +36806,87 @@ def test_translate_project_metal_matmul_device_buffers_do_not_emit_directx_param
     assert "float* B" not in output
     assert "float* X" not in output
     assert "void CSMain(float*" not in output
+
+
+def test_translate_project_metal_matmul_unbound_device_buffers_lower_to_directx_resources(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "ShaderParams.h").write_text(
+        textwrap.dedent("""
+            #ifndef _SHADER_PARAMS_H
+            #define _SHADER_PARAMS_H
+
+            typedef struct
+            {
+                unsigned int row_dim_x;
+                unsigned int col_dim_x;
+                unsigned int inner_dim;
+            } MatMulParams;
+
+            #endif
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "mat_mul_simple1.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            #include "ShaderParams.h"
+            using namespace metal;
+
+            kernel void mat_mul_simple1(device const float* A,
+                                        device const float* B,
+                                        device float* X,
+                                        constant MatMulParams& params,
+                                        uint2 id [[ thread_position_in_grid ]])
+            {
+                const uint row_dim_x = params.row_dim_x;
+                const uint col_dim_x = params.col_dim_x;
+                const uint inner_dim = params.inner_dim;
+
+                if ((id.x < col_dim_x) && (id.y < row_dim_x)) {
+                    const uint index = id.y*col_dim_x + id.x;
+                    float sum = 0;
+                    for (uint k = 0; k < inner_dim; ++k) {
+                        const uint index_A = id.y*inner_dim + k;
+                        const uint index_B = k*col_dim_x + id.x;
+
+                        sum += A[index_A] * B[index_B];
+                    }
+                    X[index] = sum;
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "StructuredBuffer<float> A : register(t0);" in output
+    assert "StructuredBuffer<float> B : register(t1);" in output
+    assert "RWStructuredBuffer<float> X : register(u0);" in output
+    assert "ConstantBuffer<MatMulParams> params : register(b0);" in output
+    assert "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)" in output
+    assert "uint2 id = id_dispatchThreadID.xy;" in output
+    assert "A.Load(index_A)" in output
+    assert "B.Load(index_B)" in output
+    assert "X.Store(index, sum);" in output
+    assert "float* A" not in output
+    assert "float* B" not in output
+    assert "float* X" not in output
+    assert "void CSMain(float*" not in output
+    assert_directx_compute_validates_if_available(output, tmp_path)
 
 
 def test_translate_project_metal_matmul_uint2_grid_id_normalizes_for_compute_targets(
