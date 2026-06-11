@@ -134,6 +134,33 @@ def assert_directx_vertex_validates_if_available(hlsl_code, tmp_path):
     assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
 
 
+def assert_directx_fragment_validates_if_available(hlsl_code, tmp_path):
+    dxc = shutil.which("dxc")
+    if not dxc:
+        return
+
+    shader_path = tmp_path / "shader.hlsl"
+    output_path = tmp_path / "shader.dxil"
+    shader_path.write_text(hlsl_code, encoding="utf-8")
+
+    compile_result = subprocess.run(
+        [
+            dxc,
+            "-T",
+            "ps_6_4",
+            "-E",
+            "PSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
+
+
 def assert_directx_compute_validates_if_available(hlsl_code, tmp_path):
     shader_path = tmp_path / "shader.hlsl"
     shader_path.write_text(hlsl_code, encoding="utf-8")
@@ -26829,7 +26856,7 @@ def test_translate_project_directx_translates_mlx_steel_issue_943_frontier(
         assert "SV_DispatchThreadID" in generated
 
 
-def test_translate_project_reports_glsl_fragment_invocation_density_as_unsupported(
+def test_translate_project_models_glsl_fragment_invocation_density_by_target(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -26840,49 +26867,88 @@ def test_translate_project_reports_glsl_fragment_invocation_density_as_unsupport
 
     report = translate_project(
         repo,
-        targets=["metal", "directx", "vulkan"],
+        targets=["metal", "directx", "vulkan", "opengl"],
         output_dir="out",
     )
     payload = report.to_json()
+    report_path = repo / "fragment-density-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
 
-    assert payload["summary"]["artifactCount"] == 3
-    assert payload["summary"]["translatedCount"] == 0
-    assert payload["summary"]["failedCount"] == 3
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
+    assert payload["summary"]["artifactCount"] == 4
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 1
     assert payload["summary"]["diagnosticsByCode"] == {
-        "project.translate.unsupported-feature": 3
+        "project.translate.unsupported-feature": 1
     }
     assert payload["summary"]["missingCapabilityCounts"] == {
-        "glsl.builtin.gl_FragSizeEXT": 3,
-        "glsl.extension.GL_EXT_fragment_invocation_density": 3,
+        "glsl.builtin.gl_FragSizeEXT": 1,
+        "glsl.extension.GL_EXT_fragment_invocation_density": 1,
     }
     assert payload["summary"]["diagnosticsByTarget"] == {
-        "directx": 1,
         "metal": 1,
-        "vulkan": 1,
     }
 
     diagnostics = payload["diagnostics"]
-    assert {diagnostic["code"] for diagnostic in diagnostics} == {
-        "project.translate.unsupported-feature"
-    }
-    for diagnostic in diagnostics:
-        assert diagnostic["sourceBackend"] == "opengl"
-        assert diagnostic["location"]["file"] == "CubeFDM_fs.glsl"
-        assert "GL_EXT_fragment_invocation_density" in diagnostic["message"]
-        assert "gl_FragSizeEXT" in diagnostic["message"]
-        assert diagnostic["missingCapabilities"] == [
-            "glsl.extension.GL_EXT_fragment_invocation_density",
-            "glsl.builtin.gl_FragSizeEXT",
-        ]
+    assert len(diagnostics) == 1
+    diagnostic = diagnostics[0]
+    assert diagnostic["code"] == "project.translate.unsupported-feature"
+    assert diagnostic["target"] == "metal"
+    assert diagnostic["sourceBackend"] == "opengl"
+    assert diagnostic["location"]["file"] == "CubeFDM_fs.glsl"
+    assert "GL_EXT_fragment_invocation_density" in diagnostic["message"]
+    assert "gl_FragSizeEXT" in diagnostic["message"]
+    assert diagnostic["missingCapabilities"] == [
+        "glsl.extension.GL_EXT_fragment_invocation_density",
+        "glsl.builtin.gl_FragSizeEXT",
+    ]
 
-    for artifact in payload["artifacts"]:
-        assert artifact["status"] == "failed"
+    required_capabilities = [
+        "glsl.extension.GL_EXT_fragment_invocation_density",
+        "glsl.builtin.gl_FragSizeEXT",
+    ]
+    artifacts_by_target = {
+        artifact["target"]: artifact for artifact in payload["artifacts"]
+    }
+    assert set(artifacts_by_target) == {"metal", "directx", "vulkan", "opengl"}
+    for artifact in artifacts_by_target.values():
         assert artifact["sourceBackend"] == "opengl"
-        assert "GL_EXT_fragment_invocation_density" in artifact["error"]
-        assert "gl_FragSizeEXT" in artifact["error"]
-        assert "generatedHash" not in artifact
-        assert "generatedSizeBytes" not in artifact
-        assert not (repo / artifact["path"]).exists()
+        assert artifact["requiredCapabilities"] == required_capabilities
+
+    metal_artifact = artifacts_by_target["metal"]
+    assert metal_artifact["status"] == "failed"
+    assert "GL_EXT_fragment_invocation_density" in metal_artifact["error"]
+    assert "gl_FragSizeEXT" in metal_artifact["error"]
+    assert "generatedHash" not in metal_artifact
+    assert "generatedSizeBytes" not in metal_artifact
+    assert not (repo / metal_artifact["path"]).exists()
+
+    directx_code = (repo / artifacts_by_target["directx"]["path"]).read_text(
+        encoding="utf-8"
+    )
+    assert artifacts_by_target["directx"]["status"] == "translated"
+    assert "SV_ShadingRate" in directx_code
+    assert "CrossGLFragmentSizeFromShadingRate" in directx_code
+    assert "uint2 _crossglFragSize" in directx_code
+    assert "GL_EXT_fragment_invocation_density" not in directx_code
+    assert_directx_fragment_validates_if_available(directx_code, tmp_path)
+
+    spirv_code = (repo / artifacts_by_target["vulkan"]["path"]).read_text(
+        encoding="utf-8"
+    )
+    assert artifacts_by_target["vulkan"]["status"] == "translated"
+    assert "OpCapability FragmentDensityEXT" in spirv_code
+    assert 'OpExtension "SPV_EXT_fragment_invocation_density"' in spirv_code
+    assert "BuiltIn FragSizeEXT" in spirv_code
+    assert_spirv_asm_validates_if_available(spirv_code, tmp_path)
+
+    opengl_code = (repo / artifacts_by_target["opengl"]["path"]).read_text(
+        encoding="utf-8"
+    )
+    assert artifacts_by_target["opengl"]["status"] == "translated"
+    assert "#extension GL_EXT_fragment_invocation_density : require" in opengl_code
+    assert "gl_FragSizeEXT" in opengl_code
 
 
 def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):

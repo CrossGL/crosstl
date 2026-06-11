@@ -635,6 +635,7 @@ class HLSLCodeGen:
         self.hlsl_derivative_function_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
+        self.required_hlsl_fragment_shading_rate_helper = False
         self.resource_array_size_hints = {}
         self.function_resource_array_size_hints = {}
         self.directx_resource_register_overrides = {}
@@ -1064,6 +1065,7 @@ class HLSLCodeGen:
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.required_hlsl_inverse_helpers = set()
+        self.required_hlsl_fragment_shading_rate_helper = False
         self.directx_resource_register_overrides = {}
         self.current_identifier_aliases = {}
         self.current_identifier_reserved_names = set()
@@ -2125,9 +2127,21 @@ class HLSLCodeGen:
         code += self.generate_byteaddress_atomic_helpers()
         code += self.generate_glsl_buffer_aggregate_load_helpers()
         code += self.generate_hlsl_inverse_helpers()
+        code += self.generate_hlsl_fragment_shading_rate_helper()
         code += functions_code
 
         return code
+
+    def generate_hlsl_fragment_shading_rate_helper(self):
+        if not self.required_hlsl_fragment_shading_rate_helper:
+            return ""
+        return (
+            "uint2 CrossGLFragmentSizeFromShadingRate(uint shadingRate) {\n"
+            "    uint width = 1u << ((shadingRate >> 2u) & 3u);\n"
+            "    uint height = 1u << (shadingRate & 3u);\n"
+            "    return uint2(width, height);\n"
+            "}\n\n"
+        )
 
     def generate_hlsl_ordered_struct_declarations(self, structs):
         records = self.hlsl_struct_declaration_records(structs)
@@ -3589,6 +3603,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 name,
                 param_type,
                 semantic,
+                prologue,
             ) in self.required_hlsl_fragment_builtin_parameters(
                 func, reserved_builtin_names, explicit_stage_builtins
             ):
@@ -3600,7 +3615,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 param_names.add(name)
                 self.local_variable_types[name] = param_type
-                self.current_identifier_aliases[builtin_name] = name
+                if prologue is not None:
+                    alias_name, alias_type, statement = prologue
+                    parameter_prologue_statements.append(statement)
+                    self.local_variable_types[alias_name] = alias_type
+                    self.current_identifier_aliases[builtin_name] = alias_name
+                else:
+                    self.current_identifier_aliases[builtin_name] = name
         shader_map = {"vertex": "VSMain", "fragment": "PSMain", "compute": "CSMain"}
         shader_attr_map = {
             "geometry": "geometry",
@@ -5775,6 +5796,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_graphics_builtin_result_type(self, name):
         if name == "gl_FragCoord" and name in self.current_identifier_aliases:
             return "float4"
+        if name == "gl_FragSizeEXT" and name in self.current_identifier_aliases:
+            return "uint2"
         return None
 
     def collect_hlsl_function_identifier_names(self, func):
@@ -13967,7 +13990,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return stage_parameters
 
     def used_hlsl_fragment_builtin_names(self, body):
-        builtin_names = {"gl_FragCoord"}
+        builtin_names = {"gl_FragCoord", "gl_FragSizeEXT"}
         used_names = set()
         for node in self.walk_ast(body):
             class_name = node.__class__.__name__
@@ -13986,20 +14009,39 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         reserved_names = set(reserved_names or ())
         explicit_stage_builtins = explicit_stage_builtins or {}
         builtin_parameters = [
-            ("gl_FragCoord", "float4", "SV_Position"),
+            ("gl_FragCoord", "_crossglFragCoord", "float4", "SV_Position"),
+            (
+                "gl_FragSizeEXT",
+                "_crossglShadingRate",
+                "uint",
+                "SV_ShadingRate",
+            ),
         ]
         required_parameters = []
-        for builtin_name, param_type, semantic in builtin_parameters:
+        for builtin_name, base_name, param_type, semantic in builtin_parameters:
             if (
                 builtin_name not in used_names
                 or builtin_name in explicit_stage_builtins
             ):
                 continue
-            name = self.hlsl_unique_local_identifier(
-                "_crossglFragCoord", reserved_names
-            )
+            name = self.hlsl_unique_local_identifier(base_name, reserved_names)
             reserved_names.add(name)
-            required_parameters.append((builtin_name, name, param_type, semantic))
+            prologue = None
+            if builtin_name == "gl_FragSizeEXT":
+                alias_name = self.hlsl_unique_local_identifier(
+                    "_crossglFragSize", reserved_names
+                )
+                reserved_names.add(alias_name)
+                self.required_hlsl_fragment_shading_rate_helper = True
+                prologue = (
+                    alias_name,
+                    "uint2",
+                    f"uint2 {alias_name} = "
+                    f"CrossGLFragmentSizeFromShadingRate({name});",
+                )
+            required_parameters.append(
+                (builtin_name, name, param_type, semantic, prologue)
+            )
         return required_parameters
 
     def used_hlsl_compute_builtin_names(self, body):

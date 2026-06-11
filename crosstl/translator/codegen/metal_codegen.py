@@ -317,6 +317,22 @@ from .stage_utils import (
     stage_matches,
 )
 
+FRAGMENT_INVOCATION_DENSITY_CAPABILITIES = (
+    "glsl.extension.GL_EXT_fragment_invocation_density",
+    "glsl.builtin.gl_FragSizeEXT",
+)
+
+
+class UnsupportedMetalFeatureError(ValueError):
+    """Raised when Metal has no equivalent target representation."""
+
+    project_diagnostic_code = "project.translate.unsupported-feature"
+
+    def __init__(self, feature, message, *, missing_capabilities=()):
+        super().__init__(message)
+        self.feature = feature
+        self.missing_capabilities = tuple(missing_capabilities)
+
 
 class CharTypeMapper:
     """Normalize CrossGL char-like scalar and vector types for Metal output."""
@@ -3580,6 +3596,7 @@ class MetalCodeGen:
             )
         if shader_type in {"vertex", "fragment"}:
             self.validate_graphics_builtin_parameter_types(param_list, shader_type)
+            self.validate_metal_fragment_invocation_density(func, shader_type)
         if shader_type == "compute":
             self.validate_compute_builtin_parameter_types(param_list)
         self.current_unsupported_glsl_buffer_block_parameters = (
@@ -5026,6 +5043,28 @@ class MetalCodeGen:
             if base_name in builtin_names:
                 used_names.add(base_name)
         return used_names
+
+    def validate_metal_fragment_invocation_density(self, func, shader_type):
+        if shader_type != "fragment":
+            return
+        for node in self.iter_ast_nodes(getattr(func, "body", []) or []):
+            class_name = node.__class__.__name__
+            if "Identifier" not in class_name and class_name != "VariableNode":
+                continue
+            name = getattr(node, "name", "")
+            if name.split(".", 1)[0] != "gl_FragSizeEXT":
+                continue
+            raise UnsupportedMetalFeatureError(
+                "gl_FragSizeEXT",
+                (
+                    "Metal target does not expose a fragment invocation density "
+                    "or fragment-size input equivalent for "
+                    "GL_EXT_fragment_invocation_density / gl_FragSizeEXT; keep "
+                    "this shader on a target with fragment density builtins or "
+                    "specialize the density path before Metal generation."
+                ),
+                missing_capabilities=FRAGMENT_INVOCATION_DENSITY_CAPABILITIES,
+            )
 
     def validate_graphics_builtin_parameter_types(self, parameters, stage_name):
         expected_types = {

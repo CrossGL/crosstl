@@ -22270,6 +22270,18 @@ class VulkanSPIRVCodeGen:
                 "Input",
                 {"Fragment"},
             ),
+            "gl_FragSizeEXT": (
+                "uvec2",
+                "FragSizeEXT",
+                "Input",
+                {"Fragment"},
+            ),
+            "gl_FragInvocationCountEXT": (
+                "uint",
+                "FragInvocationCountEXT",
+                "Input",
+                {"Fragment"},
+            ),
             "gl_SampleMaskIn": (
                 "int[1]",
                 "SampleMask",
@@ -22588,6 +22600,9 @@ class VulkanSPIRVCodeGen:
         if builtin_name in {"BaryCoordKHR", "BaryCoordNoPerspKHR"}:
             self.require_capability("FragmentBarycentricKHR")
             self.require_extension("SPV_KHR_fragment_shader_barycentric")
+        elif builtin_name in {"FragSizeEXT", "FragInvocationCountEXT"}:
+            self.require_capability("FragmentDensityEXT")
+            self.require_extension("SPV_EXT_fragment_invocation_density")
         elif builtin_name == "FragStencilRefEXT":
             self.require_capability("StencilExportEXT")
             self.require_extension("SPV_EXT_shader_stencil_export")

@@ -15,7 +15,7 @@ from crosstl.backend.GLSL.OpenglAst import (
     VariableNode,
 )
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
-from crosstl.backend.GLSL.OpenglParser import GLSLParser, UnsupportedGLSLFeatureError
+from crosstl.backend.GLSL.OpenglParser import GLSLParser
 
 
 def tokenize_code(code: str) -> List:
@@ -74,7 +74,7 @@ def test_parse_fragment_shader_with_discard():
     parse_ok(code, "fragment")
 
 
-def test_parse_rejects_fragment_invocation_density_extension():
+def test_parse_accepts_fragment_invocation_density_extension():
     code = textwrap.dedent("""
         #version 450 core
         #extension GL_EXT_fragment_invocation_density : require
@@ -85,20 +85,13 @@ def test_parse_rejects_fragment_invocation_density_extension():
         }
         """)
 
-    with pytest.raises(UnsupportedGLSLFeatureError) as excinfo:
-        parse_code(code, "fragment")
-
-    error = excinfo.value
-    assert error.feature == "GL_EXT_fragment_invocation_density"
-    assert "gl_FragSizeEXT" in str(error)
-    assert error.project_diagnostic_code == "project.translate.unsupported-feature"
-    assert error.missing_capabilities == (
-        "glsl.extension.GL_EXT_fragment_invocation_density",
-        "glsl.builtin.gl_FragSizeEXT",
+    ast = parse_ok(code, "fragment")
+    assert "#extension GL_EXT_fragment_invocation_density : require" in (
+        ast.preprocessor
     )
 
 
-def test_parse_rejects_fragment_invocation_density_builtin_without_extension():
+def test_parse_accepts_fragment_invocation_density_builtin_without_extension():
     code = textwrap.dedent("""
         #version 450 core
         layout(location = 0) out vec4 fragColor;
@@ -109,8 +102,7 @@ def test_parse_rejects_fragment_invocation_density_builtin_without_extension():
         }
         """)
 
-    with pytest.raises(UnsupportedGLSLFeatureError, match="gl_FragSizeEXT"):
-        parse_code(code, "fragment")
+    parse_ok(code, "fragment")
 
 
 def test_parse_function_body_with_brace_on_next_line():
