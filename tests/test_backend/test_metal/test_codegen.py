@@ -3135,17 +3135,20 @@ def test_codegen_simdgroup_indices_from_public_pmetal_kernel():
     kernel void fused_lora_forward(device const half* x [[buffer(0)]],
                                    uint3 tid [[thread_position_in_threadgroup]],
                                    uint simd_lane_id [[thread_index_in_simdgroup]],
-                                   uint simd_group_id [[simdgroup_index_in_threadgroup]]) {
+                                   uint simd_group_id [[simdgroup_index_in_threadgroup]],
+                                   uint simd_size [[threads_per_simdgroup]]) {
         device const half* x_row = x + tid.x;
-        half value = *(x_row + simd_lane_id + simd_group_id);
+        half value = *(x_row + simd_lane_id + simd_group_id + simd_size);
     }
     """
     result = convert(code)
 
     assert "uint simd_lane_id @gl_SubgroupInvocationID" in result
     assert "uint simd_group_id @gl_SubgroupID" in result
+    assert "uint simd_size @gl_SubgroupSize" in result
     assert "@thread_index_in_simdgroup" not in result
     assert "@simdgroup_index_in_threadgroup" not in result
+    assert "@threads_per_simdgroup" not in result
     assert parse_crossgl(result) is not None
 
 

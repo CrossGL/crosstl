@@ -31,6 +31,7 @@ TOOLS = [
                 "inspect-report",
                 "plan-runtime",
                 "runtime-manifest",
+                "runtime-test-manifest",
                 "package-runtime",
                 "inspect-runtime-package",
                 "plan-host-bindings",
@@ -124,6 +125,15 @@ TOOLS = [
             ("runtime-manifest",),
             (
                 "usage:",
+                "--format",
+                "--output",
+            ),
+        ),
+        (
+            ("runtime-test-manifest",),
+            (
+                "usage:",
+                "--project-root",
                 "--format",
                 "--output",
             ),

@@ -541,6 +541,66 @@ non-kernel host API ports, application command scheduling, target SDK
 installation, build-system migration, memory lifetime policy, and production
 runtime framework generation remain downstream integration work.
 
+Project Runtime Fixture Manifest Generation
+-------------------------------------------
+
+Curated repository fixture metadata can be converted into a standard
+``crosstl-project-runtime-test-manifest`` document without adding a native
+runtime adapter. This lets project ports describe parity cases as deterministic
+inputs, expected outputs, tolerances, artifact selectors, runtime adapter
+contracts, resource bindings, function or specialization constants, and dispatch
+geometry, then reuse the existing runtime test manifest parser, planner, and
+report writer.
+
+Build a project runtime test manifest from a translated artifact report or
+runtime artifact manifest plus curated fixture metadata:
+
+.. code-block:: bash
+
+   python -m crosstl runtime-test-manifest \
+     crosstl-out/runtime-manifest.json \
+     fixtures/runtime-fixtures.json \
+     --format text
+
+The fixture metadata convention is a small repository-agnostic input document:
+
+.. code-block:: json
+
+   {
+     "kind": "crosstl-project-runtime-fixture-metadata",
+     "fixtures": [
+       {
+         "id": "reduced-binary-add-f32",
+         "selector": {
+           "source": "mlx/backend/metal/kernels/binary.metal",
+           "target": "metal",
+           "path": "out/metal/reduced_binary_add.metal"
+         },
+         "inputs": [{"name": "lhs", "values": [1.0, 2.0]}],
+         "expectedOutputs": [{"name": "out", "values": [3.0, 4.0]}],
+         "runtimeAdapter": {
+           "entryPoints": [{"name": "binary_add", "stage": "compute"}],
+           "resourceBindings": [
+             {"name": "lhs", "kind": "buffer", "binding": 0, "value": "lhs"},
+             {"name": "out", "kind": "buffer", "binding": 1, "value": "out"}
+           ],
+           "functionConstants": [
+             {"name": "element_count", "id": 0, "value": 2}
+           ],
+           "dispatch": {"entryPoint": "binary_add", "globalSize": [2, 1, 1]}
+         }
+       }
+     ]
+   }
+
+The generator validates each fixture selector against the translated artifacts.
+Incomplete fixture data, duplicate ids, missing expected outputs, unresolved
+artifacts, and ambiguous selectors are emitted as structured diagnostics on the
+generated manifest. Valid fixture records remain in the manifest so
+``plan_runtime_test_manifest`` and ``verify_runtime_test_manifest`` can apply
+the same adapter dependency checks and runtime planning used by hand-authored
+manifests.
+
 Build a runtime loader manifest from a runtime package manifest:
 
 .. code-block:: bash
