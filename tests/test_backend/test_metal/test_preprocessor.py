@@ -182,6 +182,34 @@ def test_preprocessor_materializes_nested_explicit_template_helper_calls():
     assert "float cast_value_float(float value)" in output
 
 
+def test_preprocessor_materializes_only_reachable_explicit_template_helper_calls():
+    code = """
+    template <typename T>
+    T cast_value(float value) {
+        return T(value);
+    }
+
+    void write_value(device float* dst) {
+        dst[0] = cast_value<float>(1.0);
+    }
+
+    void unused(device half* dst) {
+        dst[0] = cast_value<half>(2.0);
+    }
+
+    kernel void copy(device float* dst [[buffer(0)]]) {
+        write_value(dst);
+    }
+    """
+
+    output = MetalPreprocessor(max_template_specializations=1).preprocess(code)
+
+    assert "cast_value_float(1.0)" in output
+    assert "float cast_value_float(float value)" in output
+    assert "cast_value_half" not in output
+    assert "cast_value<half>(2.0)" in output
+
+
 def test_preprocessor_preserves_explicit_template_specialization_calls():
     code = """
     template <typename T>

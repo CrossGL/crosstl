@@ -6,7 +6,7 @@ import os
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from .backend.OpenCL.target_lowering import (
     normalize_opencl_intermediate_for_target,
@@ -97,6 +97,7 @@ def translate(
     *,
     include_paths: Optional[Sequence[str]] = None,
     defines: Optional[Mapping[str, str]] = None,
+    source_options: Optional[Mapping[str, Any]] = None,
 ) -> str:
     """Translate a shader file to another language.
 
@@ -111,6 +112,8 @@ def translate(
             Defaults to None.
         defines (Mapping[str, str], optional): Source parser preprocessor defines.
             Defaults to None.
+        source_options (Mapping[str, object], optional): Source parser-specific
+            lexer options. Defaults to None.
 
     Returns:
         str: The translated shader code
@@ -149,6 +152,7 @@ def translate(
         file_path=file_path,
         include_paths=include_paths,
         defines=defines,
+        source_options=source_options,
     )
 
     requested_backend = backend
