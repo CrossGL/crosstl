@@ -4282,20 +4282,23 @@ def test_scan_project_accepts_supported_native_macro_forms_across_source_fronten
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
     shader_dir.mkdir(parents=True)
-    source_names = [
-        name
-        for name in sorted(SOURCE_REGISTRY.names())
-        if SOURCE_REGISTRY.get(name).supports_lexer_keyword("defines")
-    ]
+    source_names = sorted(project_pipeline.SOURCE_FRONTENDS_WITH_NATIVE_MACRO_EXPANSION)
     assert source_names
     source_overrides = []
     for source_name in source_names:
+        assert SOURCE_REGISTRY.get(source_name).supports_lexer_keyword("defines")
         shader_path = shader_dir / f"{source_name}.shader"
         shader_path.write_text(
             textwrap.dedent("""
-                #define OBJECT_MACRO 1
-                #define FUNCTION_MACRO(value) ((value) + OBJECT_MACRO)
+                #if defined(ENABLE_NATIVE_MACROS)
+                #define SCALE_VALUE 2
+                #define SCALE(x) ((x) * SCALE_VALUE)
+                #define LOG(fmt, ...) log(fmt, __VA_ARGS__)
+                #define STRINGIFY(x) #x
+                #define JOIN(a, b) a##b
+                #define VALUE_NAME(name) JOIN(name, _value)
                 #pragma once
+                #endif
                 void main() {}
                 """).strip(),
             encoding="utf-8",
@@ -4306,6 +4309,9 @@ def test_scan_project_accepts_supported_native_macro_forms_across_source_fronten
         textwrap.dedent(f"""
             [project]
             source_roots = ["shaders"]
+
+            [project.defines]
+            ENABLE_NATIVE_MACROS = "1"
 
             [project.sources]
             {source_override_text}
@@ -4401,6 +4407,51 @@ def test_scan_project_reports_unsupported_macro_forms_across_source_frontends(
             assert "__VA_OPT__ variadic expansion" in diagnostic["message"]
         else:
             assert "does not accept project define forwarding" in diagnostic["message"]
+
+
+def test_scan_project_rejects_crossgl_function_like_native_macro_form(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "main.cgl").write_text(
+        textwrap.dedent("""
+            #define LOCAL_VALUE 1
+            #define SCALE(x) ((x) * LOCAL_VALUE)
+            shader RepoShader {
+                vertex {
+                    void main() {}
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+    diagnostic = payload["diagnostics"][0]
+
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.scan.unsupported-macro-form": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {"macro.native": 1}
+    assert diagnostic["code"] == "project.scan.unsupported-macro-form"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["missingCapabilities"] == ["macro.native"]
+    assert diagnostic["location"]["file"] == "shaders/main.cgl"
+    assert diagnostic["location"]["line"] == 2
+    assert "function-like define requires native macro expansion" in (
+        diagnostic["message"]
+    )
+    assert "LOCAL_VALUE" not in diagnostic["message"]
 
 
 def test_scan_project_scopes_define_shadowing_to_selected_variants(tmp_path):
