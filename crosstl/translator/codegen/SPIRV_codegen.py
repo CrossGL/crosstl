@@ -1988,33 +1988,20 @@ class VulkanSPIRVCodeGen:
         if not candidates:
             return None
 
-        arity_matches = [
-            candidate
-            for candidate in candidates
-            if self.storage_buffer_effective_arity_matches(candidate, call_args)
-        ]
-        if not arity_matches:
-            if self.has_matching_non_storage_function_candidate(
-                function_name, call_args
-            ):
-                return None
-            raise self.storage_buffer_overload_diagnostic(
-                function_name,
-                call_args,
-                candidates,
-                "no candidate has matching arity",
-                call_node=call_node,
-            )
-
         scored_matches = []
-        for candidate in arity_matches:
-            score = self.storage_buffer_candidate_match_score(candidate, call_args)
-            if score is not None:
-                scored_matches.append((score, candidate))
+        rejection_reasons = {}
+        for candidate in candidates:
+            match, rejection_reason = self.storage_buffer_candidate_call_match(
+                candidate, call_args
+            )
+            if match is None:
+                rejection_reasons[id(candidate)] = rejection_reason
+                continue
+            scored_matches.append((match["rank_score"], match["score"], candidate))
 
         if not scored_matches:
-            if len(arity_matches) == 1:
-                return arity_matches[0]
+            if len(candidates) == 1:
+                return candidates[0]
             if self.has_matching_non_storage_function_candidate(
                 function_name, call_args
             ):
@@ -2023,14 +2010,17 @@ class VulkanSPIRVCodeGen:
                 function_name,
                 call_args,
                 candidates,
-                "no candidate has compatible argument types",
+                "no candidate has compatible argument alignment",
                 call_node=call_node,
+                rejection_reasons=rejection_reasons,
             )
 
-        scored_matches.sort(key=lambda item: item[0], reverse=True)
-        best_score, best_candidate = scored_matches[0]
+        scored_matches.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        best_rank_score, best_score, best_candidate = scored_matches[0]
         tied_candidates = [
-            candidate for score, candidate in scored_matches if score == best_score
+            candidate
+            for rank_score, score, candidate in scored_matches
+            if rank_score == best_rank_score and score == best_score
         ]
         if len(tied_candidates) > 1:
             raise self.storage_buffer_overload_diagnostic(
@@ -2039,6 +2029,7 @@ class VulkanSPIRVCodeGen:
                 tied_candidates,
                 "multiple candidates have compatible argument types",
                 call_node=call_node,
+                rejection_reasons=rejection_reasons,
             )
         return best_candidate
 
@@ -16055,7 +16046,156 @@ class VulkanSPIRVCodeGen:
         )
         return len(parameters) == len(args)
 
+    def storage_buffer_argument_match_score(self, param, arg) -> Optional[int]:
+        storage_buffer_type_name = self.storage_buffer_parameter_type_name(param)
+        if storage_buffer_type_name is not None:
+            actual_type_name = self.storage_buffer_expression_type_name(arg)
+            if actual_type_name is None:
+                return None
+            if not self.storage_buffer_parameter_type_is_compatible(
+                storage_buffer_type_name, actual_type_name
+            ):
+                return None
+            score = 4
+            if self.normalize_signature_type_name(
+                storage_buffer_type_name
+            ) == self.normalize_signature_type_name(actual_type_name):
+                score += 1
+            return score
+
+        declared_type_name = self.function_parameter_type_name(param)
+        actual_type_name = self.call_argument_type_name(arg)
+        if not self.scalar_or_vector_type_compatible(
+            declared_type_name, actual_type_name
+        ):
+            return None
+        score = 0
+        if actual_type_name is not None:
+            score += 1
+            if self.normalize_signature_type_name(
+                declared_type_name
+            ) == self.normalize_signature_type_name(actual_type_name):
+                score += 1
+        return score
+
+    def storage_buffer_argument_rejection_reason(self, param, arg, arg_index) -> str:
+        param_name = getattr(param, "name", f"param{arg_index}")
+        storage_buffer_type_name = self.storage_buffer_parameter_type_name(param)
+        if storage_buffer_type_name is not None:
+            actual_type_name = self.storage_buffer_expression_type_name(arg)
+            if actual_type_name is None:
+                actual_type_name = self.call_argument_type_name(arg) or "unknown"
+                return (
+                    f"argument {arg_index + 1} type {actual_type_name} is not a "
+                    f"storage buffer for parameter {param_name} "
+                    f"({storage_buffer_type_name})"
+                )
+            return (
+                f"argument {arg_index + 1} type {actual_type_name} is incompatible "
+                f"with parameter {param_name} ({storage_buffer_type_name})"
+            )
+
+        declared_type_name = self.function_parameter_type_name(param) or "unknown"
+        actual_type_name = self.call_argument_type_name(arg) or "unknown"
+        return (
+            f"argument {arg_index + 1} type {actual_type_name} is incompatible "
+            f"with parameter {param_name} ({declared_type_name})"
+        )
+
+    def storage_buffer_candidate_call_match(self, function_node, call_args):
+        parameters = self.function_parameters(function_node)
+        args = list(call_args or [])
+        skipped_param_indices = self.skipped_function_parameter_indices_for_node(
+            function_node
+        )
+        effective_parameters = [
+            (index, param)
+            for index, param in enumerate(parameters)
+            if index not in skipped_param_indices
+        ]
+
+        reason = None
+        incompatibility_reasons = []
+        best_match = None
+
+        def search(param_index, arg_index, score, bindings, skipped_arg_indices):
+            nonlocal best_match, reason
+            remaining_params = len(effective_parameters) - param_index
+            remaining_args = len(args) - arg_index
+            if remaining_args < remaining_params:
+                reason = (
+                    f"effective arity {len(effective_parameters)} exceeds remaining "
+                    f"actual arguments {remaining_args}"
+                )
+                return
+            if param_index == len(effective_parameters):
+                skipped = skipped_arg_indices + list(range(arg_index, len(args)))
+                candidate = (
+                    score - len(skipped),
+                    score,
+                    -len(skipped),
+                    bindings,
+                    skipped,
+                )
+                if best_match is None or candidate[:3] > best_match[:3]:
+                    best_match = candidate
+                return
+            if arg_index >= len(args):
+                reason = (
+                    f"effective arity {len(effective_parameters)} exceeds actual "
+                    f"arity {len(args)}"
+                )
+                return
+
+            original_param_index, param = effective_parameters[param_index]
+            arg = args[arg_index]
+            arg_score = self.storage_buffer_argument_match_score(param, arg)
+            if arg_score is not None:
+                search(
+                    param_index + 1,
+                    arg_index + 1,
+                    score + arg_score,
+                    bindings + [(original_param_index, param, arg)],
+                    skipped_arg_indices,
+                )
+            else:
+                incompatibility_reasons.append(
+                    self.storage_buffer_argument_rejection_reason(
+                        param, arg, arg_index
+                    )
+                )
+            search(
+                param_index,
+                arg_index + 1,
+                score,
+                bindings,
+                skipped_arg_indices + [arg_index],
+            )
+
+        search(0, 0, 0, [], [])
+        if best_match is None:
+            if incompatibility_reasons:
+                reason = incompatibility_reasons[0]
+            elif reason is None:
+                reason = "no compatible ordered argument alignment"
+            return None, reason
+
+        rank, score, _skip_rank, bindings, skipped_arg_indices = best_match
+        return {
+            "rank_score": rank,
+            "score": score,
+            "bindings": bindings,
+            "skipped_arg_indices": skipped_arg_indices,
+            "effective_parameter_count": len(effective_parameters),
+        }, None
+
     def storage_buffer_effective_call_bindings(self, function_node, call_args):
+        match, _reason = self.storage_buffer_candidate_call_match(
+            function_node, call_args
+        )
+        if match is not None:
+            return match["bindings"]
+
         parameters = self.function_parameters(function_node)
         args = list(call_args or [])
         skipped_indices = self.skipped_function_parameter_indices_for_node(
@@ -16116,44 +16256,12 @@ class VulkanSPIRVCodeGen:
         return False
 
     def storage_buffer_candidate_match_score(self, function_node, call_args):
-        parameters, args = self.storage_buffer_effective_call_signature(
+        match, _reason = self.storage_buffer_candidate_call_match(
             function_node, call_args
         )
-        if len(parameters) != len(args):
+        if match is None:
             return None
-
-        score = 0
-        for param, arg in zip(parameters, args):
-            storage_buffer_type_name = self.storage_buffer_parameter_type_name(param)
-            if storage_buffer_type_name is not None:
-                actual_type_name = self.storage_buffer_expression_type_name(arg)
-                if actual_type_name is None:
-                    continue
-                if not self.storage_buffer_parameter_type_is_compatible(
-                    storage_buffer_type_name, actual_type_name
-                ):
-                    return None
-                score += 4
-                if self.normalize_signature_type_name(
-                    storage_buffer_type_name
-                ) == self.normalize_signature_type_name(actual_type_name):
-                    score += 1
-                continue
-
-            declared_type_name = self.function_parameter_type_name(param)
-            actual_type_name = self.call_argument_type_name(arg)
-            if not self.scalar_or_vector_type_compatible(
-                declared_type_name, actual_type_name
-            ):
-                return None
-            if actual_type_name is not None:
-                score += 1
-                if self.normalize_signature_type_name(
-                    declared_type_name
-                ) == self.normalize_signature_type_name(actual_type_name):
-                    score += 1
-
-        return score
+        return match["score"]
 
     def has_matching_non_storage_function_candidate(self, function_name, call_args):
         for function_node in self.function_nodes_by_name.get(function_name, []):
@@ -16168,7 +16276,13 @@ class VulkanSPIRVCodeGen:
         return False
 
     def storage_buffer_overload_diagnostic(
-        self, function_name, call_args, candidates, reason, call_node=None
+        self,
+        function_name,
+        call_args,
+        candidates,
+        reason,
+        call_node=None,
+        rejection_reasons=None,
     ):
         actual_types = ", ".join(self.call_argument_type_names(call_args))
         actual_signature = f"{function_name}({actual_types})"
@@ -16178,12 +16292,22 @@ class VulkanSPIRVCodeGen:
         )
         if not candidate_signatures:
             candidate_signatures = "<none>"
+        rejection_detail = ""
+        if rejection_reasons:
+            details = []
+            for candidate in candidates:
+                signature = self.format_function_candidate_signature(candidate)
+                candidate_reason = rejection_reasons.get(id(candidate))
+                if candidate_reason is None:
+                    candidate_reason = "not rejected"
+                details.append(f"{signature}: {candidate_reason}")
+            rejection_detail = "; candidate rejection reasons: " + "; ".join(details)
         return UnsupportedSPIRVFeatureError(
             "storage-buffer-function-overload",
             "SPIR-V storage-buffer function inlining could not resolve "
             f"overloaded call '{function_name}': {reason}; actual call "
             f"arity/types: {len(call_args)} ({actual_signature}); candidate "
-            f"signatures: {candidate_signatures}",
+            f"signatures: {candidate_signatures}{rejection_detail}",
             missing_capabilities=("spirv.storage_buffer_function_overload",),
             source_location=(
                 getattr(call_node, "source_location", None)
@@ -17221,12 +17345,19 @@ class VulkanSPIRVCodeGen:
                 for param in self.function_parameters(function_node)
             ],
         )
-        for index, param_name in enumerate(param_names):
+        for index, param, arg in self.storage_buffer_effective_call_bindings(
+            function_node, args
+        ):
+            param_name = (
+                param_names[index]
+                if index < len(param_names)
+                else getattr(param, "name", None)
+            )
             required_access = callee_requirements.get(param_name)
-            if required_access is None or index >= len(args):
+            if required_access is None:
                 continue
 
-            actual_access = self.storage_buffer_access_for_expression(args[index])
+            actual_access = self.storage_buffer_access_for_expression(arg)
             if image_access_satisfies_requirement(required_access, actual_access):
                 continue
 
@@ -17235,7 +17366,7 @@ class VulkanSPIRVCodeGen:
             self.emit(
                 f"; WARNING: function call '{func_name}' requires {required_label} "
                 "storage buffer access for argument "
-                f"{self.expression_debug_name(args[index])} passed to parameter "
+                f"{self.expression_debug_name(arg)} passed to parameter "
                 f"{param_name}: got {actual_label}"
             )
             return False
@@ -17267,23 +17398,28 @@ class VulkanSPIRVCodeGen:
         ):
             return self.default_value_for_function(function_node)
 
-        parameters, effective_call_args = self.storage_buffer_effective_call_signature(
+        match, rejection_reason = self.storage_buffer_candidate_call_match(
             function_node, call_args
         )
-        if len(effective_call_args) > len(parameters):
-            raise self.storage_buffer_overload_diagnostic(
-                func_name,
-                call_args,
-                [function_node],
-                "selected candidate has too few parameters",
-                call_node=call_node,
+        if match is None:
+            parameters, effective_call_args = (
+                self.storage_buffer_effective_call_signature(function_node, call_args)
             )
-        if len(effective_call_args) < len(parameters):
-            self.emit(
-                f"; WARNING: function call '{func_name}' requires "
-                f"{len(parameters)} arguments"
-            )
-            return self.default_value_for_function(function_node)
+            if len(effective_call_args) > len(parameters):
+                raise self.storage_buffer_overload_diagnostic(
+                    func_name,
+                    call_args,
+                    [function_node],
+                    "selected candidate has too few parameters",
+                    call_node=call_node,
+                    rejection_reasons={id(function_node): rejection_reason},
+                )
+            if len(effective_call_args) < len(parameters):
+                self.emit(
+                    f"; WARNING: function call '{func_name}' requires "
+                    f"{len(parameters)} arguments"
+                )
+                return self.default_value_for_function(function_node)
 
         function_key = id(function_node)
         if any(
