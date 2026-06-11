@@ -5,9 +5,31 @@ env:
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+    paths:
+      - ".github/workflows/demo.yml"
+      - "crosstl/project/**"
+      - "demos/open-source-porting/**"
+      - "docs/source/project-porting.rst"
+      - "support/generated/project-porting-roadmap.json"
+      - "tests/test_demo_open_source_porting.py"
+      - "tests/test_project_test_runner.py"
+      - "tests/test_translator/test_project_translation.py"
+      - "tools/pytest_failure_summary.py"
   pull_request:
-    branches: [main]
+    branches:
+      - main
+    paths:
+      - ".github/workflows/demo.yml"
+      - "crosstl/project/**"
+      - "demos/open-source-porting/**"
+      - "docs/source/project-porting.rst"
+      - "support/generated/project-porting-roadmap.json"
+      - "tests/test_demo_open_source_porting.py"
+      - "tests/test_project_test_runner.py"
+      - "tests/test_translator/test_project_translation.py"
+      - "tools/pytest_failure_summary.py"
   workflow_dispatch:
 
 permissions:
@@ -15,7 +37,7 @@ permissions:
 
 jobs:
   demo:
-    name: Demo (${{ matrix.os }})
+    name: Open-Source Porting Demo (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -69,14 +91,34 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          python -m pip install -e .
+          python -m pip install -e . pytest
         shell: bash
+
+      - name: Run open-source porting demo tests
+        id: run_demo_tests
+        shell: bash
+        run: |
+          mkdir -p support/generated/demo-reports/${{ matrix.os }}
+          python -m pytest -q \
+            tests/test_translator/test_project_translation.py \
+            -k "monogame_sprite_entries or monogame_entries_not_empty_generic_wrapper or cuda_vector_add_demo_directx_outputs_valid_hlsl" \
+            --junitxml support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-pytest.xml
+
+      - name: Write demo failure summary
+        if: failure() && steps.run_demo_tests.outcome == 'failure'
+        shell: bash
+        run: |
+          python tools/pytest_failure_summary.py \
+            support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-pytest.xml \
+            --json-output support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.json \
+            --markdown-output support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.md
+          cat support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify checked-in demo artifacts
         run: |
           python demos/open-source-porting/run_demo.py \
             --check \
-            --reports-dir support/generated/demo-reports
+            --reports-dir support/generated/demo-reports/${{ matrix.os }}/artifacts
         shell: bash
 
       - name: Linux OpenGL smoke checks
@@ -170,7 +212,20 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: demo-reports-${{ matrix.os }}
+          name: open-source-porting-demo-reports-${{ matrix.os }}
           path: support/generated/demo-reports
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Upload demo failure summary
+        if: failure() && steps.run_demo_tests.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: open-source-porting-demo-failure-summary-${{ matrix.os }}
+          path: |
+            support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-pytest.xml
+            support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.json
+            support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.md
           if-no-files-found: ignore
           retention-days: 30

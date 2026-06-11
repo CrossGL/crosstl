@@ -209,6 +209,53 @@ def test_full_suite_runs_runtime_parity_only_for_available_adapters():
     assert '-k "runtime_parity"' in full_suite
 
 
+def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
+    workflows = _workflow_texts()
+    demo = workflows.get("demo.yml", "")
+
+    assert demo, "demo.yml must exist"
+    assert "name: Open-Source Porting Demo" in demo
+    assert re.search(r"\bpush\s*:", demo)
+    assert re.search(r"\bpull_request\s*:", demo)
+    assert "workflow_dispatch:" in demo
+    assert "permissions:\n  contents: read" in demo
+    assert "timeout-minutes: 60" in demo
+    assert _matrix_values(demo, "os") == RUNNER_OSES
+    assert '".github/workflows/demo.yml"' in demo
+    assert '"demos/open-source-porting/**"' in demo
+    assert '"tests/test_demo_open_source_porting.py"' in demo
+    assert '"tests/test_project_test_runner.py"' in demo
+    assert '"tests/test_translator/test_project_translation.py"' in demo
+    assert "id: run_demo_tests" in demo
+    for selector in (
+        "monogame_sprite_entries",
+        "monogame_entries_not_empty_generic_wrapper",
+        "cuda_vector_add_demo_directx_outputs_valid_hlsl",
+    ):
+        assert selector in demo
+    assert (
+        "--junitxml support/generated/demo-reports/${{ matrix.os }}/"
+        "open-source-porting-demo-pytest.xml"
+    ) in demo
+    assert "name: Write demo failure summary" in demo
+    assert "python tools/pytest_failure_summary.py" in demo
+    assert (
+        "--json-output support/generated/demo-reports/${{ matrix.os }}/"
+        "open-source-porting-demo-failure-summary.json"
+    ) in demo
+    assert (
+        "--markdown-output support/generated/demo-reports/${{ matrix.os }}/"
+        "open-source-porting-demo-failure-summary.md"
+    ) in demo
+    assert "name: Upload demo reports" in demo
+    assert "name: open-source-porting-demo-reports-${{ matrix.os }}" in demo
+    assert "name: Upload demo failure summary" in demo
+    assert "name: open-source-porting-demo-failure-summary-${{ matrix.os }}" in demo
+    assert "if: failure() && steps.run_demo_tests.outcome == 'failure'" in demo
+    assert "if-no-files-found: ignore" in demo
+    assert "retention-days: 30" in demo
+
+
 def test_ci_coverage_report_summarizes_required_workflow_dimensions():
     module = _load_ci_coverage_module()
 
@@ -957,6 +1004,9 @@ def test_ci_coverage_reports_missing_support_planner_tests():
     ] = False
     report["workflows"]["support_issue_sync"]["workflow_run_full_tests"] = False
     report["workflows"]["support_issue_sync"]["workflow_run_backend_tests"] = False
+    report["workflows"]["support_issue_sync"][
+        "workflow_run_open_source_porting_demo"
+    ] = False
     report["workflows"]["support_issue_sync"]["workflow_run_translator_tests"] = False
     report["workflows"]["support_issue_sync"][
         "downloads_test_failure_summaries"
@@ -1101,6 +1151,9 @@ def test_ci_coverage_reports_missing_support_planner_tests():
     )
     assert "support-issue-sync.yml missing workflow_run_full_tests" in errors
     assert "support-issue-sync.yml missing workflow_run_backend_tests" in errors
+    assert (
+        "support-issue-sync.yml missing workflow_run_open_source_porting_demo" in errors
+    )
     assert "support-issue-sync.yml missing workflow_run_translator_tests" in errors
     assert "support-issue-sync.yml missing downloads_test_failure_summaries" in errors
     assert (
@@ -1803,9 +1856,28 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "integrations/mlx/run_mlx_porting.py" in mlx_porting
     assert mlx_commit in mlx_porting
     assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
+    assert re.search(r"\bschedule\s*:", mlx_porting)
+    assert 'cron: "31 4 * * 1"' in mlx_porting
+    assert "github.event_name != 'schedule'" in mlx_porting
+    assert "--mode reduced-frontier" in mlx_porting
+    assert "mlx-full-corpus-scout:" in mlx_porting
+    assert "MLX full-corpus artifact scout" in mlx_porting
+    assert (
+        "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"
+        in mlx_porting
+    )
+    assert "--mode full-corpus" in mlx_porting
+    assert "full-corpus-summary.json" in mlx_porting
+    assert "out-full-corpus" in mlx_porting
+    assert "name: mlx-full-corpus-scout" in mlx_porting
+    assert "retention-days: 30" in mlx_porting
     assert re.search(r"translate-project\b[\s\S]*validation_flag", harness)
     assert '"--run-toolchains"' in harness
     assert '"--validate"' in harness
+    assert "FULL_CORPUS_EXPECTED_ARTIFACT_COUNT" in harness
+    assert "FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS = 4096" in harness
+    assert "FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK = 131072" in harness
+    assert "without tracked issue references" in harness
     for resolved_issue_number in (
         1184,
         1203,
@@ -1948,6 +2020,7 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
     assert re.search(r"\bpull_request\s*:", issue_sync)
     assert "issues: write" in issue_sync
     assert '".github/workflows/backend-tests.yml"' in issue_sync
+    assert '".github/workflows/demo.yml"' in issue_sync
     assert '".github/workflows/docs.yml"' in issue_sync
     assert '".github/workflows/examples-test.yml"' in issue_sync
     assert '".github/workflows/full-tests.yml"' in issue_sync
@@ -1963,11 +2036,14 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
         '"crosstl/translator/lexer.py"',
         '"crosstl/translator/parser.py"',
         '"crosstl/translator/validation.py"',
+        '"demos/open-source-porting/**"',
         '"docs/source/project-porting.rst"',
         '"docs/source/support-matrix.rst"',
         '"examples/test.py"',
         '"tests/test_backend/**"',
+        '"tests/test_demo_open_source_porting.py"',
         '"tests/test_examples_test_script.py"',
+        '"tests/test_project_test_runner.py"',
         '"tests/test_translator/test_ast_ir_contracts.py"',
         '"tests/test_translator/test_backend_contract.py"',
         '"tests/test_translator/test_codegen/**"',
@@ -2039,6 +2115,7 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
     assert "workflow_run:" in issue_sync
     assert "Complete Test Suite" in issue_sync
     assert "Backend Tests" in issue_sync
+    assert "Open-Source Porting Demo" in issue_sync
     assert "Translator Tests" in issue_sync
     assert "name: Download test failure summaries" in issue_sync
     assert "actions/download-artifact@v4" in issue_sync
