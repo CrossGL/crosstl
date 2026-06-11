@@ -119,6 +119,10 @@ jobs:
           mkdir -p support/generated/demo-reports/${{ matrix.os }}
           readarray -t demo_test_files < <(python tools/demo_ci_metadata.py emit-pytest-files)
           demo_selector="$(python tools/demo_ci_metadata.py emit-pytest-selector)"
+          for index in "${!demo_test_files[@]}"; do
+            demo_test_files[$index]="${demo_test_files[$index]%$'\r'}"
+          done
+          demo_selector="${demo_selector%$'\r'}"
           python -m pytest -q \
             "${demo_test_files[@]}" \
             -k "$demo_selector" \
