@@ -377,13 +377,18 @@ def _commands_from_runtime_tests(
             metadata = {}
         upstream_name = metadata.get("upstreamTestName", fixture)
         command = metadata.get("testCommand")
+        adapter_id = _adapter_reference_id(test_case.get("adapter"))
+        platform_requirements = test_case.get("platformRequirements")
+        if not isinstance(platform_requirements, Mapping):
+            platform_requirements = {}
         commands.append(
             {
                 "name": str(upstream_name),
                 "command": command if isinstance(command, Sequence) else [],
-                "adapter": test_case.get("adapter"),
+                "adapter": adapter_id,
                 "fixture": fixture,
                 "targets": _case_targets(test_case),
+                "platformRequirements": dict(platform_requirements),
                 "provenance": _case_provenance(test_case),
             }
         )
@@ -412,8 +417,11 @@ def _plan_commands(
             and not target_set.intersection(command_targets)
         ):
             continue
-        adapter_id = command.get("adapter")
-        adapter = adapter_by_id.get(adapter_id) if isinstance(adapter_id, str) else None
+        adapter_ref = command.get("adapter")
+        adapter_id = _adapter_reference_id(adapter_ref)
+        adapter = adapter_by_id.get(adapter_id) if adapter_id is not None else None
+        if adapter is None and isinstance(adapter_ref, Mapping):
+            adapter = adapter_ref
         availability = adapter.get("availability", {}) if adapter is not None else {}
         required = _command_requirements(command, adapter)
         missing_tools = [
@@ -468,6 +476,16 @@ def _plan_commands(
             )
         planned.append(record)
     return planned
+
+
+def _adapter_reference_id(adapter_ref: Any) -> str | None:
+    if isinstance(adapter_ref, str) and adapter_ref.strip():
+        return adapter_ref
+    if isinstance(adapter_ref, Mapping):
+        adapter_id = adapter_ref.get("id")
+        if isinstance(adapter_id, str) and adapter_id.strip():
+            return adapter_id
+    return None
 
 
 def _command_requirements(
