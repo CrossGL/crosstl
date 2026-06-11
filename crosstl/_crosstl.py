@@ -199,6 +199,8 @@ def translate(
                 "vulkan",
             }:
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
+            if source_spec.name == "hip" and normalized_backend == "directx":
+                cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
             codegen = get_codegen(requested_backend)
             lower_default_arguments(cgl_ast)
             generated_code = codegen.generate(cgl_ast)
@@ -463,9 +465,7 @@ def _run_translate_project(args):
     from .project import build_runtime_binding_manifest, translate_project
 
     binding_manifest_path = getattr(args, "runtime_binding_manifest", None)
-    if binding_manifest_path and (
-        not args.report or _is_stdout_output(args.report)
-    ):
+    if binding_manifest_path and (not args.report or _is_stdout_output(args.report)):
         print(
             "Error: --runtime-binding-manifest requires --report with a file path",
             file=sys.stderr,
