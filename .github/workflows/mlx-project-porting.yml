@@ -7,7 +7,6 @@ env:
   MLX_METAL_NUMERIC_SPECIALIZATION_ISSUE: "https://github.com/CrossGL/crosstl/issues/980"
   MLX_SPIRV_STORAGE_BUFFER_OVERLOADS_ISSUE: "https://github.com/CrossGL/crosstl/issues/981"
   PROJECT_RUNTIME_ADAPTERS_ISSUE: "https://github.com/CrossGL/crosstl/issues/982"
-  MLX_SPIRV_BOOLEAN_INTERFACE_ISSUE: "https://github.com/CrossGL/crosstl/issues/983"
   MLX_METAL_HELPER_SPECIALIZATION_ISSUE: "https://github.com/CrossGL/crosstl/issues/984"
   MLX_NATIVE_MACRO_FORMS_ISSUE: "https://github.com/CrossGL/crosstl/issues/985"
 

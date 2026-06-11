@@ -3337,8 +3337,11 @@ class VulkanSPIRVCodeGen:
 
         offsets_value = extra_args[0]
         offsets_type = self.value_types.get(offsets_value.id)
-        element_type = self.array_element_type_from_type(offsets_type)
-        if element_type is not None:
+        array_info = self.array_type_info_from_type(offsets_type)
+        if array_info is not None:
+            element_type, element_count = array_info
+            if element_count != 4:
+                return [], component_id
             return [
                 self.composite_extract(offsets_value, element_type, index)
                 for index in range(4)
@@ -11699,10 +11702,6 @@ class VulkanSPIRVCodeGen:
     def is_bound_uniform_value_parameter(
         self, param, execution_model: Optional[str]
     ) -> bool:
-        if execution_model != "GLCompute":
-            return False
-        if self.explicit_descriptor_binding(param) is None:
-            return False
         qualifiers = self.parameter_qualifier_names(param)
         qualifiers.update(self.resource_parameter_qualifier_names(param))
         if not qualifiers & {"uniform", "constant"}:
@@ -11749,7 +11748,9 @@ class VulkanSPIRVCodeGen:
             getattr(param, "resource_qualifiers", []) or []
         )
         type_name = self.type_name_from_value(variable.var_type)
-        return self.process_glsl_buffer_block_declaration(variable, type_name)
+        return self.process_glsl_buffer_block_declaration(
+            variable, type_name, allow_binding_reassignment=True
+        )
 
     def entry_point_uniform_parameter_value(
         self, param, param_value_type: SpirvId
@@ -11761,7 +11762,9 @@ class VulkanSPIRVCodeGen:
         self.decorate_cbuffer_type(block_type, [(member_type, param_name)])
 
         var_id = self.create_variable(block_type, "Uniform", f"{param_name}Uniform")
-        descriptor_set, binding = self.resource_descriptor_slot(param)
+        descriptor_set, binding = self.resource_descriptor_slot(
+            param, allow_binding_reassignment=True
+        )
         self.decorations.append(
             f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
         )
@@ -13190,7 +13193,11 @@ class VulkanSPIRVCodeGen:
         return "std430"
 
     def process_glsl_buffer_block_declaration(
-        self, node: VariableNode, type_name: str
+        self,
+        node: VariableNode,
+        type_name: str,
+        *,
+        allow_binding_reassignment: bool = False,
     ) -> SpirvId:
         """Emit a GLSL-style buffer block or buffer-qualified array variable."""
         layout = self.glsl_buffer_block_layout(node)
@@ -13268,7 +13275,9 @@ class VulkanSPIRVCodeGen:
         self.decorate_storage_buffer_member_memory_qualifiers(block_type, memory_flags)
 
         var_id = self.create_variable(value_type, "Uniform", node.name)
-        descriptor_set, binding = self.resource_descriptor_slot(node)
+        descriptor_set, binding = self.resource_descriptor_slot(
+            node, allow_binding_reassignment=allow_binding_reassignment
+        )
         self.decorations.append(
             f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
         )
@@ -14927,13 +14936,21 @@ class VulkanSPIRVCodeGen:
         }
         return var_id
 
-    def resource_descriptor_slot(self, node: VariableNode) -> Tuple[int, int]:
+    def resource_descriptor_slot(
+        self, node: VariableNode, *, allow_binding_reassignment: bool = False
+    ) -> Tuple[int, int]:
         descriptor_set = self.resource_descriptor_set(node)
         explicit_binding = self.explicit_descriptor_binding(node)
 
         if explicit_binding is not None:
             key = (descriptor_set, explicit_binding)
-            if key in self.used_resource_bindings:
+            if key in self.used_resource_bindings or (
+                allow_binding_reassignment and key in self.reserved_resource_bindings
+            ):
+                if allow_binding_reassignment:
+                    binding = self.next_available_resource_binding(descriptor_set)
+                    self.used_resource_bindings.add((descriptor_set, binding))
+                    return descriptor_set, binding
                 raise ValueError(
                     f"Duplicate SPIR-V resource binding set {descriptor_set} "
                     f"binding {explicit_binding}"

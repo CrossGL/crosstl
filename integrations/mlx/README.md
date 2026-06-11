@@ -19,9 +19,9 @@ The current harness verifies:
 - OpenGL artifact generation for `arange.metal`.
 
 A separate full-corpus scout against the same pinned MLX revision currently
-translates 73 of 120 target artifacts across DirectX, OpenGL, and Vulkan:
+translates 74 of 120 target artifacts across DirectX, OpenGL, and Vulkan:
 DirectX translates 38 of 40 artifacts, OpenGL translates 2 of 40 artifacts, and
-Vulkan translates 33 of 40 artifacts. OpenGL rejects unresolved template
+Vulkan translates 34 of 40 artifacts. OpenGL rejects unresolved template
 placeholders instead of emitting generic artifacts, so its full-corpus count
 reflects concrete specialization work that still needs to be completed.
 
@@ -66,8 +66,6 @@ The harness writes reports, generated artifacts, and command logs under
   project kernels.
 - CrossGL/crosstl#981: resolve project-scale SPIR-V storage-buffer helper
   overloads.
-- CrossGL/crosstl#983: lower boolean compute interface values for SPIR-V project
-  artifacts.
 - CrossGL/crosstl#984: scale explicit Metal helper specialization for large
   project kernels.
 - CrossGL/crosstl#985: classify and expand native macro forms during project
@@ -87,4 +85,6 @@ shader translation successes.
 The current reduced frontier no longer depends on the previously tracked issues:
 CrossGL/crosstl#939, CrossGL/crosstl#940, CrossGL/crosstl#941,
 CrossGL/crosstl#943, CrossGL/crosstl#944, CrossGL/crosstl#945, and
-CrossGL/crosstl#946.
+CrossGL/crosstl#946. CrossGL/crosstl#983 is also covered by this branch; the
+current full-corpus scout no longer reports boolean SPIR-V interface lowering as
+a missing capability.

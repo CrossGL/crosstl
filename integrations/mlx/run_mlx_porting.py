@@ -34,7 +34,6 @@ FULL_CORPUS_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/980",
     "https://github.com/CrossGL/crosstl/issues/981",
     "https://github.com/CrossGL/crosstl/issues/982",
-    "https://github.com/CrossGL/crosstl/issues/983",
     "https://github.com/CrossGL/crosstl/issues/984",
     "https://github.com/CrossGL/crosstl/issues/985",
 )
@@ -46,6 +45,7 @@ RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/944",
     "https://github.com/CrossGL/crosstl/issues/945",
     "https://github.com/CrossGL/crosstl/issues/946",
+    "https://github.com/CrossGL/crosstl/issues/983",
 )
 
 

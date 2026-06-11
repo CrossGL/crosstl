@@ -1782,7 +1782,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert mlx_commit in mlx_porting
     assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
     assert re.search(r"translate-project\b[\s\S]*--run-toolchains", harness)
-    for issue_number in (979, 980, 981, 982, 983, 984, 985):
+    for issue_number in (979, 980, 981, 982, 984, 985):
         assert f"https://github.com/CrossGL/crosstl/issues/{issue_number}" in (
             mlx_porting
         )

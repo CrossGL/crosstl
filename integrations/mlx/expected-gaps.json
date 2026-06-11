@@ -13,12 +13,12 @@
     "sources": 40,
     "targets": ["directx", "opengl", "vulkan"],
     "artifacts": 120,
-    "translated_artifacts": 73,
-    "failed_artifacts": 47,
+    "translated_artifacts": 74,
+    "failed_artifacts": 46,
     "translated_by_target": {
       "directx": 38,
       "opengl": 2,
-      "vulkan": 33
+      "vulkan": 34
     }
   },
   "tracked_issues": [
@@ -47,12 +47,6 @@
       "summary": "Add backend-agnostic runtime execution adapters for translated project artifacts."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/983",
-      "scope": "spirv-boolean-interface-lowering",
-      "status": "open",
-      "summary": "Lower boolean compute interface values for SPIR-V project artifacts."
-    },
-    {
       "issue": "https://github.com/CrossGL/crosstl/issues/984",
       "scope": "metal-helper-specialization-scale",
       "status": "open",
@@ -72,6 +66,7 @@
     "https://github.com/CrossGL/crosstl/issues/943",
     "https://github.com/CrossGL/crosstl/issues/944",
     "https://github.com/CrossGL/crosstl/issues/945",
-    "https://github.com/CrossGL/crosstl/issues/946"
+    "https://github.com/CrossGL/crosstl/issues/946",
+    "https://github.com/CrossGL/crosstl/issues/983"
   ]
 }

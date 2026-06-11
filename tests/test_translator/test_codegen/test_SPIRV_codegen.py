@@ -352,6 +352,39 @@ class TestVulkanSPIRVCodeGen:
         )
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_metal_constant_bool_parameter_lowers_to_uniform_block(self, tmp_path):
+        source_path = tmp_path / "random_reduced.metal"
+        source_path.write_text(
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void random_reduced(
+                device int* out [[buffer(0)]],
+                constant const bool& odd) {
+              out[0] = odd ? 1 : 0;
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        spv_code = crosstl.translate(
+            str(source_path), backend="vulkan", format_output=False
+        )
+        bool_type = re.search(r"(%\d+) = OpTypeBool\b", spv_code)
+        assert bool_type is not None
+        odd_uniform = spirv_named_variable(
+            spv_code, "oddUniform", storage_class="Uniform"
+        )
+
+        assert f"OpDecorate {odd_uniform} Binding" in spv_code
+        assert "CrossGL_glcompute_input_odd" not in spv_code
+        assert not re.search(
+            rf"OpTypePointer Input {re.escape(bool_type.group(1))}\b",
+            spv_code,
+        )
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_metal_constant_buffer_member_matrix_column_swizzle_lowers_to_spirv(
         self, tmp_path
     ):

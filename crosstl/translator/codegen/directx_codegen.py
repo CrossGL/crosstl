@@ -12833,9 +12833,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         used_semantics = set()
         for member in getattr(struct_node, "members", []) or []:
             semantic = self.hlsl_struct_member_declared_semantic(member)
-            if semantic is not None and self.hlsl_location_attribute_index(
-                member
-            ) is None:
+            if (
+                semantic is not None
+                and self.hlsl_location_attribute_index(member) is None
+            ):
                 used_semantics.add(self.hlsl_semantic_key(semantic))
 
         defaults = {}

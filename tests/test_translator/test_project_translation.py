@@ -32523,8 +32523,12 @@ def test_translate_project_metal_matmul_constant_pointer_params_lower_to_resourc
     opengl = outputs["opengl"]
     assert "layout(std140, binding = 0) uniform MatMulParams" in opengl
     assert "} params;" in opengl
-    assert "layout(std430, binding = 1) readonly buffer ABuffer { float A[]; };" in opengl
-    assert "layout(std430, binding = 2) readonly buffer BBuffer { float B[]; };" in opengl
+    assert (
+        "layout(std430, binding = 1) readonly buffer ABuffer { float A[]; };" in opengl
+    )
+    assert (
+        "layout(std430, binding = 2) readonly buffer BBuffer { float B[]; };" in opengl
+    )
     assert "layout(std430, binding = 3) buffer XBuffer { float X[]; };" in opengl
     assert "params.cols" in opengl
     assert "params.rows" in opengl
