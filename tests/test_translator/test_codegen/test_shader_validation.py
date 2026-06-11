@@ -160,6 +160,25 @@ shader GLSLWaveIntrinsicsValidation {
 """
 
 
+METAL_SIMD_PLACEHOLDER_COMPUTE_SHADER = """
+shader MetalSimdPlaceholderValidation {
+    float simd_max(float data) {}
+    float simd_min(float data) {}
+    float simd_prefix_exclusive_product(float data) {}
+    float simd_prefix_exclusive_sum(float data) {}
+
+    compute {
+        void main() {
+            float value = simd_max(1.0);
+            value = simd_min(value);
+            value = simd_prefix_exclusive_product(value);
+            value = simd_prefix_exclusive_sum(value);
+        }
+    }
+}
+"""
+
+
 HLSL_WAVE_INTRINSICS_COMPUTE_SHADER = """
 shader HLSLWaveIntrinsicsValidation {
     compute {
@@ -11829,6 +11848,21 @@ def test_generated_glsl_wave_intrinsics_compute_validates_with_glslang(tmp_path)
     source = tmp_path / "glsl_wave_intrinsics.comp"
     code = GLSLCodeGen().generate_stage(
         crosstl.translator.parse(GLSL_WAVE_INTRINSICS_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_generated_glsl_metal_simd_placeholders_validate_with_glslang(tmp_path):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "metal_simd_placeholders.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_SIMD_PLACEHOLDER_COMPUTE_SHADER),
         "compute",
     )
     source.write_text(code, encoding="utf-8")
