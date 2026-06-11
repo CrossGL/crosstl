@@ -24515,9 +24515,7 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_mlx_ternary_mixed_u64_uint_storage_buffer_access_validates(
-        self, tmp_path
-    ):
+    def test_mlx_ternary_mixed_u64_uint_storage_buffer_access_validates(self, tmp_path):
         source_code = """
         shader MLXTernaryMixedStorageBufferAccess {
             compute {
