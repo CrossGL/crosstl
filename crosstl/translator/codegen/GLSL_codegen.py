@@ -17184,7 +17184,10 @@ class GLSLCodeGen:
 
     def generate_struct(self, node):
         code = f"struct {node.name} {{\n"
-        for member in getattr(node, "members", []) or []:
+        members = list(getattr(node, "members", []) or [])
+        if not members:
+            code += "    int _crossgl_empty;\n"
+        for member in members:
             code += self.generate_struct_member_declaration(
                 member, struct_name=node.name
             )
