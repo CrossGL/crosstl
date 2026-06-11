@@ -2,6 +2,6 @@
 source_roots = ["."]
 include = ["mat_mul_simple1.metal"]
 include_dirs = ["."]
-targets = ["cgl", "opengl", "metal", "vulkan"]
+targets = ["cgl", "opengl", "metal", "directx", "vulkan"]
 output_dir = "crosstl-out"
 external_corpus_manifest = "corpus.json"

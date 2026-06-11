@@ -11,6 +11,7 @@
         "cgl",
         "opengl",
         "metal",
+        "directx",
         "vulkan"
       ],
       "repository": "https://github.com/bkvogel/metal_performance_testing",
@@ -25,6 +26,7 @@
         "cgl",
         "opengl",
         "metal",
+        "directx",
         "vulkan"
       ],
       "repository": "https://github.com/bkvogel/metal_performance_testing",
