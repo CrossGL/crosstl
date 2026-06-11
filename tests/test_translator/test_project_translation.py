@@ -26458,12 +26458,6 @@ def test_validate_project_report_assembles_vulkan_spirv_assembly(tmp_path, monke
 
     def run_toolchain(command, **kwargs):
         calls.append((command, kwargs))
-        assert command == [
-            "spirv-as",
-            str(artifact_path),
-            "-o",
-            project_pipeline.os.devnull,
-        ]
         assert kwargs["input"] is None
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -26472,25 +26466,97 @@ def test_validate_project_report_assembles_vulkan_spirv_assembly(tmp_path, monke
     payload = validate_project_report(report_path, run_toolchains=True)
 
     assert payload["success"] is True
-    assert len(calls) == 1
-    run = payload["validation"]["toolchainRuns"][0]
-    assert run["source"] == "simple.cgl"
-    assert run["sourceBackend"] == "cgl"
-    assert run["target"] == "vulkan"
-    assert run["path"] == "out/vulkan/simple.spvasm"
-    assert run["command"] == [
+    assert len(calls) == 2
+    spv_output = calls[0][0][3]
+    assert calls[0][0] == [
         "spirv-as",
         str(artifact_path),
         "-o",
-        project_pipeline.os.devnull,
+        spv_output,
     ]
-    assert run["checkKind"] == "artifact"
-    assert run["status"] == "ok"
+    assert Path(spv_output).suffix == ".spv"
+    assert calls[1][0] == ["spirv-val", spv_output]
+    assemble_run, validate_run = payload["validation"]["toolchainRuns"]
+    assert assemble_run["source"] == "simple.cgl"
+    assert assemble_run["sourceBackend"] == "cgl"
+    assert assemble_run["target"] == "vulkan"
+    assert assemble_run["path"] == "out/vulkan/simple.spvasm"
+    assert assemble_run["command"] == calls[0][0]
+    assert assemble_run["checkKind"] == "artifact"
+    assert assemble_run["status"] == "ok"
+    assert validate_run["path"] == "out/vulkan/simple.spvasm"
+    assert validate_run["command"] == calls[1][0]
+    assert validate_run["checkKind"] == "artifact"
+    assert validate_run["status"] == "ok"
     assert payload["toolchainRunStatusByCheckKind"] == {
-        "artifact": {"runCount": 1, "okCount": 1, "failedCount": 0}
+        "artifact": {"runCount": 2, "okCount": 2, "failedCount": 0}
     }
     assert payload["toolchainRunStatusByTool"] == {
-        "spirv-as": {"runCount": 1, "okCount": 1, "failedCount": 0}
+        "spirv-as": {"runCount": 1, "okCount": 1, "failedCount": 0},
+        "spirv-val": {"runCount": 1, "okCount": 1, "failedCount": 0},
+    }
+
+
+def test_validate_project_report_reports_vulkan_spirv_validator_failures(
+    tmp_path, monkeypatch
+):
+    report_path = _write_target_toolchain_report(
+        tmp_path / "repo", target="vulkan", extension="spvasm"
+    )
+    artifact_path = (report_path.parent / "out" / "vulkan" / "simple.spvasm").resolve()
+    calls = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: f"/usr/bin/{tool}" if tool in {"spirv-val", "spirv-as"} else None,
+    )
+
+    def run_toolchain(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[0] == "spirv-as":
+            assert command[:3] == ["spirv-as", str(artifact_path), "-o"]
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        assert command[0] == "spirv-val"
+        return SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="error: Vulkan environment requires OpEntryPoint",
+        )
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert len(calls) == 2
+    assert calls[1][0] == ["spirv-val", calls[0][0][3]]
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.toolchain-failed"
+    assert diagnostic["target"] == "vulkan"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["checkKind"] == "artifact"
+    assert diagnostic["location"]["file"] == "out/vulkan/simple.spvasm"
+    assert diagnostic["message"] == (
+        "Validation toolchain for target vulkan rejected "
+        "out/vulkan/simple.spvasm: error: Vulkan environment requires OpEntryPoint"
+    )
+    assert payload["validation"]["toolchainRuns"][0]["status"] == "ok"
+    validator_run = payload["validation"]["toolchainRuns"][1]
+    assert validator_run["status"] == "failed"
+    assert validator_run["path"] == "out/vulkan/simple.spvasm"
+    assert validator_run["command"] == calls[1][0]
+    assert validator_run["returncode"] == 1
+    assert validator_run["stderr"] == (
+        "error: Vulkan environment requires OpEntryPoint"
+    )
+    assert payload["toolchainRunStatusByCheckKind"] == {
+        "artifact": {"runCount": 2, "okCount": 1, "failedCount": 1}
+    }
+    assert payload["toolchainRunStatusByTool"] == {
+        "spirv-as": {"runCount": 1, "okCount": 1, "failedCount": 0},
+        "spirv-val": {"runCount": 1, "okCount": 0, "failedCount": 1},
     }
 
 
@@ -39407,6 +39473,135 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
     assert "work limit exceeded before GLSL codegen" in diagnostic["message"]
 
 
+def test_translate_project_metal_implicit_type_environment_cache_bounds_repeated_work(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "out"
+
+            [project.source_options.metal]
+            max_template_specializations = 2
+            max_template_materialization_work = 8
+            """).strip(),
+        encoding="utf-8",
+    )
+    repeated_declarations = "\n".join(
+        f"    float v{index} = v{index - 1};"
+        for index in range(1, 40)
+    )
+    (repo / "cached_implicit.metal").write_text(
+        textwrap.dedent(f"""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            T cast_value(T value) {{
+                return value;
+            }}
+
+            kernel void launch(device float* out [[buffer(0)]]) {{
+                float v0 = 1.0;
+            {repeated_declarations}
+                out[0] = cast_value(v39);
+            }}
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["specializations"] == [
+        {
+            "name": "cast_value",
+            "materializedName": "cast_value_float",
+            "parameters": {"T": "float"},
+            "parameterSources": {"T": "call-site"},
+            "source": "call-site",
+        }
+    ]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "cast_value_float(v39)" in output
+    assert "cast_value(v39)" not in output
+
+
+def test_translate_project_metal_implicit_type_environment_budget_diagnostic(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "out"
+
+            [project.source_options.metal]
+            max_template_specializations = 4
+            max_template_materialization_work = 3
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "budgeted_implicit.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            T cast_value(T value) {
+                return value;
+            }
+
+            kernel void launch(device float* out [[buffer(0)]]) {
+                using ValueT = float;
+                ValueT a = 1.0;
+                ValueT b = a;
+                out[0] = cast_value(b);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert "template materialization work budget exceeded" in artifact["error"].lower()
+    assert (
+        "implicit-template-materialization/type-environment"
+        in artifact["error"]
+    )
+    assert (
+        "limit 3 from "
+        "project.source_options.metal.max_template_materialization_work"
+        in artifact["error"]
+    )
+    assert not (repo / artifact["path"]).exists()
+
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-template-specialization": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.metal-template-specialization"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "budgeted_implicit.metal"
+    assert diagnostic["location"]["line"] == 10
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert (
+        "implicit-template-materialization/type-environment"
+        in diagnostic["message"]
+    )
+    assert "templates=1" in diagnostic["message"]
+
+
 def test_translate_project_metal_variant_template_materializes_for_opengl(
     tmp_path,
 ):
@@ -41136,7 +41331,7 @@ def test_translate_project_target_template_variant_manifest_materializes_for_ope
     assert validation["success"] is True
 
 
-def test_translate_project_khronos_opencl_reduce_lowers_targets_and_reports_cgl_diagnostics(
+def test_translate_project_khronos_opencl_reduce_lowers_all_target_artifacts(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -41246,34 +41441,36 @@ def test_translate_project_khronos_opencl_reduce_lowers_targets_and_reports_cgl_
         validate=True,
     ).to_json()
 
-    supported_targets = {"opengl", "metal", "vulkan"}
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {
-        ("cgl", "failed"),
+        ("cgl", "translated"),
         ("opengl", "translated"),
         ("metal", "translated"),
         ("vulkan", "translated"),
     }
-    assert payload["summary"]["translatedCount"] == 3
-    assert payload["summary"]["failedCount"] == 1
-    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 5}
-    assert payload["summary"]["diagnosticsByCode"] == {
-        "opencl.target.pointer-helper-parameter": 1,
-        "opencl.target.unresolved-helper": 1,
-        "opencl.target.unsupported-builtin": 2,
-        "project.validate.failed-artifact": 1,
-    }
-    assert payload["summary"]["diagnosticsByTarget"] == {"cgl": 5}
+    assert payload["summary"]["translatedCount"] == 4
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["summary"]["diagnosticsByTarget"] == {}
 
     artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
-    assert not (repo / artifacts["cgl"]["path"]).exists()
-    assert "opencl.target.unsupported" in artifacts["cgl"]["error"]
-    assert "read_local(shared_: ptr<i32>)" in artifacts["cgl"]["error"]
-    assert "async_work_group_copy, wait_group_events" in artifacts["cgl"]["error"]
 
-    for target in supported_targets:
+    for target in ("cgl", "opengl", "metal", "vulkan"):
         assert (repo / artifacts[target]["path"]).exists()
+
+    cgl_source = (repo / artifacts["cgl"]["path"]).read_text(encoding="utf-8")
+    cgl_spec = SOURCE_REGISTRY.get("cgl")
+    assert cgl_spec is not None
+    cgl_spec.parse(cgl_source)
+    assert "i32 op(i32 lhs, i32 rhs)" in cgl_source
+    assert "return min(lhs, rhs);" in cgl_source
+    assert "i32 read_local(array<i32, 1024> shared_" in cgl_source
+    assert "shared_[lid] = front[((wid * wg_stride) + lid)];" in cgl_source
+    assert "async_work_group_copy" not in cgl_source
+    assert "wait_group_events" not in cgl_source
+    assert "ptr<i32> shared_" not in cgl_source
 
     opengl_source = (repo / artifacts["opengl"]["path"]).read_text(encoding="utf-8")
     assert "int op(int lhs, int rhs)" in opengl_source
@@ -41299,24 +41496,11 @@ def test_translate_project_khronos_opencl_reduce_lowers_targets_and_reports_cgl_
     assert "async_work_group_copy" not in vulkan_source
     assert "wait_group_events" not in vulkan_source
 
-    assert len(payload["diagnostics"]) == 5
     for artifact in payload["artifacts"]:
-        if artifact["target"] in supported_targets:
-            assert artifact["generatedHash"]["algorithm"] == "sha256"
-            assert artifact["generatedSizeBytes"] > 0
+        assert artifact["generatedHash"]["algorithm"] == "sha256"
+        assert artifact["generatedSizeBytes"] > 0
 
-    for diagnostic in payload["diagnostics"]:
-        assert diagnostic["sourceBackend"] == "opencl"
-        assert diagnostic["location"]["file"] == "reduce.cl"
-        assert diagnostic["target"] == "cgl"
-        if diagnostic["code"].startswith("opencl.target."):
-            assert "Suggested action:" in diagnostic["message"]
-
-    messages = [diagnostic["message"] for diagnostic in payload["diagnostics"]]
-    assert any("op(lhs: i32, rhs: i32) -> i32" in message for message in messages)
-    assert any("read_local(shared_: ptr<i32>)" in message for message in messages)
-    assert any("async_work_group_copy(...)" in message for message in messages)
-    assert any("wait_group_events(...)" in message for message in messages)
+    assert payload["diagnostics"] == []
 
 
 def test_translate_project_khronos_opencl_reduce_lowers_supported_target_artifacts(
@@ -41385,18 +41569,30 @@ def test_translate_project_khronos_opencl_reduce_lowers_supported_target_artifac
 
     payload = translate_project(
         repo,
-        targets=["opengl", "metal", "vulkan"],
+        targets=["cgl", "opengl", "metal", "vulkan"],
         output_dir="out",
         validate=True,
     ).to_json()
 
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
-    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["translatedCount"] == 4
     assert payload["summary"]["failedCount"] == 0
 
     artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
-    assert set(artifacts) == {"opengl", "metal", "vulkan"}
+    assert set(artifacts) == {"cgl", "opengl", "metal", "vulkan"}
     assert all(artifact["status"] == "translated" for artifact in artifacts.values())
+
+    cgl_source = (repo / artifacts["cgl"]["path"]).read_text(encoding="utf-8")
+    cgl_spec = SOURCE_REGISTRY.get("cgl")
+    assert cgl_spec is not None
+    cgl_spec.parse(cgl_source)
+    assert "i32 op(i32 lhs, i32 rhs)" in cgl_source
+    assert "return (lhs + rhs);" in cgl_source
+    assert "i32 read_local(array<i32, 1024> shared_" in cgl_source
+    assert "shared_[lid] = front[((wid * wg_stride) + lid)];" in cgl_source
+    assert "async_work_group_copy" not in cgl_source
+    assert "wait_group_events" not in cgl_source
+    assert "ptr<i32> shared_" not in cgl_source
 
     opengl_source = (repo / artifacts["opengl"]["path"]).read_text(encoding="utf-8")
     assert "shared int shared_[1024];" in opengl_source
@@ -41419,6 +41615,42 @@ def test_translate_project_khronos_opencl_reduce_lowers_supported_target_artifac
     vulkan_source = (repo / artifacts["vulkan"]["path"]).read_text(encoding="utf-8")
     assert "async_work_group_copy" not in vulkan_source
     assert "wait_group_events" not in vulkan_source
+
+
+def test_translate_project_opencl_reduce_get_num_groups_directx_uses_cbuffer_input(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "reduce.cl").write_text(
+        textwrap.dedent("""
+            kernel void reduce(global uint* back) {
+                const size_t lid = get_local_id(0),
+                             wid = get_group_id(0),
+                             wsi = get_num_groups(0);
+                if (lid == 0) back[wid] = (uint)(wsi);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    assert "cbuffer CrossGLDispatchInfo" in output
+    assert "uint3 crossglNumWorkGroups;" in output
+    assert "uint wsi = crossglNumWorkGroups.x;" in output
+    assert re.search(r"void CSMain\([^)]*numWorkGroups", output) is None
+    HLSLParser(HLSLLexer(output).tokenize()).parse()
 
 
 def test_translate_project_opencl_global_pointer_helper_reports_contract(
@@ -41458,6 +41690,52 @@ def test_translate_project_opencl_global_pointer_helper_reports_contract(
     assert diagnostic["missingCapabilities"] == ["opencl.local-pointer-helper"]
     assert "read_global(values: ptr<i32>)" in diagnostic["message"]
     assert "Suggested action:" in diagnostic["message"]
+
+
+def test_translate_project_opencl_non_reduce_event_copy_reports_cgl_contract(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "copy.cl").write_text(
+        textwrap.dedent("""
+            kernel void copy_local(
+                global int* front,
+                global int* back,
+                local int* shared
+            ) {
+                size_t lid = get_local_id(0);
+                event_t read;
+                async_work_group_copy(shared, front, 1, read);
+                wait_group_events(1, &read);
+                barrier(CLK_LOCAL_MEM_FENCE);
+                back[lid] = shared[lid];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    assert "async_work_group_copy, wait_group_events" in artifact["error"]
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 2}
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "opencl.target.unsupported-builtin": 2
+    }
+    assert payload["summary"]["diagnosticsByTarget"] == {"cgl": 2}
+
+    messages = [diagnostic["message"] for diagnostic in payload["diagnostics"]]
+    assert any("async_work_group_copy(...)" in message for message in messages)
+    assert any("wait_group_events(...)" in message for message in messages)
+    for diagnostic in payload["diagnostics"]:
+        assert diagnostic["sourceBackend"] == "opencl"
+        assert diagnostic["target"] == "cgl"
+        assert diagnostic["location"]["file"] == "copy.cl"
+        assert diagnostic["missingCapabilities"] == ["opencl.event-local-memory"]
+        assert "Suggested action:" in diagnostic["message"]
 
 
 def test_translate_project_mojo_vector_add_launch_separates_host_runtime(

@@ -1102,6 +1102,13 @@ METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION = "max_template_specializations"
 METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION = (
     "template_specialization_limit_source"
 )
+METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION = (
+    "max_template_materialization_work"
+)
+METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION = (
+    "template_materialization_work_limit_source"
+)
+METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_MULTIPLIER = 64
 METAL_DIAGNOSTIC_TEMPLATE_HELPER_RE = re.compile(
     r"(^|_)(?:debug|dbg|log|trace|diagnostic|diag|assert)($|_)"
 )
@@ -4924,11 +4931,17 @@ def _source_options_for_unit(
         for name, value in configured_options.items()
         if name != SOURCE_OPTION_PATTERNS_KEY
     }
-    limit_source = None
+    template_limit_source = None
+    work_limit_source = None
     if METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in source_options:
-        limit_source = (
+        template_limit_source = (
             f"project.source_options.{key}."
             f"{METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION}"
+        )
+    if METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION in source_options:
+        work_limit_source = (
+            f"project.source_options.{key}."
+            f"{METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION}"
         )
 
     source_patterns = configured_options.get(SOURCE_OPTION_PATTERNS_KEY)
@@ -4946,17 +4959,36 @@ def _source_options_for_unit(
                     f"project.source_options.{key}.{SOURCE_OPTION_PATTERNS_KEY}",
                     normalized_pattern,
                 )
-                limit_source = (
+                template_limit_source = (
                     f"{pattern_path}." f"{METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION}"
+                )
+            if METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION in pattern_options:
+                pattern_path = _mapping_key_path(
+                    f"project.source_options.{key}.{SOURCE_OPTION_PATTERNS_KEY}",
+                    normalized_pattern,
+                )
+                work_limit_source = (
+                    f"{pattern_path}."
+                    f"{METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION}"
                 )
 
     source_options.pop(SOURCE_OPTION_PATTERNS_KEY, None)
     if (
         source_backend == "metal"
         and METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in source_options
-        and limit_source is not None
+        and template_limit_source is not None
     ):
-        source_options[METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION] = limit_source
+        source_options[METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION] = (
+            template_limit_source
+        )
+    if (
+        source_backend == "metal"
+        and METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION in source_options
+        and work_limit_source is not None
+    ):
+        source_options[METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION] = (
+            work_limit_source
+        )
     return source_options
 
 
@@ -4964,7 +4996,12 @@ def _frontend_source_options(source_options: Mapping[str, Any]) -> dict[str, Any
     return {
         name: value
         for name, value in source_options.items()
-        if name != TEMPLATE_VARIANTS_SOURCE_OPTION
+        if name
+        not in {
+            TEMPLATE_VARIANTS_SOURCE_OPTION,
+            METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION,
+            METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION,
+        }
     }
 
 
@@ -9187,6 +9224,9 @@ def _metal_find_implicit_template_function_calls(
     excluded_spans: Sequence[tuple[int, int]],
     included_spans: Sequence[tuple[int, int]] | None,
     return_types: Mapping[str, str] | None = None,
+    *,
+    type_cache: _MetalMaterializationTypeEnvironmentCache | None = None,
+    work_budget: _MetalTemplateMaterializationWorkBudget | None = None,
 ) -> list[tuple[str, list[str], tuple[int, int]]]:
     calls: list[tuple[str, list[str], tuple[int, int]]] = []
     functions = preprocessor._find_non_template_function_definitions(
@@ -9206,6 +9246,8 @@ def _metal_find_implicit_template_function_calls(
             source,
             function,
             known_return_types,
+            cache=type_cache,
+            work_budget=work_budget,
         )
         body = source[function.body_span[0] : function.body_span[1]]
         body_offset = function.body_span[0]
@@ -9268,11 +9310,132 @@ class _ImplicitTemplateMaterialization:
     specializations: list[dict[str, Any]]
 
 
+@dataclass
+class _MetalMaterializationTypeEnvironmentCache:
+    environments: dict[tuple[int, int, tuple[tuple[str, str], ...]], dict[str, str]] = (
+        field(default_factory=dict)
+    )
+    resolved_types: dict[
+        tuple[str, tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]], str
+    ] = field(default_factory=dict)
+
+
+@dataclass
+class _MetalTemplateMaterializationWorkBudget:
+    limit: int
+    limit_source: str
+    unit: ProjectTranslationUnit | None
+    source: str
+    target: str
+    pass_name: str = "implicit-template-materialization/type-environment"
+    used: int = 0
+
+    def consume(
+        self,
+        amount: int,
+        *,
+        offset: int = 0,
+        length: int = 0,
+        context: str = "type environment resolution",
+    ) -> None:
+        if amount <= 0:
+            return
+        self.used += amount
+        if self.used <= self.limit:
+            return
+
+        from crosstl.backend.Metal.preprocessor import MetalTemplateSpecializationError
+
+        location = (
+            _source_location_at_offset(self.unit, self.source, offset, max(length, 0))
+            if self.unit is not None
+            else None
+        )
+        requested_signature = (
+            f"{self.pass_name}: {self.used} work items for {context}"
+        )
+        suggested_action = (
+            "raise max_template_materialization_work for this source pattern "
+            "or backend, reduce implicit Metal template helper fan-out, or add "
+            "explicit template arguments"
+        )
+        location_text = (
+            f" Source context: {location.file}:{location.line}:{location.column}."
+            if location is not None
+            else ""
+        )
+        raise MetalTemplateSpecializationError(
+            "Metal template materialization work budget exceeded while "
+            f"running {self.pass_name} for target '{self.target}'; "
+            f"{self.used} work items requested, limit {self.limit} from "
+            f"{self.limit_source}.{location_text} "
+            f"Suggested action: {suggested_action}.",
+            limit=self.limit,
+            limit_source=self.limit_source,
+            unique_specialization_count=self.used,
+            requested_signature=requested_signature,
+            suggested_action=suggested_action,
+            source_location=location,
+        )
+
+
+def _metal_template_materialization_work_limit(
+    source_options: Mapping[str, Any],
+) -> int:
+    configured = source_options.get(METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION)
+    if configured is not None:
+        if isinstance(configured, bool):
+            return 0
+        try:
+            return max(0, operator.index(configured))
+        except (TypeError, ValueError):
+            return 0
+
+    template_limit = source_options.get(METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION)
+    try:
+        specialization_limit = operator.index(template_limit)
+    except (TypeError, ValueError):
+        specialization_limit = 512
+    return (
+        max(0, specialization_limit)
+        * METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_MULTIPLIER
+    )
+
+
+def _metal_template_materialization_work_limit_source(
+    source_options: Mapping[str, Any],
+) -> str:
+    configured_source = source_options.get(
+        METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION
+    )
+    if isinstance(configured_source, str) and configured_source:
+        return configured_source
+    if METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION in source_options:
+        return METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION
+
+    specialization_source = source_options.get(
+        METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION
+    )
+    if isinstance(specialization_source, str) and specialization_source:
+        return (
+            f"{specialization_source} x "
+            f"{METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_MULTIPLIER}"
+        )
+    return (
+        f"{METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION} x "
+        f"{METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_MULTIPLIER}"
+    )
+
+
 def _materialize_implicit_template_function_calls(
     *,
     preprocessor: Any,
     materialized: str,
     source_contexts: Sequence[_SourceInstantiationTemplateContext] = (),
+    unit: ProjectTranslationUnit | None = None,
+    target: str = "",
+    work_limit: int | None = None,
+    work_limit_source: str | None = None,
 ) -> _ImplicitTemplateMaterialization:
     templates = preprocessor._find_template_functions(materialized)
     templates_by_name: dict[str, Any] = {}
@@ -9295,6 +9458,23 @@ def _materialize_implicit_template_function_calls(
         template_spans,
         reachable_function_spans or [],
     )
+    type_cache = _MetalMaterializationTypeEnvironmentCache()
+    work_budget = (
+        _MetalTemplateMaterializationWorkBudget(
+            limit=work_limit,
+            limit_source=work_limit_source or "max_template_materialization_work",
+            unit=unit,
+            source=materialized,
+            target=target,
+            pass_name=(
+                "implicit-template-materialization/type-environment "
+                f"(templates={len(templates_by_name)}, "
+                f"functions={len(reachable_function_spans or [])})"
+            ),
+        )
+        if work_limit is not None and work_limit > 0
+        else None
+    )
     implicit_calls = _metal_find_implicit_template_function_calls(
         preprocessor,
         materialized,
@@ -9302,6 +9482,8 @@ def _materialize_implicit_template_function_calls(
         template_spans,
         reachable_function_spans,
         return_types,
+        type_cache=type_cache,
+        work_budget=work_budget,
     )
     context_by_materialized_name = {
         context.materialized_name: context for context in source_contexts
@@ -10017,6 +10199,10 @@ def _metal_local_using_alias(
     statement: str,
     aliases: Mapping[str, str],
     constants: Mapping[str, str],
+    *,
+    cache: _MetalMaterializationTypeEnvironmentCache | None = None,
+    work_budget: _MetalTemplateMaterializationWorkBudget | None = None,
+    offset: int = 0,
 ) -> tuple[str, str] | None:
     cleaned = _strip_metal_attribute_blocks(statement).strip().rstrip(";").strip()
     match = re.match(
@@ -10033,6 +10219,10 @@ def _metal_local_using_alias(
             match.group("type"),
             aliases=aliases,
             constants=constants,
+            cache=cache,
+            work_budget=work_budget,
+            offset=offset,
+            length=len(statement),
         ),
     )
 
@@ -10043,23 +10233,60 @@ def _metal_resolve_type_identifiers(
     *,
     aliases: Mapping[str, str],
     constants: Mapping[str, str],
+    cache: _MetalMaterializationTypeEnvironmentCache | None = None,
+    work_budget: _MetalTemplateMaterializationWorkBudget | None = None,
+    offset: int = 0,
+    length: int = 0,
 ) -> str:
     text = _normalize_metal_type_text(type_text)
+    aliases_key = tuple(
+        sorted((str(name), str(value)) for name, value in aliases.items())
+    )
+    constants_key = tuple(
+        sorted((str(name), str(value)) for name, value in constants.items())
+    )
+    cache_key = (text, aliases_key, constants_key)
+    if cache is not None:
+        cached = cache.resolved_types.get(cache_key)
+        if cached is not None:
+            return cached
+    if work_budget is not None:
+        work_budget.consume(
+            1,
+            offset=offset,
+            length=length,
+            context=f"resolving type '{text}'",
+        )
+    alias_pattern = (
+        re.compile(
+            r"\b(?:"
+            + "|".join(re.escape(name) for name, _value in aliases_key)
+            + r")\b"
+        )
+        if aliases_key
+        else None
+    )
+    alias_values = dict(aliases_key)
+    constant_pattern = (
+        re.compile(
+            r"\b(?:"
+            + "|".join(re.escape(name) for name, _value in constants_key)
+            + r")\b"
+        )
+        if constants_key
+        else None
+    )
+    constant_values = dict(constants_key)
     previous = None
     while previous != text:
         previous = text
-        for name, value in sorted(
-            aliases.items(),
-            key=lambda item: len(item[0]),
-            reverse=True,
-        ):
-            text = re.sub(rf"\b{re.escape(name)}\b", str(value), text)
-        for name, value in sorted(
-            constants.items(),
-            key=lambda item: len(item[0]),
-            reverse=True,
-        ):
-            text = re.sub(rf"\b{re.escape(name)}\b", str(value), text)
+        if alias_pattern is not None:
+            text = alias_pattern.sub(lambda match: alias_values[match.group(0)], text)
+        if constant_pattern is not None:
+            text = constant_pattern.sub(
+                lambda match: constant_values[match.group(0)],
+                text,
+            )
         if "<" in text and ">" in text:
             base, arguments = _metal_generic_type_parts(preprocessor, text)
             if arguments:
@@ -10069,7 +10296,10 @@ def _metal_resolve_type_identifiers(
                     for argument in arguments
                 ]
                 text = f"{base}<{','.join(resolved_arguments)}>"
-    return _normalize_metal_type_text(text)
+    resolved = _normalize_metal_type_text(text)
+    if cache is not None:
+        cache.resolved_types[cache_key] = resolved
+    return resolved
 
 
 def _metal_function_type_environment(
@@ -10077,7 +10307,25 @@ def _metal_function_type_environment(
     source: str,
     function: Any,
     return_types: Mapping[str, str],
+    *,
+    cache: _MetalMaterializationTypeEnvironmentCache | None = None,
+    work_budget: _MetalTemplateMaterializationWorkBudget | None = None,
 ) -> dict[str, str]:
+    return_type_key = tuple(
+        sorted((str(name), str(value)) for name, value in return_types.items())
+    )
+    cache_key = (int(function.span[0]), int(function.span[1]), return_type_key)
+    if cache is not None:
+        cached_environment = cache.environments.get(cache_key)
+        if cached_environment is not None:
+            return dict(cached_environment)
+    if work_budget is not None:
+        work_budget.consume(
+            1,
+            offset=int(function.span[0]),
+            length=max(int(function.span[1]) - int(function.span[0]), 0),
+            context=f"function '{function.name}'",
+        )
     environment: dict[str, str] = {}
     constants: dict[str, str] = {}
     aliases: dict[str, str] = {}
@@ -10091,6 +10339,10 @@ def _metal_function_type_environment(
             type_text,
             aliases=aliases,
             constants=constants,
+            cache=cache,
+            work_budget=work_budget,
+            offset=int(function.span[0]),
+            length=max(int(function.body_span[0]) - int(function.span[0]), 0),
         )
 
     body_start, body_end = function.body_span
@@ -10106,6 +10358,9 @@ def _metal_function_type_environment(
             statement,
             aliases,
             constants,
+            cache=cache,
+            work_budget=work_budget,
+            offset=start,
         )
         if alias is not None:
             name, type_text = alias
@@ -10124,7 +10379,13 @@ def _metal_function_type_environment(
                 type_text,
                 aliases=aliases,
                 constants=constants,
+                cache=cache,
+                work_budget=work_budget,
+                offset=start,
+                length=max(end - start, 0),
             )
+    if cache is not None:
+        cache.environments[cache_key] = dict(environment)
     return environment
 
 
@@ -11810,6 +12071,12 @@ def _project_template_materialization_for_artifact(
         base_preprocessor_kwargs["template_specialization_limit_source"] = (
             source_options["template_specialization_limit_source"]
         )
+    materialization_work_limit = _metal_template_materialization_work_limit(
+        source_options
+    )
+    materialization_work_limit_source = (
+        _metal_template_materialization_work_limit_source(source_options)
+    )
 
     try:
         discovery_preprocessor = MetalPreprocessor(
@@ -11957,7 +12224,7 @@ def _project_template_materialization_for_artifact(
             )
             suggested_action = (
                 "raise max_template_specializations for this source pattern "
-                "or OpenGL target, or reduce MLX/source template instantiations"
+                "or OpenGL target, or reduce source template instantiations"
             )
             raise MetalTemplateSpecializationError(
                 "OpenGL Metal template materialization work limit exceeded before "
@@ -12152,6 +12419,10 @@ def _project_template_materialization_for_artifact(
         preprocessor=preprocessor,
         materialized=materialized,
         source_contexts=source_instantiation_contexts,
+        unit=unit,
+        target=target,
+        work_limit=materialization_work_limit,
+        work_limit_source=materialization_work_limit_source,
     )
     materialized = implicit_materialization.text
     specializations.extend(implicit_materialization.specializations)
@@ -31623,57 +31894,64 @@ def _run_toolchain_smoke(
             continue
         if not artifact_path.is_file():
             continue
-        smoke_commands = _toolchain_smoke_commands(
-            target, tools, artifact_path, artifact=artifact
-        )
-        for command, check_kind in smoke_commands:
-            if not command or not shutil.which(command[0]):
-                continue
-            try:
-                stdin = (
-                    _toolchain_smoke_stdin(target, command, artifact_path)
-                    if "--stdin" in command
-                    else None
-                )
-                completed = subprocess.run(
-                    command,
-                    cwd=str(root),
-                    input=stdin,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=TOOLCHAIN_SMOKE_TIMEOUT_SECONDS,
-                )
-                returncode = completed.returncode
-                stdout = _toolchain_output_text(completed.stdout)
-                stderr = _toolchain_output_text(completed.stderr)
-            except subprocess.TimeoutExpired as exc:
-                returncode = TOOLCHAIN_TIMEOUT_RETURNCODE
-                stdout = _toolchain_output_text(getattr(exc, "stdout", None))
-                stderr = _toolchain_output_text(getattr(exc, "stderr", None))
-                timeout_message = (
-                    "Validation toolchain timed out after "
-                    f"{TOOLCHAIN_SMOKE_TIMEOUT_SECONDS} seconds."
-                )
-                stderr = f"{stderr.rstrip()}\n{timeout_message}".strip()
-            run = {
-                "source": str(artifact.get("source", "")),
-                "target": target,
-                "path": str(artifact["path"]),
-                "command": command,
-                "checkKind": check_kind,
-                "returncode": returncode,
-                "status": "ok" if returncode == 0 else "failed",
-                "stdout": stdout[-4000:],
-                "stderr": stderr[-4000:],
-            }
-            if _is_non_empty_string(artifact.get("sourceBackend")):
-                run["sourceBackend"] = artifact["sourceBackend"]
-            if _is_non_empty_string(artifact.get("stage")):
-                run["stage"] = artifact["stage"]
-            if artifact.get("variant") is not None:
-                run["variant"] = artifact["variant"]
-            runs.append(run)
+        with tempfile.TemporaryDirectory(prefix="crosstl-toolchain-") as temp_dir:
+            smoke_commands = _toolchain_smoke_commands(
+                target,
+                tools,
+                artifact_path,
+                artifact=artifact,
+                temp_dir=Path(temp_dir),
+            )
+            for command, check_kind in smoke_commands:
+                if not command or not shutil.which(command[0]):
+                    continue
+                try:
+                    stdin = (
+                        _toolchain_smoke_stdin(target, command, artifact_path)
+                        if "--stdin" in command
+                        else None
+                    )
+                    completed = subprocess.run(
+                        command,
+                        cwd=str(root),
+                        input=stdin,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=TOOLCHAIN_SMOKE_TIMEOUT_SECONDS,
+                    )
+                    returncode = completed.returncode
+                    stdout = _toolchain_output_text(completed.stdout)
+                    stderr = _toolchain_output_text(completed.stderr)
+                except subprocess.TimeoutExpired as exc:
+                    returncode = TOOLCHAIN_TIMEOUT_RETURNCODE
+                    stdout = _toolchain_output_text(getattr(exc, "stdout", None))
+                    stderr = _toolchain_output_text(getattr(exc, "stderr", None))
+                    timeout_message = (
+                        "Validation toolchain timed out after "
+                        f"{TOOLCHAIN_SMOKE_TIMEOUT_SECONDS} seconds."
+                    )
+                    stderr = f"{stderr.rstrip()}\n{timeout_message}".strip()
+                run = {
+                    "source": str(artifact.get("source", "")),
+                    "target": target,
+                    "path": str(artifact["path"]),
+                    "command": command,
+                    "checkKind": check_kind,
+                    "returncode": returncode,
+                    "status": "ok" if returncode == 0 else "failed",
+                    "stdout": stdout[-4000:],
+                    "stderr": stderr[-4000:],
+                }
+                if _is_non_empty_string(artifact.get("sourceBackend")):
+                    run["sourceBackend"] = artifact["sourceBackend"]
+                if _is_non_empty_string(artifact.get("stage")):
+                    run["stage"] = artifact["stage"]
+                if artifact.get("variant") is not None:
+                    run["variant"] = artifact["variant"]
+                runs.append(run)
+                if returncode != 0:
+                    break
     return runs
 
 
@@ -31683,6 +31961,7 @@ def _toolchain_smoke_commands(
     artifact_path: Path,
     *,
     artifact: Mapping[str, Any] | None = None,
+    temp_dir: Path | None = None,
 ) -> list[tuple[list[str], str]]:
     if target == "directx":
         return [
@@ -31698,6 +31977,12 @@ def _toolchain_smoke_commands(
             return [
                 ([tools[0], "--stdin", "-S", stage], "artifact") for stage in stages
             ]
+    if target == "vulkan" and artifact_path.suffix.lower() == ".spvasm":
+        return _vulkan_spirv_assembly_smoke_commands(
+            tools,
+            artifact_path,
+            temp_dir=temp_dir,
+        )
     smoke_command = _toolchain_smoke_command(
         target,
         tools,
@@ -31731,6 +32016,25 @@ def _toolchain_smoke_command(
     if availability_command is None:
         return None
     return list(availability_command), "tool-availability"
+
+
+def _vulkan_spirv_assembly_smoke_commands(
+    tools: Sequence[str], artifact_path: Path, *, temp_dir: Path | None = None
+) -> list[tuple[list[str], str]]:
+    if len(tools) < 2:
+        return []
+    validator = tools[0]
+    assembler = tools[1]
+    assembler_command = [assembler, str(artifact_path), "-o", os.devnull]
+    if not shutil.which(assembler) or not shutil.which(validator):
+        return [(assembler_command, "artifact")]
+    if temp_dir is None:
+        temp_dir = Path(tempfile.gettempdir())
+    output_path = temp_dir / f"{artifact_path.stem}.spv"
+    return [
+        ([assembler, str(artifact_path), "-o", str(output_path)], "artifact"),
+        ([validator, str(output_path)], "artifact"),
+    ]
 
 
 def _toolchain_smoke_stdin(target: str, command: Sequence[str], artifact_path: Path):

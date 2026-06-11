@@ -196,6 +196,7 @@ class VulkanSPIRVCodeGen:
         self.variable_value_types = {}
         self.value_types = {}
         self.constants = {}
+        self.constant_values_by_id = {}
         self.literal_int_constants = {}
         self.literal_scalar_constants = {}
         self.vector_constants = {}
@@ -702,6 +703,7 @@ class VulkanSPIRVCodeGen:
         spirv_id = SpirvId(id_value, type_id.type, f"{type_name}_{value}")
         self.value_types[id_value] = type_id
         self.constants[key] = spirv_id
+        self.constant_values_by_id[id_value] = value
         return spirv_id
 
     def spirv_constant_literal_text(
@@ -1468,6 +1470,47 @@ class VulkanSPIRVCodeGen:
         ) or self.type_contains_runtime_array(target_type):
             return None
 
+        source_vector = self.vector_type_info_from_type(source_type)
+        target_vector = self.vector_type_info_from_type(target_type)
+        source_members = self.current_struct_members.get(source_type.type.base_type)
+        target_members = self.current_struct_members.get(target_type.type.base_type)
+
+        if source_vector is not None and target_members is not None:
+            source_component_type, source_count = source_vector
+            if len(target_members) != source_count:
+                return None
+
+            values = []
+            for index, (target_member_type, _) in enumerate(target_members):
+                source_member = self.composite_extract(
+                    value_id, source_component_type, index
+                )
+                target_member = self.convert_value_to_type(
+                    source_member, target_member_type
+                )
+                if not self.value_has_type(target_member, target_member_type):
+                    return None
+                values.append(target_member)
+            return self.composite_construct(target_type, values)
+
+        if source_members is not None and target_vector is not None:
+            target_component_type, target_count = target_vector
+            if len(source_members) != target_count:
+                return None
+
+            values = []
+            for index, (source_member_type, _) in enumerate(source_members):
+                source_member = self.composite_extract(
+                    value_id, source_member_type, index
+                )
+                target_member = self.convert_value_to_type(
+                    source_member, target_component_type
+                )
+                if not self.value_has_type(target_member, target_component_type):
+                    return None
+                values.append(target_member)
+            return self.composite_construct(target_type, values)
+
         if not self.aggregate_types_are_layout_compatible(source_type, target_type):
             return None
 
@@ -1494,8 +1537,6 @@ class VulkanSPIRVCodeGen:
                 elements.append(target_element)
             return self.composite_construct(target_type, elements)
 
-        source_members = self.current_struct_members.get(source_type.type.base_type)
-        target_members = self.current_struct_members.get(target_type.type.base_type)
         if source_members is None or target_members is None:
             return None
         if len(source_members) != len(target_members):
@@ -1618,6 +1659,7 @@ class VulkanSPIRVCodeGen:
         """Create an access chain to a struct or array member."""
         id_value = self.get_id()
 
+        indices = [self.access_chain_index(index) for index in indices]
         index_list = " ".join([f"%{index.id}" for index in indices])
         self.emit(
             f"%{id_value} = OpAccessChain %{result_type.id} %{base_id.id} {index_list}"
@@ -1629,6 +1671,42 @@ class VulkanSPIRVCodeGen:
         ):
             self.mark_non_uniform_result(spirv_id)
         return spirv_id
+
+    def access_chain_index(self, index: SpirvId) -> SpirvId:
+        """Return an integer-typed value suitable for OpAccessChain indexes."""
+        index_type = self.registered_value_type(
+            index
+        ) or self.find_registered_type_by_base(index.type.base_type)
+        index_type_name = (
+            self.normalize_primitive_name(index_type.type.base_type)
+            if index_type is not None
+            else self.normalize_primitive_name(index.type.base_type)
+        )
+        if index_type_name in self.INTEGER_TYPE_NAMES:
+            return index
+
+        int_type = self.register_primitive_type("int")
+        coerced = self.coerce_scalar_constant_to_type(index, int_type)
+        if coerced.id != index.id:
+            return coerced
+
+        converted = self.convert_scalar_to_type(index, int_type)
+        converted_type = self.registered_value_type(
+            converted
+        ) or self.find_registered_type_by_base(converted.type.base_type)
+        converted_type_name = (
+            self.normalize_primitive_name(converted_type.type.base_type)
+            if converted_type is not None
+            else self.normalize_primitive_name(converted.type.base_type)
+        )
+        if converted_type_name in self.INTEGER_TYPE_NAMES:
+            return converted
+
+        self.emit(
+            "; WARNING: OpAccessChain index could not be converted to an integer; "
+            "using 0"
+        )
+        return self.register_constant(0, int_type)
 
     def composite_extract(
         self, composite: SpirvId, member_type: SpirvId, member_index: int
@@ -14857,9 +14935,7 @@ class VulkanSPIRVCodeGen:
         if source_metadata is None and source_storage_buffer_metadata is None:
             return False
 
-        declared_alias_type_name = self.storage_buffer_resource_type_name(
-            var_type_name
-        )
+        declared_alias_type_name = self.storage_buffer_resource_type_name(var_type_name)
         inferred_alias_type_name = self.storage_buffer_expression_type_name(
             initial_value
         )
@@ -14946,6 +15022,8 @@ class VulkanSPIRVCodeGen:
         initial_value = getattr(node, "initial_value", None)
         if storage_class == "Private" and initial_value is not None:
             initializer = self.process_constant_expression(initial_value, var_type)
+            if initializer is not None:
+                initializer = self.coerce_scalar_constant_to_type(initializer, var_type)
 
         if storage_class == "Input":
             var_id = self.global_interface_builtin_variable(node, "Input", var_type)
@@ -18509,11 +18587,9 @@ class VulkanSPIRVCodeGen:
         if type_info is not None and type_info.get("kind") == "storage_buffer_pointer":
             return True
 
-        return (
-            metadata.get("kind") == "structured_buffer"
-            and metadata.get("buffer_kind")
-            in {"StructuredBuffer", "RWStructuredBuffer", "StorageBufferPointer"}
-        )
+        return metadata.get("kind") == "structured_buffer" and metadata.get(
+            "buffer_kind"
+        ) in {"StructuredBuffer", "RWStructuredBuffer", "StorageBufferPointer"}
 
     def record_storage_buffer_pointer_offset_alias(
         self, source_pointer: SpirvId, alias_pointer: SpirvId, index: SpirvId
@@ -20005,6 +20081,34 @@ class VulkanSPIRVCodeGen:
         if value is not None and self.is_constant_instruction(value):
             return value
         return None
+
+    def coerce_scalar_constant_to_type(
+        self, value: SpirvId, target_type: SpirvId
+    ) -> SpirvId:
+        source_type = self.value_types.get(value.id)
+        if source_type is not None and source_type.id == target_type.id:
+            return value
+
+        literal_value = self.constant_values_by_id.get(value.id)
+        if literal_value is None or isinstance(literal_value, bool):
+            return value
+
+        target_type = self.ensure_registered_type(target_type)
+        target_type_name = self.normalize_primitive_name(target_type.type.base_type)
+        if target_type_name in {"float", "double"} and isinstance(
+            literal_value, (int, float)
+        ):
+            return self.register_constant(float(literal_value), target_type)
+        if (
+            target_type_name in self.INTEGER_TYPE_NAMES
+            and isinstance(literal_value, (int, float))
+            and float(literal_value).is_integer()
+        ):
+            int_value = int(literal_value)
+            if target_type_name in self.UNSIGNED_INTEGER_TYPES and int_value < 0:
+                return value
+            return self.register_constant(int_value, target_type)
+        return value
 
     def process_constant_struct_constructor(
         self, callee_name, expr, target_type: SpirvId
@@ -22225,6 +22329,7 @@ class VulkanSPIRVCodeGen:
             "SV_GROUPID": "gl_WorkGroupID",
             "SV_GROUPINDEX": "gl_LocalInvocationIndex",
             "SV_VERTEXID": "gl_VertexID",
+            "GL_VERTEXINDEX": "gl_VertexID",
             "SV_INSTANCEID": "gl_InstanceID",
             "SV_PRIMITIVEID": "gl_PrimitiveID",
             "SV_ISFRONTFACE": "gl_FrontFacing",

@@ -62,6 +62,18 @@ def spirv_result_ids_for_opcode(spv_code, opcode):
     return re.findall(rf"(%\d+) = {re.escape(opcode)}\b", spv_code)
 
 
+def assert_spirv_access_chain_indexes_are_integer(spv_code):
+    int_types = set(re.findall(r"(%\d+) = OpTypeInt \d+ [01]\b", spv_code))
+    result_types = {
+        result_id: result_type
+        for result_id, result_type in re.findall(r"(%\d+) = Op\w+ (%\d+)\b", spv_code)
+    }
+
+    for access_chain in re.findall(r"%\d+ = OpAccessChain %\d+ %\d+([^\n]*)", spv_code):
+        for index_id in access_chain.split():
+            assert result_types.get(index_id) in int_types
+
+
 def spirv_uint_constant_values(spv_code):
     uint_types = set(re.findall(r"(%\d+) = OpTypeInt 32 0\b", spv_code))
     return {
@@ -147,6 +159,38 @@ def assert_spirv_stores_use_matching_value_types(spv_code):
         actual_type = result_types.get(value_id)
         if expected_type is not None and actual_type is not None:
             assert actual_type == expected_type
+
+
+def assert_spirv_function_calls_use_declared_parameter_types(spv_code):
+    result_types = {
+        result_id: result_type
+        for result_id, result_type in re.findall(r"(%\d+) = Op\w+ (%\d+)\b", spv_code)
+    }
+    function_type_params = {
+        function_type: params.split()
+        for function_type, params in re.findall(
+            r"(%\d+) = OpTypeFunction %\d+(?: ([^\n]+))?", spv_code
+        )
+    }
+    function_declared_types = {
+        function_id: function_type
+        for function_id, function_type in re.findall(
+            r"(%\d+) = OpFunction %\d+ \w+ (%\d+)\b", spv_code
+        )
+    }
+
+    for callee_id, operand_text in re.findall(
+        r"OpFunctionCall %\d+ (%\d+)([^\n]*)", spv_code
+    ):
+        function_type = function_declared_types.get(callee_id)
+        if function_type is None:
+            continue
+
+        expected_types = function_type_params.get(function_type, [])
+        operands = operand_text.split()
+        assert len(operands) == len(expected_types)
+        for operand_id, expected_type in zip(operands, expected_types):
+            assert result_types.get(operand_id) == expected_type
 
 
 def spirv_named_parameters(spv_code, name, pointer_type=None):
@@ -399,7 +443,58 @@ class TestVulkanSPIRVCodeGen:
         assert "Could not find member xyz" not in spv_code
         assert "WARNING" not in spv_code
         assert len(re.findall(r"%\d+ = OpAccessChain %\d+ %\d+ %\d+", spv_code)) >= 2
+        assert_spirv_access_chain_indexes_are_integer(spv_code)
         assert re.search(r"%\d+ = OpVectorShuffle %\d+ %\d+ %\d+ 0 1 2", spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_vertex_index_array_access_uses_integer_access_chain_index(self, tmp_path):
+        source_code = """
+        shader VertexIndexArrayAccess {
+            vertex {
+                void main() {
+                    vec2 positions[3] = {
+                        vec2(0.0, -0.5),
+                        vec2(0.5, 0.5),
+                        vec2(-0.5, 0.5)
+                    };
+                    vec2 position = positions[gl_VertexIndex];
+                    gl_Position = vec4(position, 0.0, 1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        vertex_index = spirv_named_variable(
+            spv_code, "gl_VertexIndex", storage_class="Input"
+        )
+        assert f"OpDecorate {vertex_index} BuiltIn VertexIndex" in spv_code
+        assert "Unknown variable gl_VertexIndex" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_access_chain_indexes_are_integer(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_fallback_array_access_uses_integer_access_chain_index(self, tmp_path):
+        source_code = """
+        shader FallbackArrayIndex {
+            compute {
+                void main() {
+                    float values[2] = { 1.0, 2.0 };
+                    float value = values[missingIndex];
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "; WARNING: Unknown variable missingIndex" in spv_code
+        assert_spirv_access_chain_indexes_are_integer(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_compute_bool_input_lowers_to_uint_interface(self, tmp_path):
@@ -1860,6 +1955,46 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "WARNING" not in spv_code
 
+    def test_complex_helper_call_converts_vector_argument_to_parameter_struct(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ComplexHelperCall {
+            struct complex64_t {
+                float real;
+                float imag;
+            }
+
+            compute {
+                complex64_t passComplex(complex64_t value) {
+                    return value;
+                }
+
+                void main() {
+                    vec2 packed = vec2(1.0, 2.0);
+                    complex64_t result = passComplex(packed);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        complex_type = re.search(r"(%\d+) = OpTypeStruct %\d+ %\d+\b", spv_code)
+        assert complex_type is not None
+        complex_arg = re.search(
+            rf"(?P<arg>%\d+) = OpCompositeConstruct "
+            rf"{re.escape(complex_type.group(1))} %\d+ %\d+\n"
+            rf"%\d+ = OpFunctionCall {re.escape(complex_type.group(1))} %\d+ "
+            rf"(?P=arg)",
+            spv_code,
+        )
+        assert complex_arg is not None
+        assert_spirv_function_calls_use_declared_parameter_types(spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_generic_functions_specialize_concrete_calls(self):
         source_code = """
         shader GenericFunctionDiagnostic {
@@ -2152,6 +2287,63 @@ class TestVulkanSPIRVCodeGen:
             spv_code,
         )
         assert "WARNING" not in spv_code
+
+    def test_private_global_named_scalar_initializers_match_declared_types(
+        self, tmp_path
+    ):
+        source_code = """
+        const int THREAD_SCOPE_SYSTEM = 0;
+
+        shader PrivateGlobalNamedInitializers {
+            float thread_scope_system = THREAD_SCOPE_SYSTEM;
+            uint thread_scope_device = THREAD_SCOPE_SYSTEM;
+
+            compute {
+                void main() {
+                    memoryBarrier();
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0", spv_code)
+
+        assert float_type is not None
+        assert uint_type is not None
+
+        float_var = spirv_named_variable(
+            spv_code, "thread_scope_system", storage_class="Private"
+        )
+        uint_var = spirv_named_variable(
+            spv_code, "thread_scope_device", storage_class="Private"
+        )
+        float_initializer = re.search(
+            rf"{re.escape(float_var)} = OpVariable %\d+ Private (?P<init>%\d+)",
+            spv_code,
+        )
+        uint_initializer = re.search(
+            rf"{re.escape(uint_var)} = OpVariable %\d+ Private (?P<init>%\d+)",
+            spv_code,
+        )
+
+        assert float_initializer is not None
+        assert uint_initializer is not None
+        assert re.search(
+            rf"{re.escape(float_initializer.group('init'))} = OpConstant "
+            rf"{re.escape(float_type.group(1))} 0.0",
+            spv_code,
+        )
+        assert re.search(
+            rf"{re.escape(uint_initializer.group('init'))} = OpConstant "
+            rf"{re.escape(uint_type.group(1))} 0",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_compound_assignments_handle_member_and_precise_array_targets(self):
         source_code = """
