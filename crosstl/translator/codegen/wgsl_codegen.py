@@ -3830,6 +3830,12 @@ class WGSLCodeGen:
             return self.generate_texture_dimensions_call(args)
         if normalized_name == "imagesize":
             return self.generate_image_dimensions_call(args)
+        if self.is_projected_texture_function(normalized_name):
+            raise ValueError(
+                "WGSL target does not support projected texture operation "
+                f"{function_name}; divide projected coordinates explicitly before "
+                "sampling"
+            )
         if normalized_name == "texelfetch":
             return self.generate_texel_fetch_call(function_name, args)
         if normalized_name == "texelfetchoffset":
@@ -3842,6 +3848,11 @@ class WGSLCodeGen:
         raise ValueError(
             "WGSL target does not support CrossGL texture function "
             f"{function_name} yet"
+        )
+
+    def is_projected_texture_function(self, normalized_name):
+        return normalized_name.startswith("textureproj") or normalized_name.startswith(
+            "texturecompareproj"
         )
 
     def generate_texel_fetch_call(self, function_name, args):

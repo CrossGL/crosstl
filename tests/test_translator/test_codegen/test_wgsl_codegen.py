@@ -2434,6 +2434,33 @@ def test_wgsl_codegen_rejects_unsupported_resource_texture_constructs(shader, me
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+@pytest.mark.parametrize(
+    "call",
+    [
+        "textureProj(colorTex, vec3(uv, 1.0))",
+        "vec4(textureCompareProj(shadowTex, vec3(uv, 1.0), 0.5))",
+    ],
+)
+def test_wgsl_codegen_rejects_projected_texture_functions(call):
+    shader = f"""
+    shader WGSLProjectedTexture {{
+        sampler2D colorTex;
+        sampler2DShadow shadowTex;
+        fragment {{
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="WGSL target does not support projected texture operation",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_lowers_struct_texture_members_to_module_bindings():
     shader = """
     shader WGSLStructTextureResource {

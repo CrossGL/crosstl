@@ -2817,9 +2817,9 @@
         },
         "wgsl": {
           "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "notes": "WGSL has no projected texture sampling builtin; projected texture functions emit deterministic diagnostics instructing callers to divide projected coordinates explicitly before sampling.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_projected_texture_functions"
           ]
         }
       }
@@ -3523,9 +3523,12 @@
         },
         "wgsl": {
           "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "notes": "WGSL lowers supported LOD, gradient, offset, gather, query, and multisample texture forms while projected and WebGPU-unsupported variants emit deterministic diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_split_sampler_lod_grad_and_offset_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_projected_texture_functions",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_texture_gather_offsets",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_texture_query_lod"
           ]
         }
       }
