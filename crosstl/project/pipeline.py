@@ -31,6 +31,7 @@ REPORT_KIND = "crosstl-project-portability-report"
 REPORT_INSPECTION_KIND = "crosstl-project-report-inspection"
 RUNTIME_INTEGRATION_PLAN_KIND = "crosstl-runtime-integration-plan"
 RUNTIME_ARTIFACT_MANIFEST_KIND = "crosstl-runtime-artifact-manifest"
+RUNTIME_BINDING_MANIFEST_KIND = "crosstl-runtime-binding-manifest"
 RUNTIME_PACKAGE_KIND = "crosstl-runtime-package"
 RUNTIME_HOST_BINDING_PLAN_KIND = "crosstl-runtime-host-binding-plan"
 RUNTIME_PACKAGE_INSPECTION_KIND = "crosstl-runtime-package-inspection"
@@ -56,6 +57,7 @@ RUNTIME_LOADER_PLAN_CONTRACT = "runtime-loader-plan-v1"
 RUNTIME_LOADER_PLAN_CONTRACT_ISSUE = "https://github.com/CrossGL/compiler/issues/29"
 RUNTIME_INTEGRATION_PLAN_SCOPE = "metadata-only-runtime-integration-planning"
 RUNTIME_ARTIFACT_MANIFEST_SCOPE = "translated-artifact-runtime-consumption"
+RUNTIME_BINDING_MANIFEST_SCOPE = "runtime-binding-contract"
 RUNTIME_PACKAGE_SCOPE = "runtime-artifact-handoff-package"
 RUNTIME_HOST_BINDING_PLAN_SCOPE = "host-binding-planning"
 RUNTIME_PACKAGE_INSPECTION_SCOPE = "runtime-package-readiness-inspection"
@@ -80,6 +82,12 @@ RUNTIME_ARTIFACT_MANIFEST_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
     "runtime-framework-generation",
+)
+RUNTIME_BINDING_MANIFEST_NON_GOALS = (
+    "host-code-rewriting",
+    "device-execution",
+    "runtime-framework-generation",
+    "target-sdk-installation",
 )
 RUNTIME_PACKAGE_NON_GOALS = (
     "host-code-rewriting",
@@ -335,6 +343,62 @@ RUNTIME_ARTIFACT_MANIFEST_RUNTIME_PLAN_FIELDS = frozenset(
         "runtimeReferencesByPath",
         "compilerRequests",
         "actionCount",
+    )
+)
+RUNTIME_BINDING_MANIFEST_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourceReport",
+        "sourceReportHash",
+        "sourceRuntimeManifestHash",
+        "generatedAt",
+        "success",
+        "scope",
+        "nonGoals",
+        "project",
+        "summary",
+        "targets",
+        "entries",
+        "runtimePlan",
+        "diagnosticCounts",
+        "diagnostics",
+        "runtimeDiagnosticCounts",
+        "runtimeDiagnostics",
+    )
+)
+RUNTIME_BINDING_MANIFEST_TARGET_FIELDS = frozenset(
+    (
+        "targetBackend",
+        "artifactCount",
+        "entryCount",
+        "resourceBindingCount",
+        "scalarConstantCount",
+        "dispatchDimensionCount",
+        "artifacts",
+        "entries",
+    )
+)
+RUNTIME_BINDING_MANIFEST_ENTRY_FIELDS = frozenset(
+    (
+        "id",
+        "sourceFile",
+        "sourceBackend",
+        "targetBackend",
+        "variant",
+        "defines",
+        "artifactId",
+        "artifactPath",
+        "artifactHash",
+        "artifactSizeBytes",
+        "sourceProvenance",
+        "entryPoint",
+        "resourceBindings",
+        "bufferMutability",
+        "scalarConstants",
+        "dispatchDimensions",
+        "validation",
+        "diagnostics",
     )
 )
 RUNTIME_PACKAGE_FIELDS = frozenset(
@@ -12943,6 +13007,532 @@ def build_runtime_artifact_manifest(
             runtime_diagnostics
         ),
         "runtimeDiagnostics": runtime_diagnostics,
+    }
+
+
+def _runtime_binding_payload_hash(payload: Mapping[str, Any]) -> dict[str, str]:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return {
+        "algorithm": "sha256",
+        "value": hashlib.sha256(encoded).hexdigest(),
+    }
+
+
+def _runtime_binding_scalar_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        converted = _runtime_host_interface_json_value(value)
+        if isinstance(converted, str):
+            return _runtime_binding_scalar_value(converted)
+        return converted
+    stripped = value.strip()
+    lowered = stripped.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    try:
+        return int(stripped, 0)
+    except ValueError:
+        pass
+    try:
+        return float(stripped)
+    except ValueError:
+        return stripped
+
+
+def _runtime_binding_scalar_dtype_from_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    return "string"
+
+
+_RUNTIME_BINDING_SCALAR_TYPES = frozenset(
+    (
+        "bool",
+        "boolean",
+        "int",
+        "uint",
+        "unsigned int",
+        "short",
+        "ushort",
+        "long",
+        "ulong",
+        "float",
+        "half",
+        "double",
+        "i32",
+        "u32",
+        "f16",
+        "f32",
+        "f64",
+        "int32_t",
+        "uint32_t",
+        "size_t",
+    )
+)
+
+
+def _runtime_binding_is_scalar_type(type_name: str | None) -> bool:
+    if not isinstance(type_name, str):
+        return False
+    normalized = " ".join(type_name.strip().lower().split())
+    return normalized in _RUNTIME_BINDING_SCALAR_TYPES
+
+
+def _runtime_binding_define_constants(
+    artifact: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    constants = []
+    defines = artifact.get("defines")
+    if not isinstance(defines, Mapping):
+        return constants
+    for name, raw_value in sorted(defines.items()):
+        if not _is_non_empty_string(name):
+            continue
+        value = _runtime_binding_scalar_value(raw_value)
+        constants.append(
+            {
+                "name": str(name),
+                "kind": "project-define",
+                "dtype": _runtime_binding_scalar_dtype_from_value(value),
+                "value": value,
+                "required": False,
+                "source": "artifact.defines",
+            }
+        )
+    return constants
+
+
+def _runtime_binding_source_constant_payload(constant: Any) -> dict[str, Any] | None:
+    name = getattr(constant, "name", None)
+    if not _is_non_empty_string(name):
+        return None
+    dtype = _runtime_host_interface_type_name(getattr(constant, "const_type", None))
+    if not _runtime_binding_is_scalar_type(dtype):
+        return None
+    value = _runtime_binding_scalar_value(getattr(constant, "value", None))
+    payload = {
+        "name": str(name),
+        "kind": "source-constant",
+        "dtype": dtype,
+        "value": value,
+        "required": False,
+        "source": "source.constants",
+    }
+    constant_id = _runtime_host_interface_attribute_value(
+        constant, ("constant_id", "constantId", "id")
+    )
+    if constant_id is not None:
+        payload["id"] = constant_id
+    return payload
+
+
+def _runtime_binding_source_scalar_constants(
+    root_path: Path | None,
+    artifact: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    source = artifact.get("source")
+    source_backend = artifact.get("sourceBackend")
+    if not (
+        root_path is not None
+        and _is_non_empty_string(source)
+        and _is_report_identity_path(source)
+        and _is_non_empty_string(source_backend)
+    ):
+        return []
+
+    try:
+        register_default_sources()
+        parser_name = SOURCE_REGISTRY.resolve_name(str(source_backend))
+        source_spec = SOURCE_REGISTRY.get(parser_name)
+    except Exception:
+        return []
+
+    source_path = (root_path / str(source)).resolve()
+    if not _is_relative_to(source_path, root_path) or not source_path.is_file():
+        return []
+
+    try:
+        ast = source_spec.parse(
+            source_path.read_text(encoding="utf-8"),
+            file_path=str(source_path),
+        )
+    except Exception:
+        return []
+
+    constants = []
+    for constant in getattr(ast, "constants", []) or []:
+        payload = _runtime_binding_source_constant_payload(constant)
+        if payload is not None:
+            constants.append(payload)
+    return constants
+
+
+def _runtime_binding_scalar_constants(
+    root_path: Path | None,
+    artifact: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    constants = _runtime_binding_define_constants(artifact)
+    constants.extend(_runtime_binding_source_scalar_constants(root_path, artifact))
+    return constants
+
+
+def _runtime_binding_resource_mutability(binding: Mapping[str, Any]) -> str:
+    access = str(binding.get("access") or "").strip().lower().replace("-", "_")
+    if access in {"read_write", "readwrite", "rw"}:
+        return "read-write"
+    if access in {"write", "write_only", "writeonly"}:
+        return "write-only"
+    if access in {"read", "read_only", "readonly"}:
+        return "read-only"
+
+    kind = str(binding.get("kind") or "").strip().lower()
+    if kind in {"constant-buffer", "uniform", "texture", "sampler"}:
+        return "read-only"
+    type_name = str(binding.get("type") or "").strip().lower()
+    if "rwstructuredbuffer" in type_name or type_name.startswith("rwbuffer"):
+        return "read-write"
+    if "structuredbuffer" in type_name or type_name.startswith("buffer"):
+        return "read-only"
+    return "unknown"
+
+
+def _runtime_binding_resource_bindings(
+    artifact: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    bindings = []
+    for binding in _record_sequence(artifact.get("resourceBindings")):
+        if not isinstance(binding, Mapping):
+            continue
+        payload = dict(binding)
+        payload["mutability"] = _runtime_binding_resource_mutability(binding)
+        bindings.append(payload)
+    return bindings
+
+
+def _runtime_binding_buffer_mutability(
+    resource_bindings: Sequence[Mapping[str, Any]],
+) -> dict[str, list[str]]:
+    buckets = {
+        "readOnly": [],
+        "writeOnly": [],
+        "readWrite": [],
+        "unknown": [],
+    }
+    for index, binding in enumerate(resource_bindings):
+        binding_id = binding.get("id")
+        binding_label = (
+            str(binding_id) if _is_non_empty_string(binding_id) else str(index)
+        )
+        mutability = binding.get("mutability")
+        if mutability == "read-only":
+            buckets["readOnly"].append(binding_label)
+        elif mutability == "write-only":
+            buckets["writeOnly"].append(binding_label)
+        elif mutability == "read-write":
+            buckets["readWrite"].append(binding_label)
+        else:
+            buckets["unknown"].append(binding_label)
+    return buckets
+
+
+def _runtime_binding_dispatch_dimensions(
+    artifact: Mapping[str, Any],
+    entry_point: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    dispatch = artifact.get("dispatch")
+    dispatch = dispatch if isinstance(dispatch, Mapping) else {}
+    entry_name = entry_point.get("name") if isinstance(entry_point, Mapping) else None
+    workgroups = [
+        workgroup
+        for workgroup in _record_sequence(dispatch.get("workgroups"))
+        if isinstance(workgroup, Mapping)
+        and (
+            entry_name is None
+            or workgroup.get("entryPoint") == entry_name
+            or workgroup.get("entryPoint") is None
+        )
+    ]
+    workgroup = workgroups[0] if workgroups else {}
+    status = "available" if workgroup else dispatch.get("status", "unavailable")
+    return {
+        "status": status,
+        "entryPoint": entry_name,
+        "workgroupSize": (
+            list(workgroup.get("workgroupSize"))
+            if isinstance(workgroup.get("workgroupSize"), list)
+            else None
+        ),
+        "workgroupCount": None,
+        "globalSize": None,
+        "gridSize": None,
+        "source": workgroup.get("source"),
+        "executionConfig": (
+            dict(workgroup.get("executionConfig"))
+            if isinstance(workgroup.get("executionConfig"), Mapping)
+            else (
+                dict(entry_point.get("executionConfig"))
+                if isinstance(entry_point, Mapping)
+                and isinstance(entry_point.get("executionConfig"), Mapping)
+                else {}
+            )
+        ),
+    }
+
+
+def _runtime_binding_source_provenance(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "sourceHash": artifact.get("sourceHash"),
+        "sourceSizeBytes": artifact.get("sourceSizeBytes"),
+        "provenance": (
+            dict(artifact.get("provenance"))
+            if isinstance(artifact.get("provenance"), Mapping)
+            else {}
+        ),
+        "sourceMap": (
+            dict(artifact.get("sourceMap"))
+            if isinstance(artifact.get("sourceMap"), Mapping)
+            else None
+        ),
+        "sourceRemap": (
+            dict(artifact.get("sourceRemap"))
+            if isinstance(artifact.get("sourceRemap"), Mapping)
+            else None
+        ),
+    }
+
+
+def _runtime_binding_validation_payload(
+    artifact: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "artifact": (
+            dict(artifact.get("validation"))
+            if isinstance(artifact.get("validation"), Mapping)
+            else {}
+        ),
+        "toolchain": (
+            dict(artifact.get("toolchain"))
+            if isinstance(artifact.get("toolchain"), Mapping)
+            else {}
+        ),
+        "runtimeDataStatus": (
+            dict(artifact.get("runtimeDataStatus"))
+            if isinstance(artifact.get("runtimeDataStatus"), Mapping)
+            else {}
+        ),
+    }
+
+
+def _runtime_binding_manifest_entry_id(
+    artifact: Mapping[str, Any],
+    entry_point: Mapping[str, Any] | None,
+    index: int,
+) -> str:
+    artifact_id = artifact.get("id")
+    entry_name = entry_point.get("name") if isinstance(entry_point, Mapping) else None
+    return "|".join(
+        str(part)
+        for part in (
+            artifact_id if _is_non_empty_string(artifact_id) else "artifact",
+            "entry",
+            entry_name if _is_non_empty_string(entry_name) else "default",
+            index,
+        )
+    )
+
+
+def _runtime_binding_manifest_entries(
+    runtime_manifest: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    project = runtime_manifest.get("project")
+    root_path = None
+    if isinstance(project, Mapping) and _is_non_empty_string(project.get("root")):
+        root_path = Path(str(project["root"])).resolve()
+
+    entries = []
+    for artifact in _record_sequence(runtime_manifest.get("artifacts")):
+        if not isinstance(artifact, Mapping):
+            continue
+        entry_points = [
+            entry_point
+            for entry_point in _record_sequence(artifact.get("entryPoints"))
+            if isinstance(entry_point, Mapping)
+        ]
+        if not entry_points:
+            entry_points = [None]
+        resource_bindings = _runtime_binding_resource_bindings(artifact)
+        scalar_constants = _runtime_binding_scalar_constants(root_path, artifact)
+        for index, entry_point in enumerate(entry_points):
+            entries.append(
+                {
+                    "id": _runtime_binding_manifest_entry_id(
+                        artifact, entry_point, index
+                    ),
+                    "sourceFile": artifact.get("source"),
+                    "sourceBackend": artifact.get("sourceBackend"),
+                    "targetBackend": artifact.get("target"),
+                    "variant": artifact.get("variant"),
+                    "defines": (
+                        dict(artifact.get("defines"))
+                        if isinstance(artifact.get("defines"), Mapping)
+                        else {}
+                    ),
+                    "artifactId": artifact.get("id"),
+                    "artifactPath": artifact.get("path"),
+                    "artifactHash": artifact.get("hash"),
+                    "artifactSizeBytes": artifact.get("sizeBytes"),
+                    "sourceProvenance": _runtime_binding_source_provenance(artifact),
+                    "entryPoint": (
+                        dict(entry_point) if entry_point is not None else None
+                    ),
+                    "resourceBindings": [
+                        dict(binding) for binding in resource_bindings
+                    ],
+                    "bufferMutability": _runtime_binding_buffer_mutability(
+                        resource_bindings
+                    ),
+                    "scalarConstants": [
+                        dict(constant) for constant in scalar_constants
+                    ],
+                    "dispatchDimensions": _runtime_binding_dispatch_dimensions(
+                        artifact, entry_point
+                    ),
+                    "validation": _runtime_binding_validation_payload(artifact),
+                    "diagnostics": [
+                        dict(diagnostic)
+                        for diagnostic in _record_sequence(artifact.get("diagnostics"))
+                        if isinstance(diagnostic, Mapping)
+                    ],
+                }
+            )
+    return entries
+
+
+def _runtime_binding_manifest_summary(
+    runtime_manifest: Mapping[str, Any],
+    entries: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    targets = [
+        target
+        for target in _record_sequence(runtime_manifest.get("targets"))
+        if isinstance(target, Mapping)
+    ]
+    artifacts = [
+        artifact
+        for artifact in _record_sequence(runtime_manifest.get("artifacts"))
+        if isinstance(artifact, Mapping)
+    ]
+    return {
+        "targetCount": len(targets),
+        "artifactCount": len(artifacts),
+        "entryCount": len(entries),
+        "resourceBindingCount": sum(
+            len(_record_sequence(entry.get("resourceBindings"))) for entry in entries
+        ),
+        "scalarConstantCount": sum(
+            len(_record_sequence(entry.get("scalarConstants"))) for entry in entries
+        ),
+        "dispatchDimensionCount": sum(
+            1
+            for entry in entries
+            if isinstance(entry.get("dispatchDimensions"), Mapping)
+            and entry["dispatchDimensions"].get("status") == "available"
+        ),
+        "entriesBySource": _runtime_manifest_artifact_counter(entries, "sourceFile"),
+        "entriesByTarget": _runtime_manifest_artifact_counter(
+            entries, "targetBackend"
+        ),
+        "entriesByVariant": _runtime_manifest_artifact_counter(entries, "variant"),
+    }
+
+
+def _runtime_binding_manifest_target(
+    target: Mapping[str, Any],
+    entries: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    target_name = target.get("target")
+    target_entries = [
+        entry for entry in entries if entry.get("targetBackend") == target_name
+    ]
+    return {
+        "targetBackend": target_name,
+        "artifactCount": target.get("artifactCount", 0),
+        "entryCount": len(target_entries),
+        "resourceBindingCount": sum(
+            len(_record_sequence(entry.get("resourceBindings")))
+            for entry in target_entries
+        ),
+        "scalarConstantCount": sum(
+            len(_record_sequence(entry.get("scalarConstants")))
+            for entry in target_entries
+        ),
+        "dispatchDimensionCount": sum(
+            1
+            for entry in target_entries
+            if isinstance(entry.get("dispatchDimensions"), Mapping)
+            and entry["dispatchDimensions"].get("status") == "available"
+        ),
+        "artifacts": [
+            artifact
+            for artifact in _record_sequence(target.get("artifacts"))
+            if _is_non_empty_string(artifact)
+        ],
+        "entries": [
+            entry.get("id")
+            for entry in target_entries
+            if _is_non_empty_string(entry.get("id"))
+        ],
+    }
+
+
+def build_runtime_binding_manifest(
+    report_path: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Build a backend-neutral runtime binding manifest from a project report."""
+
+    runtime_manifest = build_runtime_artifact_manifest(report_path)
+    entries = _runtime_binding_manifest_entries(runtime_manifest)
+    targets = [
+        _runtime_binding_manifest_target(target, entries)
+        for target in _record_sequence(runtime_manifest.get("targets"))
+        if isinstance(target, Mapping)
+    ]
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_BINDING_MANIFEST_KIND,
+        "sourceReport": runtime_manifest.get("sourceReport"),
+        "sourceReportHash": runtime_manifest.get("sourceReportHash"),
+        "sourceRuntimeManifestHash": _runtime_binding_payload_hash(runtime_manifest),
+        "generatedAt": int(time.time()),
+        "success": bool(runtime_manifest.get("success")),
+        "scope": RUNTIME_BINDING_MANIFEST_SCOPE,
+        "nonGoals": list(RUNTIME_BINDING_MANIFEST_NON_GOALS),
+        "project": (
+            dict(runtime_manifest.get("project"))
+            if isinstance(runtime_manifest.get("project"), Mapping)
+            else {"targets": []}
+        ),
+        "summary": _runtime_binding_manifest_summary(runtime_manifest, entries),
+        "targets": targets,
+        "entries": entries,
+        "runtimePlan": (
+            dict(runtime_manifest.get("runtimePlan"))
+            if isinstance(runtime_manifest.get("runtimePlan"), Mapping)
+            else {}
+        ),
+        "diagnosticCounts": runtime_manifest.get("diagnosticCounts", {}),
+        "diagnostics": runtime_manifest.get("diagnostics", []),
+        "runtimeDiagnosticCounts": runtime_manifest.get(
+            "runtimeDiagnosticCounts", {}
+        ),
+        "runtimeDiagnostics": runtime_manifest.get("runtimeDiagnostics", []),
     }
 
 

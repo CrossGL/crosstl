@@ -20,6 +20,7 @@ from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.project import (
     build_runtime_artifact_manifest,
+    build_runtime_binding_manifest,
     build_runtime_host_integration_handoff,
     build_runtime_host_loader_scaffolds,
     build_runtime_loader_manifest,
@@ -330,6 +331,7 @@ def test_project_package_exposes_public_api_surface():
         "RuntimeValidationHook",
         "RuntimeVerificationError",
         "build_runtime_artifact_manifest",
+        "build_runtime_binding_manifest",
         "build_runtime_host_loader_scaffolds",
         "build_runtime_host_integration_handoff",
         "build_runtime_loader_manifest",
@@ -28684,6 +28686,166 @@ def test_project_cli_runtime_manifest_json_writes_output(tmp_path):
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["kind"] == project_pipeline.RUNTIME_ARTIFACT_MANIFEST_KIND
     assert payload["artifacts"][0]["path"] == "out/cgl/simple.cgl"
+
+
+def test_build_runtime_binding_manifest_from_project_report(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "bindings.cgl").write_text(
+        textwrap.dedent("""
+            shader RuntimeBindingShader {
+                const int TILE_SIZE = 8;
+
+                StructuredBuffer<float> values @set(0) @binding(0);
+                RWStructuredBuffer<float> outValues @set(0) @binding(1);
+
+                compute {
+                    layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+                    [numthreads(8, 1, 1)]
+                    void main() {
+                    }
+                }
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(repo, targets=["cgl"], output_dir="out", validate=True)
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    payload = build_runtime_binding_manifest(report_path)
+
+    assert set(payload) == project_pipeline.RUNTIME_BINDING_MANIFEST_FIELDS
+    assert payload["kind"] == project_pipeline.RUNTIME_BINDING_MANIFEST_KIND
+    assert payload["success"] is True
+    assert payload["scope"] == project_pipeline.RUNTIME_BINDING_MANIFEST_SCOPE
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_BINDING_MANIFEST_NON_GOALS
+    )
+    assert payload["sourceReport"] == str(report_path)
+    assert payload["sourceReportHash"]["algorithm"] == "sha256"
+    assert payload["sourceRuntimeManifestHash"]["algorithm"] == "sha256"
+    assert payload["summary"]["entryCount"] == 1
+    assert payload["summary"]["resourceBindingCount"] == 2
+    assert payload["summary"]["scalarConstantCount"] == 1
+    assert payload["summary"]["dispatchDimensionCount"] == 1
+    assert payload["summary"]["entriesBySource"] == {"bindings.cgl": 1}
+    assert payload["summary"]["entriesByTarget"] == {"cgl": 1}
+    assert len(payload["targets"]) == 1
+    assert set(payload["targets"][0]) == (
+        project_pipeline.RUNTIME_BINDING_MANIFEST_TARGET_FIELDS
+    )
+    assert payload["targets"][0]["targetBackend"] == "cgl"
+    assert payload["targets"][0]["entryCount"] == 1
+    assert payload["targets"][0]["resourceBindingCount"] == 2
+    assert payload["targets"][0]["scalarConstantCount"] == 1
+    assert payload["targets"][0]["dispatchDimensionCount"] == 1
+
+    assert len(payload["entries"]) == 1
+    entry = payload["entries"][0]
+    assert set(entry) == project_pipeline.RUNTIME_BINDING_MANIFEST_ENTRY_FIELDS
+    assert entry["sourceFile"] == "bindings.cgl"
+    assert entry["sourceBackend"] == "cgl"
+    assert entry["targetBackend"] == "cgl"
+    assert entry["artifactPath"] == "out/cgl/bindings.cgl"
+    assert entry["artifactHash"]["algorithm"] == "sha256"
+    assert entry["entryPoint"] == {
+        "name": "main",
+        "stage": "compute",
+        "executionConfig": {
+            "local_size_x": "8",
+            "local_size_y": "1",
+            "local_size_z": "1",
+            "numthreads": ["8", "1", "1"],
+        },
+    }
+    assert entry["scalarConstants"] == [
+        {
+            "name": "TILE_SIZE",
+            "kind": "source-constant",
+            "dtype": "int",
+            "value": 8,
+            "required": False,
+            "source": "source.constants",
+        }
+    ]
+    resources_by_name = {
+        binding["name"]: binding for binding in entry["resourceBindings"]
+    }
+    assert resources_by_name["values"]["binding"] == 0
+    assert resources_by_name["values"]["mutability"] == "read-only"
+    assert resources_by_name["outValues"]["binding"] == 1
+    assert resources_by_name["outValues"]["mutability"] == "read-write"
+    assert entry["bufferMutability"] == {
+        "readOnly": [resources_by_name["values"]["id"]],
+        "writeOnly": [],
+        "readWrite": [resources_by_name["outValues"]["id"]],
+        "unknown": [],
+    }
+    assert entry["dispatchDimensions"] == {
+        "status": "available",
+        "entryPoint": "main",
+        "workgroupSize": [8, 1, 1],
+        "workgroupCount": None,
+        "globalSize": None,
+        "gridSize": None,
+        "source": "entryPoint.executionConfig.numthreads",
+        "executionConfig": {
+            "local_size_x": "8",
+            "local_size_y": "1",
+            "local_size_z": "1",
+            "numthreads": ["8", "1", "1"],
+        },
+    }
+    assert entry["sourceProvenance"]["sourceHash"]["algorithm"] == "sha256"
+    assert entry["sourceProvenance"]["sourceRemap"]["path"] == (
+        "out/cgl/bindings.source-remap.json"
+    )
+    assert entry["validation"]["artifact"]["status"] == "ok"
+    assert entry["validation"]["runtimeDataStatus"]["dispatch"] == "available"
+    assert entry["diagnostics"] == []
+
+
+def test_translate_project_cli_writes_runtime_binding_manifest(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report_path = repo / "out" / "portability-report.json"
+    binding_manifest_path = repo / "out" / "runtime-bindings.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "translate-project",
+            str(repo),
+            "--target",
+            "cgl",
+            "--output-dir",
+            "out",
+            "--report",
+            str(report_path),
+            "--runtime-binding-manifest",
+            str(binding_manifest_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Wrote {report_path}" in result.stdout
+    assert f"Wrote {binding_manifest_path}" in result.stdout
+    payload = json.loads(binding_manifest_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == project_pipeline.RUNTIME_BINDING_MANIFEST_KIND
+    assert payload["sourceReport"] == str(report_path)
+    assert payload["summary"]["entryCount"] == 1
+    assert payload["entries"][0]["sourceFile"] == "simple.cgl"
+    assert payload["entries"][0]["targetBackend"] == "cgl"
+    assert payload["entries"][0]["artifactPath"] == "out/cgl/simple.cgl"
 
 
 def test_build_runtime_package_from_runtime_artifact_manifest(tmp_path):

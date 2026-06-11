@@ -363,6 +363,34 @@ produce diagnostic-only failed manifests. The manifest is a handoff contract;
 it does not generate runtime framework code, execute device code, or rewrite
 host application code.
 
+Build a backend-neutral runtime binding manifest for host integrations:
+
+.. code-block:: bash
+
+   python -m crosstl runtime-binding-manifest crosstl-out/portability-report.json \
+     --output crosstl-out/runtime-bindings.json
+
+``translate-project`` can write the same binding manifest beside the
+portability report in one run:
+
+.. code-block:: bash
+
+   python -m crosstl translate-project /path/to/repo \
+     --target cgl \
+     --output-dir crosstl-out \
+     --report crosstl-out/portability-report.json \
+     --runtime-binding-manifest crosstl-out/runtime-bindings.json
+
+Runtime binding manifests emit a ``crosstl-runtime-binding-manifest`` JSON
+document derived from the validated portability report and runtime artifact
+metadata. Each entry is backend-neutral and includes ``sourceFile``,
+``sourceBackend``, ``targetBackend``, ``artifactPath``, ``entryPoint``,
+``resourceBindings``, ``bufferMutability``, ``scalarConstants``,
+``dispatchDimensions``, ``sourceProvenance``, and ``validation``. Resource
+bindings include set/binding coordinates, access, and derived mutability.
+Dispatch dimensions record reflected workgroup size data when available while
+leaving workgroup, global, and grid counts unset for host code to provide.
+
 Build a deterministic runtime handoff package from a runtime artifact manifest:
 
 .. code-block:: bash
