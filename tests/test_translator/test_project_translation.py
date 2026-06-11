@@ -6707,6 +6707,69 @@ def test_translate_project_glsl_vertex_color_output_does_not_synthesize_position
     assert_directx_vertex_validates_if_available(directx, tmp_path)
 
 
+def test_translate_project_glsl_vertex_output_locations_match_fragment_inputs_directx(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "cube_vs.vert").write_text(
+        textwrap.dedent("""
+            #version 450
+            layout(location = 0) out vec4 texcoord;
+            layout(location = 1) out vec3 frag_pos;
+
+            void main() {
+                texcoord = vec4(1.0);
+                frag_pos = vec3(0.0);
+                gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (shader_dir / "cube_fs.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            layout(location = 0) in vec4 texcoord;
+            layout(location = 1) in vec3 frag_pos;
+            layout(location = 0) out vec4 outColor;
+
+            void main() {
+                outColor = texcoord + vec4(frag_pos, 1.0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu"]
+            targets = ["directx"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    vertex_directx = (
+        repo / "translated" / "directx" / "gpu" / "cube_vs.hlsl"
+    ).read_text(encoding="utf-8")
+    fragment_directx = (
+        repo / "translated" / "directx" / "gpu" / "cube_fs.hlsl"
+    ).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert "float4 texcoord: TEXCOORD0;" in vertex_directx
+    assert "float3 frag_pos: TEXCOORD1;" in vertex_directx
+    assert "float4 texcoord: TEXCOORD0;" in fragment_directx
+    assert "float3 frag_pos: TEXCOORD1;" in fragment_directx
+    assert ": location" not in vertex_directx
+    assert ": location" not in fragment_directx
+    assert_directx_vertex_validates_if_available(vertex_directx, tmp_path)
+
+
 def test_translate_project_lowers_glsl_vertex_index_to_metal_vertex_id(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
