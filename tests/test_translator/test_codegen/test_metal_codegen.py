@@ -143,6 +143,36 @@ def test_glsl_vertex_layout_locations_lower_to_metal_attributes(tmp_path):
             compile_with_metal_if_available(generated_code)
 
 
+def test_glsl_fragment_fragcoord_lowers_to_metal_position_input(tmp_path):
+    shader = """
+    #version 330 core
+    out vec4 fragColor;
+
+    void main() {
+        if (mod(gl_FragCoord.x, 2.0) < 1.0 ||
+            mod(gl_FragCoord.y, 2.0) < 1.0) {
+            discard;
+        }
+        fragColor = vec4(1.0);
+    }
+    """
+    shader_path = tmp_path / "noise.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "gl_FragCoord" not in generated_code
+    assert "float4 _crossglFragCoord [[position]]" in generated_code
+    assert "_crossglFragCoord.x" in generated_code
+    assert "_crossglFragCoord.y" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_resource_array_size_expression_function_calls_do_not_leak_ast_nodes():
     shader = """
     shader MetalResourceArrayExpressionSize {
