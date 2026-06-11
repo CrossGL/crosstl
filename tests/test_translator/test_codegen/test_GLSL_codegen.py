@@ -11090,6 +11090,32 @@ def test_generic_function_call_emits_concrete_specialization():
     assert "T::one" not in generated_code
 
 
+def test_generic_function_call_without_inferred_type_raises_diagnostic():
+    shader = """
+    shader GenericFunctionUninferred {
+        generic<T> fn zero() -> T {
+            return T::zero();
+        }
+
+        float use_zero() {
+            return zero();
+        }
+    }
+    """
+
+    with pytest.raises(ValueError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "cannot infer concrete template arguments for generic function 'zero'"
+        in str(exc_info.value)
+    )
+    assert (
+        getattr(exc_info.value, "project_diagnostic_code", None)
+        == "project.translate.opengl-template-type-unresolved"
+    )
+
+
 def test_generic_struct_concrete_constructor_and_member_access():
     shader = """
     shader GenericStructConcrete {

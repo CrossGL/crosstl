@@ -94,8 +94,10 @@ from .enum_utils import (
     generate_generic_enum_structs,
     generic_enum_specialized_fields,
     generic_enum_specialized_type_name,
+    generic_type_parts,
     infer_enum_constructor_type,
     sanitize_type_name,
+    substitute_generic_type_name,
 )
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
@@ -289,6 +291,13 @@ from .stage_utils import (
     should_emit_qualified_function,
     stage_matches,
 )
+
+
+class OpenGLTemplateTypeError(ValueError):
+    """Raised when OpenGL generation would emit an unresolved template type."""
+
+    project_diagnostic_code = "project.translate.opengl-template-type-unresolved"
+    missing_capabilities = ("template.specialization",)
 
 
 class GLSLCodeGen:
@@ -954,6 +963,8 @@ class GLSLCodeGen:
         self.generic_function_specializations = {}
         self.generic_function_specialized_names = {}
         self.current_generic_function_substitutions = {}
+        self.enforce_concrete_glsl_types = False
+        self.generic_type_parameter_names = set()
         self.structured_buffer_instance_members = {}
         self.structured_buffer_counter_members = {}
         self.structured_buffer_counter_instances = {}
@@ -2367,6 +2378,10 @@ class GLSLCodeGen:
         self.structured_buffer_counter_members = {}
         self.structured_buffer_counter_instances = {}
         self.glsl_buffer_block_struct_names = set()
+        self.enforce_concrete_glsl_types = False
+        self.generic_type_parameter_names = self.collect_generic_type_parameter_names(
+            ast
+        )
         structs = deduplicate_named_declarations(
             list(getattr(ast, "structs", []) or [])
             + collect_stage_local_structs(ast, target_stage),
@@ -2517,6 +2532,7 @@ class GLSLCodeGen:
             )
         )
         self.validate_global_resource_shadows(ast)
+        self.enforce_concrete_glsl_types = True
         code = ""
         preprocessors = getattr(ast, "preprocessors", []) or []
         version_line = None
@@ -3064,7 +3080,12 @@ class GLSLCodeGen:
             code += self.generate_cbuffers(ast, target_stage)
 
         combined_stage_entry_names = self.combined_stage_entry_names(ast, target_stage)
-        self.prepare_glsl_resource_function_specializations(ast)
+        previous_enforce_concrete_glsl_types = self.enforce_concrete_glsl_types
+        self.enforce_concrete_glsl_types = False
+        try:
+            self.prepare_glsl_resource_function_specializations(ast)
+        finally:
+            self.enforce_concrete_glsl_types = previous_enforce_concrete_glsl_types
 
         functions = getattr(ast, "functions", [])
         deferred_top_level_helpers_by_stage = (
@@ -3617,6 +3638,8 @@ class GLSLCodeGen:
     def glsl_dynamic_resource_call_info(self, func_name, args, aliases):
         callee = self.function_definitions.get(func_name)
         if callee is None:
+            return None
+        if generic_function_parameters(callee):
             return None
 
         params = list(getattr(callee, "parameters", getattr(callee, "params", [])))
@@ -10390,6 +10413,16 @@ class GLSLCodeGen:
             if specialized_func_name is not None:
                 func_name = specialized_func_name
                 callee = specialized_func_name
+            elif (
+                original_func_name
+                in getattr(self, "generic_function_definitions", {})
+                and getattr(self, "enforce_concrete_glsl_types", False)
+            ):
+                raise OpenGLTemplateTypeError(
+                    "OpenGL codegen cannot infer concrete template arguments "
+                    f"for generic function '{original_func_name}'; provide a "
+                    "concrete instantiation before GLSL generation"
+                )
 
             constructor = self.glsl_constructor_type(func_name)
             if constructor:
@@ -14947,6 +14980,15 @@ class GLSLCodeGen:
                 functions.append(node)
         return functions
 
+    def collect_generic_type_parameter_names(self, root):
+        names = set()
+        for node in self.walk_ast(root):
+            for param in getattr(node, "generic_params", []) or []:
+                name = getattr(param, "name", None)
+                if name:
+                    names.add(str(name))
+        return names
+
     def walk_ast(self, root):
         visited = set()
 
@@ -15847,6 +15889,12 @@ class GLSLCodeGen:
         else:
             vtype_str = str(vtype)
 
+        substitutions = getattr(self, "current_generic_function_substitutions", {}) or {}
+        if substitutions:
+            substituted_type = substitute_generic_type_name(vtype_str, substitutions)
+            if substituted_type != vtype_str:
+                return self.map_type(substituted_type)
+
         if self.is_ray_query_type_name(vtype_str):
             return "rayQueryEXT"
 
@@ -15873,7 +15921,81 @@ class GLSLCodeGen:
         if vtype_str in getattr(self, "enum_struct_type_names", set()):
             return vtype_str
 
+        unresolved_template_type = self.unresolved_template_placeholder_type(vtype_str)
+        if unresolved_template_type is not None:
+            raise OpenGLTemplateTypeError(
+                "OpenGL codegen cannot emit unresolved template type "
+                f"'{unresolved_template_type}' from '{vtype_str}'; "
+                "provide a concrete instantiation before GLSL generation"
+            )
+
         return self.type_mapping.get(vtype_str, vtype_str)
+
+    def unresolved_template_placeholder_type(self, type_name):
+        if not getattr(self, "enforce_concrete_glsl_types", False):
+            return None
+
+        type_text = str(type_name or "").strip()
+        if not type_text:
+            return None
+        base_type, _array_suffix = split_array_type_suffix(type_text)
+        base_type = base_type.strip().rstrip("*&").strip()
+        base_name, generic_args = generic_type_parts(base_type)
+        if generic_args:
+            for generic_arg in generic_args:
+                unresolved = self.unresolved_template_placeholder_type(generic_arg)
+                if unresolved is not None:
+                    return unresolved
+            return None
+
+        if self.is_known_glsl_type_name(base_name):
+            return None
+        if base_name in getattr(self, "generic_type_parameter_names", set()):
+            return base_name
+        if self.looks_like_template_placeholder_type(base_name):
+            return base_name
+        return None
+
+    def is_known_glsl_type_name(self, type_name):
+        if not type_name:
+            return True
+        if type_name in self.type_mapping or type_name in self.type_mapping.values():
+            return True
+        if self.canonical_resource_type(type_name) is not None:
+            return True
+        if type_name in getattr(self, "structs_by_name", {}):
+            return True
+        if type_name in getattr(self, "enum_type_names", set()):
+            return True
+        if type_name in getattr(self, "enum_struct_type_names", set()):
+            return True
+        if type_name in {
+            "void",
+            "bool",
+            "int",
+            "uint",
+            "float",
+            "double",
+            "sampler",
+            "atomic_uint",
+            "atomic_int",
+            "rayQueryEXT",
+        }:
+            return True
+        return False
+
+    def looks_like_template_placeholder_type(self, type_name):
+        if not isinstance(type_name, str) or not type_name:
+            return False
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", type_name):
+            return False
+        if re.fullmatch(r"[A-Z][A-Za-z0-9_]{0,2}", type_name):
+            return True
+        if re.fullmatch(r"[A-Z][A-Za-z0-9_]*T", type_name):
+            return True
+        if re.fullmatch(r"[A-Z][A-Z0-9_]*_T", type_name):
+            return True
+        return False
 
     def is_ray_query_type(self, vtype):
         if vtype is None:

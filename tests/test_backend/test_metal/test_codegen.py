@@ -3273,6 +3273,22 @@ def test_codegen_sanitizes_crossgl_keyword_generic_type_argument_from_tinygrad()
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_preserves_template_helper_generics_for_crossgl_specialization():
+    code = """
+    template <typename T, typename U>
+    METAL_FUNC T ceildiv(T N, U M) {
+        return (N + M - 1) / M;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "generic<T, U> T ceildiv(T N, U M)" in normalize(crossgl)
+    ast = parse_crossgl(crossgl)
+    function = ast.functions[0]
+    assert function.name == "ceildiv"
+    assert [param.name for param in function.generic_params] == ["T", "U"]
+
+
 def test_codegen_omits_global_constexpr_sampler_argument_for_roundtrip():
     code = """
     #include <metal_stdlib>

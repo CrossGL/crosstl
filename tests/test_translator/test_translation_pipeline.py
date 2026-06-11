@@ -400,6 +400,37 @@ def test_metal_xhalf_vectors_do_not_leak_to_opengl(tmp_path):
     assert "f16vec3" not in generated
 
 
+def test_metal_template_helper_specializes_to_concrete_opengl(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "template-helper.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template <typename T, typename U>
+        METAL_FUNC T ceildiv(T N, U M) {
+            T local = N;
+            return (local + M - 1) / M;
+        }
+
+        kernel void k(device uint* out [[buffer(0)]]) {
+            out[0] = ceildiv(4u, 2u);
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="opengl", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "uint ceildiv_uint_uint(uint N, uint M)" in generated
+    assert "uint local = N;" in generated
+    assert "ceildiv_uint_uint(4u, 2u)" in generated
+    assert not re.search(r"\b(?:T|U|IdxT)\b", generated)
+
+
 def test_metal_uint2_dispatch_id_promotes_to_directx_uint3(tmp_path):
     source_path = _write_source(
         tmp_path,
