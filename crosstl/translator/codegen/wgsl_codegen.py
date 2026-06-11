@@ -1391,11 +1391,8 @@ class WGSLCodeGen:
             mutable_keyword = "var" if stmt.is_mutable else "let"
             initializer = ""
             if stmt.initial_value is not None:
-                initializer = (
-                    " = "
-                    + self.generate_expression_for_target(
-                        stmt.initial_value, stmt.var_type
-                    )
+                initializer = " = " + self.generate_expression_for_target(
+                    stmt.initial_value, stmt.var_type
                 )
             variable_name = self.declare_local_identifier(stmt.name)
             line = (
@@ -1489,11 +1486,8 @@ class WGSLCodeGen:
         if isinstance(init, VariableNode):
             initializer = ""
             if init.initial_value is not None:
-                initializer = (
-                    " = "
-                    + self.generate_expression_for_target(
-                        init.initial_value, init.var_type
-                    )
+                initializer = " = " + self.generate_expression_for_target(
+                    init.initial_value, init.var_type
                 )
             variable_name = self.declare_local_identifier(init.name)
             line = (
@@ -1621,10 +1615,9 @@ class WGSLCodeGen:
             if resource_binding is not None:
                 return resource_binding["binding_name"]
             member_name = self.member_access_identifier_name(expr)
-            if (
-                isinstance(expr.object_expr, IdentifierNode)
-                and self.is_pointer_identifier(expr.object_expr.name)
-            ):
+            if isinstance(
+                expr.object_expr, IdentifierNode
+            ) and self.is_pointer_identifier(expr.object_expr.name):
                 pointer_name = self.identifier_name(expr.object_expr.name)
                 return f"(*{pointer_name}).{member_name}"
             return f"{self.generate_expression(expr.object_expr)}." f"{member_name}"
@@ -2731,9 +2724,11 @@ class WGSLCodeGen:
         ]
         module_names = [
             getattr(node, "name", "")
-            for node in list(constants)
-            + list(global_variables)
-            + list(stage_resource_parameters)
+            for node in (
+                list(constants)
+                + list(global_variables)
+                + list(stage_resource_parameters)
+            )
         ]
         module_scope_names = self.wgsl_identifier_map(
             type_names + function_names + module_names
@@ -3134,7 +3129,9 @@ class WGSLCodeGen:
         return self._module_identifier_names.get(name, self.safe_wgsl_identifier(name))
 
     def function_identifier_name(self, name):
-        return self._function_identifier_names.get(name, self.safe_wgsl_identifier(name))
+        return self._function_identifier_names.get(
+            name, self.safe_wgsl_identifier(name)
+        )
 
     def type_identifier_name(self, name):
         return self._type_identifier_names.get(name, self.safe_wgsl_identifier(name))
@@ -3146,9 +3143,9 @@ class WGSLCodeGen:
 
     def member_access_identifier_name(self, expr):
         object_type = self.array_element_type(self.expression_type(expr.object_expr))
-        if self.vector_component_type(object_type) is not None and self.is_vector_member(
-            expr.member
-        ):
+        if self.vector_component_type(
+            object_type
+        ) is not None and self.is_vector_member(expr.member):
             return expr.member
         struct_name = self.struct_type_name(object_type)
         if not struct_name:

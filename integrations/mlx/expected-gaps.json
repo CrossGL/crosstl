@@ -43,6 +43,12 @@
       "scope": "spirv-project-artifact-binding-state",
       "status": "open",
       "summary": "Reset SPIR-V resource binding allocation between project artifacts."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1160",
+      "scope": "spirv-multi-entry-template-artifact-bindings",
+      "status": "open",
+      "summary": "Isolate SPIR-V bindings for multi-entry Metal template artifacts."
     }
   ],
   "resolved_issues": [

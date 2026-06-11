@@ -1200,8 +1200,7 @@ def test_append_structured_buffer_arrays_use_sidecar_counter_arrays():
     assert (
         "appendValues[main_index_Args_index].data[atomicAdd("
         "appendValuesCounters[main_index_Args_index].counter[0], 1u)] = "
-        "int(main_value_Args_value);"
-        in generated
+        "int(main_value_Args_value);" in generated
     )
     assert "buffer_append" not in generated
 

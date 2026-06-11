@@ -108,8 +108,7 @@ def test_wgsl_codegen_narrows_vec4_assignment_to_vec3_with_swizzle():
 
     assert (
         "output.fragPosition = "
-        "(_Uniforms.matModel * vec4<f32>(input.vertexPosition, 1.0)).xyz;"
-        in generated
+        "(_Uniforms.matModel * vec4<f32>(input.vertexPosition, 1.0)).xyz;" in generated
     )
     assert "vec3<f32>((_Uniforms.matModel *" not in generated
 

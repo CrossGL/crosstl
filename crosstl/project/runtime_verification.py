@@ -901,8 +901,7 @@ class RuntimeParityExecutor(RuntimeExecutionAdapter):
             return RuntimeExecutorAvailability(
                 False,
                 reason=(
-                    "Runtime dependencies are unavailable: "
-                    + ", ".join(missing_labels)
+                    "Runtime dependencies are unavailable: " + ", ".join(missing_labels)
                 ),
                 details={
                     **self._adapter_details(request),

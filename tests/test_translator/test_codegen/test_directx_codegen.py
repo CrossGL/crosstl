@@ -1848,8 +1848,7 @@ def test_hlsl_stage_entry_buffer_pointer_params_promote_to_resources():
     assert "RWStructuredBuffer<float> B : register(u2);" in generated_code
     assert "RWStructuredBuffer<float> X : register(u3);" in generated_code
     assert (
-        "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)"
-        in generated_code
+        "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)" in generated_code
     )
     assert "float* A" not in generated_code
     assert "float* B" not in generated_code

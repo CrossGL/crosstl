@@ -430,8 +430,8 @@ def test_hip_bit_extract_kernel_body_survives_metal_and_spirv_targets(tmp_path):
     assert "d_output[i] = d_input[i] >> 8 & 15u;" in metal
 
     _assert_generated_output_is_usable(spirv)
-    assert 'OpEntryPoint GLCompute' in spirv
-    assert 'OpName %' in spirv and '"d_outputBuffer"' in spirv
+    assert "OpEntryPoint GLCompute" in spirv
+    assert "OpName %" in spirv and '"d_outputBuffer"' in spirv
     assert '"d_inputBuffer"' in spirv
     assert "OpLoopMerge" in spirv
     assert "OpShiftRightLogical" in spirv

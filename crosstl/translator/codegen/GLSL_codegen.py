@@ -7068,9 +7068,9 @@ class GLSLCodeGen:
                 return None
             if self.is_sampler_type(type_name):
                 return None
-            if self.is_structured_buffer_type(type_name) or self.is_constant_buffer_type(
+            if self.is_structured_buffer_type(
                 type_name
-            ):
+            ) or self.is_constant_buffer_type(type_name):
                 return None
             mapped_type = self.map_resource_type_with_format(
                 self.resource_base_type(type_name), param
@@ -7202,7 +7202,9 @@ class GLSLCodeGen:
         constant_struct_type = self.stage_entry_constant_struct_parameter_type(param)
         if constant_struct_type is not None:
             return constant_struct_type
-        storage_array_type = self.stage_entry_storage_array_structured_buffer_type(param)
+        storage_array_type = self.stage_entry_storage_array_structured_buffer_type(
+            param
+        )
         if storage_array_type is not None:
             return storage_array_type
         return self.stage_entry_metal_pointer_structured_buffer_type(param)

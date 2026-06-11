@@ -5844,10 +5844,7 @@ class SlangCodeGen:
                         declaration, param, param_type_name
                     )
                     params.append(
-                        declaration
-                        + self.semantic_suffix(
-                            semantic, shader_type
-                        )
+                        declaration + self.semantic_suffix(semantic, shader_type)
                     )
                     emitted_param_names.add(param.name)
             else:
@@ -5939,9 +5936,7 @@ class SlangCodeGen:
             local_name = hull_output_rewrite["local_name"]
             result += f"{self.indent()}{local_type} {local_name};\n"
         if fragment_output_rewrite is not None:
-            local_type = self.convert_type(
-                fragment_output_rewrite["return_type_name"]
-            )
+            local_type = self.convert_type(fragment_output_rewrite["return_type_name"])
             local_name = fragment_output_rewrite["local_name"]
             self.register_variable_type(
                 local_name,
@@ -5967,13 +5962,11 @@ class SlangCodeGen:
             result += f"{self.indent()}return {builtin_return_rewrite['local_name']};\n"
         if hull_output_rewrite is not None:
             result += f"{self.indent()}return {hull_output_rewrite['local_name']};\n"
-        if (
-            fragment_output_rewrite is not None
-            and not self.statement_body_terminates(body_statements)
+        if fragment_output_rewrite is not None and not self.statement_body_terminates(
+            body_statements
         ):
             result += (
-                f"{self.indent()}return "
-                f"{fragment_output_rewrite['local_name']};\n"
+                f"{self.indent()}return " f"{fragment_output_rewrite['local_name']};\n"
             )
 
         self.indent_level -= 1

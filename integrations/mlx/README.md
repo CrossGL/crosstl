@@ -70,6 +70,10 @@ The harness writes reports, generated artifacts, and command logs under
   `fence.metal` translates in single-source DirectX/Vulkan isolation, but fails
   in the reduced multi-source frontier batch with duplicate SPIR-V resource
   binding `set 0 binding 0`.
+- CrossGL/crosstl#1160 covers a single-source, multi-entry SPIR-V binding
+  collision: a Metal source with multiple materialized template entry kernels
+  can translate for DirectX/OpenGL while the Vulkan artifact fails with duplicate
+  SPIR-V resource binding `set 0 binding 0`.
 
 These gaps are translator work. Host runtime integration gaps should be handled
 in MLX-specific integration code or downstream runtime adapters, not hidden as

@@ -247,6 +247,7 @@ def test_preprocessor_materializes_signature_only_template_instantiation_entries
     assert "naive_unfold_transpose_Nd(" not in output
     assert "ConvParams<n>" not in output
 
+
 def test_preprocessor_materialized_numeric_specialization_preserves_member_names():
     code = """
     struct PackedScale {

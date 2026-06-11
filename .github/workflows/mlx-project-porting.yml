@@ -5,6 +5,7 @@ env:
   MLX_COMMIT: "968d264f2903d578e699c4452a4dbf48633921aa"
   PLAIN_TEMPLATE_HELPER_SCANNING_ISSUE: "https://github.com/CrossGL/crosstl/issues/1146"
   SPIRV_PROJECT_BINDING_STATE_ISSUE: "https://github.com/CrossGL/crosstl/issues/1155"
+  SPIRV_MULTI_ENTRY_TEMPLATE_BINDINGS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1160"
 
 on:
   push:

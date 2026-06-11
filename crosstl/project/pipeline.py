@@ -9098,9 +9098,10 @@ def _metal_find_implicit_template_function_calls(
     included = list(included_spans) if included_spans is not None else None
     known_return_types = dict(return_types or {})
     for function in functions:
-        if included is not None and preprocessor._containing_span(
-            function.span[0], included
-        ) is None:
+        if (
+            included is not None
+            and preprocessor._containing_span(function.span[0], included) is None
+        ):
             continue
         type_environment = _metal_function_type_environment(
             preprocessor,
@@ -9293,7 +9294,9 @@ def _materialize_implicit_template_function_calls(
             template = templates_by_name.get(function_name)
             if template is None:
                 continue
-            replacements.append((template.span[0], template.span[1], materialized_source))
+            replacements.append(
+                (template.span[0], template.span[1], materialized_source)
+            )
         materialized = preprocessor._apply_text_replacements(materialized, replacements)
     return _ImplicitTemplateMaterialization(
         text=materialized,
@@ -10210,7 +10213,15 @@ def _metal_expression_type(
                 )
                 for part in parts
             ]
-            for preferred in ("double", "float", "half", "ulong", "uint", "long", "int"):
+            for preferred in (
+                "double",
+                "float",
+                "half",
+                "ulong",
+                "uint",
+                "long",
+                "int",
+            ):
                 if preferred in inferred:
                     return preferred
             return next((item for item in inferred if item), None)
@@ -10323,9 +10334,12 @@ def _plain_template_helper_call_sites(
             continue
         if source[i].isalpha() or source[i] == "_":
             ident, consumed = preprocessor._read_identifier(source, i)
-            if ident not in templates_by_name or preprocessor._is_member_identifier_context(
-                source,
-                i,
+            if (
+                ident not in templates_by_name
+                or preprocessor._is_member_identifier_context(
+                    source,
+                    i,
+                )
             ):
                 i += consumed
                 continue
@@ -10543,7 +10557,9 @@ def _materialize_plain_template_helper_calls(
             )
             for function_name, call_arguments, span in calls:
                 candidate_templates = templates_by_name.get(function_name, [])
-                inferred_matches: list[tuple[Any, list[str], list[tuple[str, str, bool]]]] = []
+                inferred_matches: list[
+                    tuple[Any, list[str], list[tuple[str, str, bool]]]
+                ] = []
                 for template in candidate_templates:
                     arguments = _infer_plain_template_helper_arguments(
                         preprocessor,
@@ -10552,9 +10568,12 @@ def _materialize_plain_template_helper_calls(
                         type_environment,
                         return_types,
                     )
-                    if not arguments or not preprocessor._template_arguments_satisfy_parameters(
-                        template,
-                        arguments,
+                    if (
+                        not arguments
+                        or not preprocessor._template_arguments_satisfy_parameters(
+                            template,
+                            arguments,
+                        )
                     ):
                         continue
                     parameter_declarations = _metal_function_parameter_declarations(
@@ -10579,7 +10598,10 @@ def _materialize_plain_template_helper_calls(
                 materialized_name = materialized_names.get(key)
                 if materialized_name is None:
                     unique_count = len(materialized_names) + 1
-                    if len(materialized_names) >= preprocessor.max_template_specializations:
+                    if (
+                        len(materialized_names)
+                        >= preprocessor.max_template_specializations
+                    ):
                         from crosstl.backend.Metal.preprocessor import (
                             MetalTemplateSpecializationError,
                         )
@@ -10618,11 +10640,13 @@ def _materialize_plain_template_helper_calls(
                         materialized_names,
                     )
                     materialized_names[key] = materialized_name
-                    materialized = preprocessor._materialize_template_function_with_name(
-                        template,
-                        list(key[1]),
-                        materialized_name,
-                        host_name=None,
+                    materialized = (
+                        preprocessor._materialize_template_function_with_name(
+                            template,
+                            list(key[1]),
+                            materialized_name,
+                            host_name=None,
+                        )
                     )
                     if materialized:
                         new_materializations.append(materialized)
@@ -11052,9 +11076,7 @@ def _inline_metal_concrete_using_template_aliases(
         qualified_candidates = [
             alias
             for alias in aliases
-            if alias["name"] == ident
-            and alias["end"] <= i
-            and i < alias["scope_end"]
+            if alias["name"] == ident and alias["end"] <= i and i < alias["scope_end"]
         ]
         qualified = None
         if qualified_candidates and source[i + consumed : i + consumed + 2] == "::":
@@ -11292,9 +11314,7 @@ def _project_template_materialization_for_artifact(
         preprocessed
     )
     source_instantiation_contexts: list[_SourceInstantiationTemplateContext] = []
-    source_instantiation_materialized_names: dict[
-        tuple[str, tuple[str, ...]], str
-    ] = {}
+    source_instantiation_materialized_names: dict[tuple[str, tuple[str, ...]], str] = {}
     seen_source_instantiations: set[tuple[str, tuple[str, ...], str]] = set()
     seen_unsupported_source_instantiations: set[
         tuple[str, tuple[tuple[str, str], ...], str]
@@ -11849,9 +11869,7 @@ def _translation_failure_project_diagnostics(
             if isinstance(capabilities, str):
                 missing_capabilities = [capabilities]
             elif capabilities:
-                missing_capabilities = [
-                    str(capability) for capability in capabilities
-                ]
+                missing_capabilities = [str(capability) for capability in capabilities]
             else:
                 missing_capabilities = _translation_failure_missing_capabilities(
                     exc, target
@@ -11879,9 +11897,7 @@ def _translation_failure_project_diagnostics(
             target=target,
             source_backend=unit.source_backend,
             variant=variant,
-            missing_capabilities=_translation_failure_missing_capabilities(
-                exc, target
-            ),
+            missing_capabilities=_translation_failure_missing_capabilities(exc, target),
         )
     ]
 
@@ -13171,9 +13187,7 @@ def _artifact_provenance_message_suffix(artifact: Mapping[str, Any]) -> str:
     return f" ({', '.join(parts)})" if parts else ""
 
 
-def _placeholder_marker_missing_capabilities(
-    kind: str, target: str
-) -> list[str]:
+def _placeholder_marker_missing_capabilities(kind: str, target: str) -> list[str]:
     capabilities = [PLACEHOLDER_MISSING_CAPABILITY, kind]
     if target == "mojo" and kind == MOJO_RESOURCE_PLACEHOLDER_KIND:
         capabilities.append(MOJO_RESOURCE_PLACEHOLDER_CAPABILITY)

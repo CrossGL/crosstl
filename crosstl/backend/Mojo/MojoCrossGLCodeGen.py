@@ -524,7 +524,9 @@ class MojoToCrossGLConverter:
         return calls
 
     def mojo_enqueue_function_kernel_name(self, node):
-        if not isinstance(node, CallNode) or not isinstance(node.callee, ArrayAccessNode):
+        if not isinstance(node, CallNode) or not isinstance(
+            node.callee, ArrayAccessNode
+        ):
             return None
         callee_array = node.callee.array
         if not (
@@ -895,7 +897,9 @@ class MojoToCrossGLConverter:
             try:
                 if hasattr(func, "body") and func.body:
                     code += self.generate_function_body(func.body, indent + 1)
-                if named_result and self.needs_named_result_fallthrough_return(func.body):
+                if named_result and self.needs_named_result_fallthrough_return(
+                    func.body
+                ):
                     code += f"{indent_str}    return {named_result_name};\n"
             finally:
                 self.named_result_stack.pop()
@@ -1081,7 +1085,9 @@ class MojoToCrossGLConverter:
             else None
         )
         if node.vtype or inferred_type:
-            declaration_type = self.map_type(node.vtype) if node.vtype else inferred_type
+            declaration_type = (
+                self.map_type(node.vtype) if node.vtype else inferred_type
+            )
             declaration = f"{declaration_type} {name}"
         else:
             var_type = "var" if node.var_type == "var" else "let"
