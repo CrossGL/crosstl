@@ -41,6 +41,16 @@ from .generic_function_utils import (
 from .generic_function_utils import (
     reject_unsupported_generic_functions as reject_generic_functions_for_target,
 )
+from .generic_struct_utils import (
+    collect_generic_struct_definitions,
+    collect_generic_struct_specialization_member_types,
+    collect_generic_struct_specializations,
+    generate_generic_structs,
+    generate_struct_constructor_expression,
+    generic_struct_member_type_name,
+    generic_struct_specialized_fields,
+    generic_struct_specialized_type_name,
+)
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -165,6 +175,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     """Emit CUDA source from the shared CrossGL translator AST."""
 
     resource_diagnostic_backend = "CUDA"
+    struct_constructor_uses_braces = True
     query_return_index_binary_ops = {"+", "-", "*", "/", "%", "<<", ">>", "&", "|", "^"}
     synchronization_builtins = {
         "barrier",
@@ -218,6 +229,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.structs_by_name = {}
         self.struct_member_semantics = {}
         self.struct_member_image_accesses = {}
+        self.generic_struct_definitions = {}
+        self.generic_struct_specializations = {}
         self.function_return_types = {}
         self.helper_functions = {}
         self.query_resource_names = set()
@@ -239,6 +252,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.stage_builtin_aliases = {}
         self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
+        self.current_expression_expected_type = None
         self.builtin_map = {
             "gl_LocalInvocationID": "make_uint3(threadIdx.x, threadIdx.y, threadIdx.z)",
             "gl_LocalInvocationID.x": "threadIdx.x",
@@ -330,6 +344,23 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.struct_member_types,
             self.struct_member_image_accesses,
         ) = self.collect_struct_member_metadata(ast_node)
+        self.generic_struct_definitions = collect_generic_struct_definitions(
+            self.structs_by_name.values(),
+        )
+        self.generic_struct_specializations = collect_generic_struct_specializations(
+            ast_node,
+            self.generic_struct_definitions,
+            self.type_name_string,
+        )
+        self.struct_member_types.update(
+            self.generic_struct_definition_member_types(self.generic_struct_definitions)
+        )
+        self.struct_member_types.update(
+            collect_generic_struct_specialization_member_types(
+                self,
+                self.generic_struct_specializations,
+            )
+        )
         self.struct_member_semantics = {}
         self.function_return_types = self.collect_function_return_types(ast_node)
         self.generic_function_definitions = {}
@@ -347,6 +378,23 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 for func in generic_function_specializations.values()
             }
         )
+        additional_generic_struct_specializations = (
+            collect_generic_struct_specializations(
+                list(generic_function_specializations.values()),
+                self.generic_struct_definitions,
+                self.type_name_string,
+            )
+        )
+        if additional_generic_struct_specializations:
+            self.generic_struct_specializations.update(
+                additional_generic_struct_specializations
+            )
+            self.struct_member_types.update(
+                collect_generic_struct_specialization_member_types(
+                    self,
+                    additional_generic_struct_specializations,
+                )
+            )
         self.reject_unsupported_generic_functions(ast_node)
         self.helper_functions = {}
         self.query_metadata_aliases = {}
@@ -982,6 +1030,65 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if isinstance(struct, StructNode) and getattr(struct, "name", None)
         }
 
+    def generic_struct_definition_member_types(self, definitions):
+        member_types = {}
+        for name, definition in (definitions or {}).items():
+            member_types[name] = {
+                member.name: generic_struct_member_type_name(
+                    member,
+                    self.type_name_string,
+                )
+                for member in definition["members"]
+            }
+        return member_types
+
+    def ordered_generic_struct_specializations(self):
+        specializations = self.generic_struct_specializations or {}
+        if not specializations:
+            return {}
+
+        type_text_by_struct_name = {
+            specialization["struct_name"]: type_text
+            for type_text, specialization in specializations.items()
+        }
+        dependencies = {type_text: set() for type_text in specializations}
+        for type_text, specialization in specializations.items():
+            for _field_name, field_type in generic_struct_specialized_fields(
+                self.type_name_string,
+                specialization,
+            ):
+                dependency_name = generic_struct_specialized_type_name(
+                    self,
+                    field_type,
+                )
+                dependency_type = type_text_by_struct_name.get(dependency_name)
+                if dependency_type and dependency_type != type_text:
+                    dependencies[type_text].add(dependency_type)
+
+        ordered = {}
+        visiting = set()
+        visited = set()
+        type_order = {
+            type_text: index for index, type_text in enumerate(specializations)
+        }
+
+        def visit(type_text):
+            if type_text in visited or type_text in visiting:
+                return
+            visiting.add(type_text)
+            for dependency_type in sorted(
+                dependencies[type_text],
+                key=lambda item: type_order[item],
+            ):
+                visit(dependency_type)
+            visiting.remove(type_text)
+            visited.add(type_text)
+            ordered[type_text] = specializations[type_text]
+
+        for type_text in specializations:
+            visit(type_text)
+        return ordered
+
     def collect_struct_query_metadata_members(self, root):
         """Collect struct resource members that need embedded query sidecars."""
         has_resource_query = False
@@ -1026,7 +1133,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         structs = getattr(node, "structs", [])
         for struct in structs:
+            if getattr(struct, "name", None) in self.generic_struct_definitions:
+                continue
             self.visit(struct)
+            self.emit("")
+        generic_struct_code = generate_generic_structs(
+            self,
+            self.ordered_generic_struct_specializations(),
+        )
+        if generic_struct_code:
+            self.emit_generated_code(generic_struct_code)
             self.emit("")
 
         cbuffers = getattr(node, "cbuffers", [])
@@ -3077,6 +3193,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def visit_ConstructorNode(self, node):
         """Lower braced AST constructors to CUDA aggregate/value constructors."""
+        struct_constructor = generate_struct_constructor_expression(self, node)
+        if struct_constructor is not None:
+            return struct_constructor
+
         constructor_type = self.type_name_string(
             getattr(node, "constructor_type", None)
         )
@@ -6327,8 +6447,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return ""
         return self.visit(node)
 
-    def generate_expression_with_expected(self, node, _expected_type):
-        return self.generate_expression(node)
+    def generate_expression_with_expected(self, node, expected_type):
+        previous_expected_type = self.current_expression_expected_type
+        self.current_expression_expected_type = self.type_name_string(expected_type)
+        try:
+            return self.generate_expression(node)
+        finally:
+            self.current_expression_expected_type = previous_expected_type
 
     def visit_CaseNode(self, node):
         """Visit switch case/default label"""
@@ -6474,6 +6599,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         unsupported_type = self.cuda_unsupported_fp16_vector_type(crossgl_type)
         if unsupported_type is not None:
             self.raise_unsupported_cuda_fp16_vector_type(unsupported_type)
+
+        generic_struct_type = generic_struct_specialized_type_name(self, crossgl_type)
+        if generic_struct_type is not None:
+            return generic_struct_type
 
         geometry_stream_type = self.cuda_geometry_stream_mapped_type(crossgl_type)
         if geometry_stream_type is not None:
@@ -7420,7 +7549,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def struct_member_lookup_type(self, type_name):
         """Return the struct key after CUDA pointer/reference wrappers."""
-        return self.strip_cuda_indirect_type_qualifiers(type_name)
+        stripped = self.strip_cuda_indirect_type_qualifiers(type_name)
+        generic_struct_type = generic_struct_specialized_type_name(self, stripped)
+        if generic_struct_type is not None:
+            return generic_struct_type
+        return stripped
 
     def member_access_member_type(self, node):
         """Return the member type for ``object.field`` expressions."""

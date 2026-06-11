@@ -4097,10 +4097,10 @@
         },
         "cuda": {
           "status": "diagnostic",
-          "notes": "CUDA lowers non-generic helper functions, entry functions, calls, parameters, and returns. Generic functions emit deterministic diagnostics until CUDA monomorphization support is implemented.",
+          "notes": "CUDA lowers helper functions, entry functions, calls, parameters, returns, concrete generic helper specializations, and generic data-struct specializations. Generic enum payload signatures still remain diagnostic/known-leak coverage until CUDA has a concrete enum-payload ABI.",
           "evidence": [
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_function_conversion",
-            "tests/test_examples_contract.py::def test_generic_function_examples_report_backend_diagnostics"
+            "tests/test_examples_contract.py::def test_generic_function_examples_track_known_backend_generic_leaks"
           ]
         },
         "hip": {
@@ -4127,11 +4127,11 @@
           ]
         },
         "slang": {
-          "status": "diagnostic",
-          "notes": "Slang lowers non-generic helper functions, entry functions, calls, parameters, and returns. Generic functions emit deterministic diagnostics until Slang monomorphization support is implemented.",
+          "status": "supported",
+          "notes": "Slang lowers helper functions, entry functions, calls, parameters, returns, concrete generic helper specializations, generic enum payload specializations, and generic data-struct specializations without leaking unresolved template placeholders.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_local_functions_and_initialized_variables_emit",
-            "tests/test_examples_contract.py::def test_generic_function_examples_report_backend_diagnostics"
+            "tests/test_examples_contract.py::def test_primary_graphics_examples_with_stage_local_resources_translate"
           ]
         },
         "webgl": {

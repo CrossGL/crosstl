@@ -81,6 +81,7 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
     ("advanced/GenericPatternMatching.cgl", "hip"),
     ("advanced/GenericPatternMatching.cgl", "metal"),
     ("advanced/GenericPatternMatching.cgl", "opengl"),
+    ("advanced/GenericPatternMatching.cgl", "slang"),
     ("advanced/GenericPatternMatching.cgl", "webgl"),
     ("cross_platform/UniversalPBRShader.cgl", "directx"),
     ("cross_platform/UniversalPBRShader.cgl", "metal"),
@@ -110,8 +111,7 @@ GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES = (
 
 GENERIC_FUNCTION_KNOWN_LEAK_BACKEND_CASES = (
     ("advanced/GenericPatternMatching.cgl", "vulkan", "T::zero"),
-    ("advanced/GenericPatternMatching.cgl", "cuda", "Vec3<T>"),
-    ("advanced/GenericPatternMatching.cgl", "slang", "Vec3<T>"),
+    ("advanced/GenericPatternMatching.cgl", "cuda", "Result<Vec3<float>, MathError>"),
 )
 
 KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
@@ -291,6 +291,11 @@ def test_generic_function_examples_track_known_backend_generic_leaks(
     )
 
     assert expected_marker in generated
+    if backend == "cuda":
+        assert "Vec3<T>" not in generated
+        assert "Matrix3x3<T>" not in generated
+        assert "RenderState<T>" not in generated
+        assert re.search(r"\bT\b", generated) is None
 
 
 @pytest.mark.parametrize(

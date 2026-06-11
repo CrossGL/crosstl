@@ -22,10 +22,10 @@ implicitly supported.
 .. csv-table:: Backend inventory
    :header: "Backend", "Target aliases", "Target profiles", "Ext", "Target generator", "Source kind", "Native frontend", "Tests", "Test count", "Unsupported markers", "Docs source"
 
-   "DirectX / HLSL", "dx11, dx12, d3d11, d3d12", "directx-11, directx-12", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "native", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "1114", "292", "Microsoft Learn HLSL reference; HLSL specification project"
+   "DirectX / HLSL", "dx11, dx12, d3d11, d3d12", "directx-11, directx-12", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "native", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "1117", "297", "Microsoft Learn HLSL reference; HLSL specification project"
    "OpenGL / GLSL", "", "", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "native", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "1190", "186", "GLSL 4.60 specification; OpenGL registry"
-   "WebGL / GLSL ES", "webgl2, essl, glsl-es", "", ".webgl.glsl", "crosstl/translator/codegen/webgl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_webgl_codegen.py", "39", "38", "WebGL 2.0 specification; OpenGL ES Shading Language 3.00 specification"
-   "WebGPU / WGSL", "webgpu", "", ".wgsl", "crosstl/translator/codegen/wgsl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_wgsl_codegen.py", "103", "70", "WGSL specification; WebGPU specification"
+   "WebGL / GLSL ES", "webgl2, essl, glsl-es", "", ".webgl.glsl", "crosstl/translator/codegen/webgl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_webgl_codegen.py", "53", "46", "WebGL 2.0 specification; OpenGL ES Shading Language 3.00 specification"
+   "WebGPU / WGSL", "webgpu", "", ".wgsl", "crosstl/translator/codegen/wgsl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_wgsl_codegen.py", "160", "94", "WGSL specification; WebGPU specification"
    "Metal", "", "", ".metal", "crosstl/translator/codegen/metal_codegen.py", "native", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "1007", "499", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", "", "", ".spvasm", "crosstl/translator/codegen/SPIRV_codegen.py", "native", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "1016", "45", "SPIR-V unified grammar; Khronos SPIR-V headers"
    "CUDA", "", "", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "native", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "780", "194", "CUDA C++ programming guide"
@@ -39,15 +39,15 @@ implicitly supported.
 
    "DirectX / HLSL", "67", "0", "2", "0", "0", "0"
    "OpenGL / GLSL", "67", "0", "2", "0", "0", "0"
-   "WebGL / GLSL ES", "38", "0", "22", "9", "0", "0"
-   "WebGPU / WGSL", "42", "0", "20", "7", "0", "0"
+   "WebGL / GLSL ES", "39", "0", "13", "17", "0", "0"
+   "WebGPU / WGSL", "54", "1", "3", "11", "0", "0"
    "Metal", "66", "0", "3", "0", "0", "0"
    "Vulkan SPIR-V", "67", "0", "2", "0", "0", "0"
    "CUDA", "62", "0", "7", "0", "0", "0"
    "HIP", "62", "0", "7", "0", "0", "0"
    "Mojo", "64", "0", "5", "0", "0", "0"
    "Rust", "65", "0", "4", "0", "0", "0"
-   "Slang", "66", "0", "3", "0", "0", "0"
+   "Slang", "67", "0", "2", "0", "0", "0"
 
 Graphics Backend Focus
 ----------------------
@@ -131,44 +131,44 @@ Each category below uses the status codes from the legend.
 
    "Explicit and automatic resource bindings", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Constant/uniform buffers", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Structured/storage buffers", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Resource arrays", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Structured/storage buffers", "Y", "Y", "R", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Resource arrays", "Y", "Y", "D", "P", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Texture and sampler object model", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "GLSL buffer block lowering", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Resource memory qualifiers", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "GLSL buffer block lowering", "Y", "Y", "R", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Resource memory qualifiers", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: textures
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "WebGPU / WGSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
-   "Texture sampling", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Texture LOD, gradient, and offset operations", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Projected texture operations", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Texture gather operations", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Shadow compare texture operations", "Y", "Y", "D", "D", "Y", "Y", "D", "D", "Y", "Y", "Y"
-   "Texture query operations", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Texel fetch operations", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Multisample texture operations", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Texture sampling", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Texture LOD, gradient, and offset operations", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Projected texture operations", "Y", "Y", "D", "R", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Texture gather operations", "Y", "Y", "R", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Shadow compare texture operations", "Y", "Y", "D", "Y", "Y", "Y", "D", "D", "Y", "Y", "Y"
+   "Texture query operations", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Texel fetch operations", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Multisample texture operations", "Y", "Y", "R", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Advanced texture operations", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: images
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "WebGPU / WGSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
-   "Storage image load/store", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Image atomics", "Y", "Y", "D", "D", "Y", "Y", "D", "D", "Y", "Y", "Y"
-   "Multisample storage images", "D", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Storage image load/store", "Y", "Y", "R", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Image atomics", "Y", "Y", "R", "R", "Y", "Y", "D", "D", "Y", "Y", "Y"
+   "Multisample storage images", "D", "Y", "R", "R", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: language
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "WebGPU / WGSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
    "Struct declarations and construction", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Array declarations and access", "Y", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Function declarations and calls", "Y", "Y", "Y", "Y", "Y", "D", "D", "D", "D", "Y", "D"
+   "Array declarations and access", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Function declarations and calls", "Y", "Y", "Y", "Y", "Y", "D", "D", "D", "D", "Y", "Y"
    "Control flow", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Synchronization and memory barriers", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Wave/subgroup intrinsics", "Y", "Y", "R", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Match/pattern lowering", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Synchronization and memory barriers", "Y", "Y", "R", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Wave/subgroup intrinsics", "Y", "Y", "R", "R", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Match/pattern lowering", "Y", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Vector and matrix expressions", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Bitwise operations", "Y", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Bitwise operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: validation
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "WebGPU / WGSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
@@ -218,6 +218,7 @@ implementation work can be scoped accurately.
 .. csv-table:: Actionable backlog rows
    :header: "Backend", "Category", "Feature", "Status", "Current gap", "Next scope", "Notes"
 
+   "WebGPU / WGSL", "resources", "Resource arrays", "partial", "WGSL partially supports resource arrays by expanding fixed sampled texture arrays into individual module-scope texture/sampler bindings, including dynamic-index switch helpers for plain and explicit-LOD sampling plus selected function-call dispatch. Other resource-array forms remain diagnostic: sampler-only arrays, storage-image arrays, StructuredBuffer/RWStructuredBuffer arrays, arrays of resource-bearing structs, unsized sampled texture arrays, multisampled array texture resources, and resource-array parameters.", "", "WGSL partially supports resource arrays by expanding fixed sampled texture arrays into individual module-scope texture/sampler bindings, including dynamic-index switch helpers for plain and explicit-LOD sampling plus selected function-call dispatch. Other resource-array forms remain diagnostic: sampler-only arrays, storage-image arrays, StructuredBuffer/RWStructuredBuffer arrays, arrays of resource-bearing structs, unsized sampled texture arrays, multisampled array texture resources, and resource-array parameters."
 
 Documentation Sources
 ---------------------
