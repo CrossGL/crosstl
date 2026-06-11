@@ -366,20 +366,6 @@ class WGSLCodeGen:
         "uimagecube": "2d_array",
         "uimagecubearray": "2d_array",
     }
-    STORAGE_TEXTURE_DIMENSION_MAP = {
-        "image1d": "1d",
-        "image2d": "2d",
-        "image2darray": "2d_array",
-        "image3d": "3d",
-        "iimage1d": "1d",
-        "iimage2d": "2d",
-        "iimage2darray": "2d_array",
-        "iimage3d": "3d",
-        "uimage1d": "1d",
-        "uimage2d": "2d",
-        "uimage2darray": "2d_array",
-        "uimage3d": "3d",
-    }
     STORAGE_TEXTURE_DEFAULT_FORMATS = {
         "image1d": "rgba32float",
         "image2d": "rgba32float",
@@ -471,9 +457,49 @@ class WGSLCodeGen:
         "imagestore",
     }
     BARRIER_FUNCTION_NAMES = {
+        "allmemorybarrier",
+        "allmemorybarrierwithgroupsync",
         "barrier",
+        "devicememorybarrier",
+        "devicememorybarrierwithgroupsync",
+        "groupmemorybarrier",
         "groupmemorybarrierwithgroupsync",
+        "memorybarrier",
+        "memorybarrierbuffer",
+        "memorybarrierimage",
+        "memorybarriershared",
         "workgroupbarrier",
+    }
+    BARRIER_FUNCTION_INTRINSICS = {
+        "barrier": "workgroupBarrier",
+        "groupmemorybarrier": "workgroupBarrier",
+        "groupmemorybarrierwithgroupsync": "workgroupBarrier",
+        "memorybarrierbuffer": "storageBarrier",
+        "memorybarrierimage": "textureBarrier",
+        "memorybarriershared": "workgroupBarrier",
+        "workgroupbarrier": "workgroupBarrier",
+    }
+    BARRIER_FUNCTION_DIAGNOSTIC_REASONS = {
+        "allmemorybarrier": (
+            "WGSL has only workgroup-scoped synchronization builtins and no "
+            "single all-address-space barrier"
+        ),
+        "allmemorybarrierwithgroupsync": (
+            "WGSL has only workgroup-scoped synchronization builtins and no "
+            "single all-address-space barrier"
+        ),
+        "devicememorybarrier": (
+            "WGSL has no device-scope shader barrier; use an explicit "
+            "workgroup-scoped storageBarrier when that matches the algorithm"
+        ),
+        "devicememorybarrierwithgroupsync": (
+            "WGSL has no device-scope shader barrier; use an explicit "
+            "workgroup-scoped storageBarrier when that matches the algorithm"
+        ),
+        "memorybarrier": (
+            "WGSL has address-space-specific synchronization builtins; choose "
+            "workgroupBarrier, storageBarrier, or textureBarrier explicitly"
+        ),
     }
     WGSL_RESERVED_IDENTIFIERS = {
         "NULL",
@@ -662,6 +688,7 @@ class WGSLCodeGen:
         self._function_return_types_by_signature = {}
         self._current_expression_expected_type = None
         self._current_function_return_type = None
+        self._statement_expression_node = None
         self._identifier_scopes = []
         self._identifier_alias_scopes = []
         self._pointer_identifier_scopes = []
@@ -722,6 +749,7 @@ class WGSLCodeGen:
         self._function_return_types_by_signature = {}
         self._current_expression_expected_type = None
         self._current_function_return_type = None
+        self._statement_expression_node = None
         self._module_identifier_names = {}
         self._function_identifier_names = {}
         self._function_signature_identifier_names = {}
@@ -782,10 +810,12 @@ class WGSLCodeGen:
                 ),
             ]
         self._stage_interface_builtin_members = self.stage_interface_builtin_members(
-            ast, target_stage, {getattr(struct, "name", ""): struct for struct in structs}
+            ast,
+            target_stage,
+            {getattr(struct, "name", ""): struct for struct in structs},
         )
-        self._stage_interface_member_locations = (
-            self.stage_interface_member_locations(ast, target_stage, structs)
+        self._stage_interface_member_locations = self.stage_interface_member_locations(
+            ast, target_stage, structs
         )
         cbuffers = self._collect_cbuffers(ast, target_stage)
         global_variable_nodes = self._collect_global_variables(ast, target_stage)
@@ -1649,9 +1679,11 @@ class WGSLCodeGen:
 
         barrier_calls = self.function_barrier_call_names(function)
         if barrier_calls:
+            calls = ", ".join(sorted(set(barrier_calls)))
             raise ValueError(
-                "WGSL target does not support barrier() inside helper function "
-                f"{function.name} yet; keep barriers directly in compute entry points"
+                "WGSL target cannot lower synchronization builtin(s) inside "
+                f"helper function {function.name} yet; keep them directly in "
+                f"compute entry points: {calls}"
             )
 
     def direct_workgroup_size_references(self, function):
@@ -1676,9 +1708,23 @@ class WGSLCodeGen:
             if not isinstance(node, FunctionCallNode):
                 continue
             function_name = self.expression_name(node.function)
-            if self.semantic_key(function_name) in self.BARRIER_FUNCTION_NAMES:
+            normalized_name = self.semantic_key(function_name)
+            if (
+                normalized_name in self.BARRIER_FUNCTION_NAMES
+                and not self.is_user_defined_function_call(node, function_name)
+            ):
                 calls.append(function_name)
         return tuple(calls)
+
+    def is_user_defined_function_call(self, node, function_name, expected_type=None):
+        if not isinstance(node.function, IdentifierNode):
+            return False
+        return (
+            self.resolve_function_overload(
+                function_name, node.arguments, expected_type=expected_type
+            )
+            is not None
+        )
 
     def stage_direct_builtin_references(self, function):
         body = getattr(function, "body", None)
@@ -1732,7 +1778,9 @@ class WGSLCodeGen:
                 )
             attributes = self.wgsl_attributes(member.attributes, direction="generic")
             binding_kind, explicit_location = self.member_stage_binding(member)
-            builtin = self._stage_interface_builtin_members.get((node.name, member.name))
+            builtin = self._stage_interface_builtin_members.get(
+                (node.name, member.name)
+            )
             if builtin is not None:
                 attributes = f"@builtin({builtin})"
                 binding_kind = "builtin"
@@ -1752,9 +1800,7 @@ class WGSLCodeGen:
             base_location = (
                 implicit_location
                 if implicit_location is not None
-                else explicit_location
-                if binding_kind == "location"
-                else None
+                else explicit_location if binding_kind == "location" else None
             )
             if stage_array is not None and base_location is not None:
                 for index in range(stage_array["size"]):
@@ -2498,7 +2544,13 @@ class WGSLCodeGen:
         if isinstance(stmt, ExpressionStatementNode):
             if isinstance(stmt.expression, AssignmentNode):
                 return self.generate_assignment_statement(stmt.expression, indent)
-            return f"{pad}{self.generate_expression(stmt.expression)};"
+            previous_statement_expression = self._statement_expression_node
+            self._statement_expression_node = stmt.expression
+            try:
+                expression = self.generate_expression(stmt.expression)
+            finally:
+                self._statement_expression_node = previous_statement_expression
+            return f"{pad}{expression};"
         if isinstance(stmt, AssignmentNode):
             return self.generate_assignment_statement(stmt, indent)
         if isinstance(stmt, ReturnNode):
@@ -2635,13 +2687,13 @@ class WGSLCodeGen:
         )
 
     def generate_assignment_statement(self, node, indent):
-        stage_array_assignment = self.generate_stage_interface_array_assignment_statement(
-            node, indent
+        stage_array_assignment = (
+            self.generate_stage_interface_array_assignment_statement(node, indent)
         )
         if stage_array_assignment is not None:
             return stage_array_assignment
-        stage_matrix_assignment = self.generate_stage_interface_matrix_assignment_statement(
-            node, indent
+        stage_matrix_assignment = (
+            self.generate_stage_interface_matrix_assignment_statement(node, indent)
         )
         if stage_matrix_assignment is not None:
             return stage_matrix_assignment
@@ -2765,7 +2817,10 @@ class WGSLCodeGen:
         self, value_expression, value_type, component_index, component_count
     ):
         value_component_count = self.vector_component_count(value_type)
-        if value_component_count is not None and value_component_count >= component_count:
+        if (
+            value_component_count is not None
+            and value_component_count >= component_count
+        ):
             return f"({value_expression}).{'xyzw'[component_index]}"
         return value_expression
 
@@ -2936,10 +2991,9 @@ class WGSLCodeGen:
             if self.is_uniform_bool_member_access(expr):
                 access = f"{self.generate_expression(expr.object_expr)}.{member_name}"
                 return f"({access} != 0u)"
-            if (
-                isinstance(expr.object_expr, IdentifierNode)
-                and self.is_pointer_identifier(expr.object_expr.name)
-            ):
+            if isinstance(
+                expr.object_expr, IdentifierNode
+            ) and self.is_pointer_identifier(expr.object_expr.name):
                 pointer_name = self.identifier_name(expr.object_expr.name)
                 return f"(*{pointer_name}).{member_name}"
             return f"{self.generate_expression(expr.object_expr)}." f"{member_name}"
@@ -3051,7 +3105,12 @@ class WGSLCodeGen:
             return self.generate_image_load_call(node, function_name)
         if normalized_name == "imagestore":
             return self.generate_image_store_call(node, function_name)
-        if normalized_name in self.BARRIER_FUNCTION_NAMES:
+        if (
+            normalized_name in self.BARRIER_FUNCTION_NAMES
+            and not self.is_user_defined_function_call(
+                node, function_name, expected_type=expected_type
+            )
+        ):
             return self.generate_barrier_call(node, function_name)
         derivative_name = self.DERIVATIVE_FUNCTION_NAME_MAP.get(normalized_name)
         if derivative_name is not None:
@@ -3350,7 +3409,10 @@ class WGSLCodeGen:
         parameters = list(getattr(resolved_function, "parameters", []) or [])
         dynamic_texture_args = []
         for index, (argument, parameter) in enumerate(zip(node.arguments, parameters)):
-            if self.sampled_texture_type(getattr(parameter, "param_type", None)) is None:
+            if (
+                self.sampled_texture_type(getattr(parameter, "param_type", None))
+                is None
+            ):
                 continue
             array_info = self.sampled_texture_array_access(argument)
             if array_info is None:
@@ -3406,7 +3468,9 @@ class WGSLCodeGen:
             if info.get("kind") == "texture_sample":
                 helpers.append(self.generate_sampled_texture_array_sample_helper(info))
             else:
-                helpers.append(self.generate_sampled_texture_array_dispatch_helper(info))
+                helpers.append(
+                    self.generate_sampled_texture_array_dispatch_helper(info)
+                )
         return "\n\n".join(helpers)
 
     def generate_sampled_texture_array_sample_helper(self, info):
@@ -3556,7 +3620,7 @@ class WGSLCodeGen:
         if normalized_name == "texelfetch":
             return self.generate_texel_fetch_call(function_name, args)
         if normalized_name == "imagestore":
-            return self.generate_image_store_call(function_name, args)
+            return self.generate_image_store_call(node, function_name)
         raise ValueError(
             "WGSL target does not support CrossGL texture function "
             f"{function_name} yet"
@@ -4103,13 +4167,29 @@ class WGSLCodeGen:
     def generate_barrier_call(self, node, function_name):
         if node.arguments:
             raise ValueError(
-                f"WGSL target does not support arguments for barrier function {function_name}"
+                "WGSL synchronization builtin "
+                f"{function_name}() requires 0 argument(s), got {len(node.arguments)}"
+            )
+        if node is not self._statement_expression_node:
+            raise ValueError(
+                f"WGSL synchronization builtin {function_name}() is statement-only"
             )
         if self._current_stage_name != "compute":
             raise ValueError(
-                "WGSL target only supports barrier() inside compute stages"
+                "WGSL target only lowers synchronization builtin "
+                f"{function_name}() inside compute stages"
             )
-        return "workgroupBarrier()"
+        normalized_name = self.semantic_key(function_name)
+        diagnostic_reason = self.BARRIER_FUNCTION_DIAGNOSTIC_REASONS.get(
+            normalized_name
+        )
+        if diagnostic_reason is not None:
+            raise ValueError(
+                "WGSL target cannot lower synchronization builtin "
+                f"{function_name}(): {diagnostic_reason}"
+            )
+        intrinsic = self.BARRIER_FUNCTION_INTRINSICS[normalized_name]
+        return f"{intrinsic}()"
 
     def generate_constructor(self, node):
         if len(node.arguments) == 1:
@@ -5173,11 +5253,15 @@ class WGSLCodeGen:
         array_expr = expr.array_expr
         if not isinstance(array_expr, MemberAccessNode):
             return None
-        object_type = self.array_element_type(self.expression_type(array_expr.object_expr))
+        object_type = self.array_element_type(
+            self.expression_type(array_expr.object_expr)
+        )
         struct_name = self.struct_type_name(object_type)
         if struct_name is None:
             return None
-        member_info = self.stage_interface_array_member_info(struct_name, array_expr.member)
+        member_info = self.stage_interface_array_member_info(
+            struct_name, array_expr.member
+        )
         if member_info is None:
             return None
         return {
@@ -5800,7 +5884,9 @@ class WGSLCodeGen:
         struct_name = self.struct_type_name(object_type)
         if struct_name not in self._uniform_buffer_struct_names:
             return False
-        return self.is_bool_type(self._struct_member_types.get((struct_name, expr.member)))
+        return self.is_bool_type(
+            self._struct_member_types.get((struct_name, expr.member))
+        )
 
     def vector_shape(self, vtype):
         try:

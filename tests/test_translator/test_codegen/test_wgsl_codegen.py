@@ -2362,10 +2362,14 @@ def test_wgsl_codegen_covers_universal_pbr_full_translation():
 
     generated = WGSLCodeGen().generate(ast)
 
-    assert "fn fragment_main(input: FragmentInput) -> @location(0) vec4<f32>" in generated
+    assert (
+        "fn fragment_main(input: FragmentInput) -> @location(0) vec4<f32>" in generated
+    )
     assert "var shadow_maps_0: texture_2d<f32>;" in generated
     assert "fn calculateShadow_shadow_maps(" in generated
-    assert "var irradiance_map: texture_storage_2d_array<rgba16float, write>;" in generated
+    assert (
+        "var irradiance_map: texture_storage_2d_array<rgba16float, write>;" in generated
+    )
     assert "vec2<i32>(textureDimensions(irradiance_map))" in generated
     assert (
         "textureStore(irradiance_map, (vec3<i32>(coord, face_index)).xy, "
@@ -3071,6 +3075,119 @@ def test_wgsl_codegen_lowers_compute_barrier_to_workgroup_barrier():
     assert "barrier();" not in generated
 
 
+def test_wgsl_codegen_lowers_compute_synchronization_aliases():
+    shader = """
+    shader WGSLSynchronizationAliases {
+        compute {
+            layout(local_size_x = 4, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                barrier();
+                workgroupBarrier();
+                groupMemoryBarrierWithGroupSync();
+                groupMemoryBarrier();
+                memoryBarrierShared();
+                memoryBarrierBuffer();
+                memoryBarrierImage();
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert generated.count("workgroupBarrier();") == 5
+    assert generated.count("storageBarrier();") == 1
+    assert generated.count("textureBarrier();") == 1
+    assert "barrier();" not in generated
+    assert "groupMemoryBarrierWithGroupSync();" not in generated
+    assert "groupMemoryBarrier();" not in generated
+    assert "memoryBarrierShared();" not in generated
+    assert "memoryBarrierBuffer();" not in generated
+    assert "memoryBarrierImage();" not in generated
+
+
+@pytest.mark.parametrize(
+    "builtin, message",
+    [
+        ("memoryBarrier", "address-space-specific synchronization builtins"),
+        ("allMemoryBarrier", "no single all-address-space barrier"),
+        ("allMemoryBarrierWithGroupSync", "no single all-address-space barrier"),
+        ("deviceMemoryBarrier", "no device-scope shader barrier"),
+        ("deviceMemoryBarrierWithGroupSync", "no device-scope shader barrier"),
+    ],
+)
+def test_wgsl_codegen_reports_diagnostics_for_inexact_synchronization_aliases(
+    builtin, message
+):
+    shader = f"""
+    shader WGSLInexactSynchronizationAlias {{
+        compute {{
+            layout(local_size_x = 4, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                {builtin}();
+                return;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=rf"WGSL target cannot lower synchronization builtin {builtin}\(\): .*{message}",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_preserves_user_defined_synchronization_names():
+    shader = """
+    shader WGSLUserSynchronizationNames {
+        void barrier() {
+            return;
+        }
+        void memoryBarrier() {
+            return;
+        }
+        void memoryBarrierBuffer() {
+            return;
+        }
+        void memoryBarrierImage() {
+            return;
+        }
+        void allMemoryBarrier() {
+            return;
+        }
+        compute {
+            layout(local_size_x = 4, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                barrier();
+                memoryBarrier();
+                memoryBarrierBuffer();
+                memoryBarrierImage();
+                allMemoryBarrier();
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "fn barrier()" in generated
+    assert "fn memoryBarrier()" in generated
+    assert "fn memoryBarrierBuffer()" in generated
+    assert "fn memoryBarrierImage()" in generated
+    assert "fn allMemoryBarrier()" in generated
+    assert "barrier();" in generated
+    assert "memoryBarrier();" in generated
+    assert "memoryBarrierBuffer();" in generated
+    assert "memoryBarrierImage();" in generated
+    assert "allMemoryBarrier();" in generated
+    assert "workgroupBarrier();" not in generated
+    assert "storageBarrier();" not in generated
+    assert "textureBarrier();" not in generated
+
+
 def test_wgsl_codegen_lowers_prefix_increment_and_decrement_statements():
     shader = """
     shader WGSLPrefixUpdate {
@@ -3148,7 +3265,7 @@ def test_wgsl_codegen_rejects_barrier_outside_compute_stages():
     shader WGSLFragmentBarrier {
         fragment {
             vec4 main() @ gl_FragColor {
-                barrier();
+                memoryBarrierBuffer();
                 return vec4(1.0);
             }
         }
@@ -3157,7 +3274,58 @@ def test_wgsl_codegen_rejects_barrier_outside_compute_stages():
 
     with pytest.raises(
         ValueError,
-        match=r"WGSL target only supports barrier\(\) inside compute stages",
+        match=(
+            r"WGSL target only lowers synchronization builtin "
+            r"memoryBarrierBuffer\(\) inside compute stages"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_synchronization_builtin_arguments():
+    shader = """
+    shader WGSLSynchronizationBuiltinArguments {
+        compute {
+            void main() {
+                memoryBarrierBuffer(1);
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL synchronization builtin memoryBarrierBuffer\(\) "
+            r"requires 0 argument\(s\), got 1"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "bool ok = barrier();",
+        "if (memoryBarrierBuffer()) { return; }",
+    ],
+)
+def test_wgsl_codegen_rejects_synchronization_builtin_value_contexts(statement):
+    shader = f"""
+    shader WGSLSynchronizationValueContext {{
+        compute {{
+            void main() {{
+                {statement}
+                return;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"WGSL synchronization builtin .* is statement-only",
     ):
         WGSLCodeGen().generate(parse_shader(shader))
 
@@ -3237,6 +3405,7 @@ def test_wgsl_codegen_rejects_barriers_in_helpers_with_specific_diagnostic():
     shader WGSLHelperBarrier {
         void sync() {
             barrier();
+            memoryBarrierBuffer();
             return;
         }
         compute {
@@ -3251,8 +3420,9 @@ def test_wgsl_codegen_rejects_barriers_in_helpers_with_specific_diagnostic():
     with pytest.raises(
         ValueError,
         match=(
-            "WGSL target does not support barrier\\(\\) inside helper function "
-            "sync yet"
+            "WGSL target cannot lower synchronization builtin\\(s\\) inside "
+            "helper function sync yet; keep them directly in compute entry "
+            "points: barrier, memoryBarrierBuffer"
         ),
     ):
         WGSLCodeGen().generate(parse_shader(shader))
