@@ -8996,10 +8996,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return value
         if stage_node is None:
             return None
-        return (
-            stage_layout_entry_value(stage_node, "max_vertices", "out")
-            or stage_layout_entry_value(stage_node, "maxvertexcount", "out")
-        )
+        return stage_layout_entry_value(
+            stage_node, "max_vertices", "out"
+        ) or stage_layout_entry_value(stage_node, "maxvertexcount", "out")
 
     def hlsl_geometry_maxvertexcount_int_value(self, func, stage_node=None):
         return self.hlsl_int_literal_value(
