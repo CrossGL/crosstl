@@ -494,6 +494,153 @@ def test_translate_crossgl_to_webgl(tmp_path):
     assert "precision highp float;" in generated
 
 
+def test_webgl_array_declarations_and_access_emit_glsl_es_syntax():
+    shader = """
+    shader WebGLArrays {
+        vertex {
+            vec4 main(vec3 position @ POSITION) @ gl_Position {
+                float weights[3];
+                weights[0] = 0.25;
+                weights[1] = 0.50;
+                weights[2] = 1.00;
+                float offset = weights[1] + weights[2];
+                return vec4(position.x + offset, position.y, position.z, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "#version 300 es" in generated
+    assert "float weights[3];" in generated
+    assert "weights[0] = 0.25;" in generated
+    assert "float offset = (weights[1] + weights[2]);" in generated
+
+
+def test_webgl_bitwise_operations_emit_glsl_es_integer_operators():
+    shader = """
+    shader WebGLBitwise {
+        fragment {
+            vec4 main() @ gl_FragColor {
+                int flags = 3;
+                int masked = (flags & 1) | (flags ^ 2);
+                int shifted = masked << 1;
+                return vec4(float(shifted), 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "int masked = ((flags & 1) | (flags ^ 2));" in generated
+    assert "int shifted = (masked << 1);" in generated
+    assert "fragColor = vec4(float(shifted), 0.0, 0.0, 1.0);" in generated
+
+
+def test_webgl_control_flow_emits_if_for_while_and_continue():
+    shader = """
+    shader WebGLControlFlow {
+        fragment {
+            vec4 main() @ gl_FragColor {
+                float total = 0.0;
+                for (int i = 0; i < 3; i = i + 1) {
+                    if (i == 1) {
+                        continue;
+                    }
+                    total = total + float(i);
+                }
+                while (total < 3.0) {
+                    total = total + 1.0;
+                }
+                return vec4(total, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "for (int i = 0; (i < 3); i = (i + 1)) {" in generated
+    assert "if ((i == 1)) {" in generated
+    assert "continue;" in generated
+    assert "while ((total < 3.0)) {" in generated
+
+
+def test_webgl_function_declarations_and_calls_emit_glsl_es_helpers():
+    shader = """
+    shader WebGLFunctions {
+        float brighten(float value) {
+            return value + 0.25;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                float value = brighten(0.5);
+                return vec4(value, value, value, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "float brighten(float value) {" in generated
+    assert "return (value + 0.25);" in generated
+    assert "float value = brighten(0.5);" in generated
+
+
+def test_webgl_struct_declarations_and_construction_emit_glsl_es_members():
+    shader = """
+    shader WebGLStructs {
+        struct Material {
+            vec3 albedo;
+            float roughness;
+        };
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                Material material;
+                material.albedo = vec3(0.1, 0.2, 0.3);
+                material.roughness = 0.5;
+                return vec4(material.albedo * material.roughness, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "struct Material {" in generated
+    assert "vec3 albedo;" in generated
+    assert "Material material;" in generated
+    assert "material.albedo = vec3(0.1, 0.2, 0.3);" in generated
+    assert "fragColor = vec4((material.albedo * material.roughness), 1.0);" in generated
+
+
+def test_webgl_vector_and_matrix_expressions_emit_glsl_es_arithmetic():
+    shader = """
+    shader WebGLVectorMatrix {
+        vertex {
+            vec4 main(vec3 position @ POSITION) @ gl_Position {
+                mat4 transform = mat4(1.0);
+                vec4 local = vec4(position, 1.0);
+                vec4 projected = transform * local;
+                return projected + vec4(0.0, 0.0, 0.0, 0.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "mat4 transform = mat4(1.0);" in generated
+    assert "vec4 local = vec4(position, 1.0);" in generated
+    assert "vec4 projected = (transform * local);" in generated
+    assert "gl_Position = (projected + vec4(0.0, 0.0, 0.0, 0.0));" in generated
+
+
 def test_webgl_codegen_rejects_non_webgl_stages():
     shader = """
     shader WebGLNoCompute {
