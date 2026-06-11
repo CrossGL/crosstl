@@ -7357,6 +7357,106 @@ def _translation_failure_missing_capabilities(
     return ["batch.translation"]
 
 
+def _translation_source_location_value(location: Any, *names: str) -> Any:
+    if isinstance(location, Mapping):
+        for name in names:
+            if name in location:
+                return location[name]
+        return None
+
+    for name in names:
+        if hasattr(location, name):
+            return getattr(location, name)
+    return None
+
+
+def _translation_source_location_int(value: Any, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        converted = int(value)
+    except (TypeError, ValueError):
+        return default
+    return converted if converted >= 0 else default
+
+
+def _translation_source_location_file(value: Any, unit: ProjectTranslationUnit) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return unit.relative_path
+
+    normalized = value.strip().replace("\\", "/")
+    if PureWindowsPath(value).is_absolute() or PurePosixPath(normalized).is_absolute():
+        return unit.relative_path
+    if any(part in {"", ".", ".."} for part in PurePosixPath(normalized).parts):
+        return unit.relative_path
+    return normalized
+
+
+def _translation_failure_location(
+    exc: Exception, unit: ProjectTranslationUnit
+) -> SourceLocation:
+    source_location = getattr(exc, "source_location", None)
+    if isinstance(source_location, SourceLocation):
+        file_name = _translation_source_location_file(source_location.file, unit)
+        if file_name == source_location.file:
+            return source_location
+        return replace(source_location, file=file_name)
+    if source_location is None:
+        return SourceLocation(file=unit.relative_path)
+
+    file_name = _translation_source_location_file(
+        _translation_source_location_value(source_location, "file"), unit
+    )
+
+    line = max(
+        1,
+        _translation_source_location_int(
+            _translation_source_location_value(source_location, "line"), 1
+        ),
+    )
+    column = max(
+        1,
+        _translation_source_location_int(
+            _translation_source_location_value(source_location, "column"), 1
+        ),
+    )
+    end_line = max(
+        line,
+        _translation_source_location_int(
+            _translation_source_location_value(source_location, "end_line", "endLine"),
+            line,
+        ),
+    )
+    end_column = max(
+        1,
+        _translation_source_location_int(
+            _translation_source_location_value(
+                source_location, "end_column", "endColumn"
+            ),
+            column,
+        ),
+    )
+    return SourceLocation(
+        file=file_name,
+        line=line,
+        column=column,
+        offset=_translation_source_location_int(
+            _translation_source_location_value(source_location, "offset"), 0
+        ),
+        length=_translation_source_location_int(
+            _translation_source_location_value(source_location, "length"), 0
+        ),
+        end_line=end_line,
+        end_column=end_column,
+        end_offset=_translation_source_location_int(
+            _translation_source_location_value(
+                source_location, "end_offset", "endOffset"
+            ),
+            0,
+        ),
+    )
+
+
 def translate_project(
     config_or_root: ProjectConfig | str | os.PathLike[str],
     *,
@@ -7548,7 +7648,7 @@ def translate_project(
                             severity="error",
                             code=_translation_failure_code(exc, target),
                             message=failure_message,
-                            location=SourceLocation(file=unit.relative_path),
+                            location=_translation_failure_location(exc, unit),
                             target=target,
                             source_backend=unit.source_backend,
                             variant=variant,

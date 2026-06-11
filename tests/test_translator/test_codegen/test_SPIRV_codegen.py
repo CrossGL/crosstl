@@ -14185,6 +14185,85 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_stage_local_storage_buffer_overload_does_not_shadow_global_match(
+        self, tmp_path
+    ):
+        source_code = """
+        shader StorageBufferStageLocalOverload {
+            RWStructuredBuffer<float> values @binding(0);
+            StructuredBuffer<float> weights @binding(1);
+
+            float block_sort(
+                StructuredBuffer<float> data,
+                uint a,
+                uint b,
+                uint c,
+                uint d,
+                uint e,
+                uint f,
+                uint g,
+                uint h,
+                uint i,
+                uint j
+            ) {
+                return data.Load(a + b + c + d + e + f + g + h + i + j);
+            }
+
+            compute {
+                float block_sort(
+                    StructuredBuffer<float> data,
+                    uint a,
+                    uint b,
+                    uint c,
+                    uint d,
+                    uint e,
+                    uint f,
+                    uint g,
+                    uint h
+                ) {
+                    return data.Load(a + b + c + d + e + f + g + h);
+                }
+
+                void main() {
+                    float value = block_sort(
+                        weights,
+                        1u,
+                        0u,
+                        0u,
+                        0u,
+                        0u,
+                        0u,
+                        0u,
+                        0u,
+                        0u,
+                        0u
+                    );
+                    values.Store(0u, value);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        values_var = spirv_named_variable(spv_code, "values", storage_class="Uniform")
+        weights_var = spirv_named_variable(spv_code, "weights", storage_class="Uniform")
+
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(weights_var)} %\d+ %\d+", spv_code
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(values_var)} %\d+ %\d+", spv_code
+        )
+        assert "storage-buffer-function-overload" not in spv_code
+        assert "block_sort" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_structured_buffer_overloaded_helpers_resolve_by_buffer_type(
         self, tmp_path
     ):
