@@ -270,6 +270,7 @@ jobs:
             --case raylib-base-vertex \
             --case raylib-lighting-shader-pair \
             --case renderdoc-vktext-fragment \
+            --case rocm-examples-add-kernel \
             --case angle-simple-texture-2d \
             --case apple-modern-rendering-mesh-viewdir \
             --case arm-opengl-es-sdk-cube \
@@ -279,6 +280,7 @@ jobs:
             --case sascha-willems-vulkan-headless-compute \
             --case slang-hello-world-compute \
             --case spirv-cross-round-fragment \
+            --case spirv-tools-basic-src \
             --case vulkan-tools-cube \
             --case vulkan-samples-dynamic-line-grid \
             --target directx \
@@ -330,6 +332,7 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/raylib-lighting-shader-pair/crosstl-out/directx/lighting.vs.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/raylib-lighting-shader-pair/crosstl-out/directx/lighting.fs.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/renderdoc-vktext-fragment/crosstl-out/directx/vktext.hlsl PSMain ps_6_0
+          compile_hlsl demos/open-source-porting/cases/rocm-examples-add-kernel/crosstl-out/directx/main.hlsl CSMain cs_6_0
           compile_hlsl demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.vert.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.frag.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/apple-modern-rendering-mesh-viewdir/crosstl-out/directx/AAPLMeshRenderer.hlsl VSMain vs_6_0
@@ -342,6 +345,7 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/directx/headless.hlsl CSMain cs_6_0
           compile_hlsl demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/directx/hello-world.hlsl CSMain cs_6_0
           compile_hlsl demos/open-source-porting/cases/spirv-cross-round-fragment/crosstl-out/directx/round.hlsl PSMain ps_6_0
+          compile_hlsl demos/open-source-porting/cases/spirv-tools-basic-src/crosstl-out/directx/basic_src.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/vulkan-tools-cube/crosstl-out/directx/cube.vert.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/vulkan-tools-cube/crosstl-out/directx/cube.frag.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/vulkan-samples-dynamic-line-grid/crosstl-out/directx/grid.hlsl PSMain ps_6_0

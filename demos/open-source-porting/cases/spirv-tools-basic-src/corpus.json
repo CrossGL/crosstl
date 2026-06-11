@@ -7,7 +7,7 @@
       "id": "spirv-tools-basic-src",
       "path": "basic_src.spvasm",
       "sourceBackend": "vulkan",
-      "targets": ["cgl", "opengl", "metal", "vulkan"],
+      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
       "repository": "https://github.com/KhronosGroup/SPIRV-Tools",
       "commit": "199cb207b911501ddd76dcddf100a6e21c15ef23",
       "sourceUrl": "https://github.com/KhronosGroup/SPIRV-Tools/blob/199cb207b911501ddd76dcddf100a6e21c15ef23/test/diff/diff_files/basic_src.spvasm"
