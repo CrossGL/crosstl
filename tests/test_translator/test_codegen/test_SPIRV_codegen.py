@@ -24686,6 +24686,85 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    @pytest.mark.parametrize(
+        ("source_name", "source"),
+        [
+            (
+                "arange.metal",
+                """
+                #include <metal_stdlib>
+                using namespace metal;
+
+                kernel void arange_u64(
+                    constant const uint64_t& start [[buffer(0)]],
+                    constant const uint64_t& step [[buffer(1)]],
+                    device uint64_t* out [[buffer(2)]],
+                    uint index [[thread_position_in_grid]]
+                ) {
+                    out[index] = start + index * step;
+                }
+                """,
+            ),
+            (
+                "binary_two.metal",
+                """
+                #include <metal_stdlib>
+                using namespace metal;
+
+                inline ulong2 divmod_pair(ulong a, ulong b) {
+                    return ulong2(a / b, a % b);
+                }
+
+                kernel void binary_two_u64(
+                    device const ulong* a [[buffer(0)]],
+                    device const ulong* b [[buffer(1)]],
+                    device ulong* c [[buffer(2)]],
+                    device ulong* d [[buffer(3)]],
+                    uint index [[thread_position_in_grid]]
+                ) {
+                    auto out = divmod_pair(a[index], b[index]);
+                    c[index] = out[0];
+                    d[index] = out[1];
+                }
+                """,
+            ),
+            (
+                "ternary.metal",
+                """
+                #include <metal_stdlib>
+                using namespace metal;
+
+                kernel void ternary_u64(
+                    device const bool* a [[buffer(0)]],
+                    device const ulong* b [[buffer(1)]],
+                    device const ulong* c [[buffer(2)]],
+                    device ulong* d [[buffer(3)]],
+                    constant uint& size [[buffer(4)]],
+                    uint index [[thread_position_in_grid]]
+                ) {
+                    uint i = 0;
+                    auto bidx = size > 0 ? 0 : index + i;
+                    auto cidx = size > 1 ? 0 : index + i;
+                    d[index + i] = a[index + i] ? b[bidx] : c[cidx];
+                }
+                """,
+            ),
+        ],
+    )
+    def test_mlx_reduced_frontier_metal_access_chain_regressions_validate(
+        self, tmp_path, source_name, source
+    ):
+        source_path = tmp_path / source_name
+        source_path.write_text(source, encoding="utf-8")
+
+        spv_code = crosstl.translate(
+            str(source_path), backend="vulkan", format_output=False
+        )
+
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_mlx_random_for_in_over_fixed_array_row_validates(self, tmp_path):
         source_code = """
         shader MLXRandomForInArrayRow {
