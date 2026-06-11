@@ -13880,7 +13880,9 @@ def test_glsl_fragment_subgroup_builtins_emit_metal_diagnostics(tmp_path):
 
     assert "fragment uint4 fragment_main()" in generated
     assert "unsupported Metal GLSL subgroup builtin: gl_SubgroupSize" in generated
-    assert "unsupported Metal GLSL subgroup builtin: gl_SubgroupInvocationID" in generated
+    assert (
+        "unsupported Metal GLSL subgroup builtin: gl_SubgroupInvocationID" in generated
+    )
     assert "requires compute-stage threads_per_simdgroup value" in generated
     assert "requires compute-stage thread_index_in_simdgroup value" in generated
     assert "[[threads_per_simdgroup]]" not in generated
