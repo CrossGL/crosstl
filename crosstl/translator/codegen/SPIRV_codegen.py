@@ -12229,13 +12229,11 @@ class VulkanSPIRVCodeGen:
         if param_type is None:
             return None
 
-        type_name = self.type_name_from_value(param_type)
-        if self.pointer_pointee_type_name_from_string(type_name) is not None:
-            return type_name
-        if self.is_structured_buffer_declared_type_name(type_name):
+        type_name = self.storage_buffer_resource_type_name(param_type)
+        if type_name is not None:
             return type_name
         if self.has_attribute(param, "glsl_buffer_block"):
-            return type_name
+            return self.type_name_from_value(param_type)
         return None
 
     def storage_buffer_expression_type_name(self, expr) -> Optional[str]:
@@ -12258,7 +12256,10 @@ class VulkanSPIRVCodeGen:
         metadata = self.structured_buffer_metadata_for_pointer(pointer)
         if metadata is None:
             return None
-        return metadata.get("declared_type_name")
+        declared_type_name = self.storage_buffer_resource_type_name(
+            metadata.get("declared_type_name")
+        )
+        return declared_type_name or metadata.get("declared_type_name")
 
     def source_storage_buffer_expression_type_name(self, expr) -> Optional[str]:
         if isinstance(expr, (IdentifierNode, VariableNode, str)):
@@ -12270,27 +12271,84 @@ class VulkanSPIRVCodeGen:
             ) or self.source_variable_type_names.get(name)
             if type_name is None:
                 return None
-            type_name = self.type_name_from_value(type_name)
-            if self.is_structured_buffer_declared_type_name(type_name):
+            type_name = self.storage_buffer_resource_type_name(type_name)
+            if type_name is not None:
                 return type_name
         return None
+
+    def storage_buffer_resource_type_name(self, type_name) -> Optional[str]:
+        type_name = self.type_name_from_value(type_name)
+        if type_name is None:
+            return None
+
+        type_name = self.normalize_reference_type_name(type_name)
+        type_name = self.normalize_generic_vector_type(type_name)
+        type_name = self.normalize_hlsl_matrix_type(type_name)
+        type_name = re.sub(r"\s+", "", str(type_name))
+        if not type_name:
+            return None
+
+        base_type = self.array_base_type_name(type_name)
+        if self.pointer_pointee_type_name_from_string(base_type) is not None:
+            return type_name
+        if self.is_structured_buffer_declared_type_name(type_name):
+            return type_name
+        return None
+
+    def storage_buffer_resource_type_info(self, type_name):
+        type_name = self.storage_buffer_resource_type_name(type_name)
+        if type_name is None:
+            return None
+
+        dimensions = self.array_dimensions(type_name) or []
+        base_type = self.array_base_type_name(type_name)
+        structured_info = self.structured_buffer_type_info(base_type)
+        if structured_info is not None:
+            return {
+                **structured_info,
+                "declared_type_name": type_name,
+                "resource_class": (
+                    structured_info.get("buffer_kind") or "storage buffer"
+                ),
+                "array_dimensions": dimensions,
+            }
+
+        pointee_type = self.pointer_pointee_type_name_from_string(base_type)
+        if pointee_type is None:
+            return None
+
+        return {
+            "kind": "storage_buffer_pointer",
+            "buffer_kind": "StorageBufferPointer",
+            "element_type_name": self.normalize_signature_type_name(pointee_type),
+            "declared_type_name": type_name,
+            "resource_class": "storage buffer pointer",
+            "array_dimensions": dimensions,
+        }
+
+    def is_storage_buffer_resource_type_name(self, type_name) -> bool:
+        return self.storage_buffer_resource_type_info(type_name) is not None
+
+    def storage_buffer_resource_class_label(self, type_name) -> str:
+        info = self.storage_buffer_resource_type_info(type_name)
+        if info is None:
+            return "storage buffer"
+        if info.get("byte_address"):
+            return "byte-address buffer"
+        return info.get("resource_class") or "storage buffer"
 
     def storage_buffer_parameter_type_is_compatible(
         self, declared_type: str, actual_type: str
     ) -> bool:
-        declared_type = re.sub(r"\s+", "", str(declared_type))
-        actual_type = re.sub(r"\s+", "", str(actual_type))
-        declared_info = self.structured_buffer_type_info(
-            self.array_base_type_name(declared_type)
-        )
-        actual_info = self.structured_buffer_type_info(
-            self.array_base_type_name(actual_type)
-        )
+        declared_type = self.storage_buffer_resource_type_name(declared_type)
+        actual_type = self.storage_buffer_resource_type_name(actual_type)
+        declared_info = self.storage_buffer_resource_type_info(declared_type)
+        actual_info = self.storage_buffer_resource_type_info(actual_type)
         if declared_info is None or actual_info is None:
-            return True
+            return declared_info is None and actual_info is None
 
-        declared_dimensions = self.array_dimensions(declared_type) or []
-        actual_dimensions = self.array_dimensions(actual_type) or []
+        declared_dimensions = declared_info.get("array_dimensions", [])
+        actual_dimensions = actual_info.get("array_dimensions", [])
         if len(declared_dimensions) != len(actual_dimensions):
             return False
         for declared_dimension, actual_dimension in zip(
@@ -12310,6 +12368,12 @@ class VulkanSPIRVCodeGen:
             "element_type_name"
         ):
             return False
+
+        if (
+            declared_info.get("kind") == "storage_buffer_pointer"
+            or actual_info.get("kind") == "storage_buffer_pointer"
+        ):
+            return True
 
         declared_kind = declared_info.get("buffer_kind")
         actual_kind = actual_info.get("buffer_kind")
@@ -16311,17 +16375,25 @@ class VulkanSPIRVCodeGen:
             storage_buffer_type_name = self.substitute_generic_signature_type(
                 storage_buffer_type_name, substitutions
             )
+            expected_class = self.storage_buffer_resource_class_label(
+                storage_buffer_type_name
+            )
+            expression_label = self.expression_debug_name(arg)
             actual_type_name = self.storage_buffer_expression_type_name(arg)
             if actual_type_name is None:
                 actual_type_name = self.call_argument_type_name(arg) or "unknown"
                 return (
-                    f"argument {arg_index + 1} type {actual_type_name} is not a "
-                    f"storage buffer for parameter {param_name} "
+                    f"argument {arg_index + 1} expression {expression_label} "
+                    f"does not carry storage-buffer provenance; expected "
+                    f"{expected_class} for parameter {param_name} "
                     f"({storage_buffer_type_name})"
+                    f", got {actual_type_name}"
                 )
             return (
-                f"argument {arg_index + 1} type {actual_type_name} is incompatible "
-                f"with parameter {param_name} ({storage_buffer_type_name})"
+                f"argument {arg_index + 1} expression {expression_label} type "
+                f"{actual_type_name} is incompatible with expected "
+                f"{expected_class} parameter {param_name} "
+                f"({storage_buffer_type_name})"
             )
 
         declared_type_name = self.substitute_generic_signature_type(
@@ -16512,6 +16584,18 @@ class VulkanSPIRVCodeGen:
 
         if expected_type in generic_params:
             substitutions.setdefault(expected_type, actual_type)
+            return
+
+        expected_pointee = self.pointer_pointee_type_name_from_string(expected_type)
+        actual_pointee = self.pointer_pointee_type_name_from_string(actual_type)
+        if expected_pointee is not None or actual_pointee is not None:
+            if expected_pointee is not None and actual_pointee is not None:
+                self.collect_generic_type_bindings(
+                    expected_pointee,
+                    actual_pointee,
+                    generic_params,
+                    substitutions,
+                )
             return
 
         expected_base, expected_args = generic_type_parts(expected_type)

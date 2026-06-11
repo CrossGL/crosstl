@@ -1030,6 +1030,11 @@ REPORT_SOURCE_ROOT_STATUS_FIELDS = frozenset(
 REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
     ("path", "resolvedPath", "status", "frontendVisible")
 )
+SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
+METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION = "max_template_specializations"
+METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION = (
+    "template_specialization_limit_source"
+)
 REPORT_NATIVE_DIRECTIVE_FIELDS = frozenset(
     (
         "source",
@@ -2164,7 +2169,16 @@ INCLUDE_DEPENDENCY_STATUSES = frozenset(
     ("dynamic", "missing", "outside-project", "resolved", "system")
 )
 INCLUDE_DEPENDENCY_RESOLUTION_SOURCES = frozenset(("include-dir", "source"))
-NATIVE_DIRECTIVE_HANDLING_STATUSES = frozenset(("preserved", "unsupported"))
+NATIVE_DIRECTIVE_HANDLING_STATUSES = frozenset(("preserved", "expanded", "unsupported"))
+METAL_MODE_DIRECTIVE_SOURCE_OPTION = "mode_directives"
+METAL_MODE_DIRECTIVE_POLICIES = frozenset(("preserve", "expand", "unsupported"))
+METAL_MODE_DIRECTIVE_POLICY_ALIASES = {
+    "preserve": "preserve",
+    "preserved": "preserve",
+    "expand": "expand",
+    "expanded": "expand",
+    "unsupported": "unsupported",
+}
 DEFINE_PROCESSING_STATUSES = frozenset(("forwarded", "not-requested", "not-supported"))
 INCLUDE_PATH_PROCESSING_STATUSES = frozenset(
     ("forwarded", "not-requested", "not-supported")
@@ -2401,6 +2415,52 @@ def _as_source_options(value: Any, *, field_name: str) -> dict[str, dict[str, An
         for name, option_value in options.items():
             if not isinstance(name, str) or not name.strip():
                 raise ValueError(f"{option_path} keys must be non-empty strings")
+            if name == SOURCE_OPTION_PATTERNS_KEY:
+                if not isinstance(option_value, Mapping):
+                    raise ValueError(
+                        f"{_mapping_key_path(option_path, name)} must be a table"
+                    )
+                pattern_options: dict[str, dict[str, Any]] = {}
+                pattern_path = _mapping_key_path(option_path, name)
+                for pattern, per_source_options in option_value.items():
+                    if not isinstance(pattern, str) or not pattern.strip():
+                        raise ValueError(
+                            f"{pattern_path} keys must be non-empty strings"
+                        )
+                    source_path = _mapping_key_path(pattern_path, pattern)
+                    if not isinstance(per_source_options, Mapping):
+                        raise ValueError(f"{source_path} must be a table")
+                    normalized_pattern_options: dict[str, Any] = {}
+                    for per_source_name, per_source_value in per_source_options.items():
+                        if (
+                            not isinstance(per_source_name, str)
+                            or not per_source_name.strip()
+                        ):
+                            raise ValueError(
+                                f"{source_path} keys must be non-empty strings"
+                            )
+                        if isinstance(per_source_value, bool):
+                            normalized_pattern_options[per_source_name] = (
+                                per_source_value
+                            )
+                        elif isinstance(per_source_value, int):
+                            normalized_pattern_options[per_source_name] = (
+                                per_source_value
+                            )
+                        elif isinstance(per_source_value, str):
+                            normalized_pattern_options[per_source_name] = (
+                                per_source_value
+                            )
+                        else:
+                            raise ValueError(
+                                f"{source_path} entries must map option names to "
+                                "strings, integers, or booleans"
+                            )
+                    pattern_options[_normalize_project_relative_path(pattern)] = (
+                        normalized_pattern_options
+                    )
+                normalized_options[name] = pattern_options
+                continue
             if isinstance(option_value, bool):
                 normalized_options[name] = option_value
             elif isinstance(option_value, int):
@@ -2412,8 +2472,45 @@ def _as_source_options(value: Any, *, field_name: str) -> dict[str, dict[str, An
                     f"{option_path} entries must map option names to strings, "
                     "integers, or booleans"
                 )
+        normalized_options = _normalize_source_options_for_backend(
+            backend_key,
+            normalized_options,
+            option_path=option_path,
+        )
         result[backend_key] = normalized_options
     return result
+
+
+def _normalize_source_options_for_backend(
+    source_backend: str,
+    options: Mapping[str, Any],
+    *,
+    option_path: str,
+) -> dict[str, Any]:
+    normalized = dict(options)
+    if (
+        source_backend != "metal"
+        or METAL_MODE_DIRECTIVE_SOURCE_OPTION not in normalized
+    ):
+        return normalized
+
+    field_name = f"{option_path}.{METAL_MODE_DIRECTIVE_SOURCE_OPTION}"
+    value = normalized[METAL_MODE_DIRECTIVE_SOURCE_OPTION]
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            f"{field_name} must be one of "
+            f"{', '.join(sorted(METAL_MODE_DIRECTIVE_POLICIES))}"
+        )
+    policy = METAL_MODE_DIRECTIVE_POLICY_ALIASES.get(
+        value.strip().lower().replace("-", "_")
+    )
+    if policy is None:
+        raise ValueError(
+            f"{field_name} must be one of "
+            f"{', '.join(sorted(METAL_MODE_DIRECTIVE_POLICIES))}"
+        )
+    normalized[METAL_MODE_DIRECTIVE_SOURCE_OPTION] = policy
+    return normalized
 
 
 def _variant_defines(variants: Mapping[str, Any]) -> dict[str, dict[str, str]]:
@@ -4476,7 +4573,59 @@ def _source_options_for_backend(
 ) -> dict[str, Any]:
     register_default_sources()
     key = SOURCE_REGISTRY.resolve_name(source_backend) or source_backend.strip().lower()
-    return dict(config.source_options.get(key, {}))
+    source_options = config.source_options.get(key, {})
+    return {
+        name: value
+        for name, value in source_options.items()
+        if name != SOURCE_OPTION_PATTERNS_KEY
+    }
+
+
+def _source_options_for_unit(
+    config: ProjectConfig, source_backend: str, relative_path: str
+) -> dict[str, Any]:
+    register_default_sources()
+    key = SOURCE_REGISTRY.resolve_name(source_backend) or source_backend.strip().lower()
+    configured_options = config.source_options.get(key, {})
+    source_options = {
+        name: value
+        for name, value in configured_options.items()
+        if name != SOURCE_OPTION_PATTERNS_KEY
+    }
+    limit_source = None
+    if METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in source_options:
+        limit_source = (
+            f"project.source_options.{key}."
+            f"{METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION}"
+        )
+
+    source_patterns = configured_options.get(SOURCE_OPTION_PATTERNS_KEY)
+    if isinstance(source_patterns, Mapping):
+        normalized_path = _normalize_project_relative_path(relative_path)
+        for pattern, pattern_options in source_patterns.items():
+            if not isinstance(pattern, str) or not isinstance(pattern_options, Mapping):
+                continue
+            normalized_pattern = _normalize_project_relative_path(pattern)
+            if not fnmatch.fnmatch(normalized_path, normalized_pattern):
+                continue
+            source_options.update(pattern_options)
+            if METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in pattern_options:
+                pattern_path = _mapping_key_path(
+                    f"project.source_options.{key}.{SOURCE_OPTION_PATTERNS_KEY}",
+                    normalized_pattern,
+                )
+                limit_source = (
+                    f"{pattern_path}." f"{METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION}"
+                )
+
+    source_options.pop(SOURCE_OPTION_PATTERNS_KEY, None)
+    if (
+        source_backend == "metal"
+        and METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in source_options
+        and limit_source is not None
+    ):
+        source_options[METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION] = limit_source
+    return source_options
 
 
 def _strip_include_line_comment(value: str) -> str:
@@ -4948,6 +5097,39 @@ def _unsupported_macro_form_diagnostic(
     )
 
 
+def _unsupported_native_directive_diagnostic(
+    *,
+    relative_path: str,
+    line_number: int,
+    column: int,
+    source_backend: str,
+    kind: str,
+    payload: str,
+    variant: str | None = None,
+) -> ProjectDiagnostic:
+    context = f" for variant {variant}" if variant else ""
+    rendered_payload = payload or "(empty payload)"
+    return ProjectDiagnostic(
+        severity="warning",
+        code="project.scan.unsupported-native-directive",
+        message=(
+            f"Native directive {kind} in {relative_path}:{line_number}{context} "
+            f"is recognized by the {source_backend} frontend but configured as "
+            f"unsupported: {rendered_payload}."
+        ),
+        location=SourceLocation(
+            file=relative_path,
+            line=line_number,
+            column=column,
+            end_line=line_number,
+            end_column=column,
+        ),
+        source_backend=source_backend,
+        variant=variant,
+        missing_capabilities=[f"native.directive.{kind}"],
+    )
+
+
 def _macro_form_label(directive: str, body: str) -> str:
     if directive == "define":
         body = _strip_preprocessor_line_comment(body)
@@ -4964,8 +5146,62 @@ def _macro_form_label(directive: str, body: str) -> str:
     return f"#{directive}"
 
 
+def _metal_mode_directive_policy(config: ProjectConfig) -> str:
+    options = config.source_options.get("metal", {})
+    value = options.get(METAL_MODE_DIRECTIVE_SOURCE_OPTION, "preserve")
+    if isinstance(value, str):
+        policy = METAL_MODE_DIRECTIVE_POLICY_ALIASES.get(
+            value.strip().lower().replace("-", "_")
+        )
+        if policy is not None:
+            return policy
+    return "preserve"
+
+
+def _native_directive_handling_status(
+    config: ProjectConfig,
+    *,
+    source_backend: str,
+    kind: str,
+    default_status: str,
+) -> str:
+    if source_backend == "metal" and kind == "mode":
+        policy = _metal_mode_directive_policy(config)
+        if policy == "preserve":
+            return "preserved"
+        if policy == "expand":
+            return "expanded"
+        return "unsupported"
+    return default_status
+
+
+def _metal_mode_variant_name(payload: str) -> str:
+    normalized = " ".join(payload.split())
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", normalized.lower()).strip("-")
+    if not slug:
+        slug = "empty"
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:8]
+    return f"metal-mode-{slug[:40]}-{digest}"
+
+
+def _native_directive_variant(
+    *,
+    source_backend: str,
+    plan: Mapping[str, str],
+    variant: str | None,
+) -> str | None:
+    if (
+        source_backend == "metal"
+        and plan.get("kind") == "mode"
+        and plan.get("handlingStatus") == "expanded"
+    ):
+        return _metal_mode_variant_name(plan.get("payload", ""))
+    return variant
+
+
 def _source_frontend_native_directive_plan(
     *,
+    config: ProjectConfig,
     source_backend: str,
     directive: str,
     body: str,
@@ -4979,6 +5215,12 @@ def _source_frontend_native_directive_plan(
         return None
     kind = str(raw_plan.get("kind", "")).strip().lower()
     handling_status = str(raw_plan.get("handlingStatus", "")).strip().lower()
+    handling_status = _native_directive_handling_status(
+        config,
+        source_backend=source_backend,
+        kind=kind,
+        default_status=handling_status,
+    )
     if not kind or handling_status not in NATIVE_DIRECTIVE_HANDLING_STATUSES:
         return None
     return {
@@ -5067,6 +5309,7 @@ def _scan_native_macro_semantic_lines(
 
         if (
             _source_frontend_native_directive_plan(
+                config=config,
                 source_backend=source_backend,
                 directive=directive,
                 body=body,
@@ -5109,8 +5352,9 @@ def _scan_native_directive_lines(
     source_backend: str,
     seen: set[tuple[str, int, str, str, str, str | None]],
     variant: str | None = None,
-) -> list[ProjectNativeDirective]:
+) -> tuple[list[ProjectNativeDirective], list[ProjectDiagnostic]]:
     native_directives: list[ProjectNativeDirective] = []
+    diagnostics: list[ProjectDiagnostic] = []
     conditional_stack: list[_IncludeConditionalFrame] = []
     for line_number, line in enumerate(lines, start=1):
         directive_match = PREPROCESSOR_DIRECTIVE_RE.match(line)
@@ -5132,36 +5376,55 @@ def _scan_native_directive_lines(
             continue
 
         plan = _source_frontend_native_directive_plan(
+            config=config,
             source_backend=source_backend,
             directive=directive,
             body=body,
         )
         if plan is None:
             continue
+        directive_variant = _native_directive_variant(
+            source_backend=source_backend,
+            plan=plan,
+            variant=variant,
+        )
         key = (
             relative_path,
             line_number,
             plan["kind"],
             plan["payload"],
             plan["handlingStatus"],
-            variant,
+            directive_variant,
         )
         if key in seen:
             continue
         seen.add(key)
+        column = max(1, line.find("#") + 1)
         native_directives.append(
             ProjectNativeDirective(
                 source=relative_path,
                 source_backend=source_backend,
                 line=line_number,
-                column=max(1, line.find("#") + 1),
+                column=column,
                 kind=plan["kind"],
                 payload=plan["payload"],
                 handling_status=plan["handlingStatus"],
-                variant=variant,
+                variant=directive_variant,
             )
         )
-    return native_directives
+        if plan["handlingStatus"] == "unsupported":
+            diagnostics.append(
+                _unsupported_native_directive_diagnostic(
+                    relative_path=relative_path,
+                    line_number=line_number,
+                    column=column,
+                    source_backend=source_backend,
+                    kind=plan["kind"],
+                    payload=plan["payload"],
+                    variant=directive_variant,
+                )
+            )
+    return native_directives, diagnostics
 
 
 def _scan_native_directive_planning(
@@ -5170,33 +5433,34 @@ def _scan_native_directive_planning(
     relative_path: str,
     *,
     source_backend: str,
-) -> list[ProjectNativeDirective]:
+) -> tuple[list[ProjectNativeDirective], list[ProjectDiagnostic]]:
     source_spec = SOURCE_REGISTRY.get(source_backend)
     if source_spec is None or source_spec.native_directive_classifier is None:
-        return []
+        return [], []
     try:
         lines = source_path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
-        return []
+        return [], []
 
     native_directives: list[ProjectNativeDirective] = []
+    diagnostics: list[ProjectDiagnostic] = []
     seen: set[tuple[str, int, str, str, str, str | None]] = set()
     scan_lines = _mask_preprocessor_block_comments(lines)
     for variant, defines in _variant_jobs(config):
         scan_config = (
             replace(config, defines=defines) if variant is not None else config
         )
-        native_directives.extend(
-            _scan_native_directive_lines(
-                scan_config,
-                scan_lines,
-                relative_path,
-                source_backend=source_backend,
-                seen=seen,
-                variant=variant,
-            )
+        scanned_directives, scanned_diagnostics = _scan_native_directive_lines(
+            scan_config,
+            scan_lines,
+            relative_path,
+            source_backend=source_backend,
+            seen=seen,
+            variant=variant,
         )
-    return native_directives
+        native_directives.extend(scanned_directives)
+        diagnostics.extend(scanned_diagnostics)
+    return native_directives, diagnostics
 
 
 def _scan_unsupported_wgsl_macro_semantics(
@@ -6744,6 +7008,28 @@ def _iter_scan_candidates(config: ProjectConfig) -> list[Path]:
     return sorted(candidates)
 
 
+def _config_with_expanded_native_directive_variants(
+    config: ProjectConfig,
+    native_directives: Sequence[ProjectNativeDirective],
+) -> ProjectConfig:
+    expanded_variants = {
+        directive.variant: {}
+        for directive in native_directives
+        if directive.handling_status == "expanded" and directive.variant
+    }
+    new_variants = {
+        name: defines
+        for name, defines in expanded_variants.items()
+        if name not in config.variants
+    }
+    if not new_variants:
+        return config
+    return replace(
+        config,
+        variants={**dict(config.variants), **new_variants},
+    )
+
+
 def scan_project(
     config_or_root: ProjectConfig | str | os.PathLike[str],
     *,
@@ -6825,7 +7111,7 @@ def scan_project(
             )
             continue
 
-        native_directives.extend(
+        scanned_directives, native_directive_diagnostics = (
             _scan_native_directive_planning(
                 config,
                 path,
@@ -6833,6 +7119,8 @@ def scan_project(
                 source_backend=source_spec.name,
             )
         )
+        native_directives.extend(scanned_directives)
+        diagnostics.extend(native_directive_diagnostics)
         include_dependencies, include_diagnostics = _scan_include_dependencies(
             config, path, relative_path, source_spec.name
         )
@@ -6850,8 +7138,11 @@ def scan_project(
             )
         )
 
+    scan_config = _config_with_expanded_native_directive_variants(
+        config, native_directives
+    )
     diagnostics.extend(
-        _external_corpus_source_backend_mismatch_diagnostics(config, units)
+        _external_corpus_source_backend_mismatch_diagnostics(scan_config, units)
     )
     if not units:
         diagnostics.append(
@@ -6864,7 +7155,7 @@ def scan_project(
             )
         )
     return ProjectScan(
-        config=config,
+        config=scan_config,
         units=units,
         skipped=skipped,
         native_directives=native_directives,
@@ -8634,6 +8925,7 @@ def translate_project(
         selected_targets = ["cgl"]
 
     scan = scan_project(config)
+    config = scan.config
     diagnostics: list[ProjectDiagnostic] = list(scan.diagnostics)
     diagnostics.extend(_target_diagnostics(config, selected_targets))
     artifacts: list[dict[str, Any]] = []
@@ -8741,8 +9033,8 @@ def translate_project(
                     )
                     artifacts.append(artifact)
                     continue
-                source_options = _source_options_for_backend(
-                    config, unit.source_backend
+                source_options = _source_options_for_unit(
+                    config, unit.source_backend, unit.relative_path
                 )
                 template_materialization = (
                     _project_template_materialization_for_artifact(
@@ -13862,18 +14154,28 @@ def plan_runtime_adapters(
 def _runtime_loader_metadata_source(
     path: Any, field: str = "packagePath"
 ) -> dict[str, Any]:
-    return {"field": field, "path": path}
+    return {"field": field, "path": _runtime_loader_package_path(path)}
+
+
+def _runtime_loader_package_path(package_path: Any) -> str:
+    return PurePosixPath(str(package_path).replace("\\", "/")).as_posix()
+
+
+def _runtime_loader_optional_package_path(package_path: Any) -> Any:
+    if not _is_non_empty_string(package_path):
+        return package_path
+    return _runtime_loader_package_path(package_path)
 
 
 def _runtime_loader_package_command_path(package_path: Any) -> str:
-    return PurePosixPath(str(package_path).replace("\\", "/")).as_posix()
+    return _runtime_loader_package_path(package_path)
 
 
 def _runtime_loader_normalize_package_command_path(
     command: Sequence[str], package_path: Any
 ) -> list[str]:
     package_path_text = str(package_path)
-    command_path = _runtime_loader_package_command_path(package_path)
+    command_path = _runtime_loader_package_path(package_path)
     path_candidates = {
         package_path_text,
         package_path_text.replace("/", "\\"),
@@ -13920,14 +14222,13 @@ def _runtime_loader_webgl_program_groups(
         package_path = adapter.get("packagePath")
         if not _is_non_empty_string(package_path):
             continue
+        package_path = _runtime_loader_package_path(package_path)
         binding_source_path = None
         binding_id = adapter.get("binding")
         if _is_non_empty_string(binding_id):
             binding_source_path = str(binding_id).split("|", 1)[0]
         source_group_path = (
-            binding_source_path
-            or adapter.get("sourcePath")
-            or adapter.get("packagePath")
+            binding_source_path or adapter.get("sourcePath") or package_path
         )
         defines = (
             dict(adapter.get("defines"))
@@ -13951,7 +14252,8 @@ def _runtime_loader_webgl_program_groups(
                 "variant": variant,
                 "defines": list(defines_key),
                 "packagePaths": [
-                    adapter.get("packagePath") for adapter in group_adapters
+                    _runtime_loader_optional_package_path(adapter.get("packagePath"))
+                    for adapter in group_adapters
                 ],
             },
             sort_keys=True,
@@ -13970,6 +14272,7 @@ def _runtime_loader_webgl_program_groups(
             package_path = adapter.get("packagePath")
             if not _is_non_empty_string(package_path):
                 continue
+            package_path = _runtime_loader_package_path(package_path)
             stages.append(
                 {
                     "stage": stage,
@@ -13991,7 +14294,9 @@ def _runtime_loader_webgl_program_groups(
         for adapter in group_adapters:
             package_path = adapter.get("packagePath")
             if _is_non_empty_string(package_path):
-                groups_by_package_path[str(package_path)] = group_payload
+                groups_by_package_path[_runtime_loader_package_path(package_path)] = (
+                    group_payload
+                )
     return groups_by_package_path
 
 
@@ -14022,7 +14327,7 @@ def _runtime_loader_host_entry_points(
 def _runtime_loader_package_artifact_path(
     package_path: Any, package_root: Path | None
 ) -> Path:
-    artifact_path = Path(str(package_path))
+    artifact_path = Path(_runtime_loader_package_path(package_path))
     if package_root is not None and not artifact_path.is_absolute():
         return package_root / artifact_path
     return artifact_path
@@ -14110,7 +14415,9 @@ def _runtime_loader_target_load_metadata(
             "stage": stage,
             "shaderType": _runtime_loader_webgl_shader_type(stage),
         }
-        program_group = webgl_program_groups.get(str(package_path))
+        program_group = webgl_program_groups.get(
+            _runtime_loader_package_path(package_path)
+        )
         if isinstance(program_group, Mapping):
             metadata["programGroup"] = dict(program_group)
         return metadata
@@ -14194,7 +14501,7 @@ def _runtime_loader_manifest_load_steps(
     package_root: Path | None = None,
     target_metadata: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    package_path = adapter.get("packagePath")
+    package_path = _runtime_loader_optional_package_path(adapter.get("packagePath"))
     target = adapter.get("target")
     steps = [
         {
@@ -14215,23 +14522,26 @@ def _runtime_loader_manifest_load_steps(
     if isinstance(source_remap, Mapping) and _is_non_empty_string(
         source_remap.get("packagePath")
     ):
+        source_remap_package_path = _runtime_loader_package_path(
+            source_remap.get("packagePath")
+        )
         steps.append(
             {
                 "kind": "load-source-remap",
                 "message": (
                     "Load source-remap metadata "
-                    f"{source_remap.get('packagePath')} for diagnostics and "
+                    f"{source_remap_package_path} for diagnostics and "
                     "provenance."
                 ),
                 "target": target,
-                "packagePath": source_remap.get("packagePath"),
+                "packagePath": source_remap_package_path,
                 "tools": [],
                 "command": None,
                 "hostInterfaceStatus": None,
                 "metadata": {
                     "source": {
                         "field": "sourceRemap.packagePath",
-                        "path": source_remap.get("packagePath"),
+                        "path": source_remap_package_path,
                     }
                 },
             }
@@ -14357,11 +14667,29 @@ def _runtime_loader_manifest_blockers(
 ) -> list[dict[str, Any]]:
     adapter_id = adapter.get("id")
     return [
-        dict(action)
+        _runtime_loader_manifest_action(action)
         for action in actions
         if action.get("adapter") == adapter_id
         and action.get("kind") == "resolve-host-interface-metadata"
     ]
+
+
+def _runtime_loader_manifest_action(action: Mapping[str, Any]) -> dict[str, Any]:
+    payload = dict(action)
+    if _is_non_empty_string(payload.get("packagePath")):
+        payload["packagePath"] = _runtime_loader_package_path(payload["packagePath"])
+    return payload
+
+
+def _runtime_loader_manifest_source_remap(
+    source_remap: Any,
+) -> dict[str, Any] | None:
+    if not isinstance(source_remap, Mapping):
+        return None
+    payload = dict(source_remap)
+    if _is_non_empty_string(payload.get("packagePath")):
+        payload["packagePath"] = _runtime_loader_package_path(payload["packagePath"])
+    return payload
 
 
 def _runtime_loader_manifest_load_unit(
@@ -14387,12 +14715,13 @@ def _runtime_loader_manifest_load_unit(
         else "not-inspected"
     )
     validation["loadReady"] = not blockers
+    package_path = _runtime_loader_optional_package_path(adapter.get("packagePath"))
     return {
         "id": adapter.get("id"),
         "target": adapter.get("target"),
         "adapterKind": adapter.get("adapterKind"),
         "artifactFormat": adapter.get("artifactFormat"),
-        "packagePath": adapter.get("packagePath"),
+        "packagePath": package_path,
         "sourcePath": adapter.get("sourcePath"),
         "sourceBackend": adapter.get("sourceBackend"),
         "stage": adapter.get("stage"),
@@ -14402,10 +14731,8 @@ def _runtime_loader_manifest_load_unit(
             if isinstance(adapter.get("defines"), Mapping)
             else {}
         ),
-        "sourceRemap": (
-            dict(adapter.get("sourceRemap"))
-            if isinstance(adapter.get("sourceRemap"), Mapping)
-            else None
+        "sourceRemap": _runtime_loader_manifest_source_remap(
+            adapter.get("sourceRemap")
         ),
         "hostInterface": (
             dict(host_interface)
@@ -14561,7 +14888,7 @@ def build_runtime_loader_manifest(
             _runtime_loader_manifest_target(target, load_units) for target in targets
         ],
         "loadUnits": load_units,
-        "actions": [dict(action) for action in actions],
+        "actions": [_runtime_loader_manifest_action(action) for action in actions],
         "runtimePlan": (
             dict(adapter_plan.get("runtimePlan"))
             if isinstance(adapter_plan.get("runtimePlan"), Mapping)
@@ -22231,15 +22558,44 @@ def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[st
         if not isinstance(options, Mapping):
             reasons.append(f"{option_prefix} must be an object")
             continue
-        if any(not _is_non_empty_string(name) for name in options):
-            reasons.append(f"{option_prefix} keys must be non-empty strings")
-        if any(
-            not isinstance(option_value, (str, int, bool))
-            for option_value in options.values()
-        ):
-            reasons.append(
-                f"{option_prefix} values must be strings, integers, or booleans"
-            )
+        for name, option_value in options.items():
+            if not _is_non_empty_string(name):
+                reasons.append(f"{option_prefix} keys must be non-empty strings")
+                continue
+            name_prefix = _mapping_key_path(option_prefix, name)
+            if name == SOURCE_OPTION_PATTERNS_KEY:
+                if not isinstance(option_value, Mapping):
+                    reasons.append(f"{name_prefix} must be an object")
+                    continue
+                for pattern, pattern_options in option_value.items():
+                    if not _is_non_empty_string(pattern):
+                        reasons.append(f"{name_prefix} keys must be non-empty strings")
+                        continue
+                    pattern_prefix = _mapping_key_path(name_prefix, pattern)
+                    if not isinstance(pattern_options, Mapping):
+                        reasons.append(f"{pattern_prefix} must be an object")
+                        continue
+                    if any(
+                        not _is_non_empty_string(pattern_option)
+                        for pattern_option in pattern_options
+                    ):
+                        reasons.append(
+                            f"{pattern_prefix} keys must be non-empty strings"
+                        )
+                    if any(
+                        not isinstance(pattern_value, (str, int, bool))
+                        for pattern_value in pattern_options.values()
+                    ):
+                        reasons.append(
+                            f"{pattern_prefix} values must be strings, "
+                            "integers, or booleans"
+                        )
+                continue
+            if not isinstance(option_value, (str, int, bool)):
+                reasons.append(
+                    f"{option_prefix} values must be strings, integers, "
+                    "booleans, or source_patterns objects"
+                )
     return reasons
 
 

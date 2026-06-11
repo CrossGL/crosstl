@@ -30,7 +30,6 @@ EXPECTED_METAL_KERNEL_COUNT = 40
 FULL_CORPUS_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1019",
     "https://github.com/CrossGL/crosstl/issues/1026",
-    "https://github.com/CrossGL/crosstl/issues/1027",
     "https://github.com/CrossGL/crosstl/issues/1028",
     "https://github.com/CrossGL/crosstl/issues/1029",
     "https://github.com/CrossGL/crosstl/issues/1030",
@@ -43,6 +42,7 @@ FULL_CORPUS_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1037",
     "https://github.com/CrossGL/crosstl/issues/1038",
     "https://github.com/CrossGL/crosstl/issues/1039",
+    "https://github.com/CrossGL/crosstl/issues/1068",
 )
 RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/939",
@@ -67,6 +67,7 @@ RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1007",
     "https://github.com/CrossGL/crosstl/issues/1012",
     "https://github.com/CrossGL/crosstl/issues/1013",
+    "https://github.com/CrossGL/crosstl/issues/1027",
 )
 
 

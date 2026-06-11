@@ -8,6 +8,9 @@ from crosstl.project.runtime_verification import (
     COMPARISON_FAILED,
     PASSED,
     RUNTIME_FAILED,
+    RUNTIME_TEST_MANIFEST_KIND,
+    RUNTIME_TEST_PLAN_KIND,
+    RUNTIME_TEST_REPORT_KIND,
     RUNTIME_VERIFICATION_REPORT_KIND,
     SKIPPED,
     TRANSLATION_FAILED,
@@ -25,10 +28,14 @@ from crosstl.project.runtime_verification import (
     RuntimeSpecializationConstant,
     RuntimeVerificationError,
     compare_runtime_outputs,
+    default_runtime_test_adapters,
     load_runtime_verification_fixtures,
+    parse_runtime_test_manifest,
     parse_runtime_verification_fixtures,
+    plan_runtime_test_manifest,
     prepare_runtime_execution,
     verify_runtime_fixtures,
+    verify_runtime_test_manifest,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -677,3 +684,192 @@ def test_verify_runtime_fixtures_separates_translation_and_runtime_failures(tmp_
     assert results_by_fixture["translation-failed"]["failurePhase"] == "translation"
     assert results_by_fixture["runtime-failed"]["status"] == RUNTIME_FAILED
     assert results_by_fixture["runtime-failed"]["failurePhase"] == "runtime"
+
+
+def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements():
+    missing_tool = "crosstl-runtime-tool-that-does-not-exist-1007"
+
+    manifest = parse_runtime_test_manifest(
+        {
+            "kind": RUNTIME_TEST_MANIFEST_KIND,
+            "adapters": [
+                {
+                    "id": "opengl-native",
+                    "target": "opengl",
+                    "executor": "opengl-native",
+                    "platformRequirements": {
+                        "platformClass": "native-graphics",
+                        "requiredTools": [missing_tool],
+                        "requiredEnvironment": ["CROSSTL_RUNTIME_TEST_DEVICE"],
+                    },
+                }
+            ],
+            "tests": [
+                _runtime_fixture(id="add-runtime", adapter="opengl-native"),
+            ],
+        }
+    )
+
+    assert manifest.adapters[0].adapter_id == "opengl-native"
+    assert manifest.adapters[0].platform_requirements.platform_class == (
+        "native-graphics"
+    )
+    assert missing_tool in manifest.test_cases[0].platform_requirements.required_tools
+    assert manifest.test_cases[0].fixture.executor == "opengl-native"
+    assert manifest.to_json()["tests"][0]["adapter"] == "opengl-native"
+
+
+def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs(
+    tmp_path,
+):
+    missing_tool = "crosstl-runtime-tool-that-does-not-exist-1007"
+    artifact = _translated_artifact(
+        toolchain={"status": "failed", "tool": "glslangValidator"},
+        toolchainRuns=[
+            {
+                "status": "failed",
+                "command": ["glslangValidator", "-S", "comp"],
+                "stdout": "",
+                "stderr": "validation failed",
+            }
+        ],
+    )
+
+    plan = plan_runtime_test_manifest(
+        _artifact_report(tmp_path, [artifact]),
+        {
+            "kind": RUNTIME_TEST_MANIFEST_KIND,
+            "adapters": [
+                {
+                    "id": "opengl-native",
+                    "target": "opengl",
+                    "executor": "opengl-native",
+                    "platformRequirements": {"requiredTools": [missing_tool]},
+                }
+            ],
+            "tests": [
+                _runtime_fixture(id="add-runtime", adapter="opengl-native"),
+            ],
+        },
+    )
+
+    planned = plan["testCases"][0]
+    diagnostic = planned["diagnostics"][0]
+    assert plan["kind"] == RUNTIME_TEST_PLAN_KIND
+    assert planned["status"] == SKIPPED
+    assert planned["failurePhase"] == "platform-requirements"
+    assert planned["artifact"]["source"] == "kernels/add.cgl"
+    assert planned["artifact"]["target"] == "opengl"
+    assert planned["artifact"]["path"] == "out/opengl/debug/add.glsl"
+    assert planned["artifact"]["toolchainRuns"][0]["stderr"] == "validation failed"
+    assert diagnostic["code"] == (
+        "project.runtime-test.platform-requirements-unavailable"
+    )
+    assert diagnostic["fixture"] == "add-runtime"
+    assert missing_tool in diagnostic["missingTools"]
+
+
+def test_verify_runtime_test_manifest_reports_skipped_dependency_record(tmp_path):
+    missing_tool = "crosstl-runtime-tool-that-does-not-exist-1007"
+    output_path = tmp_path / "runtime-test-report.json"
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(tmp_path, [_translated_artifact()]),
+        {
+            "kind": RUNTIME_TEST_MANIFEST_KIND,
+            "adapters": [
+                {
+                    "id": "opengl-native",
+                    "target": "opengl",
+                    "executor": "opengl-native",
+                    "platformRequirements": {"requiredTools": [missing_tool]},
+                }
+            ],
+            "tests": [
+                _runtime_fixture(id="add-runtime", adapter="opengl-native"),
+            ],
+        },
+        output_path=output_path,
+    )
+
+    result = report["results"][0]
+    assert report["kind"] == RUNTIME_TEST_REPORT_KIND
+    assert report["success"] is True
+    assert report["summary"]["skippedCount"] == 1
+    assert result["status"] == SKIPPED
+    assert result["failurePhase"] == "platform-requirements"
+    assert result["executor"]["status"] == SKIPPED
+    assert missing_tool in result["executor"]["details"]["missingTools"]
+    persisted = json.loads(output_path.read_text(encoding="utf-8"))
+    assert persisted["summary"] == report["summary"]
+
+
+def test_verify_runtime_test_manifest_runs_executor_and_links_failed_check(tmp_path):
+    artifact = _translated_artifact(
+        toolchainRuns=[
+            {
+                "status": "passed",
+                "command": ["glslangValidator", "-S", "comp"],
+                "stdout": "ok",
+                "stderr": "",
+            }
+        ],
+    )
+
+    class WrongValueExecutor(project_api.RuntimeExecutor):
+        def run(self, request):
+            assert request.fixture.id == "add-runtime"
+            return RuntimeExecutorResult(
+                outputs={
+                    "out": {
+                        "dtype": "float32",
+                        "shape": [2],
+                        "values": [2.0, 99.0],
+                    }
+                }
+            )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(tmp_path, [artifact]),
+        {
+            "kind": RUNTIME_TEST_MANIFEST_KIND,
+            "adapters": [
+                {
+                    "id": "runtime-check",
+                    "executor": "opengl",
+                    "platformRequirements": {
+                        "platformClass": "native-graphics",
+                        "requiredTools": [],
+                    },
+                }
+            ],
+            "tests": [
+                _runtime_fixture(id="add-runtime", adapter="runtime-check"),
+            ],
+        },
+        executors={"opengl": WrongValueExecutor()},
+    )
+
+    result = report["results"][0]
+    diagnostic = result["diagnostics"][0]
+    assert report["success"] is False
+    assert result["status"] == COMPARISON_FAILED
+    assert result["failurePhase"] == "comparison"
+    assert result["artifact"]["toolchainRuns"][0]["stdout"] == "ok"
+    assert diagnostic["artifact"]["source"] == "kernels/add.cgl"
+    assert diagnostic["artifact"]["toolchainRuns"][0]["command"][0] == (
+        "glslangValidator"
+    )
+    assert diagnostic["output"] == "out"
+
+
+def test_default_runtime_test_adapters_cover_native_platform_classes():
+    adapters = default_runtime_test_adapters()
+
+    platform_classes = {
+        adapter.platform_requirements.platform_class for adapter in adapters
+    }
+    assert "native-graphics" in platform_classes
+    assert "native-compute" in platform_classes
+    assert any(adapter.target == "opengl" for adapter in adapters)
+    assert any(adapter.target == "cuda" for adapter in adapters)

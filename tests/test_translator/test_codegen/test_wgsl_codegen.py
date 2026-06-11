@@ -493,6 +493,163 @@ def test_wgsl_codegen_rejects_unsized_array_members_in_uniform_buffers():
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+def test_wgsl_codegen_lowers_glsl_buffer_blocks_to_storage_struct_bindings():
+    shader = """
+    shader WGSLBufferBlocks {
+        layout(std430, set = 1, binding = 2) readonly buffer InputBlock {
+            float values[];
+        } inputBlock;
+        layout(std430, binding = 3) buffer OutputBlock {
+            float values[];
+        } outputBlock;
+        compute {
+            void main(uint3 gid @ gl_GlobalInvocationID) {
+                outputBlock.values[gid.x] = inputBlock.values[gid.x];
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert ("struct InputBlock {\n" "    values: array<f32>,\n" "};") in generated
+    assert ("struct OutputBlock {\n" "    values: array<f32>,\n" "};") in generated
+    assert (
+        "@group(1) @binding(2)\nvar<storage, read> inputBlock: InputBlock;" in generated
+    )
+    assert (
+        "@group(0) @binding(3)\nvar<storage, read_write> outputBlock: OutputBlock;"
+        in generated
+    )
+    assert "outputBlock.values[gid.x] = inputBlock.values[gid.x];" in generated
+
+
+def test_wgsl_codegen_lowers_layoutless_buffer_blocks_as_std430_storage():
+    shader = """
+    shader WGSLImplicitBufferBlock {
+        struct ParticleBuffer {
+            float positions[];
+        }
+        buffer ParticleBuffer particleBuffer;
+        compute {
+            void main(uint3 gid @ gl_GlobalInvocationID) {
+                particleBuffer.positions[gid.x] = 1.0;
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "struct ParticleBuffer {\n" "    positions: array<f32>,\n" "};"
+    ) in generated
+    assert (
+        "@group(0) @binding(0)\n"
+        "var<storage, read_write> particleBuffer: ParticleBuffer;"
+    ) in generated
+    assert "particleBuffer.positions[gid.x] = 1.0;" in generated
+
+
+def test_wgsl_codegen_rejects_glsl_buffer_block_parameters():
+    shader = """
+    shader WGSLBufferBlockParameters {
+        struct InputBlock {
+            float values[];
+        };
+        float readFirst(InputBlock block @glsl_buffer_block(std430) @readonly) {
+            return block.values[0];
+        }
+        InputBlock inputBlock @glsl_buffer_block(std430) @binding(0) @readonly;
+        InputBlock outputBlock @glsl_buffer_block(std430) @binding(1);
+        compute {
+            void main() {
+                outputBlock.values[0] = readFirst(inputBlock);
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="does not support GLSL buffer block parameters yet",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "expected"),
+    [
+        (
+            """
+            layout(std140, binding = 0) buffer BadBlock {
+                vec4 value;
+            } badBlock;
+            """,
+            "only supports std430 GLSL buffer block layout",
+        ),
+        (
+            """
+            struct BadBlock {
+                float values[];
+            };
+            BadBlock badBlocks[2] @glsl_buffer_block(std430) @binding(0);
+            """,
+            "does not support GLSL buffer block arrays yet",
+        ),
+        (
+            """
+            layout(std430, binding = 0) buffer BadBlock {
+                sampler2D colorTex;
+            } badBlock;
+            """,
+            r"does not support resource member BadBlock\.colorTex",
+        ),
+    ],
+)
+def test_wgsl_codegen_rejects_unsupported_glsl_buffer_block_shapes(
+    declaration, expected
+):
+    shader = f"""
+    shader WGSLUnsupportedBufferBlocks {{
+        {declaration}
+        compute {{
+            void main() {{
+                return;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_writes_to_readonly_glsl_buffer_blocks():
+    shader = """
+    shader WGSLReadonlyBufferBlockWrite {
+        layout(std430, binding = 0) readonly buffer ReadBlock {
+            float values[];
+        } readBlock;
+        compute {
+            void main() {
+                readBlock.values[0] = 1.0;
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"cannot write read-only GLSL buffer block resource readBlock",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_lowers_structured_buffers_to_storage_bindings():
     shader = """
     shader WGSLStructuredBuffers {
@@ -1083,6 +1240,64 @@ def test_wgsl_codegen_lowers_explicit_sampler_texture_calls():
     assert "return textureSample(colorTex, linearSampler, uv);" in generated
 
 
+@pytest.mark.parametrize(
+    ("declaration", "resource_type"),
+    (
+        ("sampler2D textures[4];", "sampler2D"),
+        ("sampler samplers[2];", "sampler"),
+        ("image2D images[2];", "image2D"),
+        ("StructuredBuffer<float> values[4];", "StructuredBuffer"),
+        ("RWStructuredBuffer<float> values[];", "RWStructuredBuffer"),
+    ),
+)
+def test_wgsl_codegen_rejects_resource_array_declarations(declaration, resource_type):
+    shader = f"""
+    shader WGSLResourceArray {{
+        {declaration}
+        compute {{
+            void main() {{
+                return;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"WGSL target does not support resource arrays of {resource_type}; "
+            r"WebGPU/WGSL requires texture, sampler, image, and storage-buffer "
+            r"resources to be declared as individual module-scope bindings"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_resource_array_parameters():
+    shader = """
+    shader WGSLResourceArrayParameter {
+        vec4 sampleAt(sampler2D textures[4], int index, vec2 uv) {
+            return texture(textures[index], uv);
+        }
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0, int index @ TEXCOORD1) @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target does not support resource arrays of sampler2D; "
+            r"WebGPU/WGSL requires texture, sampler, image, and storage-buffer "
+            r"resources to be declared as individual module-scope bindings"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_emits_stage_local_resource_declarations():
     shader = """
     shader WGSLStageLocalResources {
@@ -1129,6 +1344,129 @@ def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls():
     assert "var size: vec2<u32> = textureDimensions(tex, 0);" in generated
     assert "textureSampleLevel(tex, tex_sampler, direction, 1.0)" in generated
     assert "return sampleEnv(envMap, envMap_sampler, normal);" in generated
+
+
+def test_wgsl_codegen_lowers_split_sampler_lod_grad_and_offset_calls():
+    shader = """
+    shader WGSLTextureSamplingForms {
+        sampler2D colorTex;
+        sampler linearSampler;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec2 ddx = vec2(0.1, 0.0);
+                vec2 ddy = vec2(0.0, 0.1);
+                ivec2 offset = ivec2(1, 0);
+                return textureLodOffset(colorTex, linearSampler, uv, 1.0, offset)
+                    + textureGrad(colorTex, linearSampler, uv, ddx, ddy)
+                    + textureGradOffset(colorTex, linearSampler, uv, ddx, ddy, offset)
+                    + textureOffset(colorTex, linearSampler, uv, offset)
+                    + textureOffset(colorTex, linearSampler, uv, offset, 0.25)
+                    + textureOffset(colorTex, uv, offset, 0.5);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "textureSampleLevel(colorTex, linearSampler, uv, 1.0, offset)" in generated
+    assert "textureSampleGrad(colorTex, linearSampler, uv, ddx, ddy)" in generated
+    assert (
+        "textureSampleGrad(colorTex, linearSampler, uv, ddx, ddy, offset)" in generated
+    )
+    assert "textureSample(colorTex, linearSampler, uv, offset)" in generated
+    assert "textureSampleBias(colorTex, linearSampler, uv, 0.25, offset)" in generated
+    assert "textureSampleBias(colorTex, colorTex_sampler, uv, 0.5, offset)" in generated
+
+
+def test_wgsl_codegen_lowers_shadow_textures_and_comparison_samplers():
+    shader = """
+    shader WGSLShadowTexture {
+        sampler2DShadow shadowMap;
+        samplerComparisonState compareSampler;
+        float sampleShadow(sampler2DShadow tex, vec2 uv, float depth) {
+            return textureCompare(tex, uv, depth);
+        }
+        fragment {
+            float main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureCompare(shadowMap, compareSampler, uv, 0.5)
+                    + textureCompareOffset(shadowMap, compareSampler, uv, 0.25, ivec2(1, 0))
+                    + textureCompareLod(shadowMap, compareSampler, uv, 0.75, 0)
+                    + textureCompareLodOffset(shadowMap, compareSampler, uv, 0.875, 0, ivec2(0, 1))
+                    + sampleShadow(shadowMap, uv, 0.625);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(0)\nvar shadowMap: texture_depth_2d;" in generated
+    assert (
+        "@group(0) @binding(1)\nvar shadowMap_sampler: sampler_comparison;" in generated
+    )
+    assert "@group(0) @binding(2)\nvar compareSampler: sampler_comparison;" in generated
+    assert (
+        "fn sampleShadow(tex: texture_depth_2d, tex_sampler: sampler_comparison, "
+        "uv: vec2<f32>, depth: f32) -> f32"
+    ) in generated
+    assert "return textureSampleCompare(tex, tex_sampler, uv, depth);" in generated
+    assert "textureSampleCompare(shadowMap, compareSampler, uv, 0.5)" in generated
+    assert (
+        "textureSampleCompare(shadowMap, compareSampler, uv, 0.25, " "vec2<i32>(1, 0))"
+    ) in generated
+    assert "textureSampleCompareLevel(shadowMap, compareSampler, uv, 0.75)" in generated
+    assert (
+        "textureSampleCompareLevel(shadowMap, compareSampler, uv, 0.875, "
+        "vec2<i32>(0, 1))"
+    ) in generated
+    assert "sampleShadow(shadowMap, shadowMap_sampler, uv, 0.625)" in generated
+
+
+def test_wgsl_codegen_rejects_plain_sampler_for_explicit_shadow_compare():
+    shader = """
+    shader WGSLBadShadowSampler {
+        sampler2DShadow shadowMap;
+        sampler plainSampler;
+        fragment {
+            float main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureCompare(shadowMap, plainSampler, uv, 0.5);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target requires textureCompare\(\) explicit sampler operand "
+            r"to use samplerComparisonState"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_nonzero_shadow_compare_lod():
+    shader = """
+    shader WGSLBadShadowLod {
+        sampler2DShadow shadowMap;
+        samplerComparisonState compareSampler;
+        fragment {
+            float main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureCompareLod(shadowMap, compareSampler, uv, 0.5, 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target only lowers textureCompareLod\(\) when the explicit "
+            r"LOD operand is literal 0"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
 
 
 def test_wgsl_codegen_lowers_mod_builtin_to_floor_semantics_expression():

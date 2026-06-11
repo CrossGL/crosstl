@@ -5,7 +5,6 @@ env:
   MLX_COMMIT: "968d264f2903d578e699c4452a4dbf48633921aa"
   PROJECT_TEMPLATE_MATERIALIZATION_BLOCKERS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1019"
   METAL_NAME_DIRECTIVE_METADATA_ISSUE: "https://github.com/CrossGL/crosstl/issues/1026"
-  METAL_QUANTIZATION_NUMERIC_DECLARATOR_ISSUE: "https://github.com/CrossGL/crosstl/issues/1027"
   METAL_SCAN_TEMPLATE_STREAMING_ISSUE: "https://github.com/CrossGL/crosstl/issues/1028"
   METAL_VARIADIC_DEBUG_TEMPLATE_ISSUE: "https://github.com/CrossGL/crosstl/issues/1029"
   METAL_REDUCTION_NORM_TEMPLATE_VARIANTS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1030"
@@ -18,6 +17,7 @@ env:
   SPIRV_SORT_HELPER_INLINE_ISSUE: "https://github.com/CrossGL/crosstl/issues/1037"
   RUNTIME_BINDING_MANIFEST_ISSUE: "https://github.com/CrossGL/crosstl/issues/1038"
   RUNTIME_PARITY_EXECUTOR_ISSUE: "https://github.com/CrossGL/crosstl/issues/1039"
+  OPENGL_QUANTIZED_FFT_TEMPLATE_BINDINGS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1068"
 
 on:
   push:

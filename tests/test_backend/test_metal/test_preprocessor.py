@@ -153,6 +153,45 @@ def test_preprocessor_materializes_decltype_instantiation_with_joined_host_name(
     assert "out[gid] = uint(gid);" in output
 
 
+def test_preprocessor_materialized_numeric_suffix_preserves_member_names():
+    code = """
+    struct PackedScale {
+        uint8_t bits;
+    };
+
+    template <typename T, const int group_size, const int bits>
+    [[kernel]] void generated_quantize(
+        const device T* in [[buffer(0)]],
+        device uint8_t* out [[buffer(1)]]) {
+        PackedScale s;
+        T sample = in[0];
+        uint8_t q_scale = s.bits;
+        uint8_t output = q_scale + bits;
+        out[0] = output;
+    }
+
+    instantiate_kernel(
+        "generated_quantize_float_gs_16_b_4",
+        generated_quantize,
+        float,
+        16,
+        4)
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+    ast = MetalParser(MetalLexer(output, preprocess=False).tokenize()).parse()
+
+    assert "void generated_quantize_float_gs_16_b_4(" in output
+    assert "const device float* in" in output
+    assert "float sample = in[0];" in output
+    assert "uint8_t q_scale = s.bits;" in output
+    assert "uint8_t q_scale = s.4;" not in output
+    assert "uint8_t output = q_scale + 4;" in output
+    assert [function.name for function in ast.functions] == [
+        "generated_quantize_float_gs_16_b_4"
+    ]
+
+
 def test_preprocessor_materializes_explicit_template_helper_calls():
     code = """
     template <typename T, typename IdxT, int Offset>
@@ -332,6 +371,64 @@ def test_preprocessor_reports_explicit_template_specialization_limit():
     assert getattr(exc_info.value, "missing_capabilities", None) == (
         "template.specialization",
     )
+
+
+def test_preprocessor_dedupes_equivalent_explicit_template_helper_signatures():
+    code = """
+    template <typename T, typename IdxT, int Width>
+    T load_value(device const T* src, IdxT index) {
+        return src[index + Width];
+    }
+
+    kernel void copy(device const float* src [[buffer(0)]],
+                     device float* dst [[buffer(1)]],
+                     uint gid [[thread_position_in_grid]]) {
+        dst[0] = load_value<float, uint, 4>(src, gid);
+        dst[1] = load_value< float, uint, 4 >(src, gid);
+        dst[2] = load_value<float /* same concrete type */, uint, 4>(src, gid);
+    }
+    """
+
+    output = MetalPreprocessor(max_template_specializations=1).preprocess(code)
+
+    assert output.count("float load_value_float_uint_4(") == 1
+    assert output.count("load_value_float_uint_4(src, gid)") == 3
+    assert "load_value<" not in output
+
+
+def test_preprocessor_reports_template_specialization_limit_details():
+    code = """
+    template <typename T>
+    T cast_value(float value) {
+        return T(value);
+    }
+
+    kernel void copy(device float* dst [[buffer(0)]]) {
+        dst[0] = cast_value<float>(1.0);
+        dst[1] = cast_value<half>(2.0);
+    }
+    """
+
+    with pytest.raises(MetalTemplateSpecializationError) as exc_info:
+        MetalPreprocessor(
+            max_template_specializations=1,
+            template_specialization_limit_source=(
+                "project.source_options.metal.max_template_specializations"
+            ),
+        ).preprocess(code)
+
+    error = exc_info.value
+    assert error.limit == 1
+    assert error.limit_source == (
+        "project.source_options.metal.max_template_specializations"
+    )
+    assert error.unique_specialization_count == 2
+    assert error.requested_signature == "cast_value<half>"
+    assert "2 unique concrete signatures requested" in str(error)
+    assert "limit 1 from project.source_options.metal.max_template_specializations" in (
+        str(error)
+    )
+    assert "Suggested action:" in str(error)
 
 
 def test_preprocessor_preserves_incomplete_multiline_function_macro_invocation():

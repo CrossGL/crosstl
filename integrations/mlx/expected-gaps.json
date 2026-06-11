@@ -13,12 +13,12 @@
     "sources": 40,
     "targets": ["directx", "opengl", "vulkan"],
     "artifacts": 120,
-    "translated_artifacts": 64,
-    "failed_artifacts": 56,
+    "translated_artifacts": 67,
+    "failed_artifacts": 53,
     "translated_by_target": {
-      "directx": 32,
-      "opengl": 3,
-      "vulkan": 29
+      "directx": 33,
+      "opengl": 4,
+      "vulkan": 30
     }
   },
   "tracked_issues": [
@@ -33,12 +33,6 @@
       "scope": "metal-name-directive-metadata",
       "status": "open",
       "summary": "Plan Metal #name directives as project specialization metadata."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1027",
-      "scope": "metal-quantization-numeric-declarators",
-      "status": "open",
-      "summary": "Parse generated Metal quantization identifiers with numeric suffix declarators."
     },
     {
       "issue": "https://github.com/CrossGL/crosstl/issues/1028",
@@ -111,6 +105,12 @@
       "scope": "runtime-parity-executors",
       "status": "open",
       "summary": "Add project runtime parity executors for translated GPU artifacts."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1068",
+      "scope": "opengl-quantized-fft-template-bindings",
+      "status": "open",
+      "summary": "Propagate OpenGL template bindings for quantized, FFT, and masked-GEMV Metal kernels."
     }
   ],
   "resolved_issues": [
@@ -135,6 +135,7 @@
     "https://github.com/CrossGL/crosstl/issues/1006",
     "https://github.com/CrossGL/crosstl/issues/1007",
     "https://github.com/CrossGL/crosstl/issues/1012",
-    "https://github.com/CrossGL/crosstl/issues/1013"
+    "https://github.com/CrossGL/crosstl/issues/1013",
+    "https://github.com/CrossGL/crosstl/issues/1027"
   ]
 }

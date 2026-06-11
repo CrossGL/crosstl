@@ -959,6 +959,57 @@ def test_project_runtime_loader_manifest_is_first_class_support_feature():
         ) in backend_support["evidence"]
 
 
+def test_project_runtime_test_manifest_is_first_class_support_feature():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.runtime_test_manifest"]
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Runtime test manifest"
+    assert set(feature["support"]) == {backend["id"] for backend in matrix["backends"]}
+    for backend_support in feature["support"].values():
+        assert backend_support["status"] == "supported"
+        assert "crosstl-project-runtime-test-manifest" in backend_support["notes"]
+        assert "crosstl-project-runtime-test-plan" in backend_support["notes"]
+        assert "crosstl-project-runtime-test-report" in backend_support["notes"]
+        assert "maps artifact selectors to runtime adapters" in (
+            backend_support["notes"]
+        )
+        assert "inputs" in backend_support["notes"]
+        assert "expected outputs" in backend_support["notes"]
+        assert "tolerances" in backend_support["notes"]
+        assert "platform requirements" in backend_support["notes"]
+        assert "structured skip diagnostics" in backend_support["notes"]
+        assert "toolchain/toolchainRuns logs" in backend_support["notes"]
+        assert "native graphics and native compute" in backend_support["notes"]
+        assert "does not rewrite host application code" in backend_support["notes"]
+        assert "install target SDKs" in backend_support["notes"]
+        assert (
+            "tests/test_translator/test_runtime_verification.py::def "
+            "test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_runtime_verification.py::def "
+            "test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_runtime_verification.py::def "
+            "test_verify_runtime_test_manifest_reports_skipped_dependency_record"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_runtime_verification.py::def "
+            "test_verify_runtime_test_manifest_runs_executor_and_links_failed_check"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_runtime_verification.py::def "
+            "test_default_runtime_test_adapters_cover_native_platform_classes"
+        ) in backend_support["evidence"]
+
+
 def test_project_runtime_host_loader_scaffolds_is_first_class_support_feature():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(

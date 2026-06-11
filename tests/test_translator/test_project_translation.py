@@ -260,6 +260,7 @@ def test_project_package_exposes_public_api_surface():
         "RuntimeArtifactSelector",
         "RuntimeBoundConstant",
         "RuntimeBoundResource",
+        "RuntimeDependencyProbeExecutor",
         "RuntimeDispatchGeometry",
         "RuntimeEntryPoint",
         "RuntimeExecutionAdapter",
@@ -274,8 +275,12 @@ def test_project_package_exposes_public_api_surface():
         "RuntimeExecutorSkipped",
         "RuntimeExecutorUnavailable",
         "RuntimeFixture",
+        "RuntimePlatformRequirements",
         "RuntimeResourceBinding",
         "RuntimeSpecializationConstant",
+        "RuntimeTestAdapterSpec",
+        "RuntimeTestCase",
+        "RuntimeTestManifest",
         "RuntimeTolerance",
         "RuntimeValue",
         "RuntimeValidationHook",
@@ -286,13 +291,17 @@ def test_project_package_exposes_public_api_surface():
         "build_runtime_loader_manifest",
         "build_runtime_package",
         "compare_runtime_outputs",
+        "default_runtime_test_adapters",
         "inspect_runtime_host_integration_handoff",
         "inspect_runtime_host_loader_scaffolds",
         "inspect_runtime_package",
         "inspect_project_report",
         "load_runtime_verification_fixtures",
+        "load_runtime_test_manifest",
         "load_project_config",
         "parse_runtime_verification_fixtures",
+        "parse_runtime_test_manifest",
+        "plan_runtime_test_manifest",
         "prepare_runtime_execution",
         "plan_runtime_adapters",
         "plan_runtime_host_bindings",
@@ -303,7 +312,9 @@ def test_project_package_exposes_public_api_surface():
         "translate_project",
         "validate_project_report",
         "verify_runtime_fixtures",
+        "verify_runtime_test_manifest",
         "write_runtime_verification_report",
+        "write_runtime_test_report",
     }
     for name in project_api.__all__:
         assert hasattr(project_api, name)
@@ -1039,13 +1050,31 @@ def test_support_project_feature_evidence_references_existing_tests():
     catalog = json.loads(
         (ROOT / "support" / "features.json").read_text(encoding="utf-8")
     )
-    test_file = ROOT / "tests" / "test_translator" / "test_project_translation.py"
-    declared_tests = {
-        line.strip().split("(", 1)[0][len("def ") :]
-        for line in test_file.read_text(encoding="utf-8").splitlines()
-        if line.strip().startswith("def test_")
-    }
-    evidence_prefix = "tests/test_translator/test_project_translation.py::def "
+
+    declared_tests_by_path = {}
+
+    def declared_tests(path_text):
+        if path_text not in declared_tests_by_path:
+            test_file = ROOT / path_text
+            declared_tests_by_path[path_text] = {
+                line.strip().split("(", 1)[0][len("def ") :]
+                for line in test_file.read_text(encoding="utf-8").splitlines()
+                if line.strip().startswith("def test_")
+            }
+        return declared_tests_by_path[path_text]
+
+    def referenced_test(item):
+        if not isinstance(item, str):
+            return None
+        path_text, separator, test_name = item.partition("::def ")
+        if (
+            not separator
+            or not path_text.startswith("tests/")
+            or not path_text.endswith(".py")
+            or not test_name.startswith("test_")
+        ):
+            return None
+        return path_text, test_name
 
     missing_evidence = []
     missing_tests = []
@@ -1057,18 +1086,17 @@ def test_support_project_feature_evidence_references_existing_tests():
             if not evidence:
                 missing_evidence.append(f"{feature.get('id')}:{backend}")
                 continue
-            project_evidence = [
-                item
-                for item in evidence
-                if isinstance(item, str) and item.startswith(evidence_prefix)
-            ]
-            if not project_evidence:
-                missing_evidence.append(f"{feature.get('id')}:{backend}")
-                continue
-            for item in project_evidence:
-                test_name = item[len(evidence_prefix) :]
-                if test_name not in declared_tests:
+            test_evidence = []
+            for item in evidence:
+                test_reference = referenced_test(item)
+                if test_reference is None:
+                    continue
+                path_text, test_name = test_reference
+                test_evidence.append(item)
+                if test_name not in declared_tests(path_text):
                     missing_tests.append(item)
+            if not test_evidence:
+                missing_evidence.append(f"{feature.get('id')}:{backend}")
 
     assert missing_evidence == []
     assert missing_tests == []
@@ -4546,6 +4574,130 @@ def test_scan_project_unknown_metal_directive_keeps_macro_native_warning(tmp_pat
     assert diagnostic["location"]["file"] == "shaders/kernel.metal"
     assert diagnostic["location"]["line"] == 1
     assert "unknown preprocessor directive" in diagnostic["message"]
+
+
+def test_scan_project_can_report_metal_mode_directive_as_unsupported(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.metal").write_text(
+        textwrap.dedent("""
+            #mode threaded tile_width=16
+            kernel void main0() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+
+            [project.source_options.metal]
+            mode_directives = "unsupported"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["metal"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    diagnostic = payload["diagnostics"][0]
+
+    assert validation["success"] is True
+    assert payload["project"]["sourceOptions"] == {
+        "metal": {"mode_directives": "unsupported"}
+    }
+    assert payload["nativeDirectives"] == [
+        {
+            "source": "shaders/kernel.metal",
+            "sourceBackend": "metal",
+            "line": 1,
+            "column": 1,
+            "kind": "mode",
+            "payload": "threaded tile_width=16",
+            "handlingStatus": "unsupported",
+        }
+    ]
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.scan.unsupported-native-directive": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {"native.directive.mode": 1}
+    assert diagnostic["code"] == "project.scan.unsupported-native-directive"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["native.directive.mode"]
+    assert diagnostic["location"]["file"] == "shaders/kernel.metal"
+    assert diagnostic["location"]["line"] == 1
+
+
+def test_scan_project_can_expand_metal_mode_directives_into_variants(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.metal").write_text(
+        textwrap.dedent("""
+            #mode threaded tile_width=16
+            #mode scalar
+            kernel void main0() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+
+            [project.source_options.metal]
+            mode_directives = "expand"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["metal"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    threaded_variant = project_pipeline._metal_mode_variant_name(
+        "threaded tile_width=16"
+    )
+    scalar_variant = project_pipeline._metal_mode_variant_name("scalar")
+
+    assert validation["success"] is True
+    assert payload["diagnostics"] == []
+    assert payload["project"]["sourceOptions"] == {
+        "metal": {"mode_directives": "expand"}
+    }
+    assert payload["project"]["variants"] == {
+        scalar_variant: {},
+        threaded_variant: {},
+    }
+    assert payload["project"]["variantCount"] == 2
+    assert payload["artifactMatrix"]["variantMode"] == "named"
+    assert payload["artifactMatrix"]["expectedArtifactCount"] == 2
+    assert payload["nativeDirectives"] == [
+        {
+            "source": "shaders/kernel.metal",
+            "sourceBackend": "metal",
+            "line": 1,
+            "column": 1,
+            "kind": "mode",
+            "payload": "threaded tile_width=16",
+            "handlingStatus": "expanded",
+            "variant": threaded_variant,
+        },
+        {
+            "source": "shaders/kernel.metal",
+            "sourceBackend": "metal",
+            "line": 2,
+            "column": 1,
+            "kind": "mode",
+            "payload": "scalar",
+            "handlingStatus": "expanded",
+            "variant": scalar_variant,
+        },
+    ]
 
 
 def test_scan_project_scopes_define_shadowing_to_selected_variants(tmp_path):
@@ -8787,6 +8939,73 @@ def test_translate_project_materializes_mlx_metal_instantiate_kernel_entries(
     assert "void arange(" not in output
 
 
+def test_translate_project_materialized_metal_numeric_suffix_member_names_to_core_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "quantize.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct PackedScale {
+                float bits;
+            };
+
+            template <typename T, const int group_size, const int bits>
+            [[kernel]] void generated_quantize(
+                const device T* in [[buffer(0)]],
+                device T* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                PackedScale s;
+                s.bits = float(group_size);
+                T sample = in[gid];
+                float q_scale = s.bits;
+                float output = q_scale + bits;
+                out[gid] = sample + T(output);
+            }
+
+            instantiate_kernel(
+                "generated_quantize_float_gs_16_b_4",
+                generated_quantize,
+                float,
+                16,
+                4)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx", "opengl", "vulkan"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    artifacts = {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    }
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert artifacts == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+    for artifact in payload["artifacts"]:
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        assert "bits" in output
+        assert "s.4" not in output
+
+
 def test_translate_project_opengl_materializes_mlx_explicit_template_helpers(
     tmp_path,
 ):
@@ -9084,6 +9303,78 @@ def test_translate_project_forwards_metal_template_specialization_limit(tmp_path
     )
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
+
+
+def test_translate_project_applies_metal_template_limit_source_patterns(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    source = textwrap.dedent("""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template <typename T>
+        T cast_value(float value) {
+            return T(value);
+        }
+
+        kernel void copy(device float* dst [[buffer(0)]]) {
+            dst[0] = cast_value<float>(1.0);
+            dst[1] = cast_value<half>(2.0);
+        }
+        """).strip() + "\n"
+    (shader_dir / "pattern_budget.metal").write_text(source, encoding="utf-8")
+    (shader_dir / "project_budget.metal").write_text(source, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["cgl"]
+            output_dir = "translated"
+
+            [project.source_options.metal]
+            max_template_specializations = 1
+
+            [project.source_options.metal.source_patterns."shaders/pattern_budget.metal"]
+            max_template_specializations = 2
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    artifacts = {artifact["source"]: artifact for artifact in payload["artifacts"]}
+
+    assert validation["success"] is False
+    assert payload["project"]["sourceOptions"] == {
+        "metal": {
+            "max_template_specializations": 1,
+            "source_patterns": {
+                "shaders/pattern_budget.metal": {"max_template_specializations": 2}
+            },
+        }
+    }
+    assert payload["project"]["sourceOptionCount"] == 1
+    assert artifacts["shaders/pattern_budget.metal"]["status"] == "translated"
+    assert (repo / "translated" / "cgl" / "shaders" / "pattern_budget.cgl").exists()
+    assert artifacts["shaders/project_budget.metal"]["status"] == "failed"
+    assert not (repo / "translated" / "cgl" / "shaders" / "project_budget.cgl").exists()
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.metal-template-specialization"
+    )
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert "2 unique concrete signatures requested" in diagnostic["message"]
+    assert (
+        "limit 1 from project.source_options.metal.max_template_specializations"
+        in diagnostic["message"]
+    )
+    assert "Suggested action:" in diagnostic["message"]
 
 
 def test_translate_project_named_variants_apply_native_slang_preprocessor(
@@ -23567,6 +23858,74 @@ def test_translate_project_resolves_generic_vulkan_storage_buffer_helper_family(
     assert payload["diagnostics"] == []
 
 
+def test_translate_project_resolves_vulkan_resource_pointer_helper_overloads(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "resource_pointer_helpers.cgl"
+    source_path.write_text(
+        textwrap.dedent("""
+            shader ResourcePointerHelperOverloads {
+                StructuredBuffer<uint> counters @binding(0);
+                RWStructuredBuffer<float> values @binding(1);
+
+                generic<T> fn copy_resource(
+                    T* source,
+                    float* target,
+                    uint index
+                ) -> void {
+                    target[index] = float(source[index]);
+                    return;
+                }
+
+                generic<T> fn copy_resource(
+                    StructuredBuffer<T>& source,
+                    RWStructuredBuffer<float>& target,
+                    uint index
+                ) -> void {
+                    target.Store(index + 1u, float(source.Load(index)));
+                }
+
+                compute {
+                    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                    layout(set = 0, binding = 2) buffer uint* rawCounters;
+                    layout(set = 0, binding = 3) buffer float* rawValues;
+
+                    void main() {
+                        uint staticScratch = 11u;
+                        copy_resource(rawCounters, rawValues, 0u, staticScratch);
+                        copy_resource(counters, values, 1u, staticScratch);
+                        return;
+                    }
+                }
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["vulkan"], output_dir="out").to_json()
+
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["diagnosticCounts"]["error"] == 0
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["target"] == "vulkan"
+    assert artifact["source"] == "resource_pointer_helpers.cgl"
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "copy_resource" not in generated
+    assert "OpFunctionCall" not in generated
+    assert "OpConvertUToF" in generated
+    assert "generic-helper-specialization" not in generated
+    assert "storage-buffer-function-overload" not in generated
+    assert "WARNING" not in generated
+    assert payload["diagnostics"] == []
+
+
 def test_translate_project_drops_mlx_metal_system_includes_for_opengl(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -29369,15 +29728,33 @@ def test_runtime_loader_validation_commands_preserve_posix_package_paths_on_wind
 
     directx_adapter = {
         "target": "directx",
-        "packagePath": "artifacts/out/directx/graphics.hlsl",
+        "packagePath": r"artifacts\out\directx\graphics.hlsl",
     }
     vulkan_adapter = {
+        "id": "vulkan:shader",
         "target": "vulkan",
-        "packagePath": "artifacts/out/vulkan/simple.spvasm",
+        "adapterKind": "vulkan-shader-adapter",
+        "artifactFormat": "SPIR-V assembly",
+        "packagePath": r"artifacts\out\vulkan\simple.spvasm",
+        "sourcePath": "out/vulkan/simple.spvasm",
+        "sourceBackend": "cgl",
+        "sourceRemap": {
+            "packagePath": r"source-remaps\out\vulkan\simple.source-remap.json",
+            "sourcePath": "out/vulkan/simple.source-remap.json",
+            "status": "ready",
+        },
+        "hostInterface": {
+            "status": "unavailable",
+            "entryPointCount": 0,
+            "resourceCount": 0,
+        },
+        "requiredTools": ["spirv-as"],
+        "hostResponsibilities": [],
+        "validation": {},
     }
     wgsl_adapter = {
         "target": "wgsl",
-        "packagePath": "artifacts/out/wgsl/simple.wgsl",
+        "packagePath": r"artifacts\out\wgsl\simple.wgsl",
     }
 
     assert project_pipeline._runtime_loader_validation_command(directx_adapter) == [
@@ -29416,6 +29793,42 @@ def test_runtime_loader_validation_commands_preserve_posix_package_paths_on_wind
         "wgsl",
         "artifacts/out/wgsl/simple.wgsl",
     ]
+
+    load_unit = project_pipeline._runtime_loader_manifest_load_unit(
+        vulkan_adapter,
+        [
+            {
+                "kind": "resolve-host-interface-metadata",
+                "severity": "warning",
+                "message": "Resolve host interface metadata.",
+                "adapter": "vulkan:shader",
+                "packagePath": r"artifacts\out\vulkan\simple.spvasm",
+            }
+        ],
+    )
+
+    assert load_unit["packagePath"] == "artifacts/out/vulkan/simple.spvasm"
+    assert load_unit["sourceRemap"]["packagePath"] == (
+        "source-remaps/out/vulkan/simple.source-remap.json"
+    )
+    assert [step["packagePath"] for step in load_unit["loadSteps"]] == [
+        "artifacts/out/vulkan/simple.spvasm",
+        "source-remaps/out/vulkan/simple.source-remap.json",
+        "artifacts/out/vulkan/simple.spvasm",
+    ]
+    assert load_unit["loadSteps"][1]["metadata"]["source"]["path"] == (
+        "source-remaps/out/vulkan/simple.source-remap.json"
+    )
+    assert load_unit["loadSteps"][2]["command"] == [
+        "spirv-as",
+        "artifacts/out/vulkan/simple.spvasm",
+        "-o",
+        project_pipeline.os.devnull,
+    ]
+    assert load_unit["blockers"][0]["packagePath"] == (
+        "artifacts/out/vulkan/simple.spvasm"
+    )
+    assert "\\" not in json.dumps(load_unit)
 
 
 def test_runtime_loader_manifest_reports_directx_dxc_entry_profile_metadata(tmp_path):

@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import math
 import os
+import shutil
 import time
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
@@ -15,6 +16,9 @@ from crosstl.translator.codegen import normalize_backend_name
 
 RUNTIME_VERIFICATION_FIXTURES_KIND = "crosstl-runtime-verification-fixtures"
 RUNTIME_VERIFICATION_REPORT_KIND = "crosstl-runtime-verification-report"
+RUNTIME_TEST_MANIFEST_KIND = "crosstl-project-runtime-test-manifest"
+RUNTIME_TEST_PLAN_KIND = "crosstl-project-runtime-test-plan"
+RUNTIME_TEST_REPORT_KIND = "crosstl-project-runtime-test-report"
 RUNTIME_VERIFICATION_SCHEMA_VERSION = 1
 
 PASSED = "passed"
@@ -27,6 +31,63 @@ EXECUTOR_OK_STATUSES = frozenset(("ok", PASSED, "success"))
 EXECUTOR_SKIPPED_STATUSES = frozenset((SKIPPED, "skip"))
 EXECUTOR_UNAVAILABLE_STATUSES = frozenset((UNAVAILABLE, "not-available"))
 EXECUTOR_FAILED_STATUSES = frozenset(("failed", "error", RUNTIME_FAILED))
+RUNTIME_TEST_DEFAULT_ADAPTERS = {
+    "cuda": {
+        "adapterKind": "cuda-runtime-probe",
+        "platformClass": "native-compute",
+        "requiredTools": ("nvcc",),
+    },
+    "directx": {
+        "adapterKind": "directx-runtime-probe",
+        "platformClass": "native-graphics",
+        "requiredTools": ("dxc",),
+    },
+    "hip": {
+        "adapterKind": "hip-runtime-probe",
+        "platformClass": "native-compute",
+        "requiredTools": ("hipcc",),
+    },
+    "metal": {
+        "adapterKind": "metal-runtime-probe",
+        "platformClass": "native-graphics",
+        "requiredTools": ("xcrun",),
+    },
+    "mojo": {
+        "adapterKind": "mojo-runtime-probe",
+        "platformClass": "native-compute",
+        "requiredTools": ("mojo",),
+    },
+    "opengl": {
+        "adapterKind": "opengl-runtime-probe",
+        "platformClass": "native-graphics",
+        "requiredTools": ("glslangValidator",),
+    },
+    "rust": {
+        "adapterKind": "rust-gpu-runtime-probe",
+        "platformClass": "native-compute",
+        "requiredTools": ("rustc",),
+    },
+    "slang": {
+        "adapterKind": "slang-runtime-probe",
+        "platformClass": "native-compute",
+        "requiredTools": ("slangc",),
+    },
+    "vulkan": {
+        "adapterKind": "vulkan-runtime-probe",
+        "platformClass": "native-graphics",
+        "requiredTools": ("spirv-val", "spirv-as"),
+    },
+    "webgl": {
+        "adapterKind": "webgl-runtime-probe",
+        "platformClass": "web-graphics",
+        "requiredTools": ("glslangValidator",),
+    },
+    "wgsl": {
+        "adapterKind": "webgpu-runtime-probe",
+        "platformClass": "web-compute",
+        "requiredTools": ("naga",),
+    },
+}
 
 
 class RuntimeVerificationError(ValueError):
@@ -440,6 +501,111 @@ class RuntimeFixture:
 
 
 @dataclass(frozen=True)
+class RuntimePlatformRequirements:
+    """Platform and dependency requirements for one runtime test adapter."""
+
+    platform_class: str | None = None
+    required_tools: tuple[str, ...] = field(default_factory=tuple)
+    required_environment: tuple[str, ...] = field(default_factory=tuple)
+    runtimes: tuple[str, ...] = field(default_factory=tuple)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if self.platform_class is not None:
+            payload["platformClass"] = self.platform_class
+        if self.required_tools:
+            payload["requiredTools"] = list(self.required_tools)
+        if self.required_environment:
+            payload["requiredEnvironment"] = list(self.required_environment)
+        if self.runtimes:
+            payload["runtimes"] = list(self.runtimes)
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
+
+
+@dataclass(frozen=True)
+class RuntimeTestAdapterSpec:
+    """Runtime adapter entry referenced by project runtime tests."""
+
+    adapter_id: str
+    target: str | None = None
+    executor: str | None = None
+    adapter_kind: str | None = None
+    platform_requirements: RuntimePlatformRequirements = field(
+        default_factory=RuntimePlatformRequirements
+    )
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"id": self.adapter_id}
+        if self.target is not None:
+            payload["target"] = self.target
+        if self.executor is not None:
+            payload["executor"] = self.executor
+        if self.adapter_kind is not None:
+            payload["adapterKind"] = self.adapter_kind
+        platform_requirements = self.platform_requirements.to_json()
+        if platform_requirements:
+            payload["platformRequirements"] = platform_requirements
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
+
+
+@dataclass(frozen=True)
+class RuntimeTestCase:
+    """One project-level runtime test bound to an artifact selector and adapter."""
+
+    fixture: RuntimeFixture
+    adapter: str | None = None
+    platform_requirements: RuntimePlatformRequirements = field(
+        default_factory=RuntimePlatformRequirements
+    )
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        payload = self.fixture.to_json()
+        if self.adapter is not None:
+            payload["adapter"] = self.adapter
+        platform_requirements = self.platform_requirements.to_json()
+        if platform_requirements:
+            payload["platformRequirements"] = platform_requirements
+        if self.metadata:
+            payload["metadata"] = {
+                **dict(payload.get("metadata", {})),
+                **dict(self.metadata),
+            }
+        return payload
+
+
+@dataclass(frozen=True)
+class RuntimeTestManifest:
+    """Parsed project-level runtime test manifest."""
+
+    adapters: tuple[RuntimeTestAdapterSpec, ...] = field(default_factory=tuple)
+    test_cases: tuple[RuntimeTestCase, ...] = field(default_factory=tuple)
+    artifact_manifest: str | None = None
+    project_root: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "kind": RUNTIME_TEST_MANIFEST_KIND,
+            "adapters": [adapter.to_json() for adapter in self.adapters],
+            "tests": [test_case.to_json() for test_case in self.test_cases],
+        }
+        if self.artifact_manifest is not None:
+            payload["artifactManifest"] = self.artifact_manifest
+        if self.project_root is not None:
+            payload["projectRoot"] = self.project_root
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
+
+
+@dataclass(frozen=True)
 class RuntimeExecutionRequest:
     """Input passed to backend-specific runtime executors."""
 
@@ -537,6 +703,46 @@ class RuntimeExecutor:
         raise RuntimeExecutorUnavailable(
             "No runtime execution implementation is configured for "
             f"{request.artifact.get('target')}"
+        )
+
+
+class RuntimeDependencyProbeExecutor(RuntimeExecutor):
+    """Metadata-only executor hook that reports dependency skip diagnostics."""
+
+    def __init__(self, adapter: RuntimeTestAdapterSpec):
+        self.adapter = adapter
+        self.name = adapter.adapter_kind or "runtime-dependency-probe"
+
+    @property
+    def target(self) -> str | None:
+        return self.adapter.target
+
+    def run(self, request: RuntimeExecutionRequest) -> RuntimeExecutorResult:
+        requirements = self.adapter.platform_requirements
+        missing = _missing_platform_requirements(requirements)
+        details = {
+            "adapter": self.adapter.adapter_id,
+            "target": self.adapter.target or request.artifact.get("target"),
+            "platformRequirements": requirements.to_json(),
+            "missingTools": missing["tools"],
+            "missingEnvironment": missing["environment"],
+        }
+        if missing["tools"] or missing["environment"]:
+            missing_labels = missing["tools"] + missing["environment"]
+            return RuntimeExecutorResult(
+                status=SKIPPED,
+                message=(
+                    "Runtime dependencies are unavailable: " + ", ".join(missing_labels)
+                ),
+                details=details,
+            )
+        return RuntimeExecutorResult(
+            status=SKIPPED,
+            message=(
+                "Runtime adapter hook is metadata-only; provide a native "
+                "executor to run this fixture."
+            ),
+            details=details,
         )
 
 
@@ -795,6 +1001,261 @@ def verify_runtime_fixtures(
     return report
 
 
+def load_runtime_test_manifest(
+    manifest_path: str | os.PathLike[str],
+) -> RuntimeTestManifest:
+    """Load a project runtime test manifest from JSON or TOML."""
+
+    path = _filesystem_path_arg(manifest_path, field_name="Runtime test manifest path")
+    try:
+        if path.suffix.lower() == ".toml":
+            payload = _load_toml(path)
+        else:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise RuntimeVerificationError(
+            f"Runtime test manifest could not be read: {exc}"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeVerificationError(
+            f"Runtime test manifest is not valid JSON: {exc}"
+        ) from exc
+    return parse_runtime_test_manifest(payload)
+
+
+def parse_runtime_test_manifest(payload: Any) -> RuntimeTestManifest:
+    """Parse a project-level manifest that maps fixtures to runtime adapters."""
+
+    if isinstance(payload, RuntimeTestManifest):
+        return payload
+    if not isinstance(payload, Mapping):
+        raise RuntimeVerificationError("Runtime test manifest must be an object.")
+    if payload.get("kind") not in (None, RUNTIME_TEST_MANIFEST_KIND):
+        raise RuntimeVerificationError(
+            "Runtime test manifest kind must be " f"{RUNTIME_TEST_MANIFEST_KIND}."
+        )
+
+    adapters = tuple(
+        _parse_runtime_test_adapter(adapter, index=index)
+        for index, adapter in enumerate(
+            _required_sequence(payload.get("adapters", []), field_name="adapters")
+        )
+    )
+    adapter_by_id = {adapter.adapter_id: adapter for adapter in adapters}
+    if len(adapter_by_id) != len(adapters):
+        raise RuntimeVerificationError("Runtime test adapter ids must be unique.")
+
+    test_payloads = payload.get("tests", payload.get("fixtures", []))
+    test_cases = tuple(
+        _parse_runtime_test_case(
+            test_case,
+            index=index,
+            adapters=adapter_by_id,
+        )
+        for index, test_case in enumerate(
+            _required_sequence(test_payloads, field_name="tests")
+        )
+    )
+    fixture_ids = [test_case.fixture.id for test_case in test_cases]
+    if len(set(fixture_ids)) != len(fixture_ids):
+        raise RuntimeVerificationError("Runtime test fixture ids must be unique.")
+
+    metadata = payload.get("metadata", {})
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, Mapping):
+        raise RuntimeVerificationError("metadata must be an object.")
+    return RuntimeTestManifest(
+        adapters=adapters,
+        test_cases=test_cases,
+        artifact_manifest=_optional_string(
+            payload.get("artifactManifest"),
+            field_name="artifactManifest",
+        ),
+        project_root=_optional_string(
+            payload.get("projectRoot"),
+            field_name="projectRoot",
+        ),
+        metadata=dict(metadata),
+    )
+
+
+def default_runtime_test_adapters(
+    targets: Sequence[str] | None = None,
+) -> tuple[RuntimeTestAdapterSpec, ...]:
+    """Return metadata-only runtime probe adapters for known target classes."""
+
+    target_names = (
+        sorted(RUNTIME_TEST_DEFAULT_ADAPTERS)
+        if targets is None
+        else [
+            _normalize_target(target)
+            for target in targets
+            if isinstance(target, str) and target.strip()
+        ]
+    )
+    adapters = [
+        _runtime_test_default_adapter(target)
+        for target in target_names
+        if target in RUNTIME_TEST_DEFAULT_ADAPTERS
+    ]
+    return tuple(adapters)
+
+
+def plan_runtime_test_manifest(
+    artifact_report: str | os.PathLike[str] | Mapping[str, Any],
+    manifest: (
+        str | os.PathLike[str] | Mapping[str, Any] | RuntimeTestManifest | None
+    ) = None,
+    *,
+    project_root: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Plan project runtime tests without requiring native runtime execution."""
+
+    runtime_manifest, manifest_source = _load_runtime_test_manifest_argument(
+        artifact_report if manifest is None else manifest
+    )
+    artifact_input = (
+        _runtime_test_manifest_artifact_input(runtime_manifest, manifest_source)
+        if manifest is None
+        else artifact_report
+    )
+    artifact_payload, artifact_source = _load_artifact_payload(artifact_input)
+    root_path = _runtime_project_root(
+        artifact_payload,
+        artifact_source=artifact_source,
+        override=project_root or runtime_manifest.project_root,
+    )
+    adapters = _runtime_test_adapters(runtime_manifest, artifact_payload)
+    adapter_by_id = {adapter.adapter_id: adapter for adapter in adapters}
+    test_cases = [
+        _runtime_test_case_with_adapter(test_case, adapter_by_id)
+        for test_case in runtime_manifest.test_cases
+    ]
+    cases = [
+        _runtime_test_plan_case(
+            test_case,
+            artifact_payload,
+            root_path=root_path,
+            adapter_by_id=adapter_by_id,
+        )
+        for test_case in test_cases
+    ]
+    summary = _runtime_test_summary(cases)
+    return {
+        "schemaVersion": RUNTIME_VERIFICATION_SCHEMA_VERSION,
+        "kind": RUNTIME_TEST_PLAN_KIND,
+        "generatedAt": int(time.time()),
+        "success": summary["failedCount"] == 0,
+        "sourceArtifacts": {
+            "path": str(artifact_source) if artifact_source is not None else None,
+            "kind": artifact_payload.get("kind"),
+        },
+        "sourceManifest": str(manifest_source) if manifest_source is not None else None,
+        "projectRoot": str(root_path) if root_path is not None else None,
+        "summary": summary,
+        "adapters": [adapter.to_json() for adapter in adapters],
+        "testCases": cases,
+    }
+
+
+def verify_runtime_test_manifest(
+    artifact_report: str | os.PathLike[str] | Mapping[str, Any],
+    manifest: (
+        str | os.PathLike[str] | Mapping[str, Any] | RuntimeTestManifest | None
+    ) = None,
+    *,
+    executors: Mapping[str, Any] | Sequence[Any] | None = None,
+    project_root: str | os.PathLike[str] | None = None,
+    output_path: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Run or skip project runtime tests from a backend-agnostic manifest."""
+
+    runtime_manifest, manifest_source = _load_runtime_test_manifest_argument(
+        artifact_report if manifest is None else manifest
+    )
+    artifact_input = (
+        _runtime_test_manifest_artifact_input(runtime_manifest, manifest_source)
+        if manifest is None
+        else artifact_report
+    )
+    artifact_payload, artifact_source = _load_artifact_payload(artifact_input)
+    root_path = _runtime_project_root(
+        artifact_payload,
+        artifact_source=artifact_source,
+        override=project_root or runtime_manifest.project_root,
+    )
+    adapters = _runtime_test_adapters(runtime_manifest, artifact_payload)
+    adapter_by_id = {adapter.adapter_id: adapter for adapter in adapters}
+    test_cases = [
+        _runtime_test_case_with_adapter(test_case, adapter_by_id)
+        for test_case in runtime_manifest.test_cases
+    ]
+    plan_cases = [
+        _runtime_test_plan_case(
+            test_case,
+            artifact_payload,
+            root_path=root_path,
+            adapter_by_id=adapter_by_id,
+        )
+        for test_case in test_cases
+    ]
+    preplanned_results = {
+        plan_case["fixture"]: _runtime_test_planned_result(test_case, plan_case)
+        for test_case, plan_case in zip(test_cases, plan_cases)
+        if plan_case["status"] in {SKIPPED, TRANSLATION_FAILED, RUNTIME_FAILED}
+    }
+    runnable = [
+        test_case.fixture
+        for test_case, plan_case in zip(test_cases, plan_cases)
+        if plan_case["fixture"] not in preplanned_results
+    ]
+    executor_registry = _runtime_test_executor_registry(adapters, executors)
+    run_results: dict[str, dict[str, Any]] = {}
+    if runnable:
+        run_report = verify_runtime_fixtures(
+            artifact_payload,
+            runnable,
+            executors=executor_registry,
+            project_root=root_path,
+        )
+        run_results = {
+            result["fixture"]: result
+            for result in run_report.get("results", [])
+            if isinstance(result, Mapping)
+        }
+    results = [
+        preplanned_results.get(test_case.fixture.id)
+        or run_results.get(test_case.fixture.id)
+        or _runtime_test_missing_result(test_case)
+        for test_case in test_cases
+    ]
+    summary = _runtime_verification_summary(results)
+    report = {
+        "schemaVersion": RUNTIME_VERIFICATION_SCHEMA_VERSION,
+        "kind": RUNTIME_TEST_REPORT_KIND,
+        "generatedAt": int(time.time()),
+        "success": summary["failedCount"] == 0,
+        "sourceArtifacts": {
+            "path": str(artifact_source) if artifact_source is not None else None,
+            "kind": artifact_payload.get("kind"),
+        },
+        "sourceManifest": str(manifest_source) if manifest_source is not None else None,
+        "projectRoot": str(root_path) if root_path is not None else None,
+        "summary": summary,
+        "runtimeTestPlan": {
+            "kind": RUNTIME_TEST_PLAN_KIND,
+            "summary": _runtime_test_summary(plan_cases),
+            "adapters": [adapter.to_json() for adapter in adapters],
+            "testCases": plan_cases,
+        },
+        "results": results,
+    }
+    if output_path is not None:
+        write_runtime_test_report(report, output_path)
+    return report
+
+
 def write_runtime_verification_report(
     report: Mapping[str, Any], output_path: str | os.PathLike[str]
 ) -> None:
@@ -808,6 +1269,513 @@ def write_runtime_verification_report(
         json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+
+
+def write_runtime_test_report(
+    report: Mapping[str, Any], output_path: str | os.PathLike[str]
+) -> None:
+    """Write a project runtime test report as deterministic JSON."""
+
+    path = _filesystem_path_arg(
+        output_path, field_name="Runtime test report output path"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _load_runtime_test_manifest_argument(
+    manifest: str | os.PathLike[str] | Mapping[str, Any] | RuntimeTestManifest,
+) -> tuple[RuntimeTestManifest, Path | None]:
+    if isinstance(manifest, RuntimeTestManifest):
+        return manifest, None
+    if isinstance(manifest, (str, os.PathLike)):
+        path = _filesystem_path_arg(manifest, field_name="Runtime test manifest path")
+        return load_runtime_test_manifest(path), path
+    if isinstance(manifest, Mapping):
+        return parse_runtime_test_manifest(manifest), None
+    raise RuntimeVerificationError(
+        "Runtime test manifest must be a manifest path or object."
+    )
+
+
+def _runtime_test_manifest_artifact_input(
+    manifest: RuntimeTestManifest, manifest_source: Path | None
+) -> str | os.PathLike[str]:
+    if manifest.artifact_manifest is None:
+        raise RuntimeVerificationError(
+            "Runtime test manifest must include artifactManifest when no "
+            "artifact report argument is provided."
+        )
+    artifact_path = Path(manifest.artifact_manifest)
+    if not artifact_path.is_absolute() and manifest_source is not None:
+        artifact_path = manifest_source.parent / artifact_path
+    return artifact_path
+
+
+def _parse_runtime_test_adapter(value: Any, *, index: int) -> RuntimeTestAdapterSpec:
+    if isinstance(value, RuntimeTestAdapterSpec):
+        return value
+    if not isinstance(value, Mapping):
+        raise RuntimeVerificationError(f"adapters[{index}] must be an object.")
+    adapter_id = _required_string(value.get("id"), field_name=f"adapters[{index}].id")
+    target = _optional_string(
+        value.get("target"), field_name=f"adapters[{index}].target"
+    )
+    normalized_target = _normalize_target(target) if target is not None else None
+    default_adapter = (
+        _runtime_test_default_adapter(normalized_target)
+        if normalized_target in RUNTIME_TEST_DEFAULT_ADAPTERS
+        else None
+    )
+    platform_requirements = _parse_runtime_platform_requirements(
+        value.get("platformRequirements", value),
+        field_name=f"adapters[{index}].platformRequirements",
+        defaults=(
+            default_adapter.platform_requirements
+            if default_adapter is not None
+            else RuntimePlatformRequirements()
+        ),
+    )
+    metadata = value.get("metadata", {})
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, Mapping):
+        raise RuntimeVerificationError(f"adapters[{index}].metadata must be an object.")
+    return RuntimeTestAdapterSpec(
+        adapter_id=adapter_id,
+        target=normalized_target,
+        executor=_optional_string(
+            value.get("executor"), field_name=f"adapters[{index}].executor"
+        )
+        or normalized_target
+        or adapter_id,
+        adapter_kind=(
+            _optional_string(
+                value.get("adapterKind"), field_name=f"adapters[{index}].adapterKind"
+            )
+            or (default_adapter.adapter_kind if default_adapter is not None else None)
+        ),
+        platform_requirements=platform_requirements,
+        metadata=dict(metadata),
+    )
+
+
+def _parse_runtime_test_case(
+    value: Any,
+    *,
+    index: int,
+    adapters: Mapping[str, RuntimeTestAdapterSpec],
+) -> RuntimeTestCase:
+    if isinstance(value, RuntimeTestCase):
+        return value
+    if not isinstance(value, Mapping):
+        raise RuntimeVerificationError(f"tests[{index}] must be an object.")
+    adapter_id = _optional_string(
+        value.get("adapter", value.get("adapterId")),
+        field_name=f"tests[{index}].adapter",
+    )
+    adapter = adapters.get(adapter_id) if adapter_id is not None else None
+    if adapter_id is not None and adapter is None:
+        raise RuntimeVerificationError(
+            f"tests[{index}].adapter references unknown adapter {adapter_id}."
+        )
+    fixture_payload = _runtime_test_fixture_payload(value)
+    if adapter is not None and "executor" not in fixture_payload:
+        fixture_payload["executor"] = adapter.executor or adapter.adapter_id
+    fixture = _parse_runtime_fixture(fixture_payload, index=index)
+    platform_requirements = _parse_runtime_platform_requirements(
+        value.get("platformRequirements", {}),
+        field_name=f"tests[{index}].platformRequirements",
+        defaults=(
+            adapter.platform_requirements
+            if adapter is not None
+            else RuntimePlatformRequirements()
+        ),
+    )
+    metadata = value.get("metadata", {})
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, Mapping):
+        raise RuntimeVerificationError(f"tests[{index}].metadata must be an object.")
+    return RuntimeTestCase(
+        fixture=fixture,
+        adapter=adapter_id,
+        platform_requirements=platform_requirements,
+        metadata=dict(metadata),
+    )
+
+
+def _runtime_test_fixture_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+    fixture_record = value.get("fixture")
+    if fixture_record is not None:
+        if not isinstance(fixture_record, Mapping):
+            raise RuntimeVerificationError("Runtime test fixture must be an object.")
+        payload = dict(fixture_record)
+    else:
+        payload = dict(value)
+    if "artifact" in value and not any(
+        key in payload for key in ("selector", "artifactSelector", "artifact")
+    ):
+        payload["selector"] = value["artifact"]
+    return payload
+
+
+def _parse_runtime_platform_requirements(
+    value: Any,
+    *,
+    field_name: str,
+    defaults: RuntimePlatformRequirements | None = None,
+) -> RuntimePlatformRequirements:
+    defaults = defaults or RuntimePlatformRequirements()
+    if value is None:
+        value = {}
+    if isinstance(value, RuntimePlatformRequirements):
+        return _merge_runtime_platform_requirements(defaults, value)
+    if not isinstance(value, Mapping):
+        raise RuntimeVerificationError(f"{field_name} must be an object.")
+    platform_class = _optional_string(
+        value.get("platformClass", value.get("platform")),
+        field_name=f"{field_name}.platformClass",
+    )
+    requirements = RuntimePlatformRequirements(
+        platform_class=platform_class or defaults.platform_class,
+        required_tools=_merge_string_tuples(
+            defaults.required_tools,
+            _string_tuple(
+                value.get("requiredTools", value.get("tools", ())),
+                field_name=f"{field_name}.requiredTools",
+            ),
+        ),
+        required_environment=_merge_string_tuples(
+            defaults.required_environment,
+            _string_tuple(
+                value.get(
+                    "requiredEnvironment",
+                    value.get("environment", value.get("env", ())),
+                ),
+                field_name=f"{field_name}.requiredEnvironment",
+            ),
+        ),
+        runtimes=_merge_string_tuples(
+            defaults.runtimes,
+            _string_tuple(
+                value.get("runtimes", value.get("runtime", ())),
+                field_name=f"{field_name}.runtimes",
+            ),
+        ),
+        metadata={
+            **dict(defaults.metadata),
+            **(
+                dict(value.get("metadata"))
+                if isinstance(value.get("metadata"), Mapping)
+                else {}
+            ),
+        },
+    )
+    return requirements
+
+
+def _string_tuple(value: Any, *, field_name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (_required_string(value, field_name=field_name),)
+    items = _required_sequence(value, field_name=field_name)
+    result = []
+    for index, item in enumerate(items):
+        result.append(_required_string(item, field_name=f"{field_name}[{index}]"))
+    return tuple(result)
+
+
+def _merge_string_tuples(
+    base: Sequence[str], override: Sequence[str]
+) -> tuple[str, ...]:
+    result: list[str] = []
+    for value in tuple(base) + tuple(override):
+        if value not in result:
+            result.append(value)
+    return tuple(result)
+
+
+def _merge_runtime_platform_requirements(
+    base: RuntimePlatformRequirements, override: RuntimePlatformRequirements
+) -> RuntimePlatformRequirements:
+    return RuntimePlatformRequirements(
+        platform_class=override.platform_class or base.platform_class,
+        required_tools=_merge_string_tuples(
+            base.required_tools, override.required_tools
+        ),
+        required_environment=_merge_string_tuples(
+            base.required_environment, override.required_environment
+        ),
+        runtimes=_merge_string_tuples(base.runtimes, override.runtimes),
+        metadata={**dict(base.metadata), **dict(override.metadata)},
+    )
+
+
+def _runtime_test_default_adapter(target: str) -> RuntimeTestAdapterSpec:
+    entry = RUNTIME_TEST_DEFAULT_ADAPTERS[target]
+    return RuntimeTestAdapterSpec(
+        adapter_id=f"{target}-runtime-probe",
+        target=target,
+        executor=target,
+        adapter_kind=str(entry["adapterKind"]),
+        platform_requirements=RuntimePlatformRequirements(
+            platform_class=str(entry["platformClass"]),
+            required_tools=tuple(str(tool) for tool in entry["requiredTools"]),
+            metadata={"source": "default-runtime-test-adapter"},
+        ),
+    )
+
+
+def _runtime_test_adapters(
+    manifest: RuntimeTestManifest, artifact_payload: Mapping[str, Any]
+) -> tuple[RuntimeTestAdapterSpec, ...]:
+    _ = artifact_payload
+    adapters = {adapter.adapter_id: adapter for adapter in manifest.adapters}
+    targets = {
+        test_case.fixture.selector.target
+        for test_case in manifest.test_cases
+        if test_case.adapter is None
+        if test_case.fixture.selector.target is not None
+    }
+    for target in sorted(targets):
+        if target in RUNTIME_TEST_DEFAULT_ADAPTERS:
+            default_adapter = _runtime_test_default_adapter(target)
+            adapters.setdefault(default_adapter.adapter_id, default_adapter)
+    return tuple(adapters.values())
+
+
+def _runtime_test_case_with_adapter(
+    test_case: RuntimeTestCase,
+    adapter_by_id: Mapping[str, RuntimeTestAdapterSpec],
+) -> RuntimeTestCase:
+    if test_case.adapter is not None:
+        return test_case
+    target = test_case.fixture.selector.target
+    if target is None:
+        return test_case
+    default_id = f"{target}-runtime-probe"
+    adapter = adapter_by_id.get(default_id)
+    if adapter is None:
+        return test_case
+    fixture = test_case.fixture
+    if fixture.executor is None:
+        fixture = replace(fixture, executor=adapter.executor or adapter.adapter_id)
+    return RuntimeTestCase(
+        fixture=fixture,
+        adapter=adapter.adapter_id,
+        platform_requirements=_merge_runtime_platform_requirements(
+            adapter.platform_requirements,
+            test_case.platform_requirements,
+        ),
+        metadata=test_case.metadata,
+    )
+
+
+def _runtime_test_plan_case(
+    test_case: RuntimeTestCase,
+    artifact_payload: Mapping[str, Any],
+    *,
+    root_path: Path | None,
+    adapter_by_id: Mapping[str, RuntimeTestAdapterSpec],
+) -> dict[str, Any]:
+    selected = _select_runtime_artifact(artifact_payload, test_case.fixture.selector)
+    adapter = (
+        adapter_by_id.get(test_case.adapter) if test_case.adapter is not None else None
+    )
+    case_payload = {
+        "fixture": test_case.fixture.id,
+        "selector": test_case.fixture.selector.to_json(),
+        "adapter": adapter.to_json() if adapter is not None else None,
+        "platformRequirements": test_case.platform_requirements.to_json(),
+        "status": "planned",
+        "diagnostics": [],
+    }
+    if selected["status"] != PASSED:
+        case_payload.update(
+            {
+                "status": selected["status"],
+                "failurePhase": selected.get("failurePhase"),
+                "artifact": _artifact_result_payload(selected.get("artifact")),
+                "diagnostics": [
+                    dict(diagnostic)
+                    for diagnostic in selected.get("diagnostics", [])
+                    if isinstance(diagnostic, Mapping)
+                ],
+            }
+        )
+        return case_payload
+
+    artifact = selected["artifact"]
+    artifact_path = _runtime_artifact_path(artifact, root_path=root_path)
+    adapter_contract = _runtime_adapter_contract(test_case.fixture, artifact)
+    request = RuntimeExecutionRequest(
+        fixture=test_case.fixture,
+        artifact=artifact,
+        artifact_path=artifact_path,
+        project_root=root_path,
+        adapter_contract=adapter_contract,
+    )
+    execution_plan = prepare_runtime_execution(request)
+    diagnostics = list(execution_plan.diagnostics)
+    missing = _missing_platform_requirements(test_case.platform_requirements)
+    if missing["tools"] or missing["environment"]:
+        diagnostics.append(
+            _runtime_test_platform_skip_diagnostic(
+                test_case,
+                artifact,
+                missing=missing,
+            )
+        )
+        status = SKIPPED
+        failure_phase = "platform-requirements"
+    elif _runtime_diagnostics_have_errors(diagnostics):
+        status = RUNTIME_FAILED
+        failure_phase = "runtime-setup"
+    else:
+        status = "planned"
+        failure_phase = None
+    case_payload.update(
+        {
+            "status": status,
+            "artifact": _artifact_result_payload(artifact),
+            "runtimeAdapter": adapter_contract.to_json(),
+            "runtimeExecution": execution_plan.to_json(),
+            "diagnostics": diagnostics,
+        }
+    )
+    if failure_phase is not None:
+        case_payload["failurePhase"] = failure_phase
+    return case_payload
+
+
+def _runtime_test_summary(cases: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    statuses = Counter(case.get("status") for case in cases)
+    failed_count = statuses[TRANSLATION_FAILED] + statuses[RUNTIME_FAILED]
+    failed_count += statuses[COMPARISON_FAILED]
+    return {
+        "testCount": len(cases),
+        "plannedCount": statuses["planned"],
+        "skippedCount": statuses[SKIPPED],
+        "unavailableCount": statuses[UNAVAILABLE],
+        "translationFailedCount": statuses[TRANSLATION_FAILED],
+        "runtimeFailedCount": statuses[RUNTIME_FAILED],
+        "comparisonFailedCount": statuses[COMPARISON_FAILED],
+        "failedCount": failed_count,
+    }
+
+
+def _runtime_test_planned_result(
+    test_case: RuntimeTestCase, plan_case: Mapping[str, Any]
+) -> dict[str, Any]:
+    executor_key = test_case.fixture.executor
+    status = str(plan_case.get("status"))
+    executor_payload = None
+    if status == SKIPPED:
+        diagnostics = [
+            diagnostic
+            for diagnostic in _runtime_record_sequence(plan_case.get("diagnostics"))
+            if isinstance(diagnostic, Mapping)
+        ]
+        skip_diagnostic = diagnostics[-1] if diagnostics else {}
+        executor_payload = {
+            "key": executor_key,
+            "status": SKIPPED,
+            "message": skip_diagnostic.get("message"),
+            "details": {
+                "platformRequirements": plan_case.get("platformRequirements", {}),
+                "missingTools": skip_diagnostic.get("missingTools", []),
+                "missingEnvironment": skip_diagnostic.get("missingEnvironment", []),
+            },
+        }
+    result = {
+        "fixture": test_case.fixture.id,
+        "selector": test_case.fixture.selector.to_json(),
+        "status": status,
+        "artifact": plan_case.get("artifact"),
+        "executor": executor_payload,
+        "comparisons": [],
+        "diagnostics": [
+            dict(diagnostic)
+            for diagnostic in _runtime_record_sequence(plan_case.get("diagnostics"))
+            if isinstance(diagnostic, Mapping)
+        ],
+    }
+    for key in ("runtimeAdapter", "runtimeExecution", "failurePhase"):
+        if key in plan_case:
+            result[key] = plan_case[key]
+    return result
+
+
+def _runtime_test_missing_result(test_case: RuntimeTestCase) -> dict[str, Any]:
+    return _fixture_result(
+        test_case.fixture,
+        status=RUNTIME_FAILED,
+        failure_phase="runtime",
+        diagnostics=[
+            _diagnostic(
+                "error",
+                "project.runtime-test.result-missing",
+                "Runtime test did not produce a result.",
+            )
+        ],
+    )
+
+
+def _runtime_test_executor_registry(
+    adapters: Sequence[RuntimeTestAdapterSpec],
+    executors: Mapping[str, Any] | Sequence[Any] | None,
+) -> dict[str, Any]:
+    registry = _executor_registry(executors)
+    for adapter in adapters:
+        executor_key = _normalize_target(adapter.executor or adapter.adapter_id)
+        registry.setdefault(executor_key, RuntimeDependencyProbeExecutor(adapter))
+    return registry
+
+
+def _runtime_test_platform_skip_diagnostic(
+    test_case: RuntimeTestCase,
+    artifact: Mapping[str, Any],
+    *,
+    missing: Mapping[str, list[str]],
+) -> dict[str, Any]:
+    missing_labels = list(missing.get("tools", [])) + list(
+        missing.get("environment", [])
+    )
+    message = (
+        "Runtime test skipped because platform requirements are unavailable: "
+        + ", ".join(missing_labels)
+    )
+    return _runtime_execution_diagnostic(
+        "note",
+        "project.runtime-test.platform-requirements-unavailable",
+        message,
+        artifact,
+        fixture=test_case.fixture.id,
+        adapter=test_case.adapter,
+        platformRequirements=test_case.platform_requirements.to_json(),
+        missingTools=list(missing.get("tools", [])),
+        missingEnvironment=list(missing.get("environment", [])),
+    )
+
+
+def _missing_platform_requirements(
+    requirements: RuntimePlatformRequirements,
+) -> dict[str, list[str]]:
+    return {
+        "tools": [
+            tool for tool in requirements.required_tools if shutil.which(tool) is None
+        ],
+        "environment": [
+            name
+            for name in requirements.required_environment
+            if not os.environ.get(name)
+        ],
+    }
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -1651,7 +2619,10 @@ def _verify_runtime_fixture(
             adapter_contract=adapter_contract,
             runtime_execution=execution_plan,
             executor=executor_payload,
-            diagnostics=setup_diagnostics,
+            diagnostics=setup_diagnostics
+            + _runtime_executor_status_diagnostics(
+                SKIPPED, target=target, execution=execution
+            ),
         )
     if normalized_status in EXECUTOR_UNAVAILABLE_STATUSES:
         return _fixture_result(
@@ -1662,7 +2633,10 @@ def _verify_runtime_fixture(
             adapter_contract=adapter_contract,
             runtime_execution=execution_plan,
             executor=executor_payload,
-            diagnostics=setup_diagnostics,
+            diagnostics=setup_diagnostics
+            + _runtime_executor_status_diagnostics(
+                UNAVAILABLE, target=target, execution=execution
+            ),
         )
     if normalized_status in EXECUTOR_FAILED_STATUSES:
         return _fixture_result(
@@ -2413,6 +3387,33 @@ def _executor_availability(
     raise RuntimeVerificationError("Executor availability probe returned invalid data.")
 
 
+def _runtime_executor_status_diagnostics(
+    status: str, *, target: str, execution: RuntimeExecutorResult
+) -> list[dict[str, Any]]:
+    if not execution.message and not execution.details:
+        return []
+    code = (
+        "project.runtime-verification.fixture-skipped"
+        if status == SKIPPED
+        else "project.runtime-verification.executor-unavailable"
+    )
+    message = execution.message or (
+        "Runtime fixture was skipped."
+        if status == SKIPPED
+        else "Runtime executor is unavailable."
+    )
+    return [
+        _diagnostic(
+            "note",
+            code,
+            message,
+            target=target,
+            executorStatus=status,
+            executorDetails=dict(execution.details) if execution.details else None,
+        )
+    ]
+
+
 def _normalize_executor_result(value: Any) -> RuntimeExecutorResult:
     if isinstance(value, RuntimeExecutorResult):
         return value
@@ -2706,6 +3707,8 @@ def _artifact_result_payload(
         "variant",
         "status",
         "error",
+        "toolchain",
+        "toolchainRuns",
     ):
         if field_name in artifact:
             payload[field_name] = artifact[field_name]
