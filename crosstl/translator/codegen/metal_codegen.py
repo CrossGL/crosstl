@@ -4077,9 +4077,9 @@ class MetalCodeGen:
         if shader_type is None and body is None:
             semantic = self.semantic_from_node(func)
             function_name = entry_name or func.name
+            semantic_attr = self.map_non_stage_function_semantic(semantic)
             code += (
-                f"{return_type} {function_name}({params_str}) "
-                f"{self.map_semantic(semantic)};\n\n"
+                f"{return_type} {function_name}({params_str}){semantic_attr};\n\n"
             )
             self.current_function_name = previous_function_name
             self.current_function_return_type = previous_function_return_type
@@ -4374,7 +4374,8 @@ class MetalCodeGen:
         else:
             semantic = self.semantic_from_node(func)
             function_name = entry_name or func.name
-            code += f"{return_type} {function_name}({params_str}) {self.map_semantic(semantic)} {{\n"
+            semantic_attr = self.map_non_stage_function_semantic(semantic)
+            code += f"{return_type} {function_name}({params_str}){semantic_attr} {{\n"
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_sampler_parameter_array_sizes = (
@@ -17730,6 +17731,22 @@ class MetalCodeGen:
             if hasattr(attr, "name"):
                 return attr.name
         return None
+
+    def map_non_stage_function_semantic(self, semantic):
+        if self.is_legacy_glsl_fragment_output_semantic(semantic):
+            return ""
+        return self.map_semantic(semantic)
+
+    def is_legacy_glsl_fragment_output_semantic(self, semantic):
+        if semantic is None:
+            return False
+        semantic_text = str(semantic)
+        return (
+            semantic_text == "gl_FragData"
+            or semantic_text.startswith("gl_FragData[")
+            or semantic_text == "gl_FragColor"
+            or re.fullmatch(r"gl_FragColor\d+", semantic_text) is not None
+        )
 
     def map_resource_type_with_format(self, vtype, node=None):
         if vtype is None:

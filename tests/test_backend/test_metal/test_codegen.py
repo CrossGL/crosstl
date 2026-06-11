@@ -1,4 +1,6 @@
 import re
+import shutil
+import subprocess
 from typing import List
 
 import pytest
@@ -350,6 +352,37 @@ def test_codegen_xhalf_vectors_lower_before_opengl_generation():
     assert "out vec3 viewDir;" in glsl
     assert "xhalf" not in glsl
     assert "f16vec3" not in glsl
+
+
+def test_codegen_stage_input_reference_struct_lowers_to_flat_opengl_inputs(tmp_path):
+    code = """
+    struct VertexInput {
+        float3 position [[attribute(0)]];
+        float3 normal [[attribute(1)]];
+    };
+
+    vertex float4 main_vertex(const VertexInput& input [[stage_in]]) {
+        return float4(input.position + input.normal, 1.0);
+    }
+    """
+
+    crossgl = convert(code)
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "in VertexInput" not in glsl
+    assert "in struct" not in glsl
+    assert "struct VertexInput" not in glsl
+    assert "layout(location = 0) in vec3 position;" in glsl
+    assert "layout(location = 1) in vec3 normal;" in glsl
+    assert "gl_Position = vec4((position + normal), 1.0);" in glsl
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "metal_stage_input_reference.vert"
+    source.write_text(glsl, encoding="utf-8")
+    subprocess.run([glslang, "-S", "vert", str(source)], check=True)
 
 
 def test_codegen_packed_integer_vertex_storage_types_do_not_leak_metal_names():
@@ -1864,6 +1897,44 @@ def test_directx_codegen_lowers_native_metal_entry_buffer_parameters_to_resource
     assert "float* B" not in hlsl
     assert "float* X" not in hlsl
     assert "thread_position_in_grid" not in hlsl
+
+
+def test_glsl_codegen_lowers_native_metal_entry_buffer_parameters_to_resources():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Params {
+        uint row_dim_x;
+        uint col_dim_x;
+        uint inner_dim;
+    };
+
+    kernel void matmul(constant Params* params [[buffer(0)]],
+                       constant float* A [[buffer(1)]],
+                       constant float* B [[buffer(2)]],
+                       device float* X [[buffer(3)]]) {
+        X[0] = A[0] + B[0];
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    glsl = GLSLCodeGen().generate(ast)
+
+    assert "layout(std140, binding = 0) uniform Params" in glsl
+    assert "uint row_dim_x;" in glsl
+    assert "} params;" in glsl
+    assert "layout(std430, binding = 1) readonly buffer ABuffer" in glsl
+    assert "float A[];" in glsl
+    assert "layout(std430, binding = 2) readonly buffer BBuffer" in glsl
+    assert "float B[];" in glsl
+    assert "layout(std430, binding = 3) buffer XBuffer" in glsl
+    assert "float X[];" in glsl
+    assert "void main()" in glsl
+    assert "constant Params* params" not in glsl
+    assert "constant float* A" not in glsl
+    assert "constant float* B" not in glsl
+    assert "device float* X" not in glsl
 
 
 def test_codegen_mlx_multi_entry_opengl_resource_bindings_do_not_overlap():
