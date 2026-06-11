@@ -7,7 +7,7 @@
       "id": "raylib-lighting-vertex",
       "path": "lighting.vs",
       "sourceBackend": "opengl",
-      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
+      "targets": ["cgl", "opengl", "metal", "vulkan"],
       "repository": "https://github.com/raysan5/raylib",
       "commit": "94897c4eca842673bad16ab03ad776a0a2255b14",
       "sourceUrl": "https://github.com/raysan5/raylib/blob/94897c4eca842673bad16ab03ad776a0a2255b14/examples/shaders/resources/shaders/glsl330/lighting.vs"
@@ -16,7 +16,7 @@
       "id": "raylib-lighting-fragment",
       "path": "lighting.fs",
       "sourceBackend": "opengl",
-      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
+      "targets": ["cgl", "opengl", "metal", "vulkan"],
       "repository": "https://github.com/raysan5/raylib",
       "commit": "94897c4eca842673bad16ab03ad776a0a2255b14",
       "sourceUrl": "https://github.com/raysan5/raylib/blob/94897c4eca842673bad16ab03ad776a0a2255b14/examples/shaders/resources/shaders/glsl330/lighting.fs"

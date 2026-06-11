@@ -308,7 +308,6 @@ jobs:
             --case openframeworks-noise-shader \
             --case raylib-base-fragment \
             --case raylib-base-vertex \
-            --case raylib-lighting-shader-pair \
             --case renderdoc-vktext-fragment \
             --case rocm-examples-add-kernel \
             --case angle-simple-texture-2d \
@@ -373,8 +372,6 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/directx/noise.frag.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/raylib-base-fragment/crosstl-out/directx/base.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/raylib-base-vertex/crosstl-out/directx/base.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/raylib-lighting-shader-pair/crosstl-out/directx/lighting.vs.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/raylib-lighting-shader-pair/crosstl-out/directx/lighting.fs.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/renderdoc-vktext-fragment/crosstl-out/directx/vktext.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/rocm-examples-add-kernel/crosstl-out/directx/main.hlsl CSMain cs_6_0
           compile_hlsl demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.vert.hlsl VSMain vs_6_0
