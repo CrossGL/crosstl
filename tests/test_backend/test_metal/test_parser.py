@@ -452,6 +452,49 @@ def test_parse_block_scope_typedef_alias_from_mlx_fp_quantized():
     assert body[2].left.array_sizes == ["8"]
 
 
+def test_parse_dependent_numeric_template_call_from_mlx_fp_quantized():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Path: mlx/backend/metal/kernels/fp_quantized.h
+    code = """
+    template <typename U, int values_per_thread, int bits>
+    inline U qdot(thread U* result);
+
+    template <typename U, const int group_size, int bits>
+    void fp_qvm_impl(thread U* result) {
+        constexpr int pack_factor = 8 / bits;
+        constexpr int tn = group_size / pack_factor;
+        qdot<U, tn * pack_factor, bits>(result);
+    }
+    """
+    ast = parse_ok(code)
+    call = ast.functions[0].body[2]
+
+    assert isinstance(call, FunctionCallNode)
+    assert call.name == "qdot<U,tn*pack_factor,bits>"
+
+
+def test_numeric_template_parse_error_reports_context_and_position():
+    code = """
+    template <int N>
+    void broken() {
+        g<N * 2>(;
+    }
+    """
+
+    with pytest.raises(SyntaxError) as excinfo:
+        parse_code(code)
+
+    error = excinfo.value
+    assert "function broken" in str(error)
+    assert "line" in str(error)
+    assert "column" in str(error)
+    assert getattr(error, "declaration_context", None) == "function broken"
+    location = getattr(error, "source_location", {})
+    assert location["line"] >= 4
+    assert location["column"] >= 1
+
+
 def test_parse_template_struct_default_bool_relational_from_tinygrad_metal():
     # Reduced from:
     # Repo: https://github.com/tinygrad/tinygrad
