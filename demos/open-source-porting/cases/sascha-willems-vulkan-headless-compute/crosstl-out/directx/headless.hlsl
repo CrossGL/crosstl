@@ -18,8 +18,8 @@ uint fibonacci(uint n) {
 
 // Compute Shader
 [numthreads(1, 1, 1)]
-void CSMain(uint3 gl_GlobalInvocationID : SV_DispatchThreadID) {
-    uint index = gl_GlobalInvocationID.x;
+void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID) {
+    uint index = dispatchThreadID.x;
     if ((index >= BUFFER_ELEMENTS)) {
         return;
     }

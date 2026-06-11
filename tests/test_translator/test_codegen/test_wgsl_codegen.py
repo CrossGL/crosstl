@@ -183,6 +183,51 @@ def test_wgsl_codegen_preserves_explicit_io_attributes():
     )
 
 
+def test_wgsl_codegen_assigns_locations_to_entry_struct_members(tmp_path):
+    shader = """
+    shader WGSLStructLocations {
+        struct VertexInput {
+            vec3 position;
+            vec2 uv;
+        };
+        struct VertexOutput {
+            vec4 position @ gl_Position;
+            vec2 uv;
+            vec4 tint;
+        };
+        struct FragmentOutput {
+            vec4 color;
+        };
+        vertex {
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                output.position = vec4(input.position, 1.0);
+                output.uv = input.uv;
+                output.tint = vec4(input.uv, 0.0, 1.0);
+                return output;
+            }
+        }
+        fragment {
+            FragmentOutput main(VertexOutput input) {
+                FragmentOutput output;
+                output.color = input.tint;
+                return output;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@location(0) position: vec3<f32>," in generated
+    assert "@location(1) uv: vec2<f32>," in generated
+    assert "@builtin(position) position: vec4<f32>," in generated
+    assert "@location(0) uv: vec2<f32>," in generated
+    assert "@location(1) tint: vec4<f32>," in generated
+    assert "@location(0) color: vec4<f32>," in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_codegen_maps_derivative_intrinsics():
     shader = """
     shader WGSLDerivatives {
@@ -1545,6 +1590,42 @@ def test_translate_crossgl_to_wgsl(tmp_path):
     assert "@vertex" in generated
     assert "@fragment" in generated
     assert "fn fragment_main" in generated
+
+
+def test_translate_metal_half_vector_aliases_to_wgsl_widens_to_f32(tmp_path):
+    source_path = tmp_path / "half_aliases.metal"
+    source_path.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        half3 buildViewDir(half2 pair, half z) {
+            half3 dir = half3(pair, z);
+            return half3(dir.x, dir.yz);
+        }
+
+        kernel void half_alias_kernel(uint3 gid [[thread_position_in_grid]]) {
+            half2 pair = half2(1.0h, 2.0h);
+            half3 viewDir = buildViewDir(pair, 3.0h);
+            half x = viewDir.x;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="webgpu")
+
+    assert "fn buildViewDir(pair: vec2<f32>, z: f32) -> vec3<f32>" in generated
+    assert "var dir: vec3<f32> = vec3<f32>(pair, z);" in generated
+    assert "return vec3<f32>(dir.x, dir.yz);" in generated
+    assert (
+        "fn compute_main(@builtin(global_invocation_id) gid: vec3<u32>)" in generated
+    )
+    assert "var pair: vec2<f32> = vec2<f32>(1.0, 2.0);" in generated
+    assert "var viewDir: vec3<f32> = buildViewDir(pair, 3.0);" in generated
+    assert "var x: f32 = viewDir.x;" in generated
+    assert "f16vec" not in generated
+    assert "float16" not in generated
 
 
 @pytest.mark.parametrize(

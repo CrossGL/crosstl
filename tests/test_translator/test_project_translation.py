@@ -735,6 +735,69 @@ def test_translate_project_glsl_overloaded_vector_helper_to_mojo(tmp_path):
     assert "fragColor = linearToSrgb((light * sample(tex," in generated
 
 
+def test_translate_project_glsl_overloaded_vector_helper_to_wgsl(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "cube.frag").write_text(
+        textwrap.dedent("""
+        #version 450
+        layout(binding = 0) uniform sampler2D tex;
+        layout(location = 0) in vec2 texcoord;
+        layout(location = 0) out vec4 fragColor;
+
+        float linearToSrgb(float linear) {
+            return linear;
+        }
+        vec3 linearToSrgb(vec3 linear) {
+            return vec3(
+                linearToSrgb(linear.r),
+                linearToSrgb(linear.g),
+                linearToSrgb(linear.b)
+            );
+        }
+        vec4 linearToSrgb(vec4 linear) {
+            return vec4(linearToSrgb(linear.rgb), linear.a);
+        }
+
+        void main() {
+            vec4 light = vec4(0.5);
+            fragColor = linearToSrgb(light * texture(tex, texcoord.xy));
+        }
+        """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+        [project]
+        source_roots = ["shaders"]
+        include = ["shaders/*.frag"]
+        targets = ["wgsl"]
+        output_dir = "translated"
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo), format_output=False)
+    payload = report.to_json()
+    generated = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert "fn linearToSrgb(" not in generated
+    assert generated.count("fn linearToSrgb_") == 3
+    assert "fn linearToSrgb_f32(linear: f32) -> f32" in generated
+    assert "fn linearToSrgb_vec3_f32(linear: vec3<f32>) -> vec3<f32>" in generated
+    assert "fn linearToSrgb_vec4_f32(linear: vec4<f32>) -> vec4<f32>" in generated
+    assert "linearToSrgb_f32(linear.r)" in generated
+    assert "linearToSrgb_vec3_f32(linear.rgb)" in generated
+    assert (
+        "fragColor = linearToSrgb_vec4_f32((light * textureSample("
+        in generated
+    )
+    assert "fragColor = linearToSrgb((light * textureSample(" not in generated
+
+
 def test_translate_project_mojo_gpu_vector_add_filters_host_runtime(tmp_path):
     repo = tmp_path / "repo"
     kernel_dir = repo / "kernels"
@@ -10246,6 +10309,67 @@ def test_translate_project_materializes_mlx_metal_instantiate_kernel_entries(
     assert "void arangefloat16(" in output
     assert "buffer_store(out_, gid, float16(gid + 3));" in output
     assert "void arange(" not in output
+
+
+def test_translate_project_opengl_remaps_mlx_arange_materialized_entry_bindings(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "arange.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_arange(tname, type) \\
+                instantiate_kernel("arange" #tname, arange, type)
+
+            template <typename T>
+            [[kernel]] void arange(
+                constant const T& start [[buffer(0)]],
+                constant const T& step [[buffer(1)]],
+                device T* out [[buffer(2)]],
+                uint index [[thread_position_in_grid]]) {
+                out[index] = start + index * step;
+            }
+
+            instantiate_arange(uint8, uint8_t)
+            instantiate_arange(uint16, uint16_t)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("opengl", "translated")}
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    arg_bindings = {
+        block_name: int(binding)
+        for binding, block_name in re.findall(
+            r"layout\(std140, binding = (\d+)\) uniform "
+            r"(arange(?:uint8|uint16)_(?:start|step)_Args)",
+            output,
+        )
+    }
+
+    assert set(arg_bindings) == {
+        "arangeuint8_start_Args",
+        "arangeuint8_step_Args",
+        "arangeuint16_start_Args",
+        "arangeuint16_step_Args",
+    }
+    assert len(set(arg_bindings.values())) == len(arg_bindings)
+    assert "Conflicting OpenGL resource binding" not in output
+    assert_compute_glsl_validates_if_available(output, tmp_path)
 
 
 def test_translate_project_materialized_metal_quantized_specialization_to_targets(
@@ -40176,7 +40300,7 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
 
     payload = translate_project(
         repo,
-        targets=["cgl", "metal", "vulkan", "wgsl"],
+        targets=["cgl", "directx", "metal", "vulkan", "wgsl"],
         output_dir="out",
     ).to_json()
 
@@ -40184,6 +40308,7 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {
         ("cgl", "translated"),
+        ("directx", "translated"),
         ("metal", "translated"),
         ("vulkan", "translated"),
         ("wgsl", "translated"),
@@ -40221,6 +40346,27 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
         "gl_WorkGroupSize",
     ]:
         assert gl_builtin not in metal_output
+
+    directx_output = outputs["directx"]
+    assert "RWStructuredBuffer<float> C : register(u0);" in directx_output
+    assert "RWStructuredBuffer<float> A : register(u1);" in directx_output
+    assert "RWStructuredBuffer<float> B : register(u2);" in directx_output
+    assert "cbuffer vectorAdd_Args : register(b3)" in directx_output
+    assert "uint3 groupID : SV_GroupID" in directx_output
+    assert "uint3 groupThreadID : SV_GroupThreadID" in directx_output
+    assert "SV_DispatchThreadID" not in directx_output
+    assert "float A[]" not in directx_output
+    assert "float B[]" not in directx_output
+    assert "float C[]" not in directx_output
+    assert ": group" not in directx_output
+    for gl_builtin in [
+        "gl_GlobalInvocationID",
+        "gl_WorkGroupID",
+        "gl_LocalInvocationID",
+        "gl_WorkGroupSize",
+    ]:
+        assert gl_builtin not in directx_output
+    assert_directx_compute_validates_if_available(directx_output, tmp_path)
 
     spirv_output = outputs["vulkan"]
     assert "OpEntryPoint GLCompute" in spirv_output

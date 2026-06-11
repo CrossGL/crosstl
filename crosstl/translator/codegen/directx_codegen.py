@@ -3534,11 +3534,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     )
         elif effective_shader_type == "compute":
             for (
+                builtin_name,
                 name,
                 param_type,
                 semantic,
-            ) in self.required_hlsl_compute_builtin_parameters(func):
-                if not name or name in param_names:
+                alias,
+            ) in self.required_hlsl_compute_builtin_parameters(
+                func, execution_config
+            ):
+                if alias is not None:
+                    self.current_identifier_aliases[builtin_name] = alias
+                    continue
+                if not name:
+                    continue
+                self.current_identifier_aliases[builtin_name] = name
+                if name in param_names:
                     continue
                 declaration = f"{param_type} {name}"
                 if semantic:
@@ -13995,19 +14005,48 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 used_names.add(base_name)
         return used_names
 
-    def required_hlsl_compute_builtin_parameters(self, func):
+    def required_hlsl_compute_builtin_parameters(self, func, execution_config=None):
         used_names = self.used_hlsl_compute_builtin_names(getattr(func, "body", []))
         builtin_parameters = [
-            ("gl_GlobalInvocationID", "uint3", "SV_DispatchThreadID"),
-            ("gl_LocalInvocationID", "uint3", "SV_GroupThreadID"),
-            ("gl_WorkGroupID", "uint3", "SV_GroupID"),
-            ("gl_LocalInvocationIndex", "uint", "SV_GroupIndex"),
-            ("gl_WorkGroupSize", "uint3", None),
-            ("gl_NumWorkGroups", "uint3", None),
+            ("gl_GlobalInvocationID", "dispatchThreadID", "uint3", "SV_DispatchThreadID"),
+            ("gl_LocalInvocationID", "groupThreadID", "uint3", "SV_GroupThreadID"),
+            ("gl_WorkGroupID", "groupID", "uint3", "SV_GroupID"),
+            ("gl_LocalInvocationIndex", "groupIndex", "uint", "SV_GroupIndex"),
+            (
+                "gl_WorkGroupSize",
+                None,
+                None,
+                None,
+                self.hlsl_compute_workgroup_size_expression(execution_config),
+            ),
+            ("gl_NumWorkGroups", "numWorkGroups", "uint3", None),
         ]
-        return [
-            parameter for parameter in builtin_parameters if parameter[0] in used_names
-        ]
+        reserved_names = set(self.local_variable_types)
+        reserved_names.update(self.global_variable_types)
+        reserved_names.update(self.current_identifier_reserved_names)
+        reserved_names.update(self.current_identifier_aliases.values())
+
+        required_parameters = []
+        for parameter in builtin_parameters:
+            builtin_name, base_name, param_type, semantic, *alias = parameter
+            if builtin_name not in used_names:
+                continue
+            alias_expression = alias[0] if alias else None
+            if alias_expression is not None:
+                required_parameters.append(
+                    (builtin_name, None, None, None, alias_expression)
+                )
+                continue
+            name = self.hlsl_unique_local_identifier(base_name, reserved_names)
+            reserved_names.add(name)
+            required_parameters.append(
+                (builtin_name, name, param_type, semantic, None)
+            )
+        return required_parameters
+
+    def hlsl_compute_workgroup_size_expression(self, execution_config=None):
+        x, y, z = compute_local_size(execution_config)
+        return f"uint3({x}, {y}, {z})"
 
     def collect_resource_array_size_hints(self, ast):
         return collect_resource_array_size_hints(

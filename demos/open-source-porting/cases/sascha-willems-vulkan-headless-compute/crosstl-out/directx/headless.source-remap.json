@@ -203,34 +203,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 22,
-        "endOffset": 426,
-        "file": "crosstl-out/directx/headless.hlsl",
-        "length": 65,
-        "line": 21,
-        "offset": 361
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 28,
-        "endOffset": 436,
-        "file": "headless.comp",
-        "length": 39,
-        "line": 27,
-        "offset": 397
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
         "endLine": 23,
-        "endOffset": 468,
+        "endOffset": 458,
         "file": "crosstl-out/directx/headless.hlsl",
-        "length": 42,
+        "length": 37,
         "line": 22,
-        "offset": 426
+        "offset": 421
       },
       "original": {
         "column": 1,
@@ -248,11 +226,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 24,
-        "endOffset": 506,
+        "endOffset": 496,
         "file": "crosstl-out/directx/headless.hlsl",
         "length": 38,
         "line": 23,
-        "offset": 468
+        "offset": 458
       },
       "original": {
         "column": 1,
@@ -270,11 +248,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 27,
-        "endOffset": 590,
+        "endOffset": 580,
         "file": "crosstl-out/directx/headless.hlsl",
         "length": 62,
         "line": 26,
-        "offset": 528
+        "offset": 518
       },
       "original": {
         "column": 1,

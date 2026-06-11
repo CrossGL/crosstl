@@ -193,7 +193,11 @@ def translate(
             if source_spec.name == "opencl" and normalized_backend != "webgl":
                 validate_opencl_intermediate_for_target(cgl_ast, normalized_backend)
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
-            if source_spec.name == "cuda" and normalized_backend in {"metal", "vulkan"}:
+            if source_spec.name == "cuda" and normalized_backend in {
+                "directx",
+                "metal",
+                "vulkan",
+            }:
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
             codegen = get_codegen(requested_backend)
             lower_default_arguments(cgl_ast)
