@@ -1267,11 +1267,64 @@ class WGSLCodeGen:
         try:
             signature = self.generate_function_signature(func)
             body = self.generate_block(func.body, indent=0)
+            body = self.add_generated_match_fallback_return(
+                body, getattr(func, "body", None), getattr(func, "return_type", None)
+            )
         finally:
             self.pop_pointer_identifier_scope()
             self.pop_identifier_scope()
             self._current_function_return_type = previous_function_return_type
         return f"{signature} {body}"
+
+    def add_generated_match_fallback_return(self, body_text, body_node, return_type):
+        if not self.generated_match_fallback_return_required(body_node, return_type):
+            return body_text
+        lines = body_text.splitlines()
+        if not lines or lines[-1].strip() != "}":
+            return body_text
+        fallback = self.default_value_expression_for_type(return_type)
+        lines.insert(-1, f"    return {fallback};")
+        return "\n".join(lines)
+
+    def generated_match_fallback_return_required(self, body_node, return_type):
+        if return_type is None or self.is_void_type(return_type):
+            return False
+        statements = self.block_statements(body_node)
+        if not statements:
+            return False
+        if not self.contains_generated_rust_match_flag(statements):
+            return False
+        return not self.statement_definitely_returns(statements[-1])
+
+    def block_statements(self, body_node):
+        if hasattr(body_node, "statements"):
+            return list(getattr(body_node, "statements", []) or [])
+        if isinstance(body_node, list):
+            return list(body_node)
+        return []
+
+    def contains_generated_rust_match_flag(self, statements):
+        return any(
+            isinstance(statement, VariableNode)
+            and re.fullmatch(r"_rust_match_matched_\d+", str(statement.name))
+            for statement in statements
+        )
+
+    def statement_definitely_returns(self, statement):
+        if isinstance(statement, ReturnNode):
+            return True
+        if isinstance(statement, BlockNode):
+            statements = self.block_statements(statement)
+            return bool(statements) and self.statement_definitely_returns(
+                statements[-1]
+            )
+        if isinstance(statement, IfNode):
+            return (
+                statement.else_branch is not None
+                and self.statement_definitely_returns(statement.then_branch)
+                and self.statement_definitely_returns(statement.else_branch)
+            )
+        return False
 
     def generate_function_signature(
         self,

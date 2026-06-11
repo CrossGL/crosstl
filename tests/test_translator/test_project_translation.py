@@ -13596,12 +13596,14 @@ def test_translate_project_rust_option_helpers_lower_to_wgsl_compute(tmp_path):
     payload = report.to_json()
     report_path = repo / "translated" / "portability-report.json"
     report.write_json(report_path)
-    validation = validate_project_report(report_path)
+    validation = validate_project_report(report_path, run_toolchains=True)
     wgsl_output = (repo / "translated" / "wgsl" / "src" / "collatz.wgsl").read_text(
         encoding="utf-8"
     )
 
     assert validation["success"] is True
+    if shutil.which("naga"):
+        assert validation["validation"]["toolchainRuns"][0]["status"] == "ok"
     assert payload["summary"]["translatedCount"] == 1
     assert "struct Option_u32" in wgsl_output
     assert "fn Option_u32_Some_make(payload0: u32) -> Option_u32" in wgsl_output
@@ -13612,6 +13614,7 @@ def test_translate_project_rust_option_helpers_lower_to_wgsl_compute(tmp_path):
     assert "return Option_u32_Some_make(n);" in wgsl_output
     assert "var value: u32 = item.Some_0;" in wgsl_output
     assert "(item.variant == Option_None)" in wgsl_output
+    assert "return u32(0);" in wgsl_output
     assert "Option<" not in wgsl_output
     assert "Option::" not in wgsl_output
     assert re.search(r"\bSome\s*\(", wgsl_output) is None
