@@ -116,6 +116,16 @@
             1
           ]
         }
+      },
+      "metadata": {
+        "upstreamTestName": "mlx.core.add reduced f32",
+        "testCommand": [
+          "python",
+          "-m",
+          "pytest",
+          "python/tests/test_ops.py::test_add"
+        ],
+        "repository": "mlx"
       }
     }
   ]
