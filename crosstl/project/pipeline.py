@@ -2434,9 +2434,7 @@ DIRECTX_HLSL_STRUCT_RE = re.compile(
 DIRECTX_HLSL_SHADER_ATTR_RE = re.compile(
     r"\[\s*shader\s*\(\s*\"([^\"]+)\"\s*\)\s*\]", re.IGNORECASE
 )
-DIRECTX_HLSL_NUMTHREADS_RE = re.compile(
-    r"\[\s*numthreads\s*\(", re.IGNORECASE
-)
+DIRECTX_HLSL_NUMTHREADS_RE = re.compile(r"\[\s*numthreads\s*\(", re.IGNORECASE)
 DIRECTX_HLSL_SEMANTIC_RE = re.compile(
     r":\s*(?P<semantic>[A-Za-z_]\w*)\b", re.IGNORECASE
 )
@@ -12368,6 +12366,35 @@ def _source_offset_in_spans(offset: int, spans: Sequence[tuple[int, int]]) -> bo
     return any(start <= offset < end for start, end in spans)
 
 
+def _metal_template_arguments_are_local_constants(
+    preprocessor: Any,
+    source: str,
+    offset: int,
+    names: Sequence[str],
+    template_spans: Sequence[tuple[int, int]],
+) -> bool:
+    if not names:
+        return False
+    for function in preprocessor._find_non_template_function_definitions(
+        source,
+        list(template_spans),
+    ):
+        body_start, body_end = function.body_span
+        if not (body_start <= offset < body_end):
+            continue
+        prefix = source[body_start:offset]
+        return all(
+            re.search(
+                rf"\b(?:static\s+)?(?:constexpr|const)\s+"
+                rf"(?:[A-Za-z_][A-Za-z0-9_:<>]*\s+)+{re.escape(name)}\s*=",
+                prefix,
+            )
+            is not None
+            for name in names
+        )
+    return False
+
+
 def _template_argument_missing_parameters(
     argument: str,
     template_parameter_names: set[str],
@@ -12438,6 +12465,14 @@ def _unresolved_metal_template_type_records(
             for parameter in declaration.parameters[len(arguments) :]:
                 if parameter not in missing:
                     missing.append(parameter)
+        if _metal_template_arguments_are_local_constants(
+            preprocessor,
+            source,
+            match.start(),
+            missing,
+            declaration_spans,
+        ):
+            continue
         if not missing:
             continue
 
@@ -12821,7 +12856,30 @@ def _project_template_materialization_for_artifact(
         for name, value in defines.items()
         if name not in configured_parameters
     }
-    if unsupported_type_records:
+    preprocessor = MetalPreprocessor(
+        **base_preprocessor_kwargs,
+        defines=parser_defines,
+    )
+    try:
+        preprocessed = _metal_preprocess_without_template_materialization(
+            preprocessor,
+            source,
+            file_path=str(unit.path),
+        )
+        templates = preprocessor._find_template_functions(preprocessed)
+    except Exception:  # noqa: BLE001
+        return None
+    source_instantiations = preprocessor._find_project_template_instantiations(
+        preprocessed
+    )
+    source_instantiations_use_decltype = any(
+        "decltype" in preprocessed[instantiation.span[0] : instantiation.span[1]]
+        for instantiation in source_instantiations
+    )
+    if unsupported_type_records and (
+        not source_instantiations
+        or (unmaterialized_functor_records and source_instantiations_use_decltype)
+    ):
         metadata = _template_materialization_metadata(
             specializations=[],
             configured_parameters={},
@@ -12864,20 +12922,6 @@ def _project_template_materialization_for_artifact(
             blocked=True,
             error=message,
         )
-
-    preprocessor = MetalPreprocessor(
-        **base_preprocessor_kwargs,
-        defines=parser_defines,
-    )
-    try:
-        preprocessed = _metal_preprocess_without_template_materialization(
-            preprocessor,
-            source,
-            file_path=str(unit.path),
-        )
-        templates = preprocessor._find_template_functions(preprocessed)
-    except Exception:  # noqa: BLE001
-        return None
     if not templates:
         return None
     preprocessed, stripped_diagnostic_helpers = (
@@ -12894,9 +12938,6 @@ def _project_template_materialization_for_artifact(
     source_instantiation_unsupported: list[dict[str, Any]] = []
     source_instantiation_partial_templates: set[str] = set()
     template_lookup = {template.name: template for template in templates}
-    source_instantiations = preprocessor._find_project_template_instantiations(
-        preprocessed
-    )
     if target == "opengl" and source_instantiations:
         materialization_work_items = len(source_instantiations) * max(
             1,
@@ -33870,7 +33911,9 @@ def _directx_dxc_entry_profiles_from_artifact(
         return ()
 
     candidates = []
-    for position, entry_point in enumerate(_directx_dxc_artifact_entry_points(artifact)):
+    for position, entry_point in enumerate(
+        _directx_dxc_artifact_entry_points(artifact)
+    ):
         name = entry_point.get("name")
         if not _is_non_empty_string(name):
             continue
@@ -34009,9 +34052,7 @@ def _directx_hlsl_struct_semantics(source: str) -> dict[str, tuple[str, ...]]:
     for match in DIRECTX_HLSL_STRUCT_RE.finditer(source):
         semantics_by_struct[match.group("name")] = tuple(
             semantic_match.group("semantic")
-            for semantic_match in DIRECTX_HLSL_SEMANTIC_RE.finditer(
-                match.group("body")
-            )
+            for semantic_match in DIRECTX_HLSL_SEMANTIC_RE.finditer(match.group("body"))
         )
     return semantics_by_struct
 
@@ -34036,9 +34077,7 @@ def _directx_hlsl_function_stage(
     if generic_stage is not None:
         return generic_stage
 
-    semantic_stage = _directx_hlsl_return_semantic_stage(
-        match.group("return_semantic")
-    )
+    semantic_stage = _directx_hlsl_return_semantic_stage(match.group("return_semantic"))
     if semantic_stage is not None:
         return semantic_stage
 

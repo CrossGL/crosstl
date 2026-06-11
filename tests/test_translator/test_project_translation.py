@@ -18150,9 +18150,7 @@ def test_directx_toolchain_smoke_commands_use_monogame_sprite_entries(tmp_path):
         encoding="utf-8",
     )
 
-    commands = project_pipeline._toolchain_smoke_commands(
-        "directx", ["dxc"], shader
-    )
+    commands = project_pipeline._toolchain_smoke_commands("directx", ["dxc"], shader)
 
     assert commands == [
         (
@@ -18205,9 +18203,7 @@ def test_directx_toolchain_smoke_commands_prefer_report_entry_profiles(tmp_path)
         ["dxc"],
         shader,
         artifact={
-            "entryProfiles": [
-                {"entry": "ReportPixelShader", "profile": "ps_6_7"}
-            ]
+            "entryProfiles": [{"entry": "ReportPixelShader", "profile": "ps_6_7"}]
         },
     ) == [
         (
