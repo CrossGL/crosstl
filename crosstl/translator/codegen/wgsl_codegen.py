@@ -223,6 +223,11 @@ class WGSLCodeGen:
         "iimagebuffer",
         "iimagecube",
         "iimagecubearray",
+        "isampler2d",
+        "isampler2darray",
+        "isampler2dms",
+        "isampler2dmsarray",
+        "isampler3d",
         "sampler",
         "sampler1d",
         "sampler1darray",
@@ -258,6 +263,11 @@ class WGSLCodeGen:
         "uimagebuffer",
         "uimagecube",
         "uimagecubearray",
+        "usampler2d",
+        "usampler2darray",
+        "usampler2dms",
+        "usampler2dmsarray",
+        "usampler3d",
     }
     STRUCTURED_BUFFER_TYPE_NAMES = {
         "rwstructuredbuffer",
@@ -325,6 +335,36 @@ class WGSLCodeGen:
         "usampler2d": "texture_2d<u32>",
         "usampler2darray": "texture_2d_array<u32>",
         "usampler3d": "texture_3d<u32>",
+    }
+    MULTISAMPLED_TEXTURE_TYPE_MAP = {
+        "sampler2dms": "texture_multisampled_2d<f32>",
+        "texture2dms": "texture_multisampled_2d<f32>",
+        "isampler2dms": "texture_multisampled_2d<i32>",
+        "usampler2dms": "texture_multisampled_2d<u32>",
+    }
+    UNSUPPORTED_MULTISAMPLED_TEXTURE_TYPE_NAMES = {
+        "sampler2dmsarray",
+        "texture2dmsarray",
+        "isampler2dmsarray",
+        "usampler2dmsarray",
+    }
+    MULTISAMPLED_TEXTURE_UNSUPPORTED_FUNCTIONS = {
+        "texture",
+        "texturecompare",
+        "texturecomparelod",
+        "texturecomparelodoffset",
+        "texturecompareoffset",
+        "texturegather",
+        "texturegathercompare",
+        "texturegathercompareoffset",
+        "texturegatheroffset",
+        "texturegatheroffsets",
+        "texturegrad",
+        "texturegradoffset",
+        "texturelod",
+        "texturelodoffset",
+        "textureoffset",
+        "texturequerylod",
     }
     STORAGE_TEXTURE_TYPE_MAP = {
         "image1d": "texture_storage_1d",
@@ -453,6 +493,7 @@ class WGSLCodeGen:
         "texturesamples",
         "texturesize",
         "texelfetch",
+        "texelfetchoffset",
         "imagesize",
         "imagestore",
     }
@@ -1563,6 +1604,18 @@ class WGSLCodeGen:
         )
         if structured_buffer_parameter is not None:
             return f"{prefix}{parameter_name}: {structured_buffer_parameter}"
+        unsupported_multisampled_type = self.unsupported_multisampled_texture_type_name(
+            node.param_type
+        )
+        if unsupported_multisampled_type is not None:
+            raise ValueError(
+                "WGSL target does not support multisampled array texture resource "
+                f"type {unsupported_multisampled_type}; WebGPU/WGSL exposes only "
+                "2D multisampled textures"
+            )
+        multisampled_texture_type = self.multisampled_texture_type(node.param_type)
+        if multisampled_texture_type is not None:
+            return f"{prefix}{parameter_name}: {multisampled_texture_type}"
         sampled_texture_array = self.sampled_texture_array_info(node.param_type)
         if sampled_texture_array is not None:
             resource_type = self.type_display_name(
@@ -2213,6 +2266,20 @@ class WGSLCodeGen:
         )
 
     def generate_global_variable(self, node):
+        unsupported_multisampled_type = self.unsupported_multisampled_texture_type_name(
+            node.var_type
+        )
+        if unsupported_multisampled_type is not None:
+            raise ValueError(
+                "WGSL target does not support multisampled array texture resource "
+                f"type {unsupported_multisampled_type}; WebGPU/WGSL exposes only "
+                "2D multisampled textures"
+            )
+        multisampled_texture_type = self.multisampled_texture_type(node.var_type)
+        if multisampled_texture_type is not None:
+            return self.generate_multisampled_texture_global_variable(
+                node, multisampled_texture_type
+            )
         sampled_texture_array = self.sampled_texture_array_info(node.var_type)
         if sampled_texture_array is not None:
             return self.generate_sampled_texture_array_global_variable(
@@ -2348,6 +2415,20 @@ class WGSLCodeGen:
             f"{self.companion_sampler_type(node.var_type)};"
         )
 
+    def generate_multisampled_texture_global_variable(self, node, texture_type):
+        if node.initial_value is not None:
+            raise ValueError(
+                "WGSL target does not support initializers for multisampled texture "
+                f"resource {node.name}"
+            )
+        attributes = (
+            self.explicit_binding_attributes(node) or self.next_binding_attributes()
+        )
+        return (
+            f"{attributes}\nvar {self.module_identifier_name(node.name)}: "
+            f"{texture_type};"
+        )
+
     def generate_sampled_texture_array_global_variable(self, node, array_info):
         if node.initial_value is not None:
             raise ValueError(
@@ -2453,6 +2534,13 @@ class WGSLCodeGen:
     def generate_resource_member_binding(self, info):
         member = info["member"]
         binding_name = info["binding_name"]
+        multisampled_texture_type = self.multisampled_texture_type(info["member_type"])
+        if multisampled_texture_type is not None:
+            attributes = (
+                self.explicit_binding_attributes(member)
+                or self.next_binding_attributes()
+            )
+            return f"{attributes}\nvar {binding_name}: {multisampled_texture_type};"
         sampled_texture_type = self.sampled_texture_type(info["member_type"])
         if sampled_texture_type is not None:
             texture_attributes = (
@@ -3573,6 +3661,8 @@ class WGSLCodeGen:
     def generate_texture_function_call(self, node, function_name):
         normalized_name = self.semantic_key(function_name)
         args = list(node.arguments)
+        if normalized_name in self.MULTISAMPLED_TEXTURE_UNSUPPORTED_FUNCTIONS and args:
+            self.reject_multisampled_texture_operation(args[0], function_name)
         if normalized_name == "texture":
             return self.generate_texture_sample_call(function_name, args)
         if normalized_name == "texturecompare":
@@ -3619,6 +3709,11 @@ class WGSLCodeGen:
             return self.generate_image_dimensions_call(args)
         if normalized_name == "texelfetch":
             return self.generate_texel_fetch_call(function_name, args)
+        if normalized_name == "texelfetchoffset":
+            raise ValueError(
+                "WGSL target does not support texelFetchOffset(); "
+                "WebGPU/WGSL textureLoad has no offset operand"
+            )
         if normalized_name == "imagestore":
             return self.generate_image_store_call(node, function_name)
         raise ValueError(
@@ -3993,6 +4088,12 @@ class WGSLCodeGen:
                 "WGSL target supports textureSize() calls with texture or "
                 f"texture/lod arguments; got {len(args)} argument(s)"
             )
+        if self.is_multisampled_texture_expression(args[0]) and len(args) != 1:
+            raise ValueError(
+                "WGSL target supports textureSize() on multisampled textures with "
+                "the texture operand only; mip levels are not valid for "
+                "texture_multisampled_2d resources"
+            )
         dimensions = (
             "textureDimensions("
             + ", ".join(self.generate_expression(arg) for arg in args)
@@ -4024,6 +4125,11 @@ class WGSLCodeGen:
                 f"WGSL target supports {function_name}() calls with exactly 1 "
                 f"argument; got {len(args)}"
             )
+        if self.is_multisampled_texture_expression(args[0]):
+            raise ValueError(
+                "WGSL target cannot query mip levels for multisampled textures; "
+                "texture_multisampled_2d resources do not have mip levels"
+            )
         return f"textureNumLevels({self.generate_expression(args[0])})"
 
     def generate_texture_num_samples_call(self, function_name, args):
@@ -4031,6 +4137,11 @@ class WGSLCodeGen:
             raise ValueError(
                 f"WGSL target supports {function_name}() calls with exactly 1 "
                 f"argument; got {len(args)}"
+            )
+        if not self.is_multisampled_texture_expression(args[0]):
+            raise ValueError(
+                f"WGSL target requires {function_name}() to use a multisampled "
+                "texture resource"
             )
         return f"textureNumSamples({self.generate_expression(args[0])})"
 
@@ -4052,6 +4163,12 @@ class WGSLCodeGen:
                 f"arguments; got {len(args)} for {function_name}"
             )
         texture, coords, level = args
+        role = (
+            "sample index"
+            if self.is_multisampled_texture_expression(texture)
+            else "mip level"
+        )
+        self.require_integer_texel_fetch_operand(level, function_name, role)
         return (
             f"textureLoad({self.generate_expression(texture)}, "
             f"{self.generate_expression(coords)}, "
@@ -4115,12 +4232,40 @@ class WGSLCodeGen:
             return self.is_comparison_texture_type(resource_binding["member_type"])
         return self.is_comparison_texture_type(self.expression_type(expr))
 
+    def is_multisampled_texture_expression(self, expr):
+        resource_binding = self.resource_member_binding_for_access(expr)
+        if resource_binding is not None:
+            return (
+                self.multisampled_texture_type(resource_binding["member_type"])
+                is not None
+            )
+        return self.multisampled_texture_type(self.expression_type(expr)) is not None
+
     def is_comparison_sampler_expression(self, expr):
         if self.is_comparison_sampler_type(self.expression_type(expr)):
             return True
         resource_binding = self.resource_member_binding_for_access(expr)
         return resource_binding is not None and self.is_comparison_sampler_type(
             resource_binding["member_type"]
+        )
+
+    def reject_multisampled_texture_operation(self, texture_expr, function_name):
+        if not self.is_multisampled_texture_expression(texture_expr):
+            return
+        raise ValueError(
+            f"WGSL target cannot lower {function_name}() on multisampled textures; "
+            "use texelFetch()/textureLoad with an explicit sample index"
+        )
+
+    def require_integer_texel_fetch_operand(self, operand, function_name, role):
+        operand_type = self.expression_type(operand)
+        if operand_type is None:
+            return
+        if self.integer_scalar_type(operand_type) is not None:
+            return
+        raise ValueError(
+            f"WGSL target requires {function_name}() {role} operand to be an "
+            "integer scalar"
         )
 
     def require_depth_texture_operand(self, texture_expr, function_name):
@@ -4297,6 +4442,23 @@ class WGSLCodeGen:
             option_type = self.builtin_option_specialized_type_name(vtype)
             if option_type is not None:
                 return option_type
+            unsupported_multisampled_type = (
+                self.unsupported_multisampled_texture_type_name(vtype)
+            )
+            if unsupported_multisampled_type is not None:
+                raise ValueError(
+                    "WGSL target does not support multisampled array texture "
+                    f"resource type {unsupported_multisampled_type}; WebGPU/WGSL "
+                    "exposes only 2D multisampled textures"
+                )
+            multisampled_texture = self.multisampled_texture_type(vtype)
+            if multisampled_texture is not None:
+                if not allow_storage_resources:
+                    raise ValueError(
+                        "WGSL target only supports multisampled texture types as "
+                        "resource bindings and helper parameters"
+                    )
+                return multisampled_texture
             storage_element = self.structured_buffer_element_type(vtype)
             if storage_element is not None:
                 if not allow_storage_resources:
@@ -4821,6 +4983,8 @@ class WGSLCodeGen:
         if not isinstance(vtype, ArrayType):
             return None
         element_type = self.array_element_type(vtype)
+        if self.multisampled_texture_type(element_type) is not None:
+            return self.type_display_name(element_type)
         resource_type = self.resource_type_name(element_type)
         if resource_type is not None and self.is_resource_type_name(resource_type):
             return self.type_display_name(element_type)
@@ -5175,6 +5339,18 @@ class WGSLCodeGen:
         if type_name is None:
             return None
         return self.SAMPLED_TEXTURE_TYPE_MAP.get(type_name)
+
+    def multisampled_texture_type(self, vtype):
+        type_name = self.resource_type_name(vtype)
+        if type_name is None:
+            return None
+        return self.MULTISAMPLED_TEXTURE_TYPE_MAP.get(type_name)
+
+    def unsupported_multisampled_texture_type_name(self, vtype):
+        type_name = self.resource_type_name(vtype)
+        if type_name not in self.UNSUPPORTED_MULTISAMPLED_TEXTURE_TYPE_NAMES:
+            return None
+        return self.type_display_name(vtype)
 
     def sampled_texture_array_info(self, vtype):
         if not isinstance(vtype, ArrayType):
@@ -5569,9 +5745,12 @@ class WGSLCodeGen:
         return str(member_type)
 
     def supported_struct_resource_member(self, member):
-        return self.sampled_texture_type(
-            getattr(member, "member_type", None)
-        ) is not None or self.is_sampler_type(getattr(member, "member_type", None))
+        member_type = getattr(member, "member_type", None)
+        return (
+            self.sampled_texture_type(member_type) is not None
+            or self.multisampled_texture_type(member_type) is not None
+            or self.is_sampler_type(member_type)
+        )
 
     def collect_identifier_metadata(
         self,
@@ -6059,6 +6238,12 @@ class WGSLCodeGen:
         declarations = []
         for info in self.resource_paths_for_type(root_type):
             binding_name = self.resource_member_binding_name(root_name, info["path"])
+            multisampled_texture_type = self.multisampled_texture_type(
+                info["member_type"]
+            )
+            if multisampled_texture_type is not None:
+                declarations.append(f"{binding_name}: {multisampled_texture_type}")
+                continue
             sampled_texture_type = self.sampled_texture_type(info["member_type"])
             if sampled_texture_type is not None:
                 declarations.append(f"{binding_name}: {sampled_texture_type}")

@@ -2350,6 +2350,33 @@ def test_wgsl_codegen_aliases_nested_resource_member_paths_from_initializer():
     assert "material.albedoMap" not in generated
 
 
+def test_wgsl_codegen_lowers_multisample_texture_resource_members():
+    shader = """
+    shader WGSLStructMultisampleTextureResourceAlias {
+        struct Material {
+            vec4 tint;
+            sampler2DMS colorMs;
+        };
+        uniform Material material;
+        fragment {
+            vec4 main(ivec2 pixel @ TEXCOORD0, int sampleIndex @ TEXCOORD1) @ gl_FragColor {
+                return texelFetch(material.colorMs, pixel, sampleIndex) * material.tint;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    material_struct = generated.split("struct Material", 1)[1].split("};", 1)[0]
+    assert "colorMs:" not in material_struct
+    assert "var material_colorMs: texture_multisampled_2d<f32>;" in generated
+    assert "material_colorMs_sampler" not in generated
+    assert "textureLoad(material_colorMs, pixel, sampleIndex)" in generated
+    assert "material.tint" in generated
+    assert "material.colorMs" not in generated
+
+
 def test_wgsl_codegen_lowers_sampled_texture_resources_and_calls():
     shader = """
     shader WGSLTextureResource {
@@ -2367,6 +2394,181 @@ def test_wgsl_codegen_lowers_sampled_texture_resources_and_calls():
     assert "@group(0) @binding(0)\nvar colorTex: texture_2d<f32>;" in generated
     assert "@group(0) @binding(1)\nvar colorTex_sampler: sampler;" in generated
     assert "return textureSample(colorTex, colorTex_sampler, uv);" in generated
+
+
+def test_wgsl_codegen_lowers_texel_fetch_to_texture_load():
+    shader = """
+    shader WGSLTexelFetch {
+        sampler2D colorTex;
+        fragment {
+            vec4 main(ivec2 pixel @ TEXCOORD0, int mipLevel @ TEXCOORD1) @ gl_FragColor {
+                return texelFetch(colorTex, pixel, mipLevel);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(0)\nvar colorTex: texture_2d<f32>;" in generated
+    assert "@group(0) @binding(1)\nvar colorTex_sampler: sampler;" in generated
+    assert "return textureLoad(colorTex, pixel, mipLevel);" in generated
+
+
+def test_wgsl_codegen_rejects_texel_fetch_offset():
+    shader = """
+    shader WGSLTexelFetchOffset {
+        sampler2D colorTex;
+        fragment {
+            vec4 main(ivec2 pixel @ TEXCOORD0) @ gl_FragColor {
+                return texelFetchOffset(colorTex, pixel, 0, ivec2(1, 1));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="does not support texelFetchOffset",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_lowers_multisample_texture_fetch_and_samples():
+    shader = """
+    shader WGSLMultisampleTextureResource {
+        sampler2DMS colorMs;
+        Texture2DMS inputMs;
+
+        vec4 fetchMs(sampler2DMS tex, ivec2 pixel, int sampleIndex) {
+            uint2 size = textureSize(tex);
+            uint samples = textureSamples(tex);
+            return texelFetch(tex, pixel, sampleIndex) + vec4(float(size.x + samples));
+        }
+
+        fragment {
+            vec4 main(ivec2 pixel @ TEXCOORD0, int sampleIndex @ TEXCOORD1) @ gl_FragColor {
+                return fetchMs(colorMs, pixel, sampleIndex) + texelFetch(inputMs, pixel, sampleIndex);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "@group(0) @binding(0)\nvar colorMs: texture_multisampled_2d<f32>;" in generated
+    )
+    assert (
+        "@group(0) @binding(1)\nvar inputMs: texture_multisampled_2d<f32>;" in generated
+    )
+    assert "colorMs_sampler" not in generated
+    assert "inputMs_sampler" not in generated
+    assert (
+        "fn fetchMs(tex: texture_multisampled_2d<f32>, "
+        "pixel: vec2<i32>, sampleIndex: i32) -> vec4<f32>" in generated
+    )
+    assert "var size: vec2<u32> = textureDimensions(tex);" in generated
+    assert "var samples: u32 = textureNumSamples(tex);" in generated
+    assert "textureLoad(tex, pixel, sampleIndex)" in generated
+    assert (
+        "return (fetchMs(colorMs, pixel, sampleIndex) + textureLoad(inputMs, pixel, sampleIndex));"
+        in generated
+    )
+
+
+def test_wgsl_codegen_lowers_integer_multisample_texture_resources():
+    shader = """
+    shader WGSLIntegerMultisampleTextureResource {
+        isampler2DMS signedMs;
+        usampler2DMS unsignedMs;
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "@group(0) @binding(0)\nvar signedMs: texture_multisampled_2d<i32>;"
+        in generated
+    )
+    assert (
+        "@group(0) @binding(1)\nvar unsignedMs: texture_multisampled_2d<u32>;"
+        in generated
+    )
+    assert "signedMs_sampler" not in generated
+    assert "unsignedMs_sampler" not in generated
+
+
+def test_wgsl_codegen_rejects_multisampled_array_texture_resources():
+    shader = """
+    shader WGSLMultisampleTextureArrayResource {
+        sampler2DMSArray layeredMs;
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="does not support multisampled array texture resource type sampler2DMSArray",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+@pytest.mark.parametrize(
+    "call",
+    (
+        "texture(colorMs, uv)",
+        "textureLod(colorMs, uv, 0.0)",
+        "textureGrad(colorMs, uv, vec2(1.0), vec2(1.0))",
+        "textureGather(colorMs, uv)",
+    ),
+)
+def test_wgsl_codegen_rejects_sampler_operations_on_multisample_textures(call):
+    shader = f"""
+    shader WGSLMultisampleTextureUnsupportedSample {{
+        sampler2DMS colorMs;
+        fragment {{
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="cannot lower .* on multisampled textures",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_multisample_texel_fetch_float_sample_index():
+    shader = """
+    shader WGSLMultisampleTextureFloatSampleIndex {
+        sampler2DMS colorMs;
+        fragment {
+            vec4 main(ivec2 pixel @ TEXCOORD0) @ gl_FragColor {
+                return texelFetch(colorMs, pixel, 1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="sample index operand to be an integer scalar",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
 
 
 def test_wgsl_codegen_lowers_explicit_sampler_texture_calls():
@@ -2974,8 +3176,7 @@ def test_wgsl_codegen_lowers_texture_query_helpers():
             vec4 main() @ gl_FragColor {
                 uint2 size = textureSize(colorTex, 0);
                 uint levels = textureQueryLevels(colorTex);
-                uint samples = textureSamples(colorTex);
-                return vec4(float(size.x + size.y + levels + samples));
+                return vec4(float(size.x + size.y + levels));
             }
         }
     }
@@ -2985,7 +3186,56 @@ def test_wgsl_codegen_lowers_texture_query_helpers():
 
     assert "var size: vec2<u32> = textureDimensions(colorTex, 0);" in generated
     assert "var levels: u32 = textureNumLevels(colorTex);" in generated
-    assert "var samples: u32 = textureNumSamples(colorTex);" in generated
+
+
+def test_wgsl_codegen_rejects_non_multisample_texture_samples_query():
+    shader = """
+    shader WGSLInvalidTextureSamplesQuery {
+        sampler2D colorTex;
+        fragment {
+            vec4 main() @ gl_FragColor {
+                uint samples = textureSamples(colorTex);
+                return vec4(float(samples));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="requires textureSamples\\(\\) to use a multisampled texture resource",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+@pytest.mark.parametrize(
+    ("query", "match"),
+    (
+        (
+            "textureSize(colorMs, 0)",
+            "textureSize\\(\\) on multisampled textures with the texture operand only",
+        ),
+        (
+            "textureQueryLevels(colorMs)",
+            "cannot query mip levels for multisampled textures",
+        ),
+    ),
+)
+def test_wgsl_codegen_rejects_invalid_multisample_texture_queries(query, match):
+    shader = f"""
+    shader WGSLInvalidMultisampleTextureQuery {{
+        sampler2DMS colorMs;
+        fragment {{
+            vec4 main() @ gl_FragColor {{
+                uint value = {query};
+                return vec4(float(value));
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        WGSLCodeGen().generate(parse_shader(shader))
 
 
 def test_wgsl_codegen_rejects_texture_query_lod():

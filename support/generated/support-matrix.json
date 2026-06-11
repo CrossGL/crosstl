@@ -399,7 +399,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 68,
+        "unsupported_marker_count": 90,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
@@ -416,6 +416,14 @@
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
             "text": "UNSUPPORTED_STRUCTURED_BUFFER_MEMBER_HELPERS = {"
+          },
+          {
+            "path": "crosstl/translator/codegen/wgsl_codegen.py",
+            "text": "UNSUPPORTED_MULTISAMPLED_TEXTURE_TYPE_NAMES = {"
+          },
+          {
+            "path": "crosstl/translator/codegen/wgsl_codegen.py",
+            "text": "MULTISAMPLED_TEXTURE_UNSUPPORTED_FUNCTIONS = {"
           },
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
@@ -463,23 +471,15 @@
           },
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "\"WGSL target does not support gl_WorkGroupSize outside compute stages\""
+            "text": "unsupported_multisampled_type = self.unsupported_multisampled_texture_type_name("
           },
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "unsupported = sorted("
+            "text": "if unsupported_multisampled_type is not None:"
           },
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "if unsupported:"
-          },
-          {
-            "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "\"WGSL target does not support implicit builtin identifier(s): \""
-          },
-          {
-            "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "+ \", \".join(unsupported)"
+            "text": "\"WGSL target does not support multisampled array texture resource \""
           }
         ]
       },
@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 128
+        "test_count": 138
       },
       "translator_codegen": {
         "exists": true,
@@ -3852,12 +3852,16 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_query_helpers",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_texture_query_lod"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_writeonly_uimage2d_to_storage_texture_store",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_infers_image2d_write_access_from_image_store",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_infers_image2d_read_access_from_image_load",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_storage_image_without_access_metadata",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_writes_to_readonly_glsl_buffer_blocks",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_readonly_structured_buffer_stores",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_readonly_structured_buffer_parameter_stores"
           ],
-          "notes": "Covers textureSize, textureQueryLevels, and textureSamples lowering to textureDimensions, textureNumLevels, and textureNumSamples, with deterministic textureQueryLod diagnostics because WebGPU/WGSL does not expose sampler LOD query builtins.",
-          "status": "diagnostic"
+          "notes": "readonly/writeonly/readwrite-style access metadata drives WGSL storage texture and storage-buffer access modes, including inferred storage-image access from imageLoad/imageStore, explicit writeonly storage texture lowering, read-only GLSL buffer-block write diagnostics, and read-only StructuredBuffer/RWStructuredBuffer store diagnostics. Target-unsupported coherent/globallycoherent/volatile/restrict qualifiers do not leak into WGSL output.",
+          "status": "supported"
         }
       }
     },
@@ -4537,10 +4541,15 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_query_helpers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_multisample_texture_fetch_and_samples",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_non_multisample_texture_samples_query",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_invalid_multisample_texture_queries",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_texture_query_lod"
           ],
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
-          "status": "diagnostic"
+          "notes": "Covers textureSize lowering to textureDimensions, textureQueryLevels lowering to textureNumLevels, textureSamples lowering to textureNumSamples for multisampled textures, multisampled texture size/sample query validation, non-multisampled sample-count diagnostics, and deterministic textureQueryLod diagnostics because WebGPU/WGSL does not expose sampler LOD query builtins.",
+          "status": "supported"
         }
       }
     },
@@ -4655,10 +4664,14 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texel_fetch_to_texture_load",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_multisample_texture_fetch_and_samples",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_multisample_texture_resource_members",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_texel_fetch_offset",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_multisample_texel_fetch_float_sample_index"
           ],
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
-          "status": "diagnostic"
+          "notes": "Covers regular and multisampled texelFetch lowering to textureLoad, multisampled resource-member aliases, integer mip/sample-index validation, and deterministic texelFetchOffset diagnostics because WebGPU/WGSL textureLoad has no offset operand.",
+          "status": "supported"
         }
       }
     },
@@ -4761,10 +4774,17 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_multisample_texture_resource_members",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_multisample_texture_fetch_and_samples",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_integer_multisample_texture_resources",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_multisampled_array_texture_resources",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_sampler_operations_on_multisample_textures",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_multisample_texel_fetch_float_sample_index",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_non_multisample_texture_samples_query",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_invalid_multisample_texture_queries"
           ],
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
-          "status": "diagnostic"
+          "notes": "Covers sampler2DMS, Texture2DMS, isampler2DMS, usampler2DMS, and multisampled texture resource members lowering to texture_multisampled_2d without companion samplers, texelFetch lowering to textureLoad with explicit sample indices, textureSamples lowering to textureNumSamples, textureSize lowering to textureDimensions, and deterministic diagnostics for multisampled array textures, sampler-based operations, invalid sample-index operands, non-multisampled sample-count queries, and mip-level queries on multisampled textures.",
+          "status": "supported"
         }
       }
     },
@@ -15489,9 +15509,9 @@
         "validated_rejection": 9
       },
       "wgsl": {
-        "diagnostic": 18,
+        "diagnostic": 14,
         "partial": 0,
-        "supported": 43,
+        "supported": 47,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 7

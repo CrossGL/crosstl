@@ -26,6 +26,7 @@ from crosstl.translator.validation import (
     texture_mip_level_argument_index,
     texture_offset_argument_indices,
     texture_query_lod_coordinate_argument_index,
+    texture_sample_index_argument_index,
 )
 
 IDENTIFIER_SUFFIXES = st.from_regex(r"[a-z][a-z0-9_]{0,8}", fullmatch=True)
@@ -47,6 +48,13 @@ class RoleIndexCase:
     implicit_argument_count: int
     implicit_indices: Tuple[int, ...]
     supports_explicit_sampler: bool = True
+
+
+@dataclass(frozen=True)
+class SampleIndexCase:
+    function_name: str
+    argument_count: Optional[int]
+    expected_index: Optional[int]
 
 
 ARGUMENT_COUNT_CASES = (
@@ -76,6 +84,24 @@ ROLE_INDEX_CASES = (
     RoleIndexCase("gather_component", "textureGather", 3, (2,)),
     RoleIndexCase("gather_component", "textureGatherOffset", 4, (3,)),
     RoleIndexCase("gather_component", "textureGatherOffsets", 7, (6,)),
+)
+
+SAMPLE_INDEX_CASES = (
+    SampleIndexCase("texelFetch", None, 2),
+    SampleIndexCase("texelFetch", 3, 2),
+)
+
+NO_SAMPLE_INDEX_CASES = (
+    SampleIndexCase("texelFetch", 0, None),
+    SampleIndexCase("texelFetch", 1, None),
+    SampleIndexCase("texelFetch", 2, None),
+    SampleIndexCase("texture", None, None),
+    SampleIndexCase("texture", 3, None),
+    SampleIndexCase("textureLod", 3, None),
+    SampleIndexCase("textureSize", 2, None),
+    SampleIndexCase("texelFetchOffset", 4, None),
+    SampleIndexCase("imageLoad", 3, None),
+    SampleIndexCase("textureSamplePosition", 2, None),
 )
 
 INTEGER_COORDINATE_TYPES = (
@@ -233,6 +259,32 @@ def test_generated_texture_intrinsic_role_indices_shift_with_explicit_samplers(c
             argument_count=min(case.implicit_indices),
         )
         == []
+    )
+
+
+@settings(max_examples=10, deadline=None)
+@given(case=st.sampled_from(SAMPLE_INDEX_CASES))
+def test_generated_texture_intrinsic_sample_index_metadata_marks_multisample_fetches(
+    case,
+):
+    assert (
+        texture_sample_index_argument_index(
+            case.function_name, argument_count=case.argument_count
+        )
+        == case.expected_index
+    )
+
+
+@settings(max_examples=20, deadline=None)
+@given(case=st.sampled_from(NO_SAMPLE_INDEX_CASES))
+def test_generated_texture_intrinsic_sample_index_metadata_ignores_non_sample_calls(
+    case,
+):
+    assert (
+        texture_sample_index_argument_index(
+            case.function_name, argument_count=case.argument_count
+        )
+        == case.expected_index
     )
 
 
