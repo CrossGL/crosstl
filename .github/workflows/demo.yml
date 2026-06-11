@@ -249,6 +249,7 @@ jobs:
             --case directx-shader-compiler-neg1 \
             --case directx-sdk-samples-tutorial02 \
             --case diligent-samples-tutorial02-cube \
+            --case diligent-samples-vrs-cube \
             --case glslang-push-constant-vertex \
             --case glslang-spec-constant-vertex \
             --case godot-betsy-alpha-stitch \
@@ -309,6 +310,8 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/directx-sdk-samples-tutorial02/crosstl-out/directx/Tutorial02.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/diligent-samples-tutorial02-cube/crosstl-out/directx/cube.vsh.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/diligent-samples-tutorial02-cube/crosstl-out/directx/cube.psh.hlsl PSMain ps_6_0
+          compile_hlsl demos/open-source-porting/cases/diligent-samples-vrs-cube/crosstl-out/directx/CubeFDM_vs.hlsl VSMain vs_6_0
+          compile_hlsl demos/open-source-porting/cases/diligent-samples-vrs-cube/crosstl-out/directx/CubeFDM_fs.hlsl PSMain ps_6_4
           compile_hlsl demos/open-source-porting/cases/glslang-spec-constant-vertex/crosstl-out/directx/spv.specConstant.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/godot-betsy-alpha-stitch/crosstl-out/directx/alpha_stitch.hlsl CSMain cs_6_0
           compile_hlsl demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.vert.hlsl VSMain vs_6_0

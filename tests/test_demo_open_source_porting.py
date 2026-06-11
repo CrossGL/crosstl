@@ -248,6 +248,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "directx-shader-compiler-neg1",
         "directx-sdk-samples-tutorial02",
         "diligent-samples-tutorial02-cube",
+        "diligent-samples-vrs-cube",
         "glslang-push-constant-vertex",
         "glslang-spec-constant-vertex",
         "godot-betsy-alpha-stitch",
@@ -340,6 +341,8 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
         "demos/open-source-porting/cases/directx-sdk-samples-tutorial02/crosstl-out/directx/Tutorial02.hlsl",
         "demos/open-source-porting/cases/diligent-samples-tutorial02-cube/crosstl-out/directx/cube.vsh.hlsl",
         "demos/open-source-porting/cases/diligent-samples-tutorial02-cube/crosstl-out/directx/cube.psh.hlsl",
+        "demos/open-source-porting/cases/diligent-samples-vrs-cube/crosstl-out/directx/CubeFDM_vs.hlsl",
+        "demos/open-source-porting/cases/diligent-samples-vrs-cube/crosstl-out/directx/CubeFDM_fs.hlsl",
         "demos/open-source-porting/cases/glslang-spec-constant-vertex/crosstl-out/directx/spv.specConstant.hlsl",
         "demos/open-source-porting/cases/godot-betsy-alpha-stitch/crosstl-out/directx/alpha_stitch.hlsl",
         "demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.vert.hlsl",
@@ -373,6 +376,11 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
         "demos/open-source-porting/cases/vulkan-samples-dynamic-line-grid/crosstl-out/directx/grid.hlsl",
     } == directx_paths
     assert all((ROOT / path).is_file() for path in directx_paths)
+    assert (
+        "compile_hlsl "
+        "demos/open-source-porting/cases/diligent-samples-vrs-cube/"
+        "crosstl-out/directx/CubeFDM_fs.hlsl PSMain ps_6_4"
+    ) in directx_block
 
 
 def test_open_source_demo_artifact_comparison_normalizes_platform_text(tmp_path):

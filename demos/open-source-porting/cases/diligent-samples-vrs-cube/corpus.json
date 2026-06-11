@@ -7,7 +7,7 @@
       "id": "diligent-samples-vrs-cube-vertex",
       "path": "CubeFDM_vs.glsl",
       "sourceBackend": "opengl",
-      "targets": ["cgl", "opengl", "vulkan"],
+      "targets": ["cgl", "opengl", "directx", "vulkan"],
       "repository": "https://github.com/DiligentGraphics/DiligentSamples",
       "commit": "30b94f26e7d10cde0be48c75a2c252185f564b69",
       "sourceUrl": "https://github.com/DiligentGraphics/DiligentSamples/blob/30b94f26e7d10cde0be48c75a2c252185f564b69/Tutorials/Tutorial24_VRS/assets/CubeFDM_vs.glsl"
@@ -16,7 +16,7 @@
       "id": "diligent-samples-vrs-cube-fragment-density",
       "path": "CubeFDM_fs.glsl",
       "sourceBackend": "opengl",
-      "targets": ["cgl", "opengl", "vulkan"],
+      "targets": ["cgl", "opengl", "directx", "vulkan"],
       "repository": "https://github.com/DiligentGraphics/DiligentSamples",
       "commit": "30b94f26e7d10cde0be48c75a2c252185f564b69",
       "sourceUrl": "https://github.com/DiligentGraphics/DiligentSamples/blob/30b94f26e7d10cde0be48c75a2c252185f564b69/Tutorials/Tutorial24_VRS/assets/CubeFDM_fs.glsl"
