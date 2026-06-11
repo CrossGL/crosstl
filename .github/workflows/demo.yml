@@ -1,0 +1,104 @@
+name: Open-Source Porting Demo
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/demo.yml"
+      - "crosstl/project/**"
+      - "demos/open-source-porting/**"
+      - "docs/source/project-porting.rst"
+      - "support/generated/project-porting-roadmap.json"
+      - "tests/test_demo_open_source_porting.py"
+      - "tests/test_project_test_runner.py"
+      - "tests/test_translator/test_project_translation.py"
+      - "tools/pytest_failure_summary.py"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/demo.yml"
+      - "crosstl/project/**"
+      - "demos/open-source-porting/**"
+      - "docs/source/project-porting.rst"
+      - "support/generated/project-porting-roadmap.json"
+      - "tests/test_demo_open_source_porting.py"
+      - "tests/test_project_test_runner.py"
+      - "tests/test_translator/test_project_translation.py"
+      - "tools/pytest_failure_summary.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  open-source-porting:
+    name: Open-Source Porting Demo (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -e . pytest
+
+      - name: Run open-source porting demo tests
+        id: run_demo_tests
+        shell: bash
+        run: |
+          mkdir -p support/generated/demo-reports/${{ matrix.os }}
+          python -m pytest -q \
+            tests/test_translator/test_project_translation.py \
+            -k "monogame_sprite_entries or monogame_entries_not_empty_generic_wrapper or cuda_vector_add_demo_directx_outputs_valid_hlsl" \
+            --junitxml support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-pytest.xml
+
+      - name: Write demo failure summary
+        if: failure() && steps.run_demo_tests.outcome == 'failure'
+        shell: bash
+        run: |
+          python tools/pytest_failure_summary.py \
+            support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-pytest.xml \
+            --json-output support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.json \
+            --markdown-output support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.md
+          cat support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload demo reports
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: open-source-porting-demo-reports-${{ matrix.os }}
+          path: support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-pytest.xml
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Upload demo failure summary
+        if: failure() && steps.run_demo_tests.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: open-source-porting-demo-failure-summary-${{ matrix.os }}
+          path: |
+            support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-pytest.xml
+            support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.json
+            support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.md
+          if-no-files-found: ignore
+          retention-days: 30
