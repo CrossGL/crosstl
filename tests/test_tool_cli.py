@@ -32,6 +32,9 @@ TOOLS = [
                 "plan-runtime",
                 "runtime-manifest",
                 "runtime-test-manifest",
+                "test-runner-plan",
+                "inspect-test-runner-plan",
+                "execute-test-runner",
                 "package-runtime",
                 "inspect-runtime-package",
                 "plan-host-bindings",
@@ -133,6 +136,38 @@ TOOLS = [
             (
                 "usage:",
                 "--project-root",
+                "--format",
+                "--output",
+            ),
+        ),
+        (
+            ("test-runner-plan",),
+            (
+                "usage:",
+                "--runtime-test-manifest",
+                "--handoff-package",
+                "--target",
+                "--test-config",
+                "--expected-artifact",
+                "--project-root",
+                "--format",
+                "--output",
+            ),
+        ),
+        (
+            ("inspect-test-runner-plan",),
+            (
+                "usage:",
+                "--format",
+                "--output",
+            ),
+        ),
+        (
+            ("execute-test-runner",),
+            (
+                "usage:",
+                "--project-root",
+                "--no-runtime-tests",
                 "--format",
                 "--output",
             ),
@@ -301,7 +336,7 @@ def test_pull_request_template_mentions_support_traceability_marker():
     assert "Support issue traceability: no issue closed" in text
 
 
-def test_local_worker_worktrees_are_ignored_by_developer_tooling():
+def test_local_temporary_worktrees_are_ignored_by_developer_tooling():
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
     pre_commit = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
     config = configparser.ConfigParser()

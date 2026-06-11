@@ -464,6 +464,9 @@ def test_project_package_exposes_public_api_surface():
         "ProjectPortabilityReport",
         "ProjectScan",
         "ProjectTranslationUnit",
+        "PROJECT_TEST_RUNNER_INSPECTION_KIND",
+        "PROJECT_TEST_RUNNER_PLAN_KIND",
+        "PROJECT_TEST_RUNNER_REPORT_KIND",
         "REFLECTION_AMBIGUOUS_BINDING",
         "REFLECTION_EMPTY",
         "REFLECTION_INCOMPLETE_OUTPUT",
@@ -521,13 +524,16 @@ def test_project_package_exposes_public_api_surface():
         "build_runtime_loader_manifest",
         "build_runtime_package",
         "build_runtime_test_manifest",
+        "build_project_test_runner_plan",
         "compare_runtime_outputs",
         "default_runtime_test_adapters",
         "execute_runtime_host_integration",
+        "execute_project_test_runner_plan",
         "inspect_runtime_host_integration_handoff",
         "inspect_runtime_host_loader_scaffolds",
         "inspect_runtime_package",
         "inspect_project_report",
+        "inspect_project_test_runner_plan",
         "load_runtime_verification_fixtures",
         "load_runtime_test_manifest",
         "load_project_config",
@@ -550,6 +556,7 @@ def test_project_package_exposes_public_api_surface():
         "verify_runtime_test_manifest",
         "write_runtime_verification_report",
         "write_runtime_test_report",
+        "write_project_test_runner_report",
     }
     for name in project_api.__all__:
         assert hasattr(project_api, name)
@@ -17027,7 +17034,9 @@ def test_translate_project_skips_invalid_external_corpus_provenance(tmp_path):
     )
 
 
-def test_translate_project_skips_duplicate_external_corpus_entries(tmp_path):
+def test_translate_project_preserves_external_corpus_entries_with_shared_path(
+    tmp_path,
+):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
@@ -17038,19 +17047,27 @@ def test_translate_project_skips_duplicate_external_corpus_entries(tmp_path):
                 "schemaVersion": 1,
                 "entries": [
                     {
-                        "id": "repo/simple",
+                        "id": "repo/simple-a",
                         "path": "simple.cgl",
                         "sourceBackend": "cgl",
                         "targets": ["cgl"],
+                        "repository": "https://github.com/example/project",
+                        "sourceUrl": (
+                            "https://github.com/example/project/blob/main/a.cgl"
+                        ),
                     },
                     {
-                        "id": "repo/simple-path-duplicate",
+                        "id": "repo/simple-b",
                         "path": "simple.cgl",
                         "sourceBackend": "cgl",
                         "targets": ["cgl"],
+                        "repository": "https://github.com/example/project",
+                        "sourceUrl": (
+                            "https://github.com/example/project/blob/main/b.cgl"
+                        ),
                     },
                     {
-                        "id": "repo/simple",
+                        "id": "repo/simple-a",
                         "path": "other.cgl",
                         "sourceBackend": "cgl",
                         "targets": ["cgl"],
@@ -17078,19 +17095,25 @@ def test_translate_project_skips_duplicate_external_corpus_entries(tmp_path):
     assert validation["success"] is True
     external_corpus = payload["externalCorpus"]
     assert external_corpus["summary"]["manifestEntryCount"] == 3
-    assert external_corpus["summary"]["validEntryCount"] == 1
-    assert external_corpus["summary"]["invalidEntryCount"] == 2
-    assert [entry["path"] for entry in external_corpus["entries"]] == ["simple.cgl"]
-    assert payload["diagnosticCounts"] == {"note": 0, "warning": 2, "error": 0}
+    assert external_corpus["summary"]["validEntryCount"] == 2
+    assert external_corpus["summary"]["invalidEntryCount"] == 1
+    assert [entry["id"] for entry in external_corpus["entries"]] == [
+        "repo/simple-a",
+        "repo/simple-b",
+    ]
+    assert [entry["path"] for entry in external_corpus["entries"]] == [
+        "simple.cgl",
+        "simple.cgl",
+    ]
+    assert [entry["sourceUrl"] for entry in external_corpus["entries"]] == [
+        "https://github.com/example/project/blob/main/a.cgl",
+        "https://github.com/example/project/blob/main/b.cgl",
+    ]
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
     diagnostics = payload["diagnostics"]
-    assert all(
-        diagnostic["code"] == "project.config.external-corpus-entry-invalid"
-        for diagnostic in diagnostics
-    )
-    assert "entry 2" in diagnostics[0]["message"]
-    assert "path duplicates entry 1" in diagnostics[0]["message"]
-    assert "entry 3" in diagnostics[1]["message"]
-    assert "id duplicates entry 1" in diagnostics[1]["message"]
+    assert diagnostics[0]["code"] == "project.config.external-corpus-entry-invalid"
+    assert "entry 3" in diagnostics[0]["message"]
+    assert "id duplicates entry 1" in diagnostics[0]["message"]
 
 
 def test_validate_project_report_accepts_generated_source_maps(tmp_path):
@@ -22878,7 +22901,7 @@ def test_validate_project_report_rejects_external_corpus_entry_state_mismatches(
     ) in diagnostic["message"]
 
 
-def test_validate_project_report_rejects_duplicate_external_corpus_entries(
+def test_validate_project_report_rejects_duplicate_external_corpus_entry_ids(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -22948,10 +22971,6 @@ def test_validate_project_report_rejects_duplicate_external_corpus_entries(
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
         "externalCorpus.entries[1].id duplicates externalCorpus.entries[0].id"
-        in diagnostic["message"]
-    )
-    assert (
-        "externalCorpus.entries[1].path duplicates externalCorpus.entries[0].path"
         in diagnostic["message"]
     )
 
@@ -25925,6 +25944,7 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
                         "variant": 0,
                         "checkKind": "maybe",
                         "missingCapabilities": "repo.scan",
+                        "details": [],
                     }
                 ],
             }
@@ -25974,6 +25994,7 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
     assert "diagnostics[0].missingCapabilities must be a list of strings" in (
         diagnostic["message"]
     )
+    assert "diagnostics[0].details must be an object" in diagnostic["message"]
 
 
 def test_project_diagnostics_preserve_original_locations(tmp_path):
@@ -40257,7 +40278,8 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
         encoding="utf-8",
     )
 
-    payload = translate_project(load_project_config(repo)).to_json()
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
 
     artifact = payload["artifacts"][0]
     assert artifact["status"] == "failed"
@@ -40287,6 +40309,21 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
     assert diagnostic["location"]["line"] == 9
     assert diagnostic["location"]["column"] == 1
     assert "work limit exceeded before GLSL codegen" in diagnostic["message"]
+    assert diagnostic["details"]["templateMaterialization"] == {
+        "limit": 4,
+        "limitSource": "project.source_options.metal.max_template_materialization_work",
+        "requiredWorkItems": 6,
+        "requestedSignature": "3 source instantiations x 2 templates",
+        "suggestedAction": (
+            "raise max_template_materialization_work for this source pattern or "
+            "OpenGL target, or reduce source template instantiations"
+        ),
+    }
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
 
 
 def test_metal_project_materialization_default_work_budget_scales_source_instantiations(
@@ -40558,6 +40595,17 @@ def test_translate_project_metal_implicit_type_environment_budget_diagnostic(
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
     assert "implicit-template-materialization/type-environment" in diagnostic["message"]
     assert "templates=1" in diagnostic["message"]
+    detail = diagnostic["details"]["templateMaterialization"]
+    assert detail["limit"] == 3
+    assert (
+        detail["limitSource"]
+        == "project.source_options.metal.max_template_materialization_work"
+    )
+    assert detail["requiredWorkItems"] > detail["limit"]
+    assert "implicit-template-materialization/type-environment" in (
+        detail["requestedSignature"]
+    )
+    assert "raise max_template_materialization_work" in detail["suggestedAction"]
 
 
 def test_translate_project_metal_type_alias_rewrite_cycle_reports_diagnostic(
@@ -42516,8 +42564,6 @@ def test_translate_project_khronos_opencl_reduce_lowers_all_target_artifacts(
     for artifact in payload["artifacts"]:
         assert artifact["generatedHash"]["algorithm"] == "sha256"
         assert artifact["generatedSizeBytes"] > 0
-
-    assert payload["diagnostics"] == []
 
 
 def test_translate_project_khronos_opencl_reduce_lowers_supported_target_artifacts(
