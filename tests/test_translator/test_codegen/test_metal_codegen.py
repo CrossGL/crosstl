@@ -173,6 +173,53 @@ def test_glsl_fragment_fragcoord_lowers_to_metal_position_input(tmp_path):
     compile_with_metal_if_available(generated_code)
 
 
+def test_glsl_push_constant_vertex_output_synthesizes_metal_position(tmp_path):
+    shader = """
+    #version 400
+
+    layout(push_constant) uniform Material {
+        int kind;
+        float fa[3];
+    } matInst;
+
+    out vec4 color;
+
+    void main()
+    {
+        switch (matInst.kind) {
+        case 1:  color = vec4(0.2); break;
+        case 2:  color = vec4(0.5); break;
+        default: color = vec4(0.0); break;
+        }
+    }
+    """
+    shader_path = tmp_path / "spv.pushConstant.vert"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "vertex VertexOutput vertex_main" in generated_code
+    assert "float4 color;" in generated_code
+    assert "float4 __crossgl_position [[position]];" in generated_code
+    assert ".__crossgl_position = float4(0.0, 0.0, 0.0, 1.0);" in generated_code
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is not None:
+        lookup = subprocess.run(
+            [xcrun, "-f", "metal"],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        if lookup.returncode == 0:
+            compile_with_metal_if_available(generated_code)
+
+
 def test_metal_resource_array_size_expression_function_calls_do_not_leak_ast_nodes():
     shader = """
     shader MetalResourceArrayExpressionSize {
