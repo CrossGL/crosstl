@@ -5937,7 +5937,7 @@ class GLSLCodeGen:
                     image_accesses=image_access_parameters,
                 )
 
-            semantic = self.semantic_from_node(p)
+            self.semantic_from_node(p)
 
             parameter_name = (
                 self.glsl_parameter_identifier_name(p.name)

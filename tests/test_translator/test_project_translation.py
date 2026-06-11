@@ -4305,9 +4305,7 @@ def test_scan_project_reports_unsupported_macro_forms_across_source_frontends(
     assert {
         diagnostic["sourceBackend"]: diagnostic["location"]["file"]
         for diagnostic in diagnostics
-    } == {
-        source_name: f"shaders/{source_name}.shader" for source_name in source_names
-    }
+    } == {source_name: f"shaders/{source_name}.shader" for source_name in source_names}
     for diagnostic in diagnostics:
         assert diagnostic["missingCapabilities"] == ["macro.native"]
         assert diagnostic["location"]["line"] == 2

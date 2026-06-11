@@ -15874,11 +15874,7 @@ class VulkanSPIRVCodeGen:
                 for index, param in enumerate(parameters)
                 if index not in skipped_indices
             ],
-            [
-                arg
-                for index, arg in enumerate(args)
-                if index not in skipped_indices
-            ],
+            [arg for index, arg in enumerate(args) if index not in skipped_indices],
         )
 
     def storage_buffer_effective_arity_matches(self, function_node, call_args):

@@ -2876,9 +2876,7 @@ def _derived_line_source_map_mappings(
         if best_score < 2:
             continue
         best_source_indexes = [
-            source_index
-            for score, source_index in scores
-            if score == best_score
+            source_index for score, source_index in scores if score == best_score
         ]
         if len(best_source_indexes) != 1:
             continue
@@ -4822,7 +4820,9 @@ def _unsupported_macro_form_reason(
     if directive not in PROJECT_KNOWN_PREPROCESSOR_DIRECTIVES:
         return "unknown preprocessor directive is preserved for backend-native handling"
 
-    supports_defines = _source_frontend_supports_lexer_keyword(source_backend, "defines")
+    supports_defines = _source_frontend_supports_lexer_keyword(
+        source_backend, "defines"
+    )
     if directive in {"define", "undef"} and not supports_defines:
         return "source frontend does not accept project define forwarding"
 
@@ -7631,7 +7631,9 @@ def translate_project(
                     if split_artifacts is not None:
                         artifact_records = split_artifacts
                     else:
-                        _attach_artifact_source_remap(config, target, artifact, output_path)
+                        _attach_artifact_source_remap(
+                            config, target, artifact, output_path
+                        )
                 except Exception as exc:  # noqa: BLE001
                     # Project translation reports per-artifact failures so one bad
                     # unit does not hide the rest of the repository's migration state.
