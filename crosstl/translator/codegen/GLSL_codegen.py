@@ -146,7 +146,6 @@ from .image_access_contracts import (
     image_multisample_sample_argument_index,
     image_multisample_sample_type_error,
     image_multisample_sample_type_mismatch,
-    image_resource_metadata,
     image_store_value_kind_error,
     image_store_value_kind_mismatch,
     image_store_value_shape_error,
@@ -283,6 +282,7 @@ from .stage_utils import (
     collect_stage_local_structs,
     collect_stage_local_variables,
     compute_local_size,
+    declaration_signature,
     deduplicate_named_declarations,
     normalize_stage_name,
     order_functions_by_dependencies,
@@ -2599,7 +2599,9 @@ class GLSLCodeGen:
             and self.is_glsl_interface_block_struct(node)
         }
         stage_resource_params = self.collect_stage_entry_resource_parameters(
-            ast, target_stage
+            ast,
+            target_stage,
+            global_vars + stage_local_resource_vars,
         )
         resource_declaration_nodes = self.deduplicate_resource_declaration_nodes(
             global_vars + stage_local_resource_vars + stage_resource_params
@@ -6208,7 +6210,9 @@ class GLSLCodeGen:
                 struct_names.add(type_name)
         return struct_names
 
-    def collect_stage_entry_resource_parameters(self, ast, target_stage=None):
+    def collect_stage_entry_resource_parameters(
+        self, ast, target_stage=None, base_declarations=None
+    ):
         stage_entry_types = {
             "vertex",
             "fragment",
@@ -6230,25 +6234,14 @@ class GLSLCodeGen:
         parameters = []
         seen = set()
         declarations_by_name = {}
-        used_names = {
-            self.resource_node_name(node)
-            for node in getattr(ast, "global_variables", []) or []
-            if self.resource_node_name(node)
-        }
-
-        def stage_entry_alias_name(func, param_name):
-            entry_name = sanitize_type_name(getattr(func, "name", "") or "entry")
-            base_name = sanitize_type_name(param_name) or "resource"
-            alias = f"{entry_name}_{base_name}"
-            if not alias or alias[0].isdigit():
-                alias = f"entry_{alias}"
-            candidate = alias
-            suffix = 2
-            while candidate in used_names:
-                candidate = f"{alias}_{suffix}"
-                suffix += 1
-            used_names.add(candidate)
-            return candidate
+        used_names = set()
+        for node in base_declarations or []:
+            record = self.glsl_resource_declaration_record(node)
+            if record is None:
+                continue
+            name, declaration = record
+            declarations_by_name.setdefault(name, declaration)
+            used_names.add(name)
 
         def add_parameters(func):
             for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
@@ -6256,38 +6249,40 @@ class GLSLCodeGen:
                     continue
                 if not self.is_stage_entry_resource_parameter(param):
                     continue
-                name = self.resource_node_name(param)
-                identity = self.resource_declaration_identity(param)
-                binding = self.explicit_resource_binding_index(param)
-                declaration = param
-                declaration_name = name
-                existing = declarations_by_name.get(name)
-                if name and identity is not None and existing is not None:
-                    if (
-                        existing["identity"] != identity
-                        or existing["binding"] != binding
-                    ):
-                        declaration = deepcopy(param)
-                        declaration_name = stage_entry_alias_name(func, name)
-                        declaration.name = declaration_name
-                        self.stage_entry_resource_parameter_aliases.setdefault(
-                            id(func), {}
-                        )[name] = declaration_name
-                if declaration_name and identity is not None:
-                    declarations_by_name.setdefault(
-                        declaration_name,
-                        {
-                            "identity": self.resource_declaration_identity(
-                                declaration
-                            ),
-                            "binding": self.explicit_resource_binding_index(
-                                declaration
-                            ),
-                        },
+                declaration_node = self.glsl_stage_entry_resource_parameter_declaration(
+                    param
+                )
+                record = self.glsl_resource_declaration_record(declaration_node)
+                if record is None:
+                    continue
+                original_name, declaration = record
+                emitted_name = original_name
+                existing = declarations_by_name.get(emitted_name)
+                if existing is not None and self.glsl_resource_declarations_conflict(
+                    existing,
+                    declaration,
+                ):
+                    emitted_name = self.glsl_scoped_entry_resource_name(
+                        func,
+                        original_name,
+                        used_names,
                     )
-                    used_names.add(declaration_name)
-                    self.stage_entry_resource_declaration_names.add(declaration_name)
-                parameters.append(declaration)
+                    declaration_node.name = emitted_name
+                    record = self.glsl_resource_declaration_record(declaration_node)
+                    if record is not None:
+                        emitted_name, declaration = record
+                    self.stage_entry_resource_parameter_aliases.setdefault(
+                        id(func), {}
+                    )[original_name] = emitted_name
+                if emitted_name:
+                    existing = declarations_by_name.get(emitted_name)
+                    if existing is None:
+                        declarations_by_name[emitted_name] = declaration
+                    elif existing.get("binding") is None:
+                        existing["binding"] = declaration.get("binding")
+                    used_names.add(emitted_name)
+                    self.stage_entry_resource_declaration_names.add(emitted_name)
+                parameters.append(declaration_node)
                 seen.add(id(param))
 
         for func in getattr(ast, "functions", []) or []:
@@ -6311,6 +6306,62 @@ class GLSLCodeGen:
                 add_parameters(entry_point)
 
         return parameters
+
+    def glsl_stage_entry_resource_parameter_declaration(self, parameter):
+        node = VariableNode(
+            name=getattr(parameter, "name", None),
+            var_type=self.resource_node_type(parameter),
+            attributes=list(getattr(parameter, "attributes", []) or []),
+            qualifiers=list(getattr(parameter, "qualifiers", []) or []),
+        )
+        for attr_name in (
+            "array_sizes",
+            "declarator_type_suffix",
+            "declarator_type_suffix_grouped",
+        ):
+            if hasattr(parameter, attr_name):
+                setattr(node, attr_name, getattr(parameter, attr_name))
+        return node
+
+    def glsl_resource_declaration_record(self, node):
+        name = self.resource_node_name(node)
+        identity = self.resource_declaration_identity(node)
+        if not name or identity is None:
+            return None
+        return (
+            name,
+            {
+                "identity": identity,
+                "binding": self.explicit_resource_binding_index(node),
+            },
+        )
+
+    def glsl_resource_declarations_conflict(self, existing, candidate):
+        if existing["identity"] != candidate["identity"]:
+            return True
+        existing_binding = existing.get("binding")
+        candidate_binding = candidate.get("binding")
+        return (
+            existing_binding is not None
+            and candidate_binding is not None
+            and existing_binding != candidate_binding
+        )
+
+    def glsl_scoped_entry_resource_name(self, func, parameter_name, used_names):
+        func_name = sanitize_type_name(getattr(func, "name", None) or "entry")
+        parameter_name = sanitize_type_name(parameter_name or "resource")
+        base_name = "_".join(part for part in (func_name, parameter_name) if part)
+        if not base_name:
+            base_name = "entry_resource"
+        if base_name[0].isdigit():
+            base_name = f"entry_{base_name}"
+
+        candidate = base_name
+        suffix = 2
+        while candidate in used_names or candidate in self.GLSL_RESERVED_IDENTIFIERS:
+            candidate = f"{base_name}_{suffix}"
+            suffix += 1
+        return candidate
 
     def collect_global_variable_types(self, nodes):
         variable_types = {}
@@ -13734,20 +13785,33 @@ class GLSLCodeGen:
         return f"textureGatherOffset({texture_name}, {coord}, {compare}, {offset})"
 
     def image_resource_format(self, texture_arg):
-        return image_resource_metadata(
+        return self.resource_metadata(
             texture_arg,
-            self.expression_name,
             self.current_image_format_parameters,
             self.image_variable_formats,
         )
 
     def image_resource_access(self, texture_arg):
-        return image_resource_metadata(
+        return self.resource_metadata(
             texture_arg,
-            self.expression_name,
             self.current_image_access_parameters,
             self.image_variable_accesses,
         )
+
+    def resource_metadata(self, resource_arg, parameter_metadata, variable_metadata):
+        resource_name = self.expression_name(resource_arg)
+        if not resource_name:
+            return None
+        parameter_value = parameter_metadata.get(resource_name)
+        if parameter_value is not None:
+            return parameter_value
+        emitted_name = self.current_identifier_aliases.get(resource_name)
+        if emitted_name and emitted_name != resource_name:
+            return parameter_metadata.get(
+                emitted_name,
+                variable_metadata.get(emitted_name),
+            )
+        return variable_metadata.get(resource_name)
 
     def image_atomic_parameter_requires_diagnostic(self, texture_arg):
         texture_name = self.expression_name(texture_arg)
@@ -13764,10 +13828,18 @@ class GLSLCodeGen:
         buffer_name = self.expression_name(buffer_arg)
         if not buffer_name:
             return None
-        return self.current_structured_buffer_access_parameters.get(
-            buffer_name,
-            self.structured_buffer_variable_accesses.get(buffer_name),
+        parameter_access = self.current_structured_buffer_access_parameters.get(
+            buffer_name
         )
+        if parameter_access is not None:
+            return parameter_access
+        emitted_name = self.current_identifier_aliases.get(buffer_name)
+        if emitted_name and emitted_name != buffer_name:
+            return self.current_structured_buffer_access_parameters.get(
+                emitted_name,
+                self.structured_buffer_variable_accesses.get(emitted_name),
+            )
+        return self.structured_buffer_variable_accesses.get(buffer_name)
 
     def image_atomic_zero_value(self, texture_type, image_format):
         component_kind = image_format_component_kind(image_format)
@@ -17112,7 +17184,10 @@ class GLSLCodeGen:
 
     def generate_struct(self, node):
         code = f"struct {node.name} {{\n"
-        for member in getattr(node, "members", []) or []:
+        members = list(getattr(node, "members", []) or [])
+        if not members:
+            code += "    int _crossgl_empty;\n"
+        for member in members:
             code += self.generate_struct_member_declaration(
                 member, struct_name=node.name
             )

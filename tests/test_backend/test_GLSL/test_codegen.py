@@ -1,7 +1,10 @@
+import shutil
+import subprocess
 import textwrap
 
 import pytest
 
+from crosstl._crosstl import translate
 from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
@@ -2233,6 +2236,60 @@ def test_codegen_structs_and_arrays_roundtrip():
     assert "Light" in output
     assert "lights" in output
     assert "vColor" in output
+
+
+def test_metal_mlx_helper_headers_emit_glsl_valid_struct_declarations(tmp_path):
+    metal_source = textwrap.dedent("""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        namespace mlx {
+        using os_log = metal::os_log;
+
+        struct os_log {};
+
+        template <typename U>
+        struct Limits {
+            U max;
+            U min;
+        };
+
+        kernel void arange(device float* out [[buffer(0)]]) {
+            out[0] = 0.0;
+        }
+        }
+    """).strip()
+    source_path = tmp_path / "arange.metal"
+    source_path.write_text(metal_source, encoding="utf-8")
+
+    generated = translate(
+        str(source_path),
+        backend="opengl",
+        source_backend="metal",
+        format_output=False,
+    )
+
+    assert "struct Limits" not in generated
+    assert " U " not in generated
+    assert "struct os_log {\n};" not in generated
+    assert "int _crossgl_empty;" in generated
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        return
+
+    shader_path = tmp_path / "arange.comp"
+    shader_path.write_text(generated, encoding="utf-8")
+    result = subprocess.run(
+        [glslang, "-S", "comp", str(shader_path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    diagnostics = "\n".join(
+        part for part in (result.stdout, result.stderr) if part.strip()
+    )
+    assert result.returncode == 0, diagnostics
 
 
 def test_codegen_const_gather_offset_arrays_roundtrip():

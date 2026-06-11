@@ -233,7 +233,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1178
+        "test_count": 1179
       },
       "translator_codegen": {
         "exists": true,
@@ -442,11 +442,19 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 36,
+        "unsupported_marker_count": 42,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "reject_unsupported_generic_functions as reject_generic_functions_for_target,"
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "class UnsupportedSPIRVFeatureError(ValueError):"
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "project_diagnostic_code = \"project.translate.unsupported-feature\""
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -507,14 +515,6 @@
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "self.emit(f\"; WARNING: {operation} is not supported by the SPIR-V backend yet\")"
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "f\"Unsupported {semantic} {context} for SPIR-V codegen; \""
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "f\"Unsupported {semantic} {context} for SPIR-V codegen; \""
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
