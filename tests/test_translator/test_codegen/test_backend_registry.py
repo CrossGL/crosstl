@@ -250,6 +250,41 @@ def test_directx_target_profile_alias_translate_api_roundtrip(tmp_path):
     assert "VSMain" in dx12_output
 
 
+def test_directx_dx11_alias_preserves_profile_validation(tmp_path):
+    import crosstl
+
+    cgl_file = tmp_path / "wave_shader.cgl"
+    cgl_file.write_text(
+        """
+        shader DxWaveProfile {
+            compute {
+                uint main(uint value) {
+                    return WaveActiveSum(value);
+                }
+            }
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX profile dx11 does not support wave intrinsic "
+            "'WaveActiveSum'.*Shader Model 6.0"
+        ),
+    ):
+        crosstl.translate(str(cgl_file), backend="dx11", format_output=False)
+
+    dx12_output = crosstl.translate(str(cgl_file), backend="dx12", format_output=False)
+    directx_output = crosstl.translate(
+        str(cgl_file), backend="directx", format_output=False
+    )
+
+    assert "WaveActiveSum(value)" in dx12_output
+    assert "WaveActiveSum(value)" in directx_output
+
+
 @pytest.mark.parametrize(
     "extension",
     (

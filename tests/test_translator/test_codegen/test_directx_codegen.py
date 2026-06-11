@@ -31273,6 +31273,34 @@ def test_directx_feedback_texture_helpers_validate_resources_and_shapes(body, ma
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
+def test_directx_dx11_profile_rejects_shader_model_6_wave_intrinsics():
+    code = """
+    shader Dx11WaveIntrinsic {
+        compute {
+            uint main(uint value) {
+                return WaveActiveSum(value);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX profile dx11 does not support wave intrinsic "
+            "'WaveActiveSum'.*Shader Model 6.0"
+        ),
+    ):
+        HLSLCodeGen(target_profile="directx-11").generate(
+            crosstl.translator.parse(code)
+        )
+
+    generated = HLSLCodeGen(target_profile="directx-12").generate(
+        crosstl.translator.parse(code)
+    )
+    assert "WaveActiveSum(value)" in generated
+
+
 def test_directx_wave_active_sum_ballot_prefix_in_compute_expressions():
     code = """
     shader WaveExpressionCoverage {

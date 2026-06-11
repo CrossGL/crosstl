@@ -833,6 +833,33 @@ def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls():
     assert "return sampleEnv(envMap, envMap_sampler, normal);" in generated
 
 
+def test_wgsl_codegen_lowers_mod_builtin_to_floor_semantics_expression():
+    shader = """
+    shader WGSLModBuiltin {
+        compute {
+            void main() {
+                vec2 uv = vec2(-1.25, 2.75);
+                vec2 tile = mod((uv * 4.0) - vec2(2.0), 1.0);
+                vec2 wrapped = mod(tile, vec2(0.25, 0.5));
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "var tile: vec2<f32> = ((((uv * 4.0) - vec2<f32>(2.0))) - "
+        "((1.0) * floor((((uv * 4.0) - vec2<f32>(2.0))) / (1.0))));"
+    ) in generated
+    assert (
+        "var wrapped: vec2<f32> = ((tile) - "
+        "((vec2<f32>(0.25, 0.5)) * floor((tile) / (vec2<f32>(0.25, 0.5)))));"
+    ) in generated
+    assert "mod(" not in generated
+
+
 def test_wgsl_codegen_lowers_compute_barrier_to_workgroup_barrier():
     shader = """
     shader WGSLBarrier {

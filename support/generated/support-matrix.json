@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 291,
+        "unsupported_marker_count": 292,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1080
+        "test_count": 1081
       },
       "translator_codegen": {
         "exists": true,
@@ -275,7 +275,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 19,
+        "unsupported_marker_count": 22,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
@@ -284,6 +284,18 @@
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "UNSUPPORTED_SAMPLED_RESOURCE_TYPES = {"
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "UNSUPPORTED_FLOAT64_TYPES = {"
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "if base_type in self.UNSUPPORTED_FLOAT64_TYPES:"
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "\"WebGL target does not support 64-bit floating-point type \""
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
@@ -344,10 +356,6 @@
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "if stage_name in self.UNSUPPORTED_STAGE_NAMES:"
-          },
-          {
-            "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "if stage_name in self.UNSUPPORTED_STAGE_NAMES:"
           }
         ]
       },
@@ -363,7 +371,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_webgl_codegen.py"
         ],
-        "test_count": 29
+        "test_count": 30
       },
       "translator_codegen": {
         "exists": true,
@@ -485,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 40
+        "test_count": 41
       },
       "translator_codegen": {
         "exists": true,

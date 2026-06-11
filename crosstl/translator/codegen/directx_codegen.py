@@ -548,8 +548,9 @@ class HLSLCodeGen:
         "nonuniformEXT",
     }
 
-    def __init__(self):
+    def __init__(self, target_profile=None):
         """Initialize DirectX type maps and per-generation resource state."""
+        self.target_profile = self.normalize_directx_target_profile(target_profile)
         self.texture_variables = set()
         self.sampler_variables = set()
         self.global_mixed_sampler_names = set()
@@ -939,6 +940,31 @@ class HLSLCodeGen:
             "callable_data": "callable_data",
             "shader_record": "shader_record",
         }
+
+    def normalize_directx_target_profile(self, target_profile):
+        if target_profile is None:
+            return None
+
+        normalized = str(target_profile).strip().lower().replace("_", "-")
+        aliases = {
+            "dx-11": "dx11",
+            "d3d-11": "dx11",
+            "d3d11": "dx11",
+            "direct3d-11": "dx11",
+            "directx-11": "dx11",
+            "dx-12": "dx12",
+            "d3d-12": "dx12",
+            "d3d12": "dx12",
+            "direct3d-12": "dx12",
+            "directx-12": "dx12",
+        }
+        normalized = aliases.get(normalized, normalized)
+        if normalized not in {"dx11", "dx12"}:
+            raise ValueError(
+                "DirectX target profile must be one of: dx11, dx12, "
+                "directx-11, directx-12"
+            )
+        return normalized
 
     def generate(self, ast):
         """Generate complete HLSL source for a CrossGL AST."""
@@ -5837,10 +5863,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         operation = getattr(expr, "operation", "")
         return self.generate_hlsl_wave_intrinsic_call(operation, expr.arguments)
 
+    def validate_directx_wave_intrinsic_profile(self, operation):
+        if self.target_profile != "dx11":
+            return
+
+        raise ValueError(
+            f"DirectX profile dx11 does not support wave intrinsic '{operation}'; "
+            "wave intrinsics require DirectX 12 / Shader Model 6.0"
+        )
+
     def generate_hlsl_wave_intrinsic_call(self, operation, args):
         expected_args = self.HLSL_WAVE_INTRINSIC_ARITIES.get(operation)
         if expected_args is None:
             raise ValueError(f"DirectX wave intrinsic '{operation}' is not recognized")
+        self.validate_directx_wave_intrinsic_profile(operation)
 
         actual_args = len(args)
         if actual_args != expected_args:

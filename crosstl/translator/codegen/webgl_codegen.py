@@ -70,9 +70,37 @@ class WebGLCodeGen(GLSLCodeGen):
         "usamplerBuffer",
         "usamplerCubeArray",
     }
+    UNSUPPORTED_FLOAT64_TYPES = {
+        "double",
+        "dvec2",
+        "dvec3",
+        "dvec4",
+        "dmat2",
+        "dmat3",
+        "dmat4",
+        "dmat2x2",
+        "dmat2x3",
+        "dmat2x4",
+        "dmat3x2",
+        "dmat3x3",
+        "dmat3x4",
+        "dmat4x2",
+        "dmat4x3",
+        "dmat4x4",
+    }
 
     def default_glsl_version_line(self, ast, target_stage=None):
         return "#version 300 es"
+
+    def map_type(self, vtype):
+        mapped_type = super().map_type(vtype)
+        base_type = mapped_type.split("[", 1)[0].rstrip("*&")
+        if base_type in self.UNSUPPORTED_FLOAT64_TYPES:
+            raise ValueError(
+                "WebGL target does not support 64-bit floating-point type "
+                f"'{base_type}'"
+            )
+        return mapped_type
 
     def map_image_base_type_with_format(self, vtype, node=None):
         if self.is_storage_image_type(vtype):

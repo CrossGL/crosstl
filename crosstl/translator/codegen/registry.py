@@ -200,4 +200,14 @@ def get_codegen(name: str):
         raise ValueError(
             f"Unsupported backend '{name}'. Supported backends: {supported}"
         )
+    key = _normalize_backend_name(name)
+    target_profile_names = {
+        _normalize_backend_name(profile)
+        for profile in (*spec.target_aliases, *spec.target_profiles)
+    }
+    if key in target_profile_names:
+        try:
+            return spec.codegen_class(target_profile=key)
+        except TypeError:
+            pass
     return spec.codegen_class()

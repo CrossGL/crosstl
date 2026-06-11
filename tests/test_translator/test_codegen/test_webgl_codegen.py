@@ -640,6 +640,36 @@ def test_webgl_codegen_rejects_sampled_resource_types_outside_glsl_es300(
         WebGLCodeGen().generate(parse_shader(shader))
 
 
+@pytest.mark.parametrize(
+    "declaration,diagnostic_type",
+    (
+        ("double value = 1.0;", "double"),
+        ("dvec2 value = dvec2(1.0);", "dvec2"),
+        ("dmat2x2 value = dmat2x2(1.0);", "dmat2x2"),
+    ),
+)
+def test_webgl_codegen_rejects_64_bit_float_types(declaration, diagnostic_type):
+    shader = f"""
+    shader WebGLNoFloat64 {{
+        fragment {{
+            vec4 main() @ gl_FragColor {{
+                {declaration}
+                return vec4(1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target does not support 64-bit floating-point type "
+            rf"'{diagnostic_type}'"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
 def test_webgl_codegen_rejects_storage_image_intrinsics():
     shader = """
     shader WebGLNoStorageImageIntrinsic {

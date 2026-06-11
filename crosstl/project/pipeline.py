@@ -1649,6 +1649,14 @@ RUNTIME_REFERENCE_RULES = (
         "wgsl",
         "runtime-api",
         re.compile(
+            r"(?<=navigator\.gpu\.)(getPreferredCanvasFormat|requestAdapter)(?=\s*\()"
+        ),
+        None,
+    ),
+    (
+        "wgsl",
+        "runtime-api",
+        re.compile(
             r"(?<!navigator\.)\b(?:adapter|gpuAdapter|gpu|device|gpuDevice|"
             r"context|gpuContext|"
             r"queue|gpuQueue|encoder|commandEncoder|pass|passEncoder|"

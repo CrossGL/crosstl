@@ -2211,19 +2211,19 @@ def test_scan_report_records_web_runtime_references_in_module_extensions(tmp_pat
 
     payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
 
-    assert payload["migration"]["runtimeReferenceCount"] == 6
+    assert payload["migration"]["runtimeReferenceCount"] == 7
     assert payload["migration"]["runtimeReferencesByBackend"] == {
         "webgl": 3,
-        "wgsl": 3,
+        "wgsl": 4,
     }
-    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 6}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 7}
     assert payload["migration"]["runtimeReferencesByPath"] == {
         "app.tsx": 1,
         "component.jsx": 1,
         "config.cts": 1,
         "legacy.cjs": 1,
         "module.mjs": 1,
-        "worker.mts": 1,
+        "worker.mts": 2,
     }
     assert [
         (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
@@ -2235,6 +2235,7 @@ def test_scan_report_records_web_runtime_references_in_module_extensions(tmp_pat
         ("legacy.cjs", "webgl", "runtime-api", "drawArrays"),
         ("module.mjs", "webgl", "runtime-api", "createShader"),
         ("worker.mts", "wgsl", "runtime-api", "navigator.gpu"),
+        ("worker.mts", "wgsl", "runtime-api", "requestAdapter"),
     ]
 
 
@@ -2496,6 +2497,7 @@ def test_scan_report_records_webgpu_runtime_reference_evidence(tmp_path):
         textwrap.dedent("""
             async function configure(device: GPUDevice) {
               const shaderModule = device.createShaderModule({ code });
+              const format = navigator.gpu.getPreferredCanvasFormat();
               await navigator.gpu.requestAdapter();
             }
             """).strip(),
@@ -2508,14 +2510,14 @@ def test_scan_report_records_webgpu_runtime_reference_evidence(tmp_path):
 
     payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
 
-    assert payload["migration"]["runtimeReferenceCount"] == 4
-    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 4}
+    assert payload["migration"]["runtimeReferenceCount"] == 7
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 7}
     assert payload["migration"]["runtimeReferencesByKind"] == {
         "build-system": 1,
-        "runtime-api": 3,
+        "runtime-api": 6,
     }
     assert payload["migration"]["runtimeReferencesByPath"] == {
-        "host.ts": 3,
+        "host.ts": 6,
         "package.json": 1,
     }
     assert [
@@ -2525,6 +2527,9 @@ def test_scan_report_records_webgpu_runtime_reference_evidence(tmp_path):
         ("host.ts", "wgsl", "runtime-api", "GPUDevice"),
         ("host.ts", "wgsl", "runtime-api", "createShaderModule"),
         ("host.ts", "wgsl", "runtime-api", "navigator.gpu"),
+        ("host.ts", "wgsl", "runtime-api", "getPreferredCanvasFormat"),
+        ("host.ts", "wgsl", "runtime-api", "navigator.gpu"),
+        ("host.ts", "wgsl", "runtime-api", "requestAdapter"),
         ("package.json", "wgsl", "build-system", "wgsl-build-system"),
     ]
 

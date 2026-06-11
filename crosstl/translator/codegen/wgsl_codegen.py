@@ -149,7 +149,6 @@ class WGSLCodeGen:
         "inverseSqrt": "inverseSqrt",
         "lerp": "mix",
         "mix": "mix",
-        "mod": "mod",
         "rsqrt": "inverseSqrt",
         "saturate": "saturate",
     }
@@ -1126,12 +1125,24 @@ class WGSLCodeGen:
             return self.generate_texture_function_call(node, function_name)
         if normalized_name in self.BARRIER_FUNCTION_NAMES:
             return self.generate_barrier_call(node, function_name)
+        if function_name == "mod":
+            return self.generate_mod_call(node)
 
         args = self.generate_call_arguments(function_name, node.arguments)
         if self.is_type_constructor_name(function_name):
             return f"{self.type_name_string(function_name)}({args})"
         mapped_name = self.FUNCTION_NAME_MAP.get(function_name, function_name)
         return f"{mapped_name}({args})"
+
+    def generate_mod_call(self, node):
+        if len(node.arguments) != 2:
+            raise ValueError(
+                "WGSL target supports mod() calls with exactly 2 arguments; got "
+                f"{len(node.arguments)}"
+            )
+        left = self.generate_expression(node.arguments[0])
+        right = self.generate_expression(node.arguments[1])
+        return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"
 
     def generate_call_arguments(self, function_name, arguments):
         texture_parameter_indices = self._function_texture_parameters.get(
