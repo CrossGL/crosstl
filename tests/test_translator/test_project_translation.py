@@ -39308,6 +39308,193 @@ def test_translate_project_metal_reduction_materializes_shared_helper_templates(
         assert not re.search(r"\\b(?:T|U|Op|N_READS)\\b", output)
 
 
+def test_translate_project_metal_const_for_loop_partial_template_materializes_to_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "loop.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_loop(name, type) \\
+                instantiate_kernel("loop" #name, loop_kernel, type)
+
+            template <int start, int stop, int step, typename F>
+            F const_for_loop(F value) {
+                return value + F(start + stop + step);
+            }
+
+            template <typename T>
+            [[kernel]] void loop_kernel(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = const_for_loop<0, 4, 1>(T(gid));
+            }
+
+            instantiate_loop(_float, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["opengl", "directx", "vulkan"],
+        output_dir="out",
+    )
+    payload = report.to_json()
+
+    expected_materialization = {
+        "status": "materialized",
+        "specializationCount": 2,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "configuredParameterSources": {},
+        "specializations": [
+            {
+                "name": "loop_kernel",
+                "materializedName": "loop_float",
+                "parameters": {"T": "float"},
+                "parameterSources": {"T": "source-instantiation"},
+                "source": "source-instantiation",
+                "hostName": "loop_float",
+            },
+            {
+                "name": "const_for_loop",
+                "materializedName": "const_for_loop_0_4_1_float",
+                "parameters": {
+                    "F": "float",
+                    "start": "0",
+                    "step": "1",
+                    "stop": "4",
+                },
+                "parameterSources": {
+                    "F": "call-site",
+                    "start": "call-site",
+                    "step": "call-site",
+                    "stop": "call-site",
+                },
+                "source": "call-site",
+            },
+        ],
+        "unsupported": [],
+    }
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+    for artifact in payload["artifacts"]:
+        assert artifact["templateMaterialization"] == expected_materialization
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        assert "const_for_loop<" not in output
+        assert "template <" not in output
+        assert not re.search(r"\\b(?:T|F|start|stop|step)\\b", output)
+
+    opengl_artifact = next(
+        artifact for artifact in payload["artifacts"] if artifact["target"] == "opengl"
+    )
+    opengl_output = (repo / opengl_artifact["path"]).read_text(encoding="utf-8")
+    assert_compute_glsl_validates_if_available(opengl_output, tmp_path)
+
+    directx_artifact = next(
+        artifact for artifact in payload["artifacts"] if artifact["target"] == "directx"
+    )
+    directx_output = (repo / directx_artifact["path"]).read_text(encoding="utf-8")
+    assert_directx_compute_validates_if_available(directx_output, tmp_path)
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+
+
+def test_metal_project_materialization_concretizes_dispatch_bool_functor_helper(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    source = textwrap.dedent("""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        #define instantiate_dispatch(name, type) \\
+            instantiate_kernel("dispatch" #name, dispatch_kernel, type)
+
+        template <typename T>
+        struct WriteTrue {
+            device T* out;
+            uint gid;
+            void operator()(bool value) const {
+                out[gid] = value ? T(1) : T(0);
+            }
+        };
+
+        template <typename F>
+        METAL_FUNC void dispatch_bool(bool flag, F f) {
+            f(flag);
+        }
+
+        template <typename T>
+        [[kernel]] void dispatch_kernel(
+            device T* out [[buffer(0)]],
+            uint gid [[thread_position_in_grid]]
+        ) {
+            WriteTrue<T> writer{out, gid};
+            dispatch_bool(true, writer);
+        }
+
+        instantiate_dispatch(_float, float)
+        """).strip() + "\n"
+    source_path = shader_dir / "dispatch_bool.metal"
+    source_path.write_text(source, encoding="utf-8")
+    unit = project_pipeline.ProjectTranslationUnit(
+        path=source_path,
+        relative_path="shaders/dispatch_bool.metal",
+        source_backend="metal",
+        extension=".metal",
+        source_hash={"sha256": "test"},
+        source_size_bytes=len(source.encode("utf-8")),
+    )
+
+    materialized = project_pipeline._project_template_materialization_for_artifact(
+        unit=unit,
+        target="opengl",
+        variant=None,
+        defines={},
+        define_sources={},
+        include_paths=[],
+        source_options={},
+    )
+
+    assert materialized is not None
+    assert list(materialized.diagnostics) == []
+    assert materialized.metadata["status"] == "materialized"
+    assert materialized.metadata["unsupported"] == []
+    specializations = {
+        record["name"]: record for record in materialized.metadata["specializations"]
+    }
+    assert specializations["dispatch_bool"] == {
+        "name": "dispatch_bool",
+        "materializedName": "dispatch_bool_WriteTrue_float",
+        "parameters": {"F": "WriteTrue<float>"},
+        "parameterSources": {"F": "call-site"},
+        "source": "call-site",
+    }
+    assert "WriteTrue<float> writer{out, gid};" in materialized.text
+    assert "dispatch_bool_WriteTrue_float(true, writer);" in materialized.text
+    assert "dispatch_bool<" not in materialized.text
+
+
 def test_translate_project_metal_multi_entry_instantiations_scope_vulkan_bindings(
     tmp_path,
 ):
