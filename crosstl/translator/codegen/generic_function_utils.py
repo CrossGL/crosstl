@@ -10,6 +10,7 @@ from ..ast import (
     ForNode,
     FunctionCallNode,
     FunctionNode,
+    IdentifierNode,
     IfNode,
     MatchNode,
     ReturnNode,
@@ -171,6 +172,26 @@ def generic_function_call_name(generator, func_name, args):
     return (getattr(generator, "generic_function_specialized_names", {}) or {}).get(key)
 
 
+def generic_function_value_arguments(generator, func_name, args):
+    """Return value arguments after any leading explicit generic type arguments."""
+    definitions = getattr(generator, "generic_function_definitions", {}) or {}
+    func = definitions.get(func_name)
+    if func is None:
+        return list(args or [])
+
+    generic_params = generic_function_parameters(func)
+    param_list = list(getattr(func, "parameters", getattr(func, "params", [])) or [])
+    explicit_substitutions, value_args = _explicit_generic_call_parts(
+        generator,
+        generic_params,
+        param_list,
+        list(args or []),
+    )
+    if explicit_substitutions is None:
+        return list(args or [])
+    return value_args
+
+
 def generic_function_call_key(generator, func_name, args):
     if is_reserved_generic_function_builtin_name(func_name):
         return None
@@ -184,15 +205,25 @@ def generic_function_call_key(generator, func_name, args):
     if not generic_params:
         return None
 
+    call_args = list(args or [])
     substitutions = {}
     param_list = list(getattr(func, "parameters", getattr(func, "params", [])) or [])
-    for param, arg in zip(param_list, args or []):
+    explicit_substitutions, value_args = _explicit_generic_call_parts(
+        generator,
+        generic_params,
+        param_list,
+        call_args,
+    )
+    if explicit_substitutions is not None:
+        substitutions.update(explicit_substitutions)
+    else:
+        value_args = call_args
+
+    for param, arg in zip(param_list, value_args):
         expected_type = generator.type_name_string(
             getattr(param, "param_type", getattr(param, "vtype", None))
         )
-        actual_type = generator.type_name_string(
-            _safe_expression_result_type(generator, arg)
-        )
+        actual_type = _expression_type_name(generator, arg)
         if not actual_type:
             actual_type = getattr(
                 generator,
@@ -215,6 +246,29 @@ def generic_function_call_key(generator, func_name, args):
     key = (func_name, concrete_args)
     _ensure_generic_function_specialization(generator, func, key, substitutions)
     return key
+
+
+def _explicit_generic_call_parts(generator, generic_params, param_list, args):
+    generic_count = len(generic_params)
+    if generic_count == 0 or len(args) != len(param_list) + generic_count:
+        return None, args
+
+    substitutions = {}
+    current_substitutions = getattr(
+        generator,
+        "current_generic_function_substitutions",
+        {},
+    )
+    for param_name, arg in zip(generic_params, args[:generic_count]):
+        type_name = _type_argument_name(generator, arg)
+        if not type_name:
+            return None, args
+        substitutions[param_name] = substitute_generic_type_name(
+            type_name,
+            current_substitutions,
+        )
+
+    return substitutions, args[generic_count:]
 
 
 def generate_numeric_trait_method_call(generator, func_expr, args):
@@ -459,6 +513,43 @@ def _safe_expression_result_type(generator, expr):
         return generator.expression_result_type(expr)
     except (AttributeError, TypeError, ValueError):
         return None
+
+
+def _expression_type_name(generator, expr):
+    name = _expression_identifier_name(expr)
+    if name is not None:
+        local_type = (getattr(generator, "local_variable_types", {}) or {}).get(name)
+        if local_type:
+            return str(local_type)
+
+    inferred_type = _safe_expression_result_type(generator, expr)
+    return _type_name_from_value(generator, inferred_type)
+
+
+def _expression_identifier_name(expr):
+    if isinstance(expr, str):
+        return expr
+    if isinstance(expr, (IdentifierNode, VariableNode)):
+        return getattr(expr, "name", None)
+    return None
+
+
+def _type_argument_name(generator, expr):
+    if isinstance(expr, str):
+        return expr
+    if isinstance(expr, IdentifierNode):
+        return expr.name
+    return generator.type_name_string(expr)
+
+
+def _type_name_from_value(generator, value):
+    if value is None:
+        return None
+    value_type = getattr(value, "type", None)
+    base_type = getattr(value_type, "base_type", None)
+    if base_type:
+        return str(base_type)
+    return generator.type_name_string(value)
 
 
 def _function_call_name(call):
