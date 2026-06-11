@@ -152,6 +152,24 @@ class WGSLCodeGen:
         "rsqrt": "inverseSqrt",
         "saturate": "saturate",
     }
+    DERIVATIVE_FUNCTION_NAME_MAP = {
+        "dfdx": "dpdx",
+        "ddx": "dpdx",
+        "dfdxfine": "dpdxFine",
+        "ddxfine": "dpdxFine",
+        "ddx_fine": "dpdxFine",
+        "dfdxcoarse": "dpdxCoarse",
+        "ddxcoarse": "dpdxCoarse",
+        "ddx_coarse": "dpdxCoarse",
+        "dfdy": "dpdy",
+        "ddy": "dpdy",
+        "dfdyfine": "dpdyFine",
+        "ddyfine": "dpdyFine",
+        "ddy_fine": "dpdyFine",
+        "dfdycoarse": "dpdyCoarse",
+        "ddycoarse": "dpdyCoarse",
+        "ddy_coarse": "dpdyCoarse",
+    }
     STAGE_INPUT_BUILTINS = {
         "vertex": {"instance_index", "vertex_index"},
         "fragment": set(),
@@ -1416,6 +1434,9 @@ class WGSLCodeGen:
             return self.generate_image_store_call(node, function_name)
         if normalized_name in self.BARRIER_FUNCTION_NAMES:
             return self.generate_barrier_call(node, function_name)
+        derivative_name = self.DERIVATIVE_FUNCTION_NAME_MAP.get(normalized_name)
+        if derivative_name is not None:
+            return self.generate_derivative_call(node, derivative_name, function_name)
         if function_name == "mod":
             return self.generate_mod_call(node)
 
@@ -1424,6 +1445,15 @@ class WGSLCodeGen:
             return f"{self.type_name_string(function_name)}({args})"
         mapped_name = self.FUNCTION_NAME_MAP.get(function_name, function_name)
         return f"{mapped_name}({args})"
+
+    def generate_derivative_call(self, node, mapped_name, function_name):
+        if len(node.arguments) != 1:
+            raise ValueError(
+                "WGSL target supports derivative intrinsic "
+                f"{function_name}() with exactly 1 argument; got "
+                f"{len(node.arguments)}"
+            )
+        return f"{mapped_name}({self.generate_expression(node.arguments[0])})"
 
     def generate_structured_buffer_free_helper_call(self, node, helper_name):
         if helper_name == "buffer_load":
