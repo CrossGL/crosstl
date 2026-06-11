@@ -516,6 +516,38 @@ def test_webgl_codegen_lowers_nested_direct_dynamic_sampler_array_texture_call()
     assert "color = (crossgl_dynamic_sampler_value + vec4(0.25));" in generated
 
 
+def test_webgl_codegen_dynamic_sampler_array_ternary_return_keeps_diagnostic():
+    shader = """
+    shader WebGLDynamicSamplerTernary {
+        const int MAP_COUNT = 2;
+
+        fragment {
+            uniform sampler2D colorMaps[MAP_COUNT];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return colorIndex > 0 ? texture(colorMaps[colorIndex], uv) : vec4(1.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "texture(colorMaps[colorIndex]" not in generated
+    assert "switch (colorIndex)" not in generated
+    assert (
+        "unsupported WebGL dynamic sampler array expression: dynamic sampler arrays "
+        "cannot be lifted from ternary or short-circuit expressions"
+    ) in generated
+    assert (
+        "fragColor = /* unsupported WebGL dynamic sampler array expression:"
+        in generated
+    )
+    assert "fragColor = vec4(0.0);" not in generated
+    assert "return;" in generated
+
+
 def test_webgl_codegen_lowers_direct_dynamic_shadow_compare_sampler_array():
     shader = """
     shader WebGLDynamicShadowCompareArray {

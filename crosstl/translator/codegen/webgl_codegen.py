@@ -413,6 +413,29 @@ class WebGLCodeGen(GLSLCodeGen):
             return None
         return matches[0]
 
+    def webgl_unliftable_dynamic_sampler_expression_info(self, expr):
+        if self.webgl_dynamic_sampler_expression_can_be_lifted(expr):
+            return None
+        for node in self.walk_ast(expr):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            func_name = self.function_call_name(node)
+            if not func_name:
+                continue
+            args = list(getattr(node, "arguments", getattr(node, "args", [])) or [])
+            dynamic_info = self.webgl_dynamic_sampler_call_info(func_name, args)
+            if dynamic_info is None:
+                continue
+            return {
+                "call": node,
+                "return_type": (
+                    self.expression_result_type(expr)
+                    or self.expression_result_type(node)
+                    or "float"
+                ),
+            }
+        return None
+
     def webgl_dynamic_sampler_expression_can_be_lifted(self, expr):
         for node in self.walk_ast(expr):
             if isinstance(node, TernaryOpNode):
@@ -422,6 +445,14 @@ class WebGLCodeGen(GLSLCodeGen):
                 if op in {"&&", "||"}:
                     return False
         return True
+
+    def webgl_unliftable_dynamic_sampler_value(self, value_type):
+        zero_value = self.zero_value_expression(value_type)
+        return (
+            "/* unsupported WebGL dynamic sampler array expression: "
+            "dynamic sampler arrays cannot be lifted from ternary or "
+            f"short-circuit expressions */ {zero_value}"
+        )
 
     def webgl_unique_dynamic_sampler_temp_name(self):
         used_names = set(self.local_variable_types)
@@ -490,7 +521,14 @@ class WebGLCodeGen(GLSLCodeGen):
 
         nested_info = self.webgl_nested_dynamic_sampler_expression_info(expr)
         if nested_info is None:
-            return None
+            unliftable_info = self.webgl_unliftable_dynamic_sampler_expression_info(
+                expr
+            )
+            if unliftable_info is None:
+                return None
+            indent_str = "    " * indent
+            fallback = self.webgl_unliftable_dynamic_sampler_value(target_type)
+            return f"{indent_str}{target} = {fallback};\n"
 
         temp_name, code = self.webgl_generate_nested_dynamic_sampler_prefix(
             nested_info,
@@ -553,7 +591,16 @@ class WebGLCodeGen(GLSLCodeGen):
 
         nested_info = self.webgl_nested_dynamic_sampler_expression_info(expr)
         if nested_info is None:
-            return None
+            unliftable_info = self.webgl_unliftable_dynamic_sampler_expression_info(
+                expr
+            )
+            if unliftable_info is None:
+                return None
+            indent_str = "    " * indent
+            fallback = self.webgl_unliftable_dynamic_sampler_value(
+                unliftable_info["return_type"]
+            )
+            return f"{indent_str}{fallback};\n"
 
         temp_name, code = self.webgl_generate_nested_dynamic_sampler_prefix(
             nested_info,
@@ -609,6 +656,19 @@ class WebGLCodeGen(GLSLCodeGen):
                 code += f"{indent_str}return;\n"
                 return code
 
+            unliftable_info = self.webgl_unliftable_dynamic_sampler_expression_info(
+                expr
+            )
+            if unliftable_info is not None:
+                indent_str = "    " * indent
+                fallback = self.webgl_unliftable_dynamic_sampler_value(
+                    unliftable_info["return_type"]
+                )
+                return (
+                    f"{indent_str}{self.current_stage_output['name']} = {fallback};\n"
+                    f"{indent_str}return;\n"
+                )
+
         direct_statement = super().generate_glsl_dynamic_resource_call_return_statement(
             expr,
             indent,
@@ -618,7 +678,16 @@ class WebGLCodeGen(GLSLCodeGen):
 
         nested_info = self.webgl_nested_dynamic_sampler_expression_info(expr)
         if nested_info is None:
-            return None
+            unliftable_info = self.webgl_unliftable_dynamic_sampler_expression_info(
+                expr
+            )
+            if unliftable_info is None:
+                return None
+            indent_str = "    " * indent
+            fallback = self.webgl_unliftable_dynamic_sampler_value(
+                unliftable_info["return_type"]
+            )
+            return f"{indent_str}return {fallback};\n"
 
         temp_name, code = self.webgl_generate_nested_dynamic_sampler_prefix(
             nested_info,

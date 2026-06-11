@@ -275,7 +275,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 46,
+        "unsupported_marker_count": 47,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
@@ -335,6 +335,10 @@
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "\"/* unsupported WebGL dynamic sampler array expression: \""
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "builtin_names = self.webgl_unsupported_builtin_output_names(ast)"
           },
           {
@@ -352,10 +356,6 @@
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "f\"'{unsupported_builtin}'\""
-          },
-          {
-            "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "def webgl_unsupported_builtin_output_names(self, ast):"
           }
         ]
       },
@@ -371,7 +371,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_webgl_codegen.py"
         ],
-        "test_count": 53
+        "test_count": 54
       },
       "translator_codegen": {
         "exists": true,
@@ -3430,9 +3430,10 @@
             "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_lowers_dynamic_sampler_array_helper_call",
             "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_lowers_direct_dynamic_sampler_array_texture_return",
             "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_lowers_direct_dynamic_shadow_compare_sampler_array",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_dynamic_sampler_array_ternary_return_keeps_diagnostic",
             "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_dynamic_sampler_array_texture_offset_keeps_diagnostic"
           ],
-          "notes": "WebGL2 supports fixed sampler/resource-array sampling through static dispatch for dynamic sampler indexes where GLSL ES requires constant sampler-array indexes, while unsupported offset forms emit deterministic diagnostics.",
+          "notes": "WebGL2 supports fixed sampler/resource-array sampling through static dispatch for dynamic sampler indexes where GLSL ES requires constant sampler-array indexes, while unsupported offset forms and non-liftable dynamic sampler expressions emit deterministic diagnostics.",
           "status": "diagnostic"
         },
         "wgsl": {

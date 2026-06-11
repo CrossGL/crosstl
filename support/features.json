@@ -2028,11 +2028,12 @@
         },
         "webgl": {
           "status": "diagnostic",
-          "notes": "WebGL2 supports fixed sampler/resource-array sampling through static dispatch for dynamic sampler indexes where GLSL ES requires constant sampler-array indexes, while unsupported offset forms emit deterministic diagnostics.",
+          "notes": "WebGL2 supports fixed sampler/resource-array sampling through static dispatch for dynamic sampler indexes where GLSL ES requires constant sampler-array indexes, while unsupported offset forms and non-liftable dynamic sampler expressions emit deterministic diagnostics.",
           "evidence": [
             "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_lowers_dynamic_sampler_array_helper_call",
             "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_lowers_direct_dynamic_sampler_array_texture_return",
             "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_lowers_direct_dynamic_shadow_compare_sampler_array",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_dynamic_sampler_array_ternary_return_keeps_diagnostic",
             "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_dynamic_sampler_array_texture_offset_keeps_diagnostic"
           ]
         },
