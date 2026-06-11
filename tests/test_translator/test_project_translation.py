@@ -25587,6 +25587,84 @@ def test_translate_project_resolves_mlx_sort_vulkan_storage_buffer_overload(
     assert payload["diagnostics"] == []
 
 
+def test_translate_project_resolves_mlx_metal_vulkan_storage_buffer_template_overloads(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "broadcast_overloads.metal"
+    source_path.write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            uint elem_to_loc_broadcast(
+                const device T* source,
+                uint index
+            ) {
+                return uint(source[index]) + index;
+            }
+
+            template <typename T>
+            uint elem_to_loc_broadcast(
+                const device T* source,
+                const device uint* strides,
+                uint index
+            ) {
+                return uint(source[index]) + strides[0] + index;
+            }
+
+            kernel void launch(
+                const device float* weights [[buffer(0)]],
+                const device uint* strides [[buffer(1)]],
+                device uint* out [[buffer(2)]],
+                uint3 gid [[thread_position_in_grid]]
+            ) {
+                uint index = gid.x;
+                uint first = elem_to_loc_broadcast(weights, index);
+                uint second = elem_to_loc_broadcast(weights, strides, index);
+                out[index] = first + second;
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["vulkan"], output_dir="out").to_json()
+
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+    assert payload["diagnosticCounts"]["error"] == 0
+    assert payload["diagnostics"] == []
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["target"] == "vulkan"
+    assert artifact["source"] == "broadcast_overloads.metal"
+    materialization = artifact["templateMaterialization"]
+    assert materialization["status"] == "materialized"
+    materialized_names = [
+        record["materializedName"]
+        for record in materialization["specializations"]
+        if record["name"] == "elem_to_loc_broadcast"
+    ]
+    assert len(materialized_names) == 2
+    assert len(set(materialized_names)) == 2
+
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "elem_to_loc_broadcast" not in generated
+    assert "OpFunctionCall" not in generated
+    assert "storage-buffer-function-overload" not in generated
+    assert "WARNING" not in generated
+    assert "DescriptorSet 0" in generated
+    for binding in ("Binding 0", "Binding 1", "Binding 2"):
+        assert binding in generated
+    assert_spirv_asm_validates_if_available(generated, tmp_path)
+
+
 def test_translate_project_resolves_mlx_sort_reference_thread_ids_for_vulkan(
     tmp_path,
 ):

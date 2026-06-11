@@ -11664,11 +11664,15 @@ class VulkanSPIRVCodeGen:
         )
 
     def is_storage_resource_parameter(self, param) -> bool:
+        param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+        type_name = self.type_name_from_value(param_type)
+        if self.is_structured_buffer_declared_type_name(type_name):
+            return True
+
         qualifiers = self.resource_parameter_qualifier_names(param)
         if "storage" not in qualifiers:
             return False
 
-        param_type = getattr(param, "param_type", getattr(param, "vtype", None))
         if param_type is None:
             return False
         param_type_id = self.map_crossgl_type(param_type)
@@ -11685,6 +11689,8 @@ class VulkanSPIRVCodeGen:
             getattr(param, "resource_qualifiers", []) or []
         )
         type_name = self.type_name_from_value(variable.var_type)
+        if self.is_structured_buffer_declared_type_name(type_name):
+            return self.process_structured_buffer_declaration(variable, type_name)
         return self.process_glsl_buffer_block_declaration(variable, type_name)
 
     def entry_point_uniform_parameter_value(
@@ -14126,6 +14132,11 @@ class VulkanSPIRVCodeGen:
 
             if param_name in param_type_hints:
                 param_type_source = param_type_hints[param_name]
+            if is_entry_point and self.is_storage_resource_parameter(param):
+                param_type = self.register_primitive_type("void")
+                param_value_types.append(param_type)
+                runtime_parameters.append((param, param_type, param_type))
+                continue
             if param_type_source is not None:
                 param_type = self.map_resource_type_with_format(
                     param_type_source, param
