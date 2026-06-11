@@ -4339,14 +4339,6 @@ class GLSLCodeGen:
         self, block_name, parameter_name, used_names
     ):
         parameter_name = sanitize_type_name(parameter_name or "value")
-        if (
-            parameter_name
-            and parameter_name not in used_names
-            and parameter_name not in self.GLSL_RESERVED_IDENTIFIERS
-            and not parameter_name[0].isdigit()
-        ):
-            return parameter_name
-
         block_name = sanitize_type_name(block_name or "Entry_Value_Args")
         base_name = "_".join(
             part for part in (block_name, parameter_name or "value") if part

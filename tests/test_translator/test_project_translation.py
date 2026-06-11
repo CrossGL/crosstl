@@ -36150,7 +36150,7 @@ def test_translate_project_metal_opengl_disambiguates_constant_value_members(
     assert "Ambiguous cbuffer member" not in output
     assert (
         "layout(std140, binding = 1) uniform first_value_Args {\n"
-        "    float value;\n"
+        "    float first_value_Args_value;\n"
         "};"
     ) in output
     assert (
@@ -36158,9 +36158,70 @@ def test_translate_project_metal_opengl_disambiguates_constant_value_members(
         "    float second_value_Args_value;\n"
         "};"
     ) in output
-    assert output.count("float value;") == 1
-    assert "out_[0] = value;" in output
+    assert "float value;" not in output
+    assert "out_[0] = first_value_Args_value;" in output
     assert "second_out[0] = (second_value_Args_value + 1.0);" in output
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_metal_opengl_scopes_mlx_style_constant_value_members(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "gemv.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void gemv_a(device float* out [[buffer(0)]],
+                               constant float& alpha [[buffer(1)]],
+                               constant float& beta [[buffer(2)]],
+                               constant uint& batch_ndim [[buffer(3)]]) {
+                out[0] = alpha + beta + float(batch_ndim);
+            }
+
+            kernel void gemv_b(device float* out [[buffer(4)]],
+                               constant float& alpha [[buffer(5)]],
+                               constant float& beta [[buffer(6)]],
+                               constant uint& batch_ndim [[buffer(7)]]) {
+                out[0] = alpha * beta + float(batch_ndim);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("opengl", "translated")}
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "float alpha;" not in output
+    assert "float beta;" not in output
+    assert "uint batch_ndim;" not in output
+    assert "float gemv_a_alpha_Args_alpha;" in output
+    assert "float gemv_a_beta_Args_beta;" in output
+    assert "uint gemv_a_batch_ndim_Args_batch_ndim;" in output
+    assert "float gemv_b_alpha_Args_alpha;" in output
+    assert "float gemv_b_beta_Args_beta;" in output
+    assert "uint gemv_b_batch_ndim_Args_batch_ndim;" in output
+    assert (
+        "out_[0] = ((gemv_a_alpha_Args_alpha + gemv_a_beta_Args_beta) + "
+        "float(gemv_a_batch_ndim_Args_batch_ndim));"
+    ) in output
+    assert (
+        "gemv_b_out[0] = ((gemv_b_alpha_Args_alpha * gemv_b_beta_Args_beta) + "
+        "float(gemv_b_batch_ndim_Args_batch_ndim));"
+    ) in output
     assert_compute_glsl_validates_if_available(output, tmp_path)
 
 
