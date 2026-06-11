@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
@@ -29173,6 +29173,71 @@ def test_runtime_loader_manifest_reports_wgsl_validation_command(tmp_path):
         },
         "language": "wgsl",
     }
+
+
+def test_runtime_loader_validation_commands_preserve_posix_package_paths_on_windows(
+    monkeypatch,
+):
+    monkeypatch.setattr(project_pipeline, "Path", PureWindowsPath)
+    monkeypatch.setattr(
+        project_pipeline,
+        "_runtime_loader_directx_entry_profiles",
+        lambda _adapter, *, package_root=None: (("VSMain", "vs_6_0"),),
+    )
+
+    directx_adapter = {
+        "target": "directx",
+        "packagePath": "artifacts/out/directx/graphics.hlsl",
+    }
+    vulkan_adapter = {
+        "target": "vulkan",
+        "packagePath": "artifacts/out/vulkan/simple.spvasm",
+    }
+    wgsl_adapter = {
+        "target": "wgsl",
+        "packagePath": "artifacts/out/wgsl/simple.wgsl",
+    }
+
+    assert project_pipeline._runtime_loader_validation_command(
+        directx_adapter
+    ) == [
+        "dxc",
+        "-T",
+        "vs_6_0",
+        "-E",
+        "VSMain",
+        "artifacts/out/directx/graphics.hlsl",
+        "-Fo",
+        project_pipeline.os.devnull,
+    ]
+    assert project_pipeline._runtime_loader_validation_command_input_metadata(
+        directx_adapter
+    )["commands"] == [
+        [
+            "dxc",
+            "-T",
+            "vs_6_0",
+            "-E",
+            "VSMain",
+            "artifacts/out/directx/graphics.hlsl",
+            "-Fo",
+            project_pipeline.os.devnull,
+        ]
+    ]
+    assert project_pipeline._runtime_loader_validation_command(
+        vulkan_adapter
+    ) == [
+        "spirv-as",
+        "artifacts/out/vulkan/simple.spvasm",
+        "-o",
+        project_pipeline.os.devnull,
+    ]
+    assert project_pipeline._runtime_loader_validation_command(wgsl_adapter) == [
+        "naga",
+        "--input-kind",
+        "wgsl",
+        "artifacts/out/wgsl/simple.wgsl",
+    ]
 
 
 def test_runtime_loader_manifest_reports_directx_dxc_entry_profile_metadata(tmp_path):
