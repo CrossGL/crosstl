@@ -9890,7 +9890,10 @@ def _metal_local_variable_declaration(
         return None
 
     declaration, initializer = _metal_split_assignment(cleaned)
-    first_declaration = preprocessor._split_top_level_commas(declaration)[0]
+    declaration_parts = preprocessor._split_top_level_commas(declaration)
+    if not declaration_parts:
+        return None
+    first_declaration = declaration_parts[0]
     parsed = _metal_declared_type_and_name(first_declaration)
     if parsed is None:
         return None
@@ -11527,6 +11530,28 @@ def _template_materialization_unsupported_message(
     )
 
 
+def _template_materialization_unsupported_location(
+    unit: ProjectTranslationUnit,
+    unsupported: Sequence[Mapping[str, Any]],
+) -> SourceLocation:
+    for record in unsupported:
+        declaration = record.get("sourceDeclaration")
+        if not isinstance(declaration, Mapping):
+            continue
+        file_name = declaration.get("file")
+        line = declaration.get("line")
+        column = declaration.get("column")
+        if isinstance(file_name, str) and file_name and isinstance(line, int):
+            return SourceLocation(
+                file=file_name,
+                line=line,
+                column=column if isinstance(column, int) else 1,
+                end_line=line,
+                end_column=column if isinstance(column, int) else 1,
+            )
+    return SourceLocation(file=unit.relative_path)
+
+
 def _masked_metal_non_code_text(source: str) -> str:
     chars = list(source)
     i = 0
@@ -11849,7 +11874,10 @@ def _project_template_materialization_for_artifact(
                     severity="error",
                     code="project.translate.template-materialization-unsupported",
                     message=message,
-                    location=SourceLocation(file=unit.relative_path),
+                    location=_template_materialization_unsupported_location(
+                        unit,
+                        unresolved_type_records,
+                    ),
                     target=target,
                     source_backend=unit.source_backend,
                     variant=variant,
@@ -12340,7 +12368,10 @@ def _project_template_materialization_for_artifact(
                 severity="error",
                 code="project.translate.template-materialization-unsupported",
                 message=message,
-                location=SourceLocation(file=unit.relative_path),
+                location=_template_materialization_unsupported_location(
+                    unit,
+                    unsupported,
+                ),
                 target=target,
                 source_backend=unit.source_backend,
                 variant=variant,
