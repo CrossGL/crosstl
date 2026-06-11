@@ -33719,6 +33719,71 @@ def test_byte_address_buffer_load_store_patterns():
     assert "buffer_store3(" not in generated_code
 
 
+@pytest.mark.parametrize(
+    ("statement", "match"),
+    [
+        (
+            "uint x = buffer_load(values);",
+            "DirectX buffer helper 'buffer_load' requires 2 argument(s), got 1",
+        ),
+        (
+            "uint x = buffer_load(values, index, index);",
+            "DirectX buffer helper 'buffer_load' requires 2 argument(s), got 3",
+        ),
+        (
+            "buffer_store(outValues, index);",
+            "DirectX buffer helper 'buffer_store' requires 3 argument(s), got 2",
+        ),
+        (
+            "buffer_store(outValues, index, value, value);",
+            "DirectX buffer helper 'buffer_store' requires 3 argument(s), got 4",
+        ),
+        (
+            "uvec2 pair = buffer_load2(rawData);",
+            "DirectX buffer helper 'buffer_load2' requires 2 argument(s), got 1",
+        ),
+        (
+            "buffer_store4(rawOut, index, vectorValue, vectorValue);",
+            "DirectX buffer helper 'buffer_store4' requires 3 argument(s), got 4",
+        ),
+        (
+            "buffer_dimensions(rawData, count, stride);",
+            "DirectX buffer helper 'buffer_dimensions' requires 2 argument(s), got 3",
+        ),
+        (
+            "buffer_dimensions(outValues);",
+            "DirectX buffer helper 'buffer_dimensions' requires "
+            "2 or 3 argument(s), got 1",
+        ),
+        (
+            "buffer_dimensions(outValues, count, stride, value);",
+            "DirectX buffer helper 'buffer_dimensions' requires "
+            "2 or 3 argument(s), got 4",
+        ),
+    ],
+)
+def test_buffer_helpers_reject_invalid_arity(statement, match):
+    shader = f"""
+    shader BufferHelperArityDiagnostics {{
+        StructuredBuffer<uint> values @register(t0);
+        RWStructuredBuffer<uint> outValues @register(u0);
+        ByteAddressBuffer rawData @register(t1);
+        RWByteAddressBuffer rawOut @register(u1);
+
+        compute {{
+            void main(uint index, uint value, uvec4 vectorValue) {{
+                uint count;
+                uint stride;
+                {statement}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
 def test_multiple_buffer_declarations_with_explicit_bindings():
     shader = """
     shader MultipleBufferBindings {

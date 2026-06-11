@@ -6706,6 +6706,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "buffer_consume": 1,
             "buffer_increment_counter": 1,
             "buffer_decrement_counter": 1,
+            "buffer_load": 2,
+            "buffer_load2": 2,
+            "buffer_load3": 2,
+            "buffer_load4": 2,
+            "buffer_store": 3,
+            "buffer_store2": 3,
+            "buffer_store3": 3,
+            "buffer_store4": 3,
         }
         expected_args = helper_arg_counts.get(func_name)
         if expected_args is not None and len(args) != expected_args:
@@ -6713,6 +6721,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"DirectX buffer helper '{func_name}' requires "
                 f"{expected_args} argument(s), got {len(args)}"
             )
+        if func_name == "buffer_dimensions":
+            valid_counts = {2, 3}
+            if args:
+                resource_type = self.hlsl_buffer_helper_resource_type(args[0])
+                resource_name = self.hlsl_resource_type_name(resource_type)
+                if resource_name in {
+                    "Buffer",
+                    "ByteAddressBuffer",
+                    "RWBuffer",
+                    "RWByteAddressBuffer",
+                    "RasterizerOrderedBuffer",
+                    "RasterizerOrderedByteAddressBuffer",
+                }:
+                    valid_counts = {2}
+            if len(args) not in valid_counts:
+                expected = " or ".join(str(count) for count in sorted(valid_counts))
+                raise ValueError(
+                    f"DirectX buffer helper 'buffer_dimensions' requires "
+                    f"{expected} argument(s), got {len(args)}"
+                )
 
         if not args:
             return
