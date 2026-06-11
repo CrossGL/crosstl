@@ -22204,6 +22204,92 @@ def test_translate_project_records_structured_diagnostics_for_failures(tmp_path)
     assert payload["migration"]["actions"][0]["targets"] == ["opengl"]
 
 
+def test_translate_project_reports_directx_unresolved_source_type_diagnostic(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "missing_texture.cgl").write_text(
+        textwrap.dedent("""
+            shader MissingTextureType {
+                compute {
+                    void main() {
+                        vec4 color = texture(missingTex, vec2(0.0));
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.unresolved-source-type": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "directx.type-inference": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.unresolved-source-type"
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["location"]["file"] == "missing_texture.cgl"
+    assert diagnostic["missingCapabilities"] == ["directx.type-inference"]
+    assert "missingTex" in diagnostic["message"]
+    assert "operation 'texture'" in diagnostic["message"]
+    assert "function 'main'" in diagnostic["message"]
+    assert "NoneType" not in diagnostic["message"]
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "directx"
+    assert "NoneType" not in artifact["error"]
+    assert not (repo / artifact["path"]).exists()
+
+
+def test_translate_project_rewrites_directx_nontype_startswith_failure(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    def raise_raw_directx_failure(*_args, **_kwargs):
+        raise AttributeError("'NoneType' object has no attribute 'startswith'")
+
+    monkeypatch.setattr(project_pipeline, "translate", raise_raw_directx_failure)
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.unresolved-source-type": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "directx.type-inference": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.unresolved-source-type"
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["missingCapabilities"] == ["directx.type-inference"]
+    assert "source type metadata" in diagnostic["message"]
+    assert "simple.cgl" in diagnostic["message"]
+    assert "NoneType" not in diagnostic["message"]
+    assert "startswith" not in diagnostic["message"]
+    assert "NoneType" not in payload["artifacts"][0]["error"]
+
+
 def test_translate_project_reports_glsl_fragment_invocation_density_as_unsupported(
     tmp_path,
 ):
@@ -22309,22 +22395,38 @@ def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
     assert "asuint(" not in generated
 
 
-def test_translate_project_reports_mlx_sort_vulkan_storage_buffer_recursion(
+def test_translate_project_resolves_mlx_sort_vulkan_storage_buffer_overload(
     tmp_path,
 ):
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "sort_reduced.cgl").write_text(
+    source_path = repo / "sort_reduced.cgl"
+    source_path.write_text(
         textwrap.dedent("""
-            shader ReducedSortRecursion {
+            shader ReducedSortOverload {
+                StructuredBuffer<int> inp @binding(0);
+                RWStructuredBuffer<int> out_ @binding(1);
+
+                void block_sort(
+                    StructuredBuffer<int> source,
+                    RWStructuredBuffer<int> target,
+                    uint index
+                ) {
+                    target.Store(index, source.Load(index));
+                }
+
+                void block_sort(
+                    StructuredBuffer<int> source,
+                    RWStructuredBuffer<int> target,
+                    uint base,
+                    uint index
+                ) {
+                    target.Store(base + index, source.Load(index));
+                }
+
                 compute {
-                    @ stage_entry
-                    void block_sort(
-                        StructuredBuffer<int> inp @buffer(0),
-                        RWStructuredBuffer<int> out_ @buffer(1),
-                        uvec3 tid @gl_WorkGroupID
-                    ) {
-                        block_sort(inp, out_, tid, tid);
+                    void main() {
+                        block_sort(inp, out_, 1u, 0u);
                     }
                 }
             }
@@ -22335,35 +22437,22 @@ def test_translate_project_reports_mlx_sort_vulkan_storage_buffer_recursion(
     payload = translate_project(repo, targets=["vulkan"], output_dir="out").to_json()
 
     assert payload["summary"]["artifactCount"] == 1
-    assert payload["summary"]["translatedCount"] == 0
-    assert payload["summary"]["failedCount"] == 1
-    assert payload["summary"]["diagnosticsByCode"] == {
-        "project.translate.unsupported-feature": 1
-    }
-    assert payload["summary"]["missingCapabilityCounts"] == {
-        "spirv.storage_buffer_function_overload": 1
-    }
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+    assert payload["diagnosticCounts"]["error"] == 0
 
     artifact = payload["artifacts"][0]
-    assert artifact["status"] == "failed"
+    assert artifact["status"] == "translated"
     assert artifact["target"] == "vulkan"
     assert artifact["source"] == "sort_reduced.cgl"
-    assert "storage-buffer function inlining" in artifact["error"]
-    assert (
-        "overloaded storage-buffer helper calls are not supported" in artifact["error"]
-    )
-    assert "maximum recursion depth exceeded" not in artifact["error"]
-    assert "generatedHash" not in artifact
-    assert not (repo / artifact["path"]).exists()
-
-    diagnostic = payload["diagnostics"][0]
-    assert diagnostic["code"] == "project.translate.unsupported-feature"
-    assert diagnostic["target"] == "vulkan"
-    assert diagnostic["location"]["file"] == "sort_reduced.cgl"
-    assert diagnostic["missingCapabilities"] == [
-        "spirv.storage_buffer_function_overload"
-    ]
-    assert "maximum recursion depth exceeded" not in diagnostic["message"]
+    assert "generatedHash" in artifact
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "block_sort" not in generated
+    assert "OpFunctionCall" not in generated
+    assert "WARNING" not in generated
+    assert payload["diagnostics"] == []
 
 
 def test_translate_project_drops_mlx_metal_system_includes_for_opengl(tmp_path):

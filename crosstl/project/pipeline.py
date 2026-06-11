@@ -6955,7 +6955,38 @@ def _translation_failure_diagnostic_code(exc: Exception) -> str:
     return code if _is_non_empty_string(code) else "project.translate.failed"
 
 
-def _translation_failure_missing_capabilities(exc: Exception) -> list[str]:
+def _is_directx_unresolved_type_attribute_error(exc: Exception, target: str) -> bool:
+    return (
+        target == "directx"
+        and isinstance(exc, AttributeError)
+        and "'NoneType' object has no attribute 'startswith'" in str(exc)
+    )
+
+
+def _translation_failure_message(
+    exc: Exception, target: str, unit: ProjectTranslationUnit
+) -> str:
+    if _is_directx_unresolved_type_attribute_error(exc, target):
+        return (
+            "DirectX translation could not resolve source type metadata while "
+            f"translating '{unit.relative_path}'. Affected function or declaration "
+            "could not be determined before DirectX codegen reached an internal "
+            "type check."
+        )
+    return str(exc)
+
+
+def _translation_failure_code(exc: Exception, target: str) -> str:
+    if _is_directx_unresolved_type_attribute_error(exc, target):
+        return "project.translate.unresolved-source-type"
+    return _translation_failure_diagnostic_code(exc)
+
+
+def _translation_failure_missing_capabilities(
+    exc: Exception, target: str | None = None
+) -> list[str]:
+    if target is not None and _is_directx_unresolved_type_attribute_error(exc, target):
+        return ["directx.type-inference"]
     capabilities = getattr(exc, "missing_capabilities", None)
     if isinstance(capabilities, str):
         return [capabilities]
@@ -7152,8 +7183,9 @@ def translate_project(
                 except Exception as exc:  # noqa: BLE001
                     # Project translation reports per-artifact failures so one bad
                     # unit does not hide the rest of the repository's migration state.
+                    failure_message = _translation_failure_message(exc, target, unit)
                     artifact["status"] = "failed"
-                    artifact["error"] = str(exc)
+                    artifact["error"] = failure_message
                     artifact.pop("generatedHash", None)
                     artifact.pop("generatedSizeBytes", None)
                     artifact.pop("sourceMap", None)
@@ -7162,14 +7194,14 @@ def translate_project(
                     diagnostics.append(
                         ProjectDiagnostic(
                             severity="error",
-                            code=_translation_failure_diagnostic_code(exc),
-                            message=str(exc),
+                            code=_translation_failure_code(exc, target),
+                            message=failure_message,
                             location=SourceLocation(file=unit.relative_path),
                             target=target,
                             source_backend=unit.source_backend,
                             variant=variant,
                             missing_capabilities=_translation_failure_missing_capabilities(
-                                exc
+                                exc, target
                             ),
                         )
                     )
