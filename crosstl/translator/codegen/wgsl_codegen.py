@@ -1180,10 +1180,9 @@ class WGSLCodeGen:
             resource_binding = self.resource_member_binding_for_access(expr)
             if resource_binding is not None:
                 return resource_binding["binding_name"]
-            if (
-                isinstance(expr.object_expr, IdentifierNode)
-                and self.is_pointer_identifier(expr.object_expr.name)
-            ):
+            if isinstance(
+                expr.object_expr, IdentifierNode
+            ) and self.is_pointer_identifier(expr.object_expr.name):
                 return f"(*{expr.object_expr.name}).{expr.member}"
             return f"{self.generate_expression(expr.object_expr)}." f"{expr.member}"
         if isinstance(expr, SwizzleNode):
@@ -1834,7 +1833,8 @@ class WGSLCodeGen:
         if self.glsl_buffer_block_attribute(node) is not None:
             return True
         qualifier_names = {
-            str(qualifier).lower() for qualifier in getattr(node, "qualifiers", []) or []
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
         }
         if "buffer" not in qualifier_names:
             return False
@@ -1917,7 +1917,9 @@ class WGSLCodeGen:
             resource_type_name = self.struct_member_resource_type_name(member)
             if resource_type_name:
                 continue
-            if self.structured_buffer_element_type(self.array_element_type(member_type)):
+            if self.structured_buffer_element_type(
+                self.array_element_type(member_type)
+            ):
                 raise ValueError(
                     "WGSL target does not support storage-buffer resource member "
                     f"{node.name}.{member.name} inside GLSL buffer blocks"

@@ -513,17 +513,11 @@ def test_wgsl_codegen_lowers_glsl_buffer_blocks_to_storage_struct_bindings():
 
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
+    assert ("struct InputBlock {\n" "    values: array<f32>,\n" "};") in generated
+    assert ("struct OutputBlock {\n" "    values: array<f32>,\n" "};") in generated
     assert (
-        "struct InputBlock {\n"
-        "    values: array<f32>,\n"
-        "};"
-    ) in generated
-    assert (
-        "struct OutputBlock {\n"
-        "    values: array<f32>,\n"
-        "};"
-    ) in generated
-    assert "@group(1) @binding(2)\nvar<storage, read> inputBlock: InputBlock;" in generated
+        "@group(1) @binding(2)\nvar<storage, read> inputBlock: InputBlock;" in generated
+    )
     assert (
         "@group(0) @binding(3)\nvar<storage, read_write> outputBlock: OutputBlock;"
         in generated
@@ -550,9 +544,7 @@ def test_wgsl_codegen_lowers_layoutless_buffer_blocks_as_std430_storage():
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
     assert (
-        "struct ParticleBuffer {\n"
-        "    positions: array<f32>,\n"
-        "};"
+        "struct ParticleBuffer {\n" "    positions: array<f32>,\n" "};"
     ) in generated
     assert (
         "@group(0) @binding(0)\n"
