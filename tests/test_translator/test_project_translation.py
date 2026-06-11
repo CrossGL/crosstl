@@ -8941,13 +8941,13 @@ def test_translate_project_materializes_mlx_metal_instantiate_kernel_entries(
     assert "void arange(" not in output
 
 
-def test_translate_project_materialized_metal_numeric_suffix_member_names_to_core_targets(
+def test_translate_project_materialized_metal_quantized_specialization_to_targets(
     tmp_path,
 ):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
     shader_dir.mkdir(parents=True)
-    (shader_dir / "quantize.metal").write_text(
+    (shader_dir / "fp_quantized.metal").write_text(
         textwrap.dedent("""
             #include <metal_stdlib>
             using namespace metal;
@@ -8957,7 +8957,7 @@ def test_translate_project_materialized_metal_numeric_suffix_member_names_to_cor
             };
 
             template <typename T, const int group_size, const int bits>
-            [[kernel]] void generated_quantize(
+            [[kernel]] void nvfp4_quantize(
                 const device T* in [[buffer(0)]],
                 device T* out [[buffer(1)]],
                 uint gid [[thread_position_in_grid]]) {
@@ -8969,12 +8969,8 @@ def test_translate_project_materialized_metal_numeric_suffix_member_names_to_cor
                 out[gid] = sample + T(output);
             }
 
-            instantiate_kernel(
-                "generated_quantize_float_gs_16_b_4",
-                generated_quantize,
-                float,
-                16,
-                4)
+            template [[host_name("nvfp4_quantize_float_gs_16_b_4")]] [[kernel]]
+            decltype(nvfp4_quantize<float, 16, 4>) nvfp4_quantize<float, 16, 4>;
             """).strip() + "\n",
         encoding="utf-8",
     )
@@ -8982,7 +8978,7 @@ def test_translate_project_materialized_metal_numeric_suffix_member_names_to_cor
         textwrap.dedent("""
             [project]
             source_roots = ["shaders"]
-            targets = ["directx", "opengl", "vulkan"]
+            targets = ["cgl", "directx", "opengl", "vulkan", "metal"]
             output_dir = "translated"
             """).strip(),
         encoding="utf-8",
@@ -8994,11 +8990,13 @@ def test_translate_project_materialized_metal_numeric_suffix_member_names_to_cor
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     }
 
-    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["translatedCount"] == 5
     assert payload["summary"]["failedCount"] == 0
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
     assert artifacts == {
+        ("cgl", "translated"),
         ("directx", "translated"),
+        ("metal", "translated"),
         ("opengl", "translated"),
         ("vulkan", "translated"),
     }
@@ -9006,6 +9004,8 @@ def test_translate_project_materialized_metal_numeric_suffix_member_names_to_cor
         output = (repo / artifact["path"]).read_text(encoding="utf-8")
         assert "bits" in output
         assert "s.4" not in output
+        if artifact["target"] in {"cgl", "metal", "vulkan"}:
+            assert "nvfp4_quantize_float_gs_16_b_4" in output
 
 
 def test_translate_project_opengl_materializes_mlx_explicit_template_helpers(
