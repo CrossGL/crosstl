@@ -696,6 +696,37 @@ def test_for_statement():
         pytest.fail("for parsing not implemented.")
 
 
+def test_for_statement_accepts_colon_style_var_initializer():
+    code = """
+    shader main {
+        @compute
+        @stage_entry
+        fn bit_extract_kernel(
+            @group(0) @binding(0) var<storage, read_write> d_output: array<u32>,
+            @group(0) @binding(1) var<storage, read> d_input: array<u32>,
+            @group(0) @binding(2) var<uniform> size: u32
+        ) {
+            var offset: u32 = 0u;
+            var stride: u32 = 1u;
+            for (var i: u32 = offset; i < size; i += stride) {
+                d_output[i] = (d_input[i] >> 8u) & 0xfu;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = ast.functions[0]
+    loop = function.body.statements[2]
+
+    assert isinstance(loop, ForNode)
+    assert isinstance(loop.init, VariableNode)
+    assert loop.init.name == "i"
+    assert isinstance(loop.init.var_type, PrimitiveType)
+    assert loop.init.var_type.name == "u32"
+    assert isinstance(loop.body.statements[0], ExpressionStatementNode)
+
+
 def test_loop_statement_parses_to_loop_node():
     code = """
     shader main {

@@ -370,6 +370,83 @@ def test_native_source_extension_aliases_translate_to_parseable_crossgl(
     crosstl.translator.parse(generated)
 
 
+def test_hip_bit_extract_kernel_body_survives_metal_and_spirv_targets(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "bit_extract.hip",
+        """
+        #include <hip/hip_runtime.h>
+        #include <iostream>
+
+        __global__ void bit_extract_kernel(
+            uint32_t* d_output,
+            const uint32_t* d_input,
+            size_t size
+        ) {
+            const size_t offset = blockIdx.x * blockDim.x + threadIdx.x;
+            const size_t stride = blockDim.x * gridDim.x;
+            for (size_t i = offset; i < size; i += stride) {
+                d_output[i] = ((d_input[i] >> 8) & 0xfu);
+            }
+        }
+
+        int main() {
+            constexpr size_t size = 1024;
+            uint32_t *d_input, *d_output;
+            hipMalloc(&d_input, size * sizeof(uint32_t));
+            hipMalloc(&d_output, size * sizeof(uint32_t));
+            hipMemcpy(d_input, d_output, size, hipMemcpyHostToDevice);
+            bit_extract_kernel<<<dim3(1), dim3(256), 0, hipStreamDefault>>>(
+                d_output,
+                d_input,
+                size
+            );
+            hipDeviceSynchronize();
+            std::cout << "done" << std::endl;
+            hipFree(d_input);
+            hipFree(d_output);
+        }
+        """,
+    )
+
+    metal = crosstl.translate(
+        str(source_path),
+        backend="metal",
+        source_backend="hip",
+        format_output=False,
+    )
+    spirv = crosstl.translate(
+        str(source_path),
+        backend="vulkan",
+        source_backend="hip",
+        format_output=False,
+    )
+
+    _assert_generated_output_is_usable(metal)
+    assert "device uint* d_output [[buffer(0)]]" in metal
+    assert "const device uint* d_input [[buffer(1)]]" in metal
+    assert "constant uint& size [[buffer(2)]]" in metal
+    assert "for (uint i = offset; i < size; i += stride)" in metal
+    assert "d_output[i] = d_input[i] >> 8 & 15u;" in metal
+
+    _assert_generated_output_is_usable(spirv)
+    assert 'OpEntryPoint GLCompute' in spirv
+    assert 'OpName %' in spirv and '"d_outputBuffer"' in spirv
+    assert '"d_inputBuffer"' in spirv
+    assert "OpLoopMerge" in spirv
+    assert "OpShiftRightLogical" in spirv
+    assert "OpBitwiseAnd" in spirv
+    assert spirv.index("OpLoopMerge") < spirv.index("OpShiftRightLogical")
+    assert spirv.index("OpShiftRightLogical") < spirv.index("OpBitwiseAnd")
+    assert spirv.rindex("OpStore") < spirv.rindex("OpReturn")
+
+    for shader_artifact in (metal, spirv):
+        assert "hipMalloc" not in shader_artifact
+        assert "hipMemcpy" not in shader_artifact
+        assert "hipDeviceSynchronize" not in shader_artifact
+        assert "std::cout" not in shader_artifact
+
+
 def test_metal_vertex_struct_return_preserves_view_dir_outputs(tmp_path):
     source_path = _write_source(
         tmp_path,
