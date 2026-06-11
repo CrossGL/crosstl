@@ -321,6 +321,8 @@ def test_project_package_exposes_public_api_surface():
         "RuntimeExecutorUnavailable",
         "RuntimeFixture",
         "RuntimePlatformRequirements",
+        "RuntimeParityAdapter",
+        "RuntimeParityExecutor",
         "RuntimeResourceBinding",
         "RuntimeSpecializationConstant",
         "RuntimeTestAdapterSpec",
