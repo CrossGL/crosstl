@@ -1798,9 +1798,28 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "integrations/mlx/run_mlx_porting.py" in mlx_porting
     assert mlx_commit in mlx_porting
     assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
+    assert re.search(r"\bschedule\s*:", mlx_porting)
+    assert 'cron: "31 4 * * 1"' in mlx_porting
+    assert "github.event_name != 'schedule'" in mlx_porting
+    assert "--mode reduced-frontier" in mlx_porting
+    assert "mlx-full-corpus-scout:" in mlx_porting
+    assert "MLX full-corpus artifact scout" in mlx_porting
+    assert (
+        "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"
+        in mlx_porting
+    )
+    assert "--mode full-corpus" in mlx_porting
+    assert "full-corpus-summary.json" in mlx_porting
+    assert "out-full-corpus" in mlx_porting
+    assert "name: mlx-full-corpus-scout" in mlx_porting
+    assert "retention-days: 30" in mlx_porting
     assert re.search(r"translate-project\b[\s\S]*validation_flag", harness)
     assert '"--run-toolchains"' in harness
     assert '"--validate"' in harness
+    assert "FULL_CORPUS_EXPECTED_ARTIFACT_COUNT" in harness
+    assert "FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS = 4096" in harness
+    assert "FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK = 131072" in harness
+    assert "without tracked issue references" in harness
     for resolved_issue_number in (
         1184,
         1203,
