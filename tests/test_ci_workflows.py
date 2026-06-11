@@ -187,6 +187,23 @@ def test_full_suite_keeps_required_compiler_smoke_coverage():
     assert "shell: bash" in shader_job
 
 
+def test_full_suite_runs_runtime_parity_only_for_available_adapters():
+    workflows = _workflow_texts()
+    full_suite = workflows.get("full-tests.yml", "")
+
+    assert "runtime-parity:" in full_suite
+    assert "Runtime Parity (${{ matrix.adapter }} on ${{ matrix.os }})" in full_suite
+    for adapter in ("opengl", "vulkan", "metal", "directx"):
+        assert f"adapter: {adapter}" in full_suite
+    for tool in ("glslangValidator", "spirv-val,spirv-as", "xcrun", "dxc"):
+        assert f"required_tools: {tool}" in full_suite
+    assert "Probe runtime parity adapter availability" in full_suite
+    assert "steps.probe_runtime_parity.outputs.available == 'true'" in full_suite
+    assert "Record unavailable runtime parity adapter" in full_suite
+    assert "tests/test_translator/test_runtime_verification.py" in full_suite
+    assert '-k "runtime_parity"' in full_suite
+
+
 def test_ci_coverage_report_summarizes_required_workflow_dimensions():
     module = _load_ci_coverage_module()
 

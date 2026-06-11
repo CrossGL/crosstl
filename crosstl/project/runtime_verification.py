@@ -837,6 +837,187 @@ class RuntimeExecutionAdapter(RuntimeExecutor):
         return state.outputs
 
 
+class RuntimeParityAdapter:
+    """Interface for backend adapters that execute translated runtime artifacts."""
+
+    name = "runtime-parity-adapter"
+    target: str | None = None
+    targets: tuple[str, ...] = ()
+
+    def is_available(
+        self, request: RuntimeExecutionRequest
+    ) -> RuntimeExecutorAvailability:
+        return RuntimeExecutorAvailability(True)
+
+    def prepare_buffers(self, state: RuntimeExecutionState) -> Any:
+        return dict(state.resource_values)
+
+    def dispatch(self, state: RuntimeExecutionState, prepared_buffers: Any) -> Any:
+        raise RuntimeExecutorUnavailable(
+            "Runtime parity adapter must implement dispatch."
+        )
+
+    def collect_outputs(
+        self, state: RuntimeExecutionState, dispatch_result: Any
+    ) -> Any:
+        return dispatch_result
+
+
+class RuntimeParityExecutor(RuntimeExecutionAdapter):
+    """Executor wrapper that runs translated artifacts through a target adapter."""
+
+    name = "runtime-parity-executor"
+
+    def __init__(
+        self,
+        adapter: RuntimeTestAdapterSpec,
+        runtime_adapter: Any | None = None,
+    ):
+        self.adapter = adapter
+        self.runtime_adapter = runtime_adapter
+        self.name = adapter.adapter_kind or self.name
+
+    @property
+    def target(self) -> str | None:
+        return self.adapter.target
+
+    @property
+    def targets(self) -> tuple[str, ...]:
+        values = []
+        for value in (
+            self.adapter.target,
+            self.adapter.executor,
+            self.adapter.adapter_id,
+        ):
+            if isinstance(value, str) and value not in values:
+                values.append(value)
+        return tuple(values)
+
+    def is_available(
+        self, request: RuntimeExecutionRequest
+    ) -> RuntimeExecutorAvailability:
+        missing = _missing_platform_requirements(self.adapter.platform_requirements)
+        if missing["tools"] or missing["environment"]:
+            missing_labels = missing["tools"] + missing["environment"]
+            return RuntimeExecutorAvailability(
+                False,
+                reason=(
+                    "Runtime dependencies are unavailable: "
+                    + ", ".join(missing_labels)
+                ),
+                details={
+                    **self._adapter_details(request),
+                    "missingTools": missing["tools"],
+                    "missingEnvironment": missing["environment"],
+                },
+            )
+        if self.runtime_adapter is None:
+            target = self.adapter.target or request.artifact.get("target")
+            return RuntimeExecutorAvailability(
+                False,
+                reason=(
+                    "Runtime parity adapter is not implemented for "
+                    f"{target or self.adapter.adapter_id}."
+                ),
+                details=self._adapter_details(request),
+            )
+        availability = _executor_availability(self.runtime_adapter, request)
+        if availability.available:
+            return availability
+        return RuntimeExecutorAvailability(
+            False,
+            reason=availability.reason,
+            details={
+                **self._adapter_details(request),
+                **dict(availability.details),
+            },
+        )
+
+    def dispatch_fixture(self, state: RuntimeExecutionState) -> Any:
+        if self.runtime_adapter is None:
+            details = self._adapter_details(state.request)
+            state.record_step(
+                "dispatch",
+                "runtime-parity-adapter-gap",
+                status=UNAVAILABLE,
+                details=details,
+            )
+            raise RuntimeExecutorUnavailable(
+                "Runtime parity adapter is not implemented for "
+                f"{details.get('target') or details.get('adapter')}."
+            )
+
+        details = self._adapter_details(state.request)
+        state.details["runtimeParityAdapter"] = details
+        prepared_buffers = self._prepare_buffers(state)
+        prepare_details = {
+            **details,
+            "resourceCount": len(state.resource_values),
+        }
+        if isinstance(prepared_buffers, Mapping):
+            prepare_details["preparedBufferCount"] = len(prepared_buffers)
+        state.record_step(
+            "prepare",
+            "prepare-runtime-buffers",
+            details=prepare_details,
+        )
+
+        dispatch = getattr(self.runtime_adapter, "dispatch", None)
+        if not callable(dispatch):
+            raise RuntimeExecutorUnavailable(
+                "Runtime parity adapter must expose dispatch(state, buffers)."
+            )
+        state.record_step(
+            "dispatch",
+            "dispatch-translated-artifact",
+            details=details,
+        )
+        return dispatch(state, prepared_buffers)
+
+    def collect_outputs(self, state: RuntimeExecutionState) -> Any:
+        collect = (
+            getattr(self.runtime_adapter, "collect_outputs", None)
+            if self.runtime_adapter is not None
+            else None
+        )
+        if not callable(collect):
+            return super().collect_outputs(state)
+        state.record_step(
+            "collect",
+            "collect-runtime-outputs",
+            details=self._adapter_details(state.request),
+        )
+        outputs = collect(state, state.outputs)
+        return state.outputs if outputs is None else outputs
+
+    def _prepare_buffers(self, state: RuntimeExecutionState) -> Any:
+        prepare = (
+            getattr(self.runtime_adapter, "prepare_buffers", None)
+            if self.runtime_adapter is not None
+            else None
+        )
+        if callable(prepare):
+            prepared = prepare(state)
+            return state.resource_values if prepared is None else prepared
+        return dict(state.resource_values)
+
+    def _adapter_details(self, request: RuntimeExecutionRequest) -> dict[str, Any]:
+        runtime_adapter = self.runtime_adapter
+        adapter_name = (
+            getattr(runtime_adapter, "name", runtime_adapter.__class__.__name__)
+            if runtime_adapter is not None
+            else None
+        )
+        return {
+            "adapter": self.adapter.adapter_id,
+            "adapterKind": self.adapter.adapter_kind,
+            "executor": self.adapter.executor,
+            "target": self.adapter.target or request.artifact.get("target"),
+            "runtimeAdapter": adapter_name,
+            "platformRequirements": self.adapter.platform_requirements.to_json(),
+        }
+
+
 def load_runtime_verification_fixtures(
     fixture_path: str | os.PathLike[str],
 ) -> list[RuntimeFixture]:
@@ -1741,8 +1922,19 @@ def _runtime_test_executor_registry(
     registry = _executor_registry(executors)
     for adapter in adapters:
         executor_key = _normalize_target(adapter.executor or adapter.adapter_id)
-        registry.setdefault(executor_key, RuntimeDependencyProbeExecutor(adapter))
+        executor = registry.get(executor_key)
+        if executor is None:
+            registry[executor_key] = RuntimeParityExecutor(adapter)
+        elif _is_runtime_parity_adapter(executor):
+            registry[executor_key] = RuntimeParityExecutor(adapter, executor)
     return registry
+
+
+def _is_runtime_parity_adapter(value: Any) -> bool:
+    if isinstance(value, RuntimeParityExecutor):
+        return False
+    required_methods = ("prepare_buffers", "dispatch", "collect_outputs")
+    return all(callable(getattr(value, method, None)) for method in required_methods)
 
 
 def _runtime_test_platform_skip_diagnostic(
