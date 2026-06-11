@@ -22031,6 +22031,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return f"vec{size}<{element_type}>"
                 else:
                     return f"{element_type}{size}"
+        elif hasattr(type_node, "operator") or hasattr(type_node, "identifier"):
+            return self.expression_to_string(type_node)
         else:
             return str(type_node)
 

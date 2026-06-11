@@ -188,6 +188,62 @@ def reject_unsupported_generic_functions(
         )
 
 
+def collect_unresolved_generic_function_call_names(generator, functions):
+    """Return generic helpers called from emitted functions without a specialization."""
+    definitions = getattr(generator, "generic_function_definitions", {}) or {}
+    if not definitions:
+        return []
+
+    unresolved = []
+    seen_names = set()
+    visited = set()
+
+    def visit(value):
+        if value is None or isinstance(value, (str, bytes, int, float, bool)):
+            return
+
+        value_id = id(value)
+        if value_id in visited:
+            return
+        visited.add(value_id)
+
+        if isinstance(value, FunctionNode) and generic_function_parameters(value):
+            return
+
+        if isinstance(value, FunctionCallNode):
+            func_name = _function_call_name(value)
+            args = list(getattr(value, "arguments", getattr(value, "args", [])) or [])
+            for arg in args:
+                visit(arg)
+            if (
+                func_name in definitions
+                and generic_function_call_name(generator, func_name, args) is None
+                and func_name not in seen_names
+            ):
+                seen_names.add(func_name)
+                unresolved.append(func_name)
+            return
+
+        if isinstance(value, dict):
+            children = value.values()
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            children = value
+        elif hasattr(value, "__dict__"):
+            children = vars(value).values()
+        else:
+            return
+
+        for child in children:
+            visit(child)
+
+    for func in functions or []:
+        if generic_function_parameters(func):
+            continue
+        visit(func)
+
+    return unresolved
+
+
 def generic_function_emission_list(generator, func):
     """Return concrete specializations to emit for ``func`` instead of the generic."""
     if not generic_function_parameters(func):
@@ -229,6 +285,26 @@ def raise_unresolved_generic_function_call(generator, func_name, target_name):
         f"generic function '{func_name}'{suffix}; specialize the function before "
         f"{target_name} generation"
     )
+
+
+def generic_function_value_arguments(generator, func_name, args):
+    """Return value arguments after any leading explicit generic type arguments."""
+    definitions = getattr(generator, "generic_function_definitions", {}) or {}
+    func = definitions.get(func_name)
+    if func is None:
+        return list(args or [])
+
+    generic_params = generic_function_parameters(func)
+    param_list = list(getattr(func, "parameters", getattr(func, "params", [])) or [])
+    explicit_substitutions, value_args = _explicit_generic_call_parts(
+        generator,
+        generic_params,
+        param_list,
+        list(args or []),
+    )
+    if explicit_substitutions is None:
+        return list(args or [])
+    return value_args
 
 
 def generic_function_call_key(generator, func_name, args):
@@ -341,14 +417,26 @@ def _generic_function_candidate_call_match(generator, func, func_name, args):
     if not generic_params:
         return None
 
+    call_args = list(args or [])
     substitutions = {}
     generic_param_set = set(generic_params)
     param_list = list(getattr(func, "parameters", getattr(func, "params", [])) or [])
-    matched_params = 0
+    explicit_substitutions, value_args = _explicit_generic_call_parts(
+        generator,
+        generic_params,
+        param_list,
+        call_args,
+    )
+    if explicit_substitutions is not None:
+        substitutions.update(explicit_substitutions)
+    else:
+        value_args = call_args
+
+    matched_params = len(substitutions)
     exact_matches = 0
     compatible_params = 0
 
-    for param, arg in zip(param_list, args or []):
+    for param, arg in zip(param_list, value_args):
         expected_type = _raw_generic_signature_type_name(
             generator,
             getattr(param, "param_type", getattr(param, "vtype", None)),
@@ -419,7 +507,7 @@ def _generic_function_candidate_call_match(generator, func, func_name, args):
         if overload_count > 1
         else (func_name, concrete_args)
     )
-    args_count = len(args or [])
+    args_count = len(value_args)
     arity_distance = abs(args_count - len(param_list))
     return {
         "function": func,
@@ -434,6 +522,29 @@ def _generic_function_candidate_call_match(generator, func, func_name, args):
             -ordinal,
         ),
     }
+
+
+def _explicit_generic_call_parts(generator, generic_params, param_list, args):
+    generic_count = len(generic_params)
+    if generic_count == 0 or len(args) != len(param_list) + generic_count:
+        return None, args
+
+    substitutions = {}
+    current_substitutions = getattr(
+        generator,
+        "current_generic_function_substitutions",
+        {},
+    )
+    for param_name, arg in zip(generic_params, args[:generic_count]):
+        type_name = _type_argument_name(generator, arg)
+        if not type_name:
+            return None, args
+        substitutions[param_name] = substitute_generic_type_name(
+            type_name,
+            current_substitutions,
+        )
+
+    return substitutions, args[generic_count:]
 
 
 def generate_numeric_trait_method_call(generator, func_expr, args):
@@ -1051,6 +1162,14 @@ def _safe_call_argument_type_name(generator, expr):
     if fallback_type:
         return fallback_type
     return generator.type_name_string(_safe_expression_result_type(generator, expr))
+
+
+def _type_argument_name(generator, expr):
+    if isinstance(expr, str):
+        return expr
+    if isinstance(expr, IdentifierNode):
+        return expr.name
+    return generator.type_name_string(expr)
 
 
 def _is_more_specific_generic_type(candidate_type, current_type):

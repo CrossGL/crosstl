@@ -280,6 +280,31 @@ def assert_only_optional_project_toolchain_warnings(payload):
     assert payload["summary"]["diagnosticsByTarget"] == diagnostics_by_target
 
 
+def assert_only_optional_wgsl_toolchain_warning(payload):
+    expected_toolchain_warnings = 0 if shutil.which("naga") else 1
+    assert payload["diagnosticCounts"] == {
+        "note": 0,
+        "warning": expected_toolchain_warnings,
+        "error": 0,
+    }
+
+    if not expected_toolchain_warnings:
+        assert payload["diagnostics"] == []
+        assert payload["summary"]["diagnosticsByCode"] == {}
+        assert payload["summary"]["diagnosticsByTarget"] == {}
+        return
+
+    diagnostics = payload["diagnostics"]
+    assert len(diagnostics) == expected_toolchain_warnings
+    assert [diagnostic["code"] for diagnostic in diagnostics] == [
+        "project.validate.toolchain-unavailable"
+    ]
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.validate.toolchain-unavailable": expected_toolchain_warnings
+    }
+    assert payload["summary"]["diagnosticsByTarget"] == {"wgsl": 1}
+
+
 def assert_glsl_stage_validates_if_available(glsl_code, tmp_path, stage):
     glslang = shutil.which("glslangValidator")
     if not glslang:
@@ -7484,16 +7509,7 @@ def test_translate_project_glsl_alpha_stitch_storage_image_lowers_to_wgsl(
 
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
-    expected_warning_count = 0 if shutil.which("naga") else 1
-    assert payload["diagnosticCounts"] == {
-        "note": 0,
-        "warning": expected_warning_count,
-        "error": 0,
-    }
-    if expected_warning_count:
-        assert [diagnostic["code"] for diagnostic in payload["diagnostics"]] == [
-            "project.validate.toolchain-unavailable"
-        ]
+    assert_only_optional_wgsl_toolchain_warning(payload)
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("wgsl", "translated")}
@@ -7577,16 +7593,7 @@ def test_translate_project_glsl_fragcoord_lowers_to_wgsl_fragment_position(tmp_p
 
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
-    expected_warning_count = 0 if shutil.which("naga") else 1
-    assert payload["diagnosticCounts"] == {
-        "note": 0,
-        "warning": expected_warning_count,
-        "error": 0,
-    }
-    if expected_warning_count:
-        assert [diagnostic["code"] for diagnostic in payload["diagnostics"]] == [
-            "project.validate.toolchain-unavailable"
-        ]
+    assert_only_optional_wgsl_toolchain_warning(payload)
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("wgsl", "translated")}
@@ -7625,16 +7632,7 @@ def test_translate_project_spirv_assembly_vertex_position_lowers_to_wgsl(tmp_pat
 
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
-    expected_warning_count = 0 if shutil.which("naga") else 1
-    assert payload["diagnosticCounts"] == {
-        "note": 0,
-        "warning": expected_warning_count,
-        "error": 0,
-    }
-    if expected_warning_count:
-        assert [diagnostic["code"] for diagnostic in payload["diagnostics"]] == [
-            "project.validate.toolchain-unavailable"
-        ]
+    assert_only_optional_wgsl_toolchain_warning(payload)
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("wgsl", "translated")}
@@ -10846,6 +10844,51 @@ def test_translate_project_opengl_materializes_mlx_explicit_template_helpers(
     assert "add_offset_float_uint_7(src[gid], uint(gid))" in output
     assert "add_offset<T" not in output
     assert not re.search(r"\b(?:T|IdxT|Offset|AccT|Wtype)\b", output)
+
+
+@pytest.mark.parametrize("target", ["directx", "vulkan"])
+def test_translate_project_ignores_comment_words_before_mlx_metal_helpers(
+    tmp_path,
+    target,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "random.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_random(name, type) \\
+                instantiate_kernel("random" #name, random_values, type)
+
+            // Non templated version to handle arbitrary dims
+            METAL_FUNC float seed_to_unit_float(float seed) {
+                return seed * 0.5;
+            }
+
+            template <typename T>
+            [[kernel]] void random_values(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                out[gid] = T(seed_to_unit_float(float(gid)));
+            }
+
+            instantiate_random(float32, float)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=[target], output_dir="translated")
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["artifacts"][0]["status"] == "translated"
+    assert payload["artifacts"][0]["templateMaterialization"]["unsupported"] == []
+    assert "project.translate.template-materialization-unsupported" not in payload[
+        "summary"
+    ].get("diagnosticsByCode", {})
 
 
 def test_translate_project_opengl_materializes_mlx_pointer_and_value_bindings(
@@ -18119,6 +18162,202 @@ def test_directx_toolchain_smoke_commands_compile_all_detected_entries(tmp_path)
             "artifact",
         ),
     ]
+
+
+def test_directx_toolchain_smoke_commands_use_monogame_sprite_entries(tmp_path):
+    shader = tmp_path / "SpriteEffect.hlsl"
+    shader.write_text(
+        textwrap.dedent("""
+            struct VSOutput {
+                float4 Position : SV_Position;
+                float4 Color : COLOR0;
+                float2 TextureCoordinate : TEXCOORD0;
+            };
+
+            VSOutput SpriteVertexShader(
+                float4 position : POSITION0,
+                float4 color : COLOR0,
+                float2 texCoord : TEXCOORD0
+            ) {
+                VSOutput output;
+                output.Position = position;
+                output.Color = color;
+                output.TextureCoordinate = texCoord;
+                return output;
+            }
+
+            float4 SpritePixelShader(VSOutput input) : SV_Target0 {
+                return input.Color;
+            }
+
+            float4 PSMain() : SV_Target0 {
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    commands = project_pipeline._toolchain_smoke_commands("directx", ["dxc"], shader)
+
+    assert commands == [
+        (
+            [
+                "dxc",
+                "-T",
+                "vs_6_0",
+                "-E",
+                "SpriteVertexShader",
+                str(shader),
+                "-Fo",
+                project_pipeline.os.devnull,
+            ],
+            "artifact",
+        ),
+        (
+            [
+                "dxc",
+                "-T",
+                "ps_6_0",
+                "-E",
+                "SpritePixelShader",
+                str(shader),
+                "-Fo",
+                project_pipeline.os.devnull,
+            ],
+            "artifact",
+        ),
+    ]
+    assert all("PSMain" not in command for command, _kind in commands)
+
+
+def test_directx_toolchain_smoke_commands_prefer_report_entry_profiles(tmp_path):
+    shader = tmp_path / "reflected.hlsl"
+    shader.write_text(
+        textwrap.dedent("""
+            float4 PSMain() : SV_Target0 {
+                return 1.0.xxxx;
+            }
+
+            float4 ReportPixelShader() : SV_Target0 {
+                return 0.5.xxxx;
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_commands(
+        "directx",
+        ["dxc"],
+        shader,
+        artifact={
+            "entryProfiles": [{"entry": "ReportPixelShader", "profile": "ps_6_7"}]
+        },
+    ) == [
+        (
+            [
+                "dxc",
+                "-T",
+                "ps_6_7",
+                "-E",
+                "ReportPixelShader",
+                str(shader),
+                "-Fo",
+                project_pipeline.os.devnull,
+            ],
+            "artifact",
+        )
+    ]
+
+
+def test_project_directx_smoke_runs_monogame_entries_not_empty_generic_wrapper(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    artifact = repo / "out" / "directx" / "SpriteEffect.hlsl"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(
+        textwrap.dedent("""
+            struct VSOutput {
+                float4 Position : SV_Position;
+                float4 Color : COLOR0;
+                float2 TextureCoordinate : TEXCOORD0;
+            };
+
+            VSOutput SpriteVertexShader(float4 position : POSITION0) {
+                VSOutput output;
+                output.Position = position;
+                output.Color = 1.0.xxxx;
+                output.TextureCoordinate = 0.0.xx;
+                return output;
+            }
+
+            float4 SpritePixelShader(VSOutput input) : SV_Target0 {
+                return input.Color;
+            }
+
+            float4 PSMain() : SV_Target0 {
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+    expected_commands = [
+        [
+            "dxc",
+            "-T",
+            "vs_6_0",
+            "-E",
+            "SpriteVertexShader",
+            str(artifact.resolve()),
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+        [
+            "dxc",
+            "-T",
+            "ps_6_0",
+            "-E",
+            "SpritePixelShader",
+            str(artifact.resolve()),
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+    ]
+    commands = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: "/usr/bin/dxc" if tool == "dxc" else None,
+    )
+
+    def run_toolchain(command, **kwargs):
+        commands.append(command)
+        assert command in expected_commands
+        assert kwargs["cwd"] == str(repo)
+        assert kwargs["input"] is None
+        assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    runs = project_pipeline._run_toolchain_smoke(
+        [
+            {
+                "source": (
+                    "demos/open-source-porting/cases/monogame-sprite-effect/"
+                    "SpriteEffect.fx"
+                ),
+                "sourceBackend": "directx",
+                "target": "directx",
+                "path": "out/directx/SpriteEffect.hlsl",
+                "status": "translated",
+            }
+        ],
+        repo,
+    )
+
+    assert commands == expected_commands
+    assert [run["command"] for run in runs] == expected_commands
+    assert all("PSMain" not in run["command"] for run in runs)
 
 
 def test_directx_toolchain_smoke_command_uses_vrs_capable_profile(tmp_path):
