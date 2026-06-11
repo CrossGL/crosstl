@@ -7381,6 +7381,13 @@ def scan_project(
             )
             continue
 
+        if source_spec.name == "metal" and _is_metal_template_utility_unit(
+            config,
+            path,
+        ):
+            skipped.append({"path": relative_path, "reason": "metal-template-utility"})
+            continue
+
         scanned_directives, native_directive_diagnostics = (
             _scan_native_directive_planning(
                 config,
@@ -8580,6 +8587,55 @@ def _is_metal_entry_template(template: Any) -> bool:
     from crosstl.backend.Metal.preprocessor import METAL_ENTRY_FUNCTION_RE
 
     return METAL_ENTRY_FUNCTION_RE.search(_metal_template_header(template)) is not None
+
+
+def _is_metal_template_utility_unit(config: ProjectConfig, path: Path) -> bool:
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    if "template" not in source:
+        return False
+
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source_options = _source_options_for_unit(
+        config,
+        "metal",
+        _relpath(path, config.root),
+    )
+    preprocessor_kwargs: dict[str, Any] = {
+        "include_paths": _frontend_include_dirs(config),
+    }
+    if "strict_preprocessor" in source_options:
+        preprocessor_kwargs["strict"] = bool(source_options["strict_preprocessor"])
+    preprocessor = MetalPreprocessor(**preprocessor_kwargs, defines={})
+    try:
+        preprocessed = _metal_preprocess_without_template_materialization(
+            preprocessor,
+            source,
+            file_path=str(path),
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+    template_spans = preprocessor._find_template_declaration_spans(preprocessed)
+    if not template_spans:
+        return False
+    if preprocessor._find_project_template_instantiations(preprocessed):
+        return False
+    if any(
+        _is_metal_entry_template(template)
+        for template in preprocessor._find_template_functions(preprocessed)
+    ):
+        return False
+    return not any(
+        function.is_entry
+        for function in preprocessor._find_non_template_function_definitions(
+            preprocessed,
+            template_spans,
+        )
+    )
 
 
 def _metal_template_parameter_defaults(
