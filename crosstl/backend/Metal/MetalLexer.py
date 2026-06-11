@@ -359,16 +359,22 @@ class MetalLexer:
         defines: Optional[Dict[str, str]] = None,
         strict_preprocessor: bool = False,
         file_path: Optional[str] = None,
+        max_template_specializations: Optional[int] = None,
     ):
         """Initialize the lexer with raw Metal source text."""
         code = code.lstrip("\ufeff")
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         if preprocess:
-            preprocessor = MetalPreprocessor(
-                include_paths=include_paths,
-                defines=defines,
-                strict=strict_preprocessor,
-            )
+            preprocessor_kwargs = {
+                "include_paths": include_paths,
+                "defines": defines,
+                "strict": strict_preprocessor,
+            }
+            if max_template_specializations is not None:
+                preprocessor_kwargs["max_template_specializations"] = (
+                    max_template_specializations
+                )
+            preprocessor = MetalPreprocessor(**preprocessor_kwargs)
             code = preprocessor.preprocess(code, file_path=file_path)
         self.code = code
         self._length = len(code)

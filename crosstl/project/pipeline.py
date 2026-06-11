@@ -938,6 +938,8 @@ REPORT_PROJECT_FIELDS = frozenset(
         "outputDir",
         "sourceOverrides",
         "sourceOverrideCount",
+        "sourceOptions",
+        "sourceOptionCount",
         "includeDirs",
         "includeDirCount",
         "includeDirStatus",
@@ -2272,6 +2274,43 @@ def _as_non_empty_str_mapping(value: Any, *, field_name: str) -> dict[str, str]:
                 f"{field_name} entries must map non-empty strings to non-empty strings"
             )
         result[key] = item
+    return result
+
+
+def _as_source_options(value: Any, *, field_name: str) -> dict[str, dict[str, Any]]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a table")
+
+    register_default_sources()
+    result: dict[str, dict[str, Any]] = {}
+    for source_backend, options in value.items():
+        if not isinstance(source_backend, str) or not source_backend.strip():
+            raise ValueError(f"{field_name} keys must be non-empty strings")
+        backend_key = (
+            SOURCE_REGISTRY.resolve_name(source_backend) or source_backend.strip().lower()
+        )
+        if not isinstance(options, Mapping):
+            option_path = _mapping_key_path(field_name, source_backend)
+            raise ValueError(f"{option_path} must be a table")
+        normalized_options: dict[str, Any] = {}
+        option_path = _mapping_key_path(field_name, source_backend)
+        for name, option_value in options.items():
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(f"{option_path} keys must be non-empty strings")
+            if isinstance(option_value, bool):
+                normalized_options[name] = option_value
+            elif isinstance(option_value, int):
+                normalized_options[name] = option_value
+            elif isinstance(option_value, str):
+                normalized_options[name] = option_value
+            else:
+                raise ValueError(
+                    f"{option_path} entries must map option names to strings, "
+                    "integers, or booleans"
+                )
+        result[backend_key] = normalized_options
     return result
 
 
@@ -4332,6 +4371,14 @@ def _frontend_include_dirs(config: ProjectConfig) -> list[str]:
     return include_dirs
 
 
+def _source_options_for_backend(
+    config: ProjectConfig, source_backend: str
+) -> dict[str, Any]:
+    register_default_sources()
+    key = SOURCE_REGISTRY.resolve_name(source_backend) or source_backend.strip().lower()
+    return dict(config.source_options.get(key, {}))
+
+
 def _strip_include_line_comment(value: str) -> str:
     return value.split("//", 1)[0].strip()
 
@@ -5531,6 +5578,7 @@ class ProjectConfig:
     source_overrides: Mapping[str, str] = field(default_factory=dict)
     include_dirs: Sequence[str] | str = ()
     defines: Mapping[str, str] = field(default_factory=dict)
+    source_options: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     variants: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     selected_variants: Sequence[str] | str = ()
     external_corpus_manifest: str | os.PathLike[str] | None = None
@@ -5601,6 +5649,13 @@ class ProjectConfig:
             self,
             "defines",
             _as_str_mapping(self.defines, field_name="ProjectConfig.defines"),
+        )
+        object.__setattr__(
+            self,
+            "source_options",
+            _as_source_options(
+                self.source_options, field_name="ProjectConfig.source_options"
+            ),
         )
         if not isinstance(self.variants, Mapping):
             raise ValueError("ProjectConfig.variants must be a mapping")
@@ -6163,6 +6218,11 @@ class ProjectPortabilityReport:
                 "outputDir": str(self.config.output_path),
                 "sourceOverrides": dict(sorted(self.config.source_overrides.items())),
                 "sourceOverrideCount": len(self.config.source_overrides),
+                "sourceOptions": {
+                    name: dict(sorted(options.items()))
+                    for name, options in sorted(self.config.source_options.items())
+                },
+                "sourceOptionCount": len(self.config.source_options),
                 "includeDirs": list(self.config.include_dirs),
                 "includeDirCount": len(self.config.include_dirs),
                 "includeDirStatus": include_dir_status,
@@ -6304,6 +6364,10 @@ def load_project_config(
     defines = _as_str_mapping(
         project.get("defines"), field_name="crosstl.toml [project.defines]"
     )
+    source_options = _as_source_options(
+        project.get("source_options"),
+        field_name="crosstl.toml [project.source_options]",
+    )
     variants = project.get("variants", {})
     if not isinstance(variants, Mapping):
         raise ValueError("crosstl.toml [project.variants] must be a table")
@@ -6346,6 +6410,7 @@ def load_project_config(
             _as_str_list(project.get("include_dirs"), field_name="project.include_dirs")
         ),
         defines=defines,
+        source_options=source_options,
         variants=_variant_defines(variants),
         selected_variants=_as_str_list(
             project.get("selected_variants"),
@@ -7861,15 +7926,20 @@ def translate_project(
                 artifact_records = [artifact]
                 try:
                     output_path.parent.mkdir(parents=True, exist_ok=True)
-                    translate(
-                        str(unit.path),
-                        backend=target,
-                        save_shader=str(output_path),
-                        format_output=format_output,
-                        source_backend=unit.source_backend,
-                        include_paths=include_paths,
-                        defines=defines,
+                    translate_kwargs: dict[str, Any] = {
+                        "backend": target,
+                        "save_shader": str(output_path),
+                        "format_output": format_output,
+                        "source_backend": unit.source_backend,
+                        "include_paths": include_paths,
+                        "defines": defines,
+                    }
+                    source_options = _source_options_for_backend(
+                        config, unit.source_backend
                     )
+                    if source_options:
+                        translate_kwargs["source_options"] = source_options
+                    translate(str(unit.path), **translate_kwargs)
                     artifact["generatedHash"] = _source_hash(output_path)
                     artifact["generatedSizeBytes"] = output_path.stat().st_size
                     artifact["sourceMap"] = _artifact_source_map(
@@ -18694,9 +18764,12 @@ def _project_config_for_scan_validation(
 
     source_overrides = project.get("sourceOverrides")
     defines = project.get("defines")
+    source_options = project.get("sourceOptions", {})
     if not _valid_non_empty_string_mapping(
         source_overrides
     ) or not _valid_string_mapping(defines):
+        return None
+    if not _valid_source_options_mapping(source_options):
         return None
 
     raw_variants = project.get("variants")
@@ -18737,6 +18810,11 @@ def _project_config_for_scan_validation(
         source_overrides=_normalize_project_relative_path_mapping(source_overrides),
         include_dirs=tuple(_normalize_project_relative_paths(include_dirs)),
         defines=dict(defines),
+        source_options={
+            str(name): dict(options)
+            for name, options in source_options.items()
+            if isinstance(options, Mapping)
+        },
         variants=variants,
         selected_variants=tuple(selected_variants),
         external_corpus_manifest=external_corpus_manifest,
@@ -20768,6 +20846,32 @@ def _variant_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
     return reasons
 
 
+def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    for source_backend, options in value.items():
+        if not _is_non_empty_string(source_backend):
+            reasons.append(f"{prefix} keys must be non-empty strings")
+            option_prefix = prefix
+        else:
+            option_prefix = _mapping_key_path(prefix, source_backend)
+        if not isinstance(options, Mapping):
+            reasons.append(f"{option_prefix} must be an object")
+            continue
+        if any(not _is_non_empty_string(name) for name in options):
+            reasons.append(f"{option_prefix} keys must be non-empty strings")
+        if any(
+            not isinstance(option_value, (str, int, bool))
+            for option_value in options.values()
+        ):
+            reasons.append(
+                f"{option_prefix} values must be strings, integers, or booleans"
+            )
+    return reasons
+
+
 def _valid_string_mapping(value: Any) -> bool:
     return isinstance(value, Mapping) and all(
         _is_non_empty_string(key) and isinstance(item, str)
@@ -20777,6 +20881,12 @@ def _valid_string_mapping(value: Any) -> bool:
 
 def _valid_non_empty_string_mapping(value: Any) -> bool:
     return _valid_string_mapping(value) and all(item.strip() for item in value.values())
+
+
+def _valid_source_options_mapping(value: Any) -> bool:
+    return isinstance(value, Mapping) and not _source_options_mapping_contract_reasons(
+        "sourceOptions", value
+    )
 
 
 def _expected_artifact_defines(
@@ -21506,6 +21616,29 @@ def _project_metadata_contract_reasons(
             reasons.append(
                 "project.sourceOverrideCount must match project.sourceOverrides "
                 f"({_value_mismatch_context(source_override_count, len(source_overrides))})"
+            )
+
+    source_options = project.get("sourceOptions")
+    source_options_is_mapping = isinstance(source_options, Mapping)
+    if _optional_project_field(
+        project, "sourceOptions", required=require_full_metadata
+    ):
+        reasons.extend(
+            _source_options_mapping_contract_reasons(
+                "project.sourceOptions", source_options
+            )
+        )
+
+    if _optional_project_field(
+        project, "sourceOptionCount", required=require_full_metadata
+    ):
+        source_option_count = project.get("sourceOptionCount")
+        if not _is_non_negative_int(source_option_count):
+            reasons.append("project.sourceOptionCount must be a non-negative integer")
+        elif source_options_is_mapping and source_option_count != len(source_options):
+            reasons.append(
+                "project.sourceOptionCount must match project.sourceOptions "
+                f"({_value_mismatch_context(source_option_count, len(source_options))})"
             )
 
     variants = project.get("variants")

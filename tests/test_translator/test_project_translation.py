@@ -8808,6 +8808,81 @@ def test_translate_project_opengl_reports_unresolved_metal_template_kernel(
     assert "Suggested action:" in diagnostic["message"]
 
 
+def test_translate_project_forwards_metal_template_specialization_limit(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "bad.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            T cast_value(float value) {
+                return T(value);
+            }
+
+            kernel void bad(device float* dst [[buffer(0)]]) {
+                dst[0] = cast_value<float>(1.0);
+                dst[1] = cast_value<half>(2.0);
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "ok.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void ok(device float* dst [[buffer(0)]]) {
+                dst[0] = 1.0;
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["cgl"]
+            output_dir = "translated"
+
+            [project.source_options.metal]
+            max_template_specializations = 1
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    artifacts = {artifact["source"]: artifact for artifact in payload["artifacts"]}
+
+    assert validation["success"] is False
+    assert validation["diagnosticsByCode"]["project.validate.failed-artifact"] == 1
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
+    assert payload["project"]["sourceOptions"] == {
+        "metal": {"max_template_specializations": 1}
+    }
+    assert payload["project"]["sourceOptionCount"] == 1
+    assert artifacts["shaders/bad.metal"]["status"] == "failed"
+    assert "template specialization limit exceeded" in artifacts["shaders/bad.metal"][
+        "error"
+    ]
+    assert not (repo / "translated" / "cgl" / "shaders" / "bad.cgl").exists()
+    assert artifacts["shaders/ok.metal"]["status"] == "translated"
+    assert (repo / "translated" / "cgl" / "shaders" / "ok.cgl").exists()
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.metal-template-specialization"
+    )
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+
+
 def test_translate_project_named_variants_apply_native_slang_preprocessor(
     tmp_path,
 ):
