@@ -1,5 +1,15 @@
 """Project scanning, translation, validation, and reporting APIs."""
 
+from .host_reflection import (
+    REFLECTION_AMBIGUOUS_BINDING,
+    REFLECTION_EMPTY,
+    REFLECTION_INCOMPLETE_OUTPUT,
+    REFLECTION_PARSE_FAILED,
+    REFLECTION_TOOL_UNAVAILABLE,
+    REFLECTION_UNSUPPORTED_FORMAT,
+    ReflectionDiagnostic,
+    reflect_target_host_interface,
+)
 from .pipeline import (
     ProjectConfig,
     ProjectDiagnostic,
@@ -94,6 +104,13 @@ __all__ = [
     "ProjectPortabilityReport",
     "ProjectScan",
     "ProjectTranslationUnit",
+    "REFLECTION_AMBIGUOUS_BINDING",
+    "REFLECTION_EMPTY",
+    "REFLECTION_INCOMPLETE_OUTPUT",
+    "REFLECTION_PARSE_FAILED",
+    "REFLECTION_TOOL_UNAVAILABLE",
+    "REFLECTION_UNSUPPORTED_FORMAT",
+    "ReflectionDiagnostic",
     "DirectXRuntimeParityAdapter",
     "NativeRuntimeBufferBinding",
     "NativeRuntimeConstantBinding",
@@ -160,6 +177,7 @@ __all__ = [
     "parse_runtime_test_manifest",
     "plan_runtime_test_manifest",
     "prepare_runtime_execution",
+    "reflect_target_host_interface",
     "plan_runtime_adapters",
     "plan_runtime_host_bindings",
     "plan_runtime_host_integration_execution",

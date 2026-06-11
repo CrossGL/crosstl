@@ -1,5 +1,6 @@
 """CrossGL-to-HLSL code generator."""
 
+import re
 from copy import deepcopy
 from hashlib import sha1
 
@@ -317,6 +318,7 @@ from .stage_utils import (
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
+    stage_layout_entry_value,
     stage_matches,
 )
 
@@ -1769,6 +1771,14 @@ class HLSLCodeGen:
                 )
                 continue
 
+            if self.is_input_attachment_type_name(vtype):
+                code += (
+                    "/* unsupported HLSL input attachment declaration: "
+                    f"'{var_name}' uses {self.type_name_string(vtype)}; "
+                    "subpassInput resources require Vulkan subpass lowering */\n"
+                )
+                continue
+
             mapped_type = self.hlsl_struct_buffer_resource_type(
                 node, vtype
             ) or self.map_resource_type_with_format(vtype, node)
@@ -2311,6 +2321,7 @@ class HLSLCodeGen:
                             stage_output_lowering=self.hlsl_stage_output_lowerings.get(
                                 id(stage)
                             ),
+                            stage_node=stage,
                         )
                     finally:
                         self.current_hlsl_available_functions = (
@@ -3538,6 +3549,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         execution_config=None,
         entry_name=None,
         stage_output_lowering=None,
+        stage_node=None,
     ):
         """Render a function or stage entry point with HLSL semantics."""
         code = ""
@@ -4020,12 +4032,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             code += f"{declaration_return_type} {function_name}({params_str}){return_semantic_attr} {{\n"
         else:
             shader_attr = shader_attr_map.get(effective_shader_type)
-            self.validate_hlsl_stage_requirements(func, effective_shader_type)
+            self.validate_hlsl_stage_requirements(
+                func,
+                effective_shader_type,
+                stage_node=stage_node,
+            )
             code += root_signature_attribute
             code += self.generate_stage_numthreads(
                 func, effective_shader_type, execution_config
             )
-            code += self.generate_hlsl_stage_attributes(func, effective_shader_type)
+            code += self.generate_hlsl_stage_attributes(
+                func,
+                effective_shader_type,
+                stage_node=stage_node,
+            )
             code += wave_size_attribute
             code += waveops_helper_lanes_attribute
             if shader_attr:
@@ -4961,6 +4981,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.image_atomic_result_type(func_name, args[0])
             if func_name == "imageLoad" and args:
                 return self.image_load_result_type(args[0])
+            if func_name == "subpassLoad":
+                return "vec4"
             if func_name == "textureSamplePosition":
                 return "vec2"
             if is_texture_query_lod_operation(func_name):
@@ -5770,6 +5792,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if unsupported_call is not None:
                 return unsupported_call
+
+            input_attachment_call = self.unsupported_input_attachment_call(func_name)
+            if input_attachment_call is not None:
+                return input_attachment_call
 
             synchronization_call = self.synchronization_function_call(func_name, args)
             if synchronization_call is not None:
@@ -9038,6 +9064,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.hlsl_stage_attribute_argument(func, expected_name)
         )
 
+    def hlsl_geometry_maxvertexcount_value(self, func, stage_node=None):
+        value = self.hlsl_stage_attribute_argument(func, "maxvertexcount")
+        if value is not None:
+            return value
+        if stage_node is None:
+            return None
+        return stage_layout_entry_value(
+            stage_node, "max_vertices", "out"
+        ) or stage_layout_entry_value(stage_node, "maxvertexcount", "out")
+
+    def hlsl_geometry_maxvertexcount_int_value(self, func, stage_node=None):
+        return self.hlsl_int_literal_value(
+            self.hlsl_geometry_maxvertexcount_value(func, stage_node)
+        )
+
     def hlsl_parameter_type_base(self, parameter):
         param_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
         type_name = self.type_name_string(param_type)
@@ -9278,12 +9319,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"({max_tess_factor_text}) must be in the range 1.0..64.0"
             )
 
-    def validate_hlsl_max_vertex_count_value(self, func, shader_type):
+    def validate_hlsl_max_vertex_count_value(self, func, shader_type, stage_node=None):
         if shader_type != "geometry":
             return
 
-        max_vertex_count = self.hlsl_stage_attribute_int_argument(
-            func, "maxvertexcount"
+        max_vertex_count = self.hlsl_geometry_maxvertexcount_int_value(
+            func,
+            stage_node=stage_node,
         )
         if max_vertex_count is None:
             return
@@ -10649,9 +10691,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "as a function return semantic"
             )
 
-        if self.hlsl_gl_frag_data_semantic(
-            semantic
-        ) and self.hlsl_render_target_semantic(mapped_semantic):
+        if self.hlsl_flexible_render_target_semantic(semantic, mapped_semantic):
             if array_suffix or not self.hlsl_render_target_type(actual_base_type):
                 raise ValueError(
                     f"DirectX {shader_type} return semantic '{semantic}' maps to "
@@ -10688,9 +10728,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         actual_type = self.map_type(member_type)
         actual_base_type, array_suffix = split_array_type_suffix(actual_type)
-        if self.hlsl_gl_frag_data_semantic(
-            semantic
-        ) and self.hlsl_render_target_semantic(mapped_semantic):
+        if self.hlsl_flexible_render_target_semantic(semantic, mapped_semantic):
             if array_suffix or not self.hlsl_render_target_type(actual_base_type):
                 raise ValueError(
                     f"DirectX struct '{struct_name}' semantic '{semantic}' maps to "
@@ -10769,6 +10807,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return False
         suffix = semantic_key[len("SV_TARGET") :]
         return suffix == "" or suffix.isdigit()
+
+    def hlsl_flexible_render_target_semantic(self, semantic, mapped_semantic):
+        if not self.hlsl_render_target_semantic(mapped_semantic):
+            return False
+        if self.hlsl_gl_frag_data_semantic(semantic):
+            return True
+        return str(semantic).upper().startswith("SV_TARGET")
 
     def hlsl_gl_frag_data_semantic(self, semantic):
         semantic_text = str(semantic)
@@ -13962,7 +14007,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"'{partitioning}' must be one of: {valid_values}"
             )
 
-    def validate_hlsl_stage_requirements(self, func, shader_type):
+    def validate_hlsl_stage_requirements(self, func, shader_type, stage_node=None):
         self.validate_hlsl_max_tess_factor_value(func, shader_type)
         self.validate_hlsl_mesh_output_topology(func, shader_type)
 
@@ -13986,6 +14031,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return
 
         present_attributes = self.hlsl_stage_attribute_names(func)
+        if (
+            shader_type == "geometry"
+            and self.hlsl_geometry_maxvertexcount_value(
+                func,
+                stage_node=stage_node,
+            )
+            is not None
+        ):
+            present_attributes.add("maxvertexcount")
         missing_attributes = sorted(required_attributes - present_attributes)
         if missing_attributes:
             missing = ", ".join(missing_attributes)
@@ -13997,7 +14051,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.validate_hlsl_tessellation_domain_topology(func, shader_type)
         self.validate_hlsl_tessellation_partitioning(func, shader_type)
         self.validate_hlsl_output_control_points_value(func, shader_type)
-        self.validate_hlsl_max_vertex_count_value(func, shader_type)
+        self.validate_hlsl_max_vertex_count_value(
+            func,
+            shader_type,
+            stage_node=stage_node,
+        )
         self.validate_hlsl_domain_matches_hull(func, shader_type)
         self.validate_hlsl_stage_parameter_requirements(func, shader_type)
         self.validate_hlsl_patch_constant_function(func, shader_type)
@@ -14013,7 +14071,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return str(value.name)
         return str(value)
 
-    def generate_hlsl_stage_attributes(self, func, shader_type):
+    def generate_hlsl_stage_attributes(self, func, shader_type, stage_node=None):
         if shader_type not in {
             "geometry",
             "tessellation_control",
@@ -14052,6 +14110,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if attr_name in quoted_argument_attributes:
                 argument_values = [f'"{value}"' for value in argument_values]
             code += f"[{attr_name}({', '.join(argument_values)})]\n"
+
+        if (
+            shader_type == "geometry"
+            and "maxvertexcount" not in self.hlsl_stage_attribute_names(func)
+        ):
+            maxvertexcount = self.hlsl_geometry_maxvertexcount_value(
+                func,
+                stage_node=stage_node,
+            )
+            if maxvertexcount is not None:
+                code += f"[maxvertexcount({maxvertexcount})]\n"
 
         return code
 
@@ -21337,6 +21406,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return f"{mapped_type}({', '.join(member_values)})"
 
         return default_value_expression(self, base_type)
+
+    def is_input_attachment_type_name(self, vtype):
+        type_name = self.type_name_string(vtype)
+        return bool(re.fullmatch(r"[iu]?subpassInput(?:MS)?", str(type_name or "")))
+
+    def unsupported_input_attachment_call(self, func_name):
+        if func_name != "subpassLoad":
+            return None
+        fallback_type = self.current_expression_expected_type or "vec4"
+        fallback = self.diagnostic_zero_value_for_type(fallback_type)
+        return (
+            "/* unsupported HLSL input attachment load: "
+            "subpassLoad requires Vulkan subpass input lowering */ "
+            f"{fallback}"
+        )
 
     def unsupported_glsl_buffer_block_access_value(self, expr):
         name = self.unsupported_glsl_buffer_block_access_name(expr)

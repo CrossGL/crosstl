@@ -314,6 +314,7 @@ from .stage_utils import (
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
+    stage_layout_entry_value,
     stage_matches,
 )
 
@@ -587,6 +588,16 @@ class MetalCodeGen:
     )
     METAL_WAVE_NUMERIC_COMPONENT_TYPES = {"float", "half", "int", "uint"}
     METAL_WAVE_INTEGER_COMPONENT_TYPES = {"int", "uint"}
+    METAL_GLSL_SUBGROUP_LANE_BUILTINS = {
+        "gl_SubgroupInvocationID": (
+            "thread_index_in_simdgroup",
+            "uint",
+        ),
+        "gl_SubgroupSize": (
+            "threads_per_simdgroup",
+            "uint",
+        ),
+    }
     METAL_RAY_FLAG_VALUES = {
         "RAY_FLAG_NONE": 0x00,
         "RAY_FLAG_FORCE_OPAQUE": 0x01,
@@ -1220,6 +1231,8 @@ class MetalCodeGen:
             "sv_groupindex": "thread_index_in_threadgroup",
             "gl_WorkGroupSize": "threads_per_threadgroup",
             "gl_NumWorkGroups": "threadgroups_per_grid",
+            "gl_SubgroupInvocationID": "thread_index_in_simdgroup",
+            "gl_SubgroupSize": "threads_per_simdgroup",
             # Ray tracing / payload semantics
             "payload": "payload",
             "mesh_payload": "payload",
@@ -2177,6 +2190,12 @@ class MetalCodeGen:
                 )
                 self.sampler_variables.append((node, binding, array_size))
                 sampler_register = max(sampler_register, binding + resource_count)
+            elif self.is_input_attachment_type_name(vtype):
+                code += (
+                    "/* unsupported Metal input attachment declaration: "
+                    f"'{var_name}' uses {self.type_name_string(vtype)}; "
+                    "subpassInput resources require Vulkan subpass lowering */\n"
+                )
             else:
                 mapped_type = self.map_type(vtype)
                 declaration = format_c_style_array_declaration(mapped_type, var_name)
@@ -2295,6 +2314,7 @@ class MetalCodeGen:
                             stage.entry_point,
                             getattr(stage, "local_variables", []),
                         ),
+                        stage_node=stage,
                     )
 
         code += self.generate_image_atomic_compare_helpers()
@@ -3467,6 +3487,21 @@ class MetalCodeGen:
             return f"{base_type}(false)"
         return f"{base_type}(0)"
 
+    def is_input_attachment_type_name(self, vtype):
+        type_name = self.type_name_string(vtype)
+        return bool(re.fullmatch(r"[iu]?subpassInput(?:MS)?", str(type_name or "")))
+
+    def unsupported_input_attachment_call(self, func_name):
+        if func_name != "subpassLoad":
+            return None
+        fallback_type = self.current_expression_expected_type or "vec4"
+        fallback = self.metal_default_value_expression(fallback_type)
+        return (
+            "/* unsupported Metal input attachment load: "
+            "subpassLoad requires Vulkan subpass input lowering */ "
+            f"{fallback}"
+        )
+
     def generate_function(
         self,
         func,
@@ -3475,6 +3510,7 @@ class MetalCodeGen:
         execution_config=None,
         entry_name=None,
         stage_local_variables=None,
+        stage_node=None,
     ):
         """Render a function or stage entry point with Metal attributes."""
         code = ""
@@ -4339,10 +4375,15 @@ class MetalCodeGen:
                 params_str, self.current_function_name, func
             )
             function_name = entry_name or f"geometry_{func.name}"
-            self.validate_metal_geometry_stage(func, param_list)
+            self.validate_metal_geometry_stage(
+                func,
+                param_list,
+                stage_node=stage_node,
+            )
             code += self.generate_metal_geometry_stage_comments(
                 func,
                 param_list,
+                stage_node=stage_node,
             )
             code += f"{return_type} {function_name}({params_str}) {{\n"
         elif shader_type in {"tessellation_control", "tessellation_evaluation"}:
@@ -4637,6 +4678,8 @@ class MetalCodeGen:
             ("gl_LocalInvocationIndex", "uint", "thread_index_in_threadgroup"),
             ("gl_WorkGroupSize", "uint3", "threads_per_threadgroup"),
             ("gl_NumWorkGroups", "uint3", "threadgroups_per_grid"),
+            ("gl_SubgroupInvocationID", "uint", "thread_index_in_simdgroup"),
+            ("gl_SubgroupSize", "uint", "threads_per_simdgroup"),
         ]
 
     def compute_builtin_name_for_metal_attribute(self, attribute):
@@ -4654,6 +4697,19 @@ class MetalCodeGen:
             return name
         return self.current_metal_compute_builtin_parameter_names.get(name, name)
 
+    def metal_glsl_subgroup_lane_builtin_diagnostic(self, name):
+        if name in self.local_variable_types:
+            return None
+        builtin = self.METAL_GLSL_SUBGROUP_LANE_BUILTINS.get(name)
+        if builtin is None:
+            return None
+        attribute, result_type = builtin
+        fallback = self.diagnostic_zero_value_for_type(result_type)
+        return (
+            f"{fallback} /* unsupported Metal GLSL subgroup builtin: {name} "
+            f"requires compute-stage {attribute} value */"
+        )
+
     def metal_graphics_builtin_expression_name(self, name):
         if name is None or name in self.local_variable_types:
             return name
@@ -4663,7 +4719,13 @@ class MetalCodeGen:
         graphics_name = self.metal_graphics_builtin_expression_name(name)
         if graphics_name != name:
             return graphics_name
-        return self.metal_compute_builtin_expression_name(name)
+        compute_name = self.metal_compute_builtin_expression_name(name)
+        if compute_name != name:
+            return compute_name
+        diagnostic = self.metal_glsl_subgroup_lane_builtin_diagnostic(name)
+        if diagnostic is not None:
+            return diagnostic
+        return name
 
     def metal_graphics_builtin_result_type(self, name):
         if (
@@ -4699,6 +4761,8 @@ class MetalCodeGen:
             "gl_LocalInvocationIndex": "thread_index_in_threadgroup",
             "gl_WorkGroupSize": "threads_per_threadgroup",
             "gl_NumWorkGroups": "threadgroups_per_grid",
+            "gl_SubgroupInvocationID": "thread_index_in_simdgroup",
+            "gl_SubgroupSize": "threads_per_simdgroup",
         }.get(builtin_name, attribute)
 
     def required_compute_builtin_parameters(
@@ -4729,6 +4793,9 @@ class MetalCodeGen:
             )
             reserved_names.add(name)
             required_parameters.append((name, param_type, attribute))
+        required_attributes = {
+            attribute for _name, _param_type, attribute in required_parameters
+        }
         wave_builtin_parameters = [
             (
                 "WaveGetLaneIndex",
@@ -4746,11 +4813,12 @@ class MetalCodeGen:
         for operation, base_name, param_type, attribute in wave_builtin_parameters:
             if operation not in used_wave_operations:
                 continue
-            if attribute in explicit_stage_builtins:
+            if attribute in explicit_stage_builtins or attribute in required_attributes:
                 continue
             name = self.unique_metal_generated_name(base_name, reserved_names)
             reserved_names.add(name)
             required_parameters.append((name, param_type, attribute))
+            required_attributes.add(attribute)
         return required_parameters
 
     def used_compute_builtin_names(self, body):
@@ -4761,6 +4829,8 @@ class MetalCodeGen:
             "gl_LocalInvocationIndex",
             "gl_WorkGroupSize",
             "gl_NumWorkGroups",
+            "gl_SubgroupInvocationID",
+            "gl_SubgroupSize",
         }
         used_names = set()
         for node in self.iter_ast_nodes(body):
@@ -7782,6 +7852,8 @@ class MetalCodeGen:
                 return unsupported_functions[func_name].get("return_type")
             if func_name == "imageLoad" and args:
                 return self.image_load_result_type(args[0])
+            if func_name == "subpassLoad":
+                return "vec4"
             if func_name in {
                 "float",
                 "half",
@@ -8886,6 +8958,10 @@ class MetalCodeGen:
             )
             if unsupported_call is not None:
                 return unsupported_call
+
+            input_attachment_call = self.unsupported_input_attachment_call(func_name)
+            if input_attachment_call is not None:
+                return input_attachment_call
 
             enum_constructor = generate_enum_constructor_call(
                 self, func_name, expr.args
@@ -14509,15 +14585,28 @@ class MetalCodeGen:
                 return getattr(attr, "arguments", []) or []
         return []
 
-    def metal_geometry_maxvertexcount(self, func):
+    def metal_geometry_maxvertexcount(self, func, stage_node=None):
         arguments = self.metal_stage_attribute_arguments(func, "maxvertexcount")
-        if not arguments:
-            raise ValueError("Metal geometry stage requires maxvertexcount attribute")
-        if len(arguments) != 1:
-            raise ValueError(
-                "Metal geometry stage maxvertexcount requires exactly one argument"
-            )
-        value_text = self.attribute_value_to_string(arguments[0])
+        if arguments:
+            if len(arguments) != 1:
+                raise ValueError(
+                    "Metal geometry stage maxvertexcount requires exactly one argument"
+                )
+            value_text = self.attribute_value_to_string(arguments[0])
+        else:
+            value_text = None
+            if stage_node is not None:
+                value_text = stage_layout_entry_value(
+                    stage_node, "max_vertices", "out"
+                ) or stage_layout_entry_value(
+                    stage_node,
+                    "maxvertexcount",
+                    "out",
+                )
+            if value_text is None:
+                raise ValueError(
+                    "Metal geometry stage requires maxvertexcount attribute"
+                )
         value = self.literal_int_value(value_text, self.literal_int_constants)
         if value is not None and value <= 0:
             raise ValueError(
@@ -14629,8 +14718,8 @@ class MetalCodeGen:
                     f"must have {expected_count} element(s), got {array_count}"
                 )
 
-    def validate_metal_geometry_stage(self, func, parameters):
-        self.metal_geometry_maxvertexcount(func)
+    def validate_metal_geometry_stage(self, func, parameters, stage_node=None):
+        self.metal_geometry_maxvertexcount(func, stage_node=stage_node)
 
         if not any(
             self.metal_geometry_stream_info(self.parameter_raw_type(param))
@@ -14651,8 +14740,16 @@ class MetalCodeGen:
 
         self.validate_metal_geometry_input_primitive_arity(parameters)
 
-    def generate_metal_geometry_stage_comments(self, func, parameters):
-        maxvertexcount = self.metal_geometry_maxvertexcount(func)
+    def generate_metal_geometry_stage_comments(
+        self,
+        func,
+        parameters,
+        stage_node=None,
+    ):
+        maxvertexcount = self.metal_geometry_maxvertexcount(
+            func,
+            stage_node=stage_node,
+        )
         input_descriptions = []
         stream_descriptions = []
 
@@ -20387,6 +20484,8 @@ class MetalCodeGen:
         )
 
     def validate_texture_call_arity(self, func_name, args):
+        if self.is_packed_shadow_texture_sample_call(func_name, args):
+            return
         validate_texture_operation_arity(
             "Metal",
             func_name,
@@ -21093,6 +21192,138 @@ class MetalCodeGen:
 
     def unsupported_texture_compare_call(self, func_name, reason):
         return unsupported_texture_compare_scalar_expression("Metal", func_name, reason)
+
+    def is_depth_texture_resource(self, texture_type):
+        return self.resource_base_type(texture_type).startswith("depth")
+
+    def is_packed_shadow_texture_sample_call(self, func_name, args):
+        if func_name not in {
+            "texture",
+            "textureLod",
+            "textureOffset",
+            "textureLodOffset",
+        }:
+            return False
+        if not args:
+            return False
+        return self.is_depth_texture_resource(
+            self.texture_argument_resource_type(args[0])
+        )
+
+    def packed_shadow_compare_coord_args(self, texture_type, coord):
+        texture_type = self.resource_base_type(texture_type)
+        if texture_type.startswith("depth2d_array<"):
+            return [
+                self.vector_component(coord, "xy"),
+                f"uint({self.vector_component(coord, 'z')})",
+            ], self.vector_component(coord, "w")
+        if texture_type.startswith("depth2d<"):
+            return [self.vector_component(coord, "xy")], self.vector_component(
+                coord, "z"
+            )
+        if texture_type.startswith("depthcube_array<"):
+            return [
+                self.vector_component(coord, "xyz"),
+                f"uint({self.vector_component(coord, 'w')})",
+            ], None
+        if texture_type.startswith("depthcube<"):
+            return [self.vector_component(coord, "xyz")], self.vector_component(
+                coord, "w"
+            )
+        return None, None
+
+    def generate_packed_shadow_texture_sample_call(
+        self, func_name, texture_name, sampler_arg, coord, extra_args, texture_type
+    ):
+        if not self.is_depth_texture_resource(texture_type):
+            return None
+
+        coord_args, packed_compare = self.packed_shadow_compare_coord_args(
+            texture_type, coord
+        )
+        if coord_args is None:
+            return self.unsupported_texture_compare_call(
+                func_name, "requires supported shadow texture coordinates"
+            )
+
+        is_cube_array = self.resource_base_type(texture_type).startswith(
+            "depthcube_array<"
+        )
+        sample_options = []
+        trailing_args = []
+
+        if func_name == "texture":
+            if is_cube_array:
+                if len(extra_args) not in {1, 2}:
+                    return self.unsupported_texture_compare_call(
+                        func_name,
+                        "cube-array shadow sampling requires compare and optional bias arguments",
+                    )
+                compare = self.generate_expression(extra_args[0])
+                if len(extra_args) == 2:
+                    bias = self.generate_expression(extra_args[1])
+                    sample_options.append(f"bias({bias})")
+            else:
+                if len(extra_args) > 1:
+                    return self.unsupported_texture_compare_call(
+                        func_name,
+                        "packed shadow sampling accepts at most one bias argument",
+                    )
+                compare = packed_compare
+                if extra_args:
+                    bias = self.generate_expression(extra_args[0])
+                    sample_options.append(f"bias({bias})")
+        elif func_name == "textureLod":
+            if is_cube_array:
+                if len(extra_args) != 2:
+                    return self.unsupported_texture_compare_call(
+                        func_name,
+                        "cube-array shadow LOD sampling requires compare and lod arguments",
+                    )
+                compare = self.generate_expression(extra_args[0])
+                lod_arg = extra_args[1]
+            else:
+                if len(extra_args) != 1:
+                    return self.unsupported_texture_compare_call(
+                        func_name,
+                        "packed shadow LOD sampling requires one lod argument",
+                    )
+                compare = packed_compare
+                lod_arg = extra_args[0]
+            sample_options.append(f"level({self.generate_expression(lod_arg)})")
+        elif func_name == "textureOffset":
+            if is_cube_array or not self.texture_compare_offset_supported(texture_type):
+                return self.unsupported_texture_compare_call(
+                    func_name, texture_compare_offset_capability_error("Metal")
+                )
+            if len(extra_args) not in {1, 2}:
+                return self.unsupported_texture_compare_call(
+                    func_name,
+                    "packed shadow offset sampling requires offset and optional bias arguments",
+                )
+            compare = packed_compare
+            if len(extra_args) == 2:
+                bias = self.generate_expression(extra_args[1])
+                sample_options.append(f"bias({bias})")
+            trailing_args.append(self.generate_expression(extra_args[0]))
+        elif func_name == "textureLodOffset":
+            if is_cube_array or not self.texture_compare_offset_supported(texture_type):
+                return self.unsupported_texture_compare_call(
+                    func_name, texture_compare_offset_capability_error("Metal")
+                )
+            if len(extra_args) != 2:
+                return self.unsupported_texture_compare_call(
+                    func_name,
+                    "packed shadow LOD offset sampling requires lod and offset arguments",
+                )
+            compare = packed_compare
+            sample_options.append(f"level({self.generate_expression(extra_args[0])})")
+            trailing_args.append(self.generate_expression(extra_args[1]))
+        else:
+            return None
+
+        args = [sampler_arg] + coord_args + [compare] + sample_options + trailing_args
+        return f"{texture_name}.sample_compare({', '.join(args)})"
 
     def texture_compare_projected_coord_args(self, texture_type, coord_arg, coord):
         texture_type = self.resource_base_type(texture_type)
@@ -22242,6 +22473,17 @@ class MetalCodeGen:
         )
         if storage_image_operation is not None:
             return storage_image_operation
+
+        packed_shadow_call = self.generate_packed_shadow_texture_sample_call(
+            func_name,
+            texture_name,
+            sampler_arg,
+            coord,
+            extra_args,
+            texture_type,
+        )
+        if packed_shadow_call is not None:
+            return packed_shadow_call
 
         is_array_texture = self.is_array_texture_resource(texture_type)
         if is_array_texture:
