@@ -3275,6 +3275,9 @@ class VulkanSPIRVCodeGen:
             return [], component_id
 
         offsets_value = extra_args[0]
+        if self.integer_value_component_count(offsets_value) is not None:
+            return [offsets_value] * 4, component_id
+
         offsets_type = self.value_types.get(offsets_value.id)
         element_type = self.array_element_type_from_type(offsets_type)
         if element_type is not None:
