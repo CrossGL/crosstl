@@ -185,6 +185,12 @@ def test_glsl_fragment_fragcoord_lowers_to_hlsl_position_input(tmp_path):
 
     assert "gl_FragCoord" not in generated_code
     assert "float4 _crossglFragCoord : SV_Position" in generated_code
+    assert (
+        "float4 PSMain(float4 _crossglFragCoord : SV_Position): SV_Target0"
+        in generated_code
+    )
+    assert "): fragColor" not in generated_code
+    assert "return fragColor;" in generated_code
     assert "_crossglFragCoord.x" in generated_code
     assert "_crossglFragCoord.y" in generated_code
 
