@@ -8495,6 +8495,62 @@ def test_translate_project_materializes_mlx_metal_instantiate_kernel_entries(
     assert "void arange(" not in output
 
 
+def test_translate_project_opengl_materializes_mlx_explicit_template_helpers(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "copy.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_copy(name, type, idx_type, offset) \\
+                instantiate_kernel("copy" #name, copy_values, type, idx_type, offset)
+
+            template <typename T, typename IdxT, int Offset>
+            METAL_FUNC T add_offset(T value, IdxT index) {
+                return value + T(index + Offset);
+            }
+
+            template <typename T, typename IdxT, int Offset>
+            [[kernel]] void copy_values(
+                device const T* src [[buffer(0)]],
+                device T* dst [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                dst[gid] = add_offset<T, IdxT, Offset>(src[gid], IdxT(gid));
+            }
+
+            instantiate_copy(float32, float, uint, 7)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    output = (repo / "translated" / "opengl" / "shaders" / "copy.glsl").read_text(
+        encoding="utf-8"
+    )
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert "float add_offset_float_uint_7(float value, uint index)" in output
+    assert "return (value + float((index + 7)));" in output
+    assert "add_offset_float_uint_7(src[gid], uint(gid))" in output
+    assert "add_offset<T" not in output
+    assert not re.search(r"\b(?:T|IdxT|Offset|AccT|Wtype)\b", output)
+
+
 def test_translate_project_opengl_reports_unresolved_metal_template_kernel(
     tmp_path,
 ):
