@@ -1176,21 +1176,28 @@ class VulkanSPIRVCodeGen:
             self.emit("; WARNING: storage buffer load requires a readable buffer")
             return self.default_value_for_type(result_type)
 
+        pointer_type = self.pointer_pointee_type(variable_id)
+        load_type = pointer_type or result_type
         if self.type_contains_runtime_array(result_type):
             return self.runtime_array_aggregate_fallback(
                 "runtime-array aggregate values cannot be loaded as SPIR-V values"
             )
 
         id_value = self.get_id()
-        self.emit(f"%{id_value} = OpLoad %{result_type.id} %{variable_id.id}")
+        self.emit(f"%{id_value} = OpLoad %{load_type.id} %{variable_id.id}")
 
-        spirv_id = SpirvId(id_value, result_type.type)
-        self.value_types[id_value] = result_type
+        spirv_id = SpirvId(id_value, load_type.type)
+        self.value_types[id_value] = load_type
         resource_metadata = self.resource_metadata_for_pointer(variable_id)
         if resource_metadata is not None:
             self.resource_type_metadata[id_value] = resource_metadata
         if self.is_non_uniform_value(variable_id):
             self.mark_non_uniform_result(spirv_id)
+        if (
+            pointer_type is not None
+            and pointer_type.type.base_type != result_type.type.base_type
+        ):
+            return self.convert_value_to_type(spirv_id, result_type)
         return spirv_id
 
     def convert_value_for_store(
@@ -1211,10 +1218,15 @@ class VulkanSPIRVCodeGen:
 
     def pointer_pointee_type(self, variable_id: SpirvId) -> Optional[SpirvId]:
         target_type = self.variable_value_types.get(variable_id.id)
-        if target_type is None and variable_id.type.storage_class:
-            target_type = self.find_registered_type_by_base(
+        if variable_id.type.storage_class:
+            pointer_type = self.find_registered_type_by_base(
                 variable_id.type.base_type.replace("ptr_", "", 1)
             )
+            if pointer_type is not None and (
+                target_type is None
+                or pointer_type.type.base_type != target_type.type.base_type
+            ):
+                return pointer_type
         return target_type
 
     def pointer_type_pointee_type(
@@ -1225,6 +1237,25 @@ class VulkanSPIRVCodeGen:
         return self.find_registered_type_by_base(
             pointer_type.type.base_type.replace("ptr_", "", 1)
         )
+
+    def scalar_subscript_pointee_type(self, pointer_id: SpirvId) -> Optional[SpirvId]:
+        pointee_type = self.pointer_pointee_type(pointer_id)
+        if pointee_type is None:
+            return None
+
+        base_type = pointee_type.type.base_type
+        if (
+            self.array_type_info_from_type(pointee_type) is not None
+            or self.matrix_type_info_from_type(pointee_type) is not None
+            or self.vector_type_info_from_type(pointee_type) is not None
+            or base_type in self.current_struct_members
+        ):
+            return None
+
+        scalar_type = self.normalize_primitive_name(base_type)
+        if scalar_type in {"bool", "float", "double"} | self.INTEGER_TYPE_NAMES:
+            return pointee_type
+        return None
 
     def copy_array_pointer_to_function_storage(
         self,
@@ -1332,9 +1363,7 @@ class VulkanSPIRVCodeGen:
         if size is None:
             return None
 
-        source_type = self.value_types.get(
-            value_id.id
-        ) or self.find_registered_type_by_base(value_id.type.base_type)
+        source_type = self.registered_value_type(value_id)
         if source_type is not None:
             source_array_info = self.array_type_info_from_type(source_type)
             if source_array_info is not None:
@@ -1470,9 +1499,7 @@ class VulkanSPIRVCodeGen:
         return self.composite_construct(target_type, components)
 
     def value_has_type(self, value_id: SpirvId, target_type: SpirvId) -> bool:
-        value_type = self.value_types.get(
-            value_id.id
-        ) or self.find_registered_type_by_base(value_id.type.base_type)
+        value_type = self.registered_value_type(value_id)
         if value_type is None:
             return value_id.type.base_type == target_type.type.base_type
         return (
@@ -7003,9 +7030,16 @@ class VulkanSPIRVCodeGen:
         return " or ".join(str(count) for count in sorted(expected_counts))
 
     def registered_value_type(self, value_id: SpirvId) -> Optional[SpirvId]:
-        return self.value_types.get(value_id.id) or self.find_registered_type_by_base(
-            value_id.type.base_type
-        )
+        emitted_type = self.find_registered_type_by_base(value_id.type.base_type)
+        cached_type = self.value_types.get(value_id.id)
+        if cached_type is None:
+            return emitted_type
+        if (
+            emitted_type is not None
+            and emitted_type.type.base_type != cached_type.type.base_type
+        ):
+            return emitted_type
+        return cached_type
 
     def acceleration_structure_value_from_expression(self, expr) -> Optional[SpirvId]:
         value = self.process_expression(expr)
@@ -20704,6 +20738,16 @@ class VulkanSPIRVCodeGen:
             target_size = len(values)
             array_type = self.register_array_type(element_type, target_size)
 
+        if element_type is not None:
+            values = [
+                (
+                    self.coerce_scalar_constant_to_type(value, element_type)
+                    if constant
+                    else self.convert_value_to_type(value, element_type)
+                )
+                for value in values
+            ]
+
         if target_size is not None:
             values = values[:target_size]
             if element_type is not None:
@@ -20974,6 +21018,9 @@ class VulkanSPIRVCodeGen:
             array_type = self.variable_value_types.get(array_variable.id)
             element_type = self.array_element_type_from_type(array_type)
             if element_type is None:
+                scalar_type = self.scalar_subscript_pointee_type(array_variable)
+                if scalar_type is not None:
+                    return array_variable
                 element_type = self.determine_array_element_type(array_variable)
             if element_type is None:
                 return None
@@ -21140,6 +21187,9 @@ class VulkanSPIRVCodeGen:
             array_type = self.variable_value_types.get(array_variable.id)
             element_type = self.array_element_type_from_type(array_type)
             if element_type is None:
+                scalar_type = self.scalar_subscript_pointee_type(array_variable)
+                if scalar_type is not None:
+                    return array_variable, scalar_type
                 element_type = self.determine_array_element_type(array_variable)
             if element_type is None:
                 return None, None

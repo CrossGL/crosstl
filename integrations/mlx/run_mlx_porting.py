@@ -24,9 +24,19 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/ternary.metal",
 )
 EXPECTED_METAL_KERNEL_COUNT = 40
-FRONTIER_VALIDATION_TRACKED_ISSUES = ("https://github.com/CrossGL/crosstl/issues/1317",)
-FULL_CORPUS_TRACKED_ISSUES = (*FRONTIER_VALIDATION_TRACKED_ISSUES,)
+FRONTIER_VALIDATION_TRACKED_ISSUES = ()
+FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1354",
+    "https://github.com/CrossGL/crosstl/issues/1355",
+)
+FULL_CORPUS_VALIDATION_TRACKED_ISSUES = ()
+FULL_CORPUS_TRACKED_ISSUES = (
+    *FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
+    *FULL_CORPUS_VALIDATION_TRACKED_ISSUES,
+)
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1362",
+    "https://github.com/CrossGL/crosstl/issues/1317",
     "https://github.com/CrossGL/crosstl/issues/1300",
     "https://github.com/CrossGL/crosstl/issues/939",
     "https://github.com/CrossGL/crosstl/issues/940",
@@ -399,8 +409,13 @@ def _translate_directx_vulkan_frontier(
         if isinstance(run, dict) and run.get("target") == "vulkan"
     ]
     if require_vulkan_toolchain and run_toolchains:
+        validated_sources = {
+            run.get("source")
+            for run in vulkan_runs
+            if isinstance(run.get("source"), str) and run.get("status") == "ok"
+        }
         _require(
-            len(vulkan_runs) == frontier_count,
+            set(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES).issubset(validated_sources),
             "Vulkan toolchain validation was required for every frontier artifact",
         )
     for run in vulkan_runs:
@@ -516,6 +531,146 @@ def _check_arange_opengl(
     }
 
 
+def _translate_full_corpus(
+    mlx_root: Path,
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+    *,
+    require_vulkan_toolchain: bool,
+) -> dict[str, Any]:
+    config_path = config_dir / "full-corpus.toml"
+    report_path = report_dir / "full-corpus.json"
+    targets = ("directx", "opengl", "vulkan")
+    _write_project_config(
+        config_path,
+        include=f"{MLX_METAL_KERNEL_ROOT}/**/*.metal",
+        targets=targets,
+        output_dir=_relpath(work_dir / "out-full-corpus", mlx_root),
+    )
+    run_toolchains = not FULL_CORPUS_VALIDATION_TRACKED_ISSUES
+    validation_flag = "--run-toolchains" if run_toolchains else "--validate"
+    result = _run_command(
+        "translate-full-corpus",
+        [
+            python,
+            "-m",
+            "crosstl",
+            "translate-project",
+            str(mlx_root),
+            "--config",
+            str(config_path),
+            "--report",
+            str(report_path),
+            validation_flag,
+        ],
+        log_dir=log_dir,
+        check=False,
+    )
+    _require(
+        report_path.is_file(),
+        "full-corpus translation did not write a project report",
+    )
+    payload = _load_json(report_path)
+    summary = payload.get("summary", {})
+    _require(isinstance(summary, dict), "full-corpus report summary must be an object")
+    expected_artifacts = EXPECTED_METAL_KERNEL_COUNT * len(targets)
+    _require(
+        summary.get("unitCount") == EXPECTED_METAL_KERNEL_COUNT,
+        "full-corpus translation must scan {} units".format(
+            EXPECTED_METAL_KERNEL_COUNT
+        ),
+    )
+    _require(
+        summary.get("artifactCount") == expected_artifacts,
+        f"full-corpus translation must emit {expected_artifacts} artifacts",
+    )
+    translated_count = summary.get("translatedCount")
+    failed_count = summary.get("failedCount")
+    diagnostic_errors = summary.get("diagnosticCounts", {}).get("error", 0)
+    if (
+        result.returncode != 0
+        or translated_count != expected_artifacts
+        or failed_count != 0
+        or diagnostic_errors != 0
+    ):
+        raise PortingCheckError(
+            "full-corpus translation is not clean: translated {}/{} artifacts, "
+            "failed {}; tracked open issues: {}".format(
+                translated_count,
+                expected_artifacts,
+                failed_count,
+                ", ".join(FULL_CORPUS_TRACKED_ISSUES),
+            )
+        )
+
+    artifacts_by_target = summary.get("artifactsByTarget", {})
+    _require(
+        isinstance(artifacts_by_target, dict),
+        "full-corpus artifactsByTarget must be an object",
+    )
+    translated_by_target: dict[str, int] = {}
+    for target in targets:
+        target_summary = artifacts_by_target.get(target, {})
+        _require(
+            target_summary.get("translatedCount") == EXPECTED_METAL_KERNEL_COUNT
+            and target_summary.get("failedCount") == 0,
+            f"full-corpus {target} artifacts were not translated cleanly",
+        )
+        translated_by_target[target] = target_summary.get("translatedCount")
+
+    validation = payload.get("validation", {})
+    _require(isinstance(validation, dict), "full-corpus validation must be an object")
+    toolchain_runs = validation.get("toolchainRuns", [])
+    _require(isinstance(toolchain_runs, list), "toolchainRuns must be a list")
+    vulkan_runs = [
+        run
+        for run in toolchain_runs
+        if isinstance(run, dict) and run.get("target") == "vulkan"
+    ]
+    if require_vulkan_toolchain and run_toolchains:
+        _require(
+            len(vulkan_runs) >= EXPECTED_METAL_KERNEL_COUNT,
+            "Vulkan toolchain validation was required for every full-corpus artifact",
+        )
+    for run in vulkan_runs:
+        _require(run.get("status") == "ok", "Vulkan toolchain validation failed")
+    if require_vulkan_toolchain and not run_toolchains:
+        _require(
+            not vulkan_runs,
+            "Vulkan toolchain validation ran while active validation issues are tracked",
+        )
+
+    return {
+        "name": "full-corpus",
+        "status": "passed",
+        "report": _relpath(report_path, mlx_root),
+        "unitCount": EXPECTED_METAL_KERNEL_COUNT,
+        "artifactCount": expected_artifacts,
+        "targets": list(targets),
+        "translatedByTarget": translated_by_target,
+        "toolchainRuns": len(toolchain_runs),
+        "vulkanToolchainRequired": require_vulkan_toolchain,
+        "vulkanValidationStatus": (
+            "validated" if run_toolchains else "blocked-by-tracked-issues"
+        ),
+        "trackedIssues": list(FULL_CORPUS_TRACKED_ISSUES),
+    }
+
+
+def _full_corpus_not_run() -> dict[str, Any]:
+    return {
+        "status": "not-run",
+        "reason": "pass --full-corpus to enforce the full MLX Metal kernel corpus",
+        "expectedUnitCount": EXPECTED_METAL_KERNEL_COUNT,
+        "expectedArtifactCount": EXPECTED_METAL_KERNEL_COUNT * 3,
+        "targets": ["directx", "opengl", "vulkan"],
+        "trackedIssues": list(FULL_CORPUS_TRACKED_ISSUES),
+    }
+
+
 def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     mlx_root = Path(args.mlx_root).resolve()
     work_dir = _resolve_work_dir(mlx_root, args.work_dir)
@@ -555,6 +710,18 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             args.python,
         ),
     ]
+    full_corpus = _full_corpus_not_run()
+    if args.full_corpus:
+        full_corpus = _translate_full_corpus(
+            mlx_root,
+            work_dir,
+            config_dir,
+            report_dir,
+            log_dir,
+            args.python,
+            require_vulkan_toolchain=args.require_vulkan_toolchain,
+        )
+        checks.append(full_corpus)
     return {
         "schema_version": 1,
         "repository": {
@@ -567,10 +734,12 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "frontierSources": list(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
             "shaderArtifactsOnly": True,
             "runtimeIntegrationIncluded": False,
+            "fullCorpusIncluded": args.full_corpus,
         },
         "trackedIssues": list(FULL_CORPUS_TRACKED_ISSUES),
         "resolvedFrontierIssues": list(RESOLVED_FRONTIER_ISSUES),
         "checks": checks,
+        "fullCorpus": full_corpus,
         "status": "passed",
     }
 
@@ -595,7 +764,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--require-vulkan-toolchain",
         action="store_true",
-        help="Fail unless the Vulkan SPIR-V smoke check runs successfully.",
+        help=(
+            "Fail unless the Vulkan SPIR-V smoke check runs successfully when "
+            "no active Vulkan validation blocker is tracked."
+        ),
+    )
+    parser.add_argument(
+        "--full-corpus",
+        action="store_true",
+        help=(
+            "Also translate all pinned MLX Metal kernels for DirectX, OpenGL, "
+            "and Vulkan, and fail unless every artifact is clean."
+        ),
     )
     parser.add_argument(
         "--no-clean",
