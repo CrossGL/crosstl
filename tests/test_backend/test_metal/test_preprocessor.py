@@ -72,6 +72,36 @@ def test_preprocessor_materializes_mlx_instantiate_kernel_macros():
     assert "out[gid] = half(gid + 3);" in output
 
 
+def test_preprocessor_materializes_mlx_instantiations_with_template_defaults():
+    code = """
+    #define instantiate_rope(name, type, idx_type) \\
+        instantiate_kernel("rope_" #name, rope, type, idx_type)
+
+    template <typename T, typename IdxT, int N = 4>
+    [[kernel]] void rope(
+        device const T* src [[buffer(0)]],
+        device T* dst [[buffer(1)]],
+        device const IdxT* positions [[buffer(2)]],
+        uint gid [[thread_position_in_grid]]) {
+        IdxT pos = positions[gid];
+        dst[gid] = src[pos] + T(N);
+    }
+
+    instantiate_rope(float32, float, uint)
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "template <typename T" not in output
+    assert "instantiate_kernel" not in output
+    assert '[[host_name("rope_float32")]]' in output
+    assert "void rope_float32(" in output
+    assert "device const float* src" in output
+    assert "device const uint* positions" in output
+    assert "uint pos = positions[gid];" in output
+    assert "dst[gid] = src[pos] + float(4);" in output
+
+
 def test_preprocessor_materializes_multiple_mlx_instantiations_from_one_macro():
     code = """
     #define instantiate_copy_pair(name, type) \\

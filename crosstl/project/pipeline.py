@@ -1352,7 +1352,14 @@ REPORT_ARTIFACT_TEMPLATE_MATERIALIZATION_FIELDS = frozenset(
     )
 )
 REPORT_ARTIFACT_TEMPLATE_SPECIALIZATION_FIELDS = frozenset(
-    ("name", "materializedName", "parameters", "parameterSources", "source")
+    (
+        "name",
+        "materializedName",
+        "parameters",
+        "parameterSources",
+        "source",
+        "hostName",
+    )
 )
 REPORT_ARTIFACT_TEMPLATE_UNSUPPORTED_FIELDS = frozenset(
     (
@@ -8354,6 +8361,7 @@ def _materialized_template_specialization_record(
     parameters: Mapping[str, str],
     parameter_sources: Mapping[str, str] | None = None,
     source: str,
+    host_name: str | None = None,
 ) -> dict[str, Any]:
     sources = {
         parameter: str(
@@ -8363,13 +8371,16 @@ def _materialized_template_specialization_record(
         )
         for parameter in parameters
     }
-    return {
+    payload = {
         "name": name,
         "materializedName": materialized_name,
         "parameters": dict(sorted(parameters.items())),
         "parameterSources": dict(sorted(sources.items())),
         "source": source,
     }
+    if _is_non_empty_string(host_name):
+        payload["hostName"] = host_name
+    return payload
 
 
 def _unsupported_template_record(
@@ -8999,9 +9010,14 @@ def _project_template_materialization_for_artifact(
     ] = set()
     for instantiation in source_instantiations:
         template = template_lookup.get(instantiation.function_name)
-        arguments = list(instantiation.template_arguments)
         if template is None:
             continue
+        raw_arguments = list(instantiation.template_arguments)
+        arguments = preprocessor._template_arguments_with_defaults(
+            preprocessed,
+            template,
+            raw_arguments,
+        )
         normalized_arguments = list(
             preprocessor._template_specialization_key(
                 instantiation.function_name,
@@ -9060,7 +9076,7 @@ def _project_template_materialization_for_artifact(
         )
         parameter_sources = _template_parameter_sources_from_arguments(
             template,
-            normalized_arguments,
+            raw_arguments,
             argument_source="source-instantiation",
             default_source="source-default",
         )
@@ -9074,6 +9090,7 @@ def _project_template_materialization_for_artifact(
                 parameters=parameters,
                 parameter_sources=parameter_sources,
                 source="source-instantiation",
+                host_name=instantiation.host_name,
             )
         )
     preprocessed = preprocessor._materialize_project_template_instantiations(
@@ -27451,6 +27468,8 @@ def _template_specialization_contract_reasons(
             f"{prefix}.source must be one of "
             f"{', '.join(sorted(TEMPLATE_PARAMETER_SOURCE_VALUES))}"
         )
+    if "hostName" in value and not _is_non_empty_string(value.get("hostName")):
+        reasons.append(f"{prefix}.hostName must be a string")
     return reasons
 
 
