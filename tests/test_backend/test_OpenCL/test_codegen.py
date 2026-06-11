@@ -1,6 +1,7 @@
 import pytest
 
 import crosstl
+from crosstl.backend.common_ast import UnaryOpNode
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import OpenCLToCrossGLConverter
@@ -25,6 +26,22 @@ def parse_crossgl_from_opencl(source):
 def generate_crossgl(source):
     _cgl_ast, crossgl = parse_crossgl_from_opencl(source)
     return crossgl
+
+
+def test_opencl_event_token_extraction_handles_identifier_spellings():
+    converter = OpenCLToCrossGLConverter()
+    assert converter.opencl_event_token_name("read") == "read"
+    assert converter.opencl_event_token_name(UnaryOpNode("&", "read")) == "read"
+
+    ast = OpenCLParser(OpenCLLexer("""
+            kernel void reduce(global int *front, local int *shared) {
+                event_t read;
+                async_work_group_copy(shared, front, 1, read);
+                wait_group_events(1, &read);
+            }
+            """).tokenize()).parse()
+
+    assert converter.collect_opencl_event_tokens(ast) == {"read"}
 
 
 def test_opencl_kernel_codegen_reparses_and_lowers_builtin_ids():
