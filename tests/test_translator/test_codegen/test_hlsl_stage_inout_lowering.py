@@ -5,7 +5,6 @@ import pytest
 
 from crosstl._crosstl import translate
 
-
 HLSL_INOUT_VERTEX = textwrap.dedent("""
     cbuffer Constants
     {
