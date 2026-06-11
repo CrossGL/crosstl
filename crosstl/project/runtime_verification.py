@@ -16,6 +16,7 @@ from crosstl.translator.codegen import normalize_backend_name
 
 RUNTIME_VERIFICATION_FIXTURES_KIND = "crosstl-runtime-verification-fixtures"
 RUNTIME_VERIFICATION_REPORT_KIND = "crosstl-runtime-verification-report"
+RUNTIME_TEST_FIXTURE_METADATA_KIND = "crosstl-project-runtime-fixture-metadata"
 RUNTIME_TEST_MANIFEST_KIND = "crosstl-project-runtime-test-manifest"
 RUNTIME_TEST_PLAN_KIND = "crosstl-project-runtime-test-plan"
 RUNTIME_TEST_REPORT_KIND = "crosstl-project-runtime-test-report"
@@ -1282,6 +1283,137 @@ def default_runtime_test_adapters(
     return tuple(adapters)
 
 
+def build_runtime_test_manifest(
+    artifact_report: str | os.PathLike[str] | Mapping[str, Any],
+    fixture_metadata: str | os.PathLike[str] | Mapping[str, Any],
+    *,
+    project_root: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Emit a project runtime test manifest from curated fixture metadata."""
+
+    artifact_payload, artifact_source = _load_artifact_payload(artifact_report)
+    metadata_payload, metadata_source = _load_runtime_test_fixture_metadata_argument(
+        fixture_metadata
+    )
+    diagnostics: list[dict[str, Any]] = []
+    _runtime_test_fixture_metadata_kind_diagnostics(metadata_payload, diagnostics)
+
+    adapters = _runtime_test_manifest_generator_adapters(
+        metadata_payload, diagnostics=diagnostics
+    )
+    adapter_by_id = {adapter.adapter_id: adapter for adapter in adapters}
+    fixture_records = _runtime_test_fixture_metadata_records(
+        metadata_payload, diagnostics=diagnostics
+    )
+    test_cases: list[RuntimeTestCase] = []
+    fixture_ids: set[str] = set()
+    for index, record in enumerate(fixture_records):
+        if not isinstance(record, Mapping):
+            diagnostics.append(
+                _diagnostic(
+                    "error",
+                    "project.runtime-test-manifest.fixture-invalid",
+                    "Runtime fixture metadata entries must be objects.",
+                    fixtureIndex=index,
+                )
+            )
+            continue
+        try:
+            test_case = _parse_runtime_test_case(
+                record,
+                index=index,
+                adapters=adapter_by_id,
+            )
+        except RuntimeVerificationError as exc:
+            diagnostics.append(
+                _diagnostic(
+                    "error",
+                    "project.runtime-test-manifest.fixture-invalid",
+                    str(exc),
+                    fixtureIndex=index,
+                )
+            )
+            continue
+        if test_case.fixture.id in fixture_ids:
+            diagnostics.append(
+                _diagnostic(
+                    "error",
+                    "project.runtime-test-manifest.fixture-duplicate",
+                    "Runtime fixture metadata ids must be unique.",
+                    fixture=test_case.fixture.id,
+                    fixtureIndex=index,
+                )
+            )
+            continue
+        fixture_ids.add(test_case.fixture.id)
+        diagnostics.extend(
+            _runtime_test_manifest_generation_diagnostics(
+                test_case,
+                artifact_payload,
+                fixture_index=index,
+            )
+        )
+        test_cases.append(test_case)
+
+    generated_adapters = {adapter.adapter_id: adapter for adapter in adapters}
+    for test_case in test_cases:
+        target = test_case.fixture.selector.target
+        if test_case.adapter is None and target in RUNTIME_TEST_DEFAULT_ADAPTERS:
+            adapter = _runtime_test_default_adapter(target)
+            generated_adapters.setdefault(adapter.adapter_id, adapter)
+    adapter_by_id = generated_adapters
+    test_cases = [
+        _runtime_test_case_with_adapter(test_case, adapter_by_id)
+        for test_case in test_cases
+    ]
+
+    artifact_manifest = _runtime_test_manifest_artifact_manifest(
+        metadata_payload,
+        artifact_source=artifact_source,
+        diagnostics=diagnostics,
+    )
+    project_root_payload = _runtime_test_manifest_project_root(
+        metadata_payload,
+        artifact_payload,
+        override=project_root,
+        diagnostics=diagnostics,
+    )
+    manifest_metadata = _runtime_test_manifest_metadata(
+        metadata_payload,
+        metadata_source=metadata_source,
+        diagnostics=diagnostics,
+    )
+    diagnostic_counts = _runtime_test_manifest_diagnostic_counts(diagnostics)
+    payload: dict[str, Any] = {
+        "schemaVersion": RUNTIME_VERIFICATION_SCHEMA_VERSION,
+        "kind": RUNTIME_TEST_MANIFEST_KIND,
+        "generatedAt": int(time.time()),
+        "success": diagnostic_counts["error"] == 0,
+        "summary": _runtime_test_manifest_generation_summary(
+            fixture_records=fixture_records,
+            test_cases=test_cases,
+            adapters=tuple(adapter_by_id.values()),
+            diagnostics=diagnostics,
+        ),
+        "adapters": [
+            adapter.to_json()
+            for adapter in sorted(
+                adapter_by_id.values(), key=lambda adapter: adapter.adapter_id
+            )
+        ],
+        "tests": [test_case.to_json() for test_case in test_cases],
+        "diagnosticCounts": diagnostic_counts,
+        "diagnostics": diagnostics,
+    }
+    if artifact_manifest is not None:
+        payload["artifactManifest"] = artifact_manifest
+    if project_root_payload is not None:
+        payload["projectRoot"] = project_root_payload
+    if manifest_metadata:
+        payload["metadata"] = manifest_metadata
+    return payload
+
+
 def plan_runtime_test_manifest(
     artifact_report: str | os.PathLike[str] | Mapping[str, Any],
     manifest: (
@@ -1479,6 +1611,375 @@ def _load_runtime_test_manifest_argument(
     raise RuntimeVerificationError(
         "Runtime test manifest must be a manifest path or object."
     )
+
+
+def _load_runtime_test_fixture_metadata_argument(
+    metadata: str | os.PathLike[str] | Mapping[str, Any],
+) -> tuple[Mapping[str, Any], Path | None]:
+    if isinstance(metadata, Mapping):
+        return metadata, None
+    path = _filesystem_path_arg(metadata, field_name="Runtime fixture metadata path")
+    try:
+        if path.suffix.lower() == ".toml":
+            payload = _load_toml(path)
+        else:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise RuntimeVerificationError(
+            f"Runtime fixture metadata could not be read: {exc}"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeVerificationError(
+            f"Runtime fixture metadata is not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise RuntimeVerificationError(
+            "Runtime fixture metadata must be a JSON object."
+        )
+    return payload, path
+
+
+def _runtime_test_fixture_metadata_kind_diagnostics(
+    payload: Mapping[str, Any], diagnostics: list[dict[str, Any]]
+) -> None:
+    kind = payload.get("kind")
+    if kind in (None, RUNTIME_TEST_FIXTURE_METADATA_KIND):
+        return
+    diagnostics.append(
+        _diagnostic(
+            "error",
+            "project.runtime-test-manifest.fixture-metadata-kind-invalid",
+            "Runtime fixture metadata kind must be "
+            f"{RUNTIME_TEST_FIXTURE_METADATA_KIND}.",
+            kind=kind,
+        )
+    )
+
+
+def _runtime_test_manifest_generator_adapters(
+    payload: Mapping[str, Any], *, diagnostics: list[dict[str, Any]]
+) -> tuple[RuntimeTestAdapterSpec, ...]:
+    adapter_records = payload.get("adapters", [])
+    if not isinstance(adapter_records, Sequence) or isinstance(
+        adapter_records, (str, bytes, bytearray)
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "error",
+                "project.runtime-test-manifest.adapters-invalid",
+                "Runtime fixture metadata adapters must be a list.",
+            )
+        )
+        return ()
+
+    adapters: list[RuntimeTestAdapterSpec] = []
+    adapter_ids: set[str] = set()
+    for index, adapter_record in enumerate(adapter_records):
+        try:
+            adapter = _parse_runtime_test_adapter(adapter_record, index=index)
+        except RuntimeVerificationError as exc:
+            diagnostics.append(
+                _diagnostic(
+                    "error",
+                    "project.runtime-test-manifest.adapter-invalid",
+                    str(exc),
+                    adapterIndex=index,
+                )
+            )
+            continue
+        if adapter.adapter_id in adapter_ids:
+            diagnostics.append(
+                _diagnostic(
+                    "error",
+                    "project.runtime-test-manifest.adapter-duplicate",
+                    "Runtime fixture metadata adapter ids must be unique.",
+                    adapter=adapter.adapter_id,
+                    adapterIndex=index,
+                )
+            )
+            continue
+        adapter_ids.add(adapter.adapter_id)
+        adapters.append(adapter)
+    return tuple(adapters)
+
+
+def _runtime_test_fixture_metadata_records(
+    payload: Mapping[str, Any], *, diagnostics: list[dict[str, Any]]
+) -> Sequence[Any]:
+    records = payload.get("fixtures", payload.get("tests", []))
+    if isinstance(records, Sequence) and not isinstance(
+        records, (str, bytes, bytearray)
+    ):
+        return records
+    diagnostics.append(
+        _diagnostic(
+            "error",
+            "project.runtime-test-manifest.fixtures-invalid",
+            "Runtime fixture metadata fixtures must be a list.",
+        )
+    )
+    return ()
+
+
+def _runtime_test_manifest_generation_diagnostics(
+    test_case: RuntimeTestCase,
+    artifact_payload: Mapping[str, Any],
+    *,
+    fixture_index: int,
+) -> list[dict[str, Any]]:
+    fixture = test_case.fixture
+    diagnostics: list[dict[str, Any]] = []
+    if not fixture.inputs:
+        diagnostics.append(
+            _diagnostic(
+                "warning",
+                "project.runtime-test-manifest.fixture-inputs-missing",
+                "Runtime fixture metadata does not provide deterministic inputs.",
+                fixture=fixture.id,
+                fixtureIndex=fixture_index,
+            )
+        )
+    if not fixture.expected_outputs:
+        diagnostics.append(
+            _diagnostic(
+                "error",
+                "project.runtime-test-manifest.fixture-expected-outputs-missing",
+                "Runtime fixture metadata must provide expected outputs.",
+                fixture=fixture.id,
+                fixtureIndex=fixture_index,
+            )
+        )
+
+    selected = _select_runtime_artifact(artifact_payload, fixture.selector)
+    if selected["status"] != PASSED:
+        diagnostics.extend(
+            _runtime_test_manifest_artifact_diagnostics(
+                selected,
+                fixture=fixture,
+                fixture_index=fixture_index,
+            )
+        )
+        return diagnostics
+
+    artifact = selected["artifact"]
+    contract = _runtime_adapter_contract(fixture, artifact)
+    diagnostics.extend(
+        _runtime_test_manifest_contract_diagnostics(
+            fixture,
+            artifact,
+            contract,
+            fixture_index=fixture_index,
+        )
+    )
+    return diagnostics
+
+
+def _runtime_test_manifest_artifact_diagnostics(
+    selected: Mapping[str, Any],
+    *,
+    fixture: RuntimeFixture,
+    fixture_index: int,
+) -> list[dict[str, Any]]:
+    code_by_status = {
+        "project.runtime-verification.artifact-ambiguous": (
+            "project.runtime-test-manifest.artifact-ambiguous"
+        ),
+        "project.runtime-verification.artifact-missing": (
+            "project.runtime-test-manifest.artifact-missing"
+        ),
+        "project.runtime-verification.translation-failed": (
+            "project.runtime-test-manifest.translation-failed"
+        ),
+    }
+    diagnostics: list[dict[str, Any]] = []
+    for diagnostic in selected.get("diagnostics", []):
+        if not isinstance(diagnostic, Mapping):
+            continue
+        code = code_by_status.get(
+            str(diagnostic.get("code", "")),
+            "project.runtime-test-manifest.artifact-unresolved",
+        )
+        diagnostics.append(
+            _diagnostic(
+                "error",
+                code,
+                str(
+                    diagnostic.get("message")
+                    or "Runtime fixture metadata could not select one artifact."
+                ),
+                fixture=fixture.id,
+                fixtureIndex=fixture_index,
+                selector=fixture.selector.to_json(),
+            )
+        )
+    if diagnostics:
+        return diagnostics
+    return [
+        _diagnostic(
+            "error",
+            "project.runtime-test-manifest.artifact-unresolved",
+            "Runtime fixture metadata could not select one artifact.",
+            fixture=fixture.id,
+            fixtureIndex=fixture_index,
+            selector=fixture.selector.to_json(),
+        )
+    ]
+
+
+def _runtime_test_manifest_contract_diagnostics(
+    fixture: RuntimeFixture,
+    artifact: Mapping[str, Any],
+    contract: RuntimeAdapterContract,
+    *,
+    fixture_index: int,
+) -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    if not contract.entry_points:
+        diagnostics.append(
+            _diagnostic(
+                "warning",
+                "project.runtime-test-manifest.entry-points-unavailable",
+                "Runtime fixture metadata and selected artifact do not provide "
+                "entry point metadata.",
+                fixture=fixture.id,
+                fixtureIndex=fixture_index,
+                artifact=_artifact_result_payload(artifact),
+            )
+        )
+    if not contract.resource_bindings:
+        diagnostics.append(
+            _diagnostic(
+                "warning",
+                "project.runtime-test-manifest.resource-bindings-unavailable",
+                "Runtime fixture metadata and selected artifact do not provide "
+                "resource binding metadata.",
+                fixture=fixture.id,
+                fixtureIndex=fixture_index,
+                artifact=_artifact_result_payload(artifact),
+            )
+        )
+    if _complete_runtime_dispatch_geometry(contract) is None:
+        diagnostics.append(
+            _diagnostic(
+                "warning",
+                "project.runtime-test-manifest.dispatch-unavailable",
+                "Runtime fixture metadata and selected artifact do not provide "
+                "dispatch geometry.",
+                fixture=fixture.id,
+                fixtureIndex=fixture_index,
+                artifact=_artifact_result_payload(artifact),
+            )
+        )
+    return diagnostics
+
+
+def _runtime_test_manifest_artifact_manifest(
+    payload: Mapping[str, Any],
+    *,
+    artifact_source: Path | None,
+    diagnostics: list[dict[str, Any]],
+) -> str | None:
+    manifest = payload.get("artifactManifest", payload.get("artifactReport"))
+    if manifest is None:
+        return str(artifact_source) if artifact_source is not None else None
+    if isinstance(manifest, str) and manifest.strip():
+        return manifest
+    diagnostics.append(
+        _diagnostic(
+            "error",
+            "project.runtime-test-manifest.artifact-manifest-invalid",
+            "Runtime fixture metadata artifactManifest must be a non-empty string.",
+        )
+    )
+    return str(artifact_source) if artifact_source is not None else None
+
+
+def _runtime_test_manifest_project_root(
+    metadata_payload: Mapping[str, Any],
+    artifact_payload: Mapping[str, Any],
+    *,
+    override: str | os.PathLike[str] | None,
+    diagnostics: list[dict[str, Any]],
+) -> str | None:
+    if override is not None:
+        return str(_filesystem_path_arg(override, field_name="Project root"))
+    root = metadata_payload.get("projectRoot")
+    if root is not None:
+        if isinstance(root, str) and root.strip():
+            return root
+        diagnostics.append(
+            _diagnostic(
+                "error",
+                "project.runtime-test-manifest.project-root-invalid",
+                "Runtime fixture metadata projectRoot must be a non-empty string.",
+            )
+        )
+    project = artifact_payload.get("project")
+    if isinstance(project, Mapping):
+        artifact_root = project.get("root")
+        if isinstance(artifact_root, str) and artifact_root.strip():
+            return artifact_root
+    return None
+
+
+def _runtime_test_manifest_metadata(
+    payload: Mapping[str, Any],
+    *,
+    metadata_source: Path | None,
+    diagnostics: list[dict[str, Any]],
+) -> dict[str, Any]:
+    metadata = payload.get("metadata", {})
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, Mapping):
+        diagnostics.append(
+            _diagnostic(
+                "error",
+                "project.runtime-test-manifest.metadata-invalid",
+                "Runtime fixture metadata metadata must be an object.",
+            )
+        )
+        metadata = {}
+    result = dict(metadata)
+    result["fixtureMetadataKind"] = RUNTIME_TEST_FIXTURE_METADATA_KIND
+    if metadata_source is not None:
+        result["sourceFixtureMetadata"] = str(metadata_source)
+    return result
+
+
+def _runtime_test_manifest_diagnostic_counts(
+    diagnostics: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts = {"note": 0, "warning": 0, "error": 0}
+    for diagnostic in diagnostics:
+        severity = diagnostic.get("severity")
+        if severity in counts:
+            counts[str(severity)] += 1
+    return counts
+
+
+def _runtime_test_manifest_generation_summary(
+    *,
+    fixture_records: Sequence[Any],
+    test_cases: Sequence[RuntimeTestCase],
+    adapters: Sequence[RuntimeTestAdapterSpec],
+    diagnostics: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    diagnostic_counts = _runtime_test_manifest_diagnostic_counts(diagnostics)
+    targets = [
+        test_case.fixture.selector.target
+        for test_case in test_cases
+        if test_case.fixture.selector.target is not None
+    ]
+    return {
+        "fixtureMetadataCount": len(fixture_records),
+        "testCount": len(test_cases),
+        "adapterCount": len(adapters),
+        "targetCount": len(set(targets)),
+        "testsByTarget": dict(sorted(Counter(targets).items())),
+        "diagnosticCount": len(diagnostics),
+        "diagnosticCounts": diagnostic_counts,
+    }
 
 
 def _runtime_test_manifest_artifact_input(
