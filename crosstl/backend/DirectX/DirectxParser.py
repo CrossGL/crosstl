@@ -272,6 +272,32 @@ EFFECT_BLOCK_KEYWORDS = {
     "technique11",
 }
 
+EFFECT_SHADER_ASSIGNMENT_STAGES = {
+    "vertexshader": "vertex",
+    "pixelshader": "fragment",
+    "fragmentshader": "fragment",
+    "computeshader": "compute",
+    "geometryshader": "geometry",
+    "hullshader": "tessellation_control",
+    "domainshader": "tessellation_evaluation",
+    "meshshader": "mesh",
+    "amplificationshader": "task",
+    "taskshader": "task",
+}
+
+EFFECT_PROFILE_STAGES = {
+    "vs": "vertex",
+    "ps": "fragment",
+    "cs": "compute",
+    "gs": "geometry",
+    "hs": "tessellation_control",
+    "ds": "tessellation_evaluation",
+    "ms": "mesh",
+    "as": "task",
+}
+
+STAGE_QUALIFIER_NAMES = frozenset(EFFECT_SHADER_ASSIGNMENT_STAGES.values())
+
 STATEMENT_START_TOKENS = {
     "RETURN",
     "IF",
@@ -348,6 +374,7 @@ class HLSLParser:
         self.synthetic_structs = []
         self.synthetic_cbuffer_names = set()
         self.synthetic_enum_count = 0
+        self.effect_stage_entries = {}
 
     def parse(self):
         structs = []
@@ -478,6 +505,7 @@ class HLSLParser:
                 global_variables.extend(declarations)
 
         self.apply_struct_parameter_stage_qualifiers(functions, structs)
+        self.apply_effect_stage_entries(functions)
 
         return ShaderNode(
             includes=[],
@@ -524,9 +552,88 @@ class HLSLParser:
         self.skip_effect_declaration_suffixes()
 
         if self.current_token[0] == "LBRACE":
+            self.collect_effect_stage_entries_in_block(self.current_index)
             self.skip_balanced_brace_block()
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
+
+    def collect_effect_stage_entries_in_block(self, start_index):
+        end_index = self.find_matching_token_index(start_index, "LBRACE", "RBRACE")
+        if end_index is None:
+            return
+
+        idx = start_index + 1
+        while idx < end_index:
+            token_type, value = self.tokens[idx]
+            assignment_stage = self.effect_shader_assignment_stage(value)
+            if (
+                token_type == "IDENTIFIER"
+                and assignment_stage is not None
+                and idx + 2 < end_index
+                and self.tokens[idx + 1][0] == "EQUALS"
+            ):
+                entry = self.effect_compile_entry_at(idx + 2, end_index)
+                if entry is not None:
+                    profile, entry_name = entry
+                    stage = self.effect_profile_stage(profile) or assignment_stage
+                    self.record_effect_stage_entry(entry_name, stage, profile)
+                    idx += 2
+            idx += 1
+
+    def find_matching_token_index(self, start_index, open_token, close_token):
+        if start_index >= len(self.tokens) or self.tokens[start_index][0] != open_token:
+            return None
+
+        depth = 1
+        idx = start_index + 1
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == open_token:
+                depth += 1
+            elif token_type == close_token:
+                depth -= 1
+                if depth == 0:
+                    return idx
+            elif token_type == "EOF":
+                return None
+            idx += 1
+        return None
+
+    def effect_shader_assignment_stage(self, name):
+        if name is None:
+            return None
+        return EFFECT_SHADER_ASSIGNMENT_STAGES.get(str(name).lower())
+
+    def effect_profile_stage(self, profile):
+        if profile is None:
+            return None
+        profile_prefix = str(profile).lower().split("_", 1)[0]
+        return EFFECT_PROFILE_STAGES.get(profile_prefix)
+
+    def effect_compile_entry_at(self, start_index, end_index):
+        if start_index + 2 >= end_index:
+            return None
+        token_type, value = self.tokens[start_index]
+        if token_type != "IDENTIFIER" or str(value).lower() != "compile":
+            return None
+
+        profile_type, profile = self.tokens[start_index + 1]
+        if profile_type != "IDENTIFIER":
+            return None
+
+        entry_index = start_index + 2
+        if not self.is_identifier_token_at(entry_index):
+            return None
+        entry_name = self.tokens[entry_index][1]
+        return profile, entry_name
+
+    def record_effect_stage_entry(self, entry_name, stage, profile):
+        if not entry_name or not stage:
+            return
+        entries = self.effect_stage_entries.setdefault(str(entry_name), [])
+        record = {"stage": stage, "profile": profile}
+        if record not in entries:
+            entries.append(record)
 
     def eat(self, expected_type):
         if self.current_token[0] == expected_type:
@@ -2192,6 +2299,31 @@ class HLSLParser:
             qualifiers = list(getattr(function, "qualifiers", []) or [])
             if qualifier not in qualifiers:
                 qualifiers.append(qualifier)
+            function.qualifiers = qualifiers
+
+    def apply_effect_stage_entries(self, functions):
+        if not self.effect_stage_entries:
+            return
+
+        for function in functions:
+            entries = self.effect_stage_entries.get(getattr(function, "name", None))
+            if not entries:
+                continue
+
+            entry = entries[0]
+            stage = entry.get("stage")
+            if not stage:
+                continue
+
+            function.is_effect_stage_entry = True
+            function.effect_stage_profile = entry.get("profile")
+            function.qualifier = stage
+            qualifiers = [
+                qualifier
+                for qualifier in getattr(function, "qualifiers", []) or []
+                if str(qualifier).lower() not in STAGE_QUALIFIER_NAMES
+            ]
+            qualifiers.append(stage)
             function.qualifiers = qualifiers
 
     def infer_struct_parameter_stage_qualifier(self, function, structs_by_name):
