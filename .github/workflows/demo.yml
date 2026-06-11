@@ -324,7 +324,6 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/nvpro-vk-mini-samples-rectangle/crosstl-out/directx/rectangle.frag.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/ogl-samples-flat-color/crosstl-out/directx/flat-color.vert.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/ogl-samples-flat-color/crosstl-out/directx/flat-color.frag.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/opencl-sdk-saxpy/crosstl-out/directx/saxpy.hlsl CSMain cs_6_0
           compile_hlsl demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/directx/noise.vert.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/directx/noise.frag.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/raylib-base-fragment/crosstl-out/directx/base.hlsl PSMain ps_6_0

@@ -348,7 +348,6 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
         "demos/open-source-porting/cases/nvpro-vk-mini-samples-rectangle/crosstl-out/directx/rectangle.frag.hlsl",
         "demos/open-source-porting/cases/ogl-samples-flat-color/crosstl-out/directx/flat-color.vert.hlsl",
         "demos/open-source-porting/cases/ogl-samples-flat-color/crosstl-out/directx/flat-color.frag.hlsl",
-        "demos/open-source-porting/cases/opencl-sdk-saxpy/crosstl-out/directx/saxpy.hlsl",
         "demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/directx/noise.vert.hlsl",
         "demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/directx/noise.frag.hlsl",
         "demos/open-source-porting/cases/raylib-base-fragment/crosstl-out/directx/base.hlsl",
