@@ -5109,7 +5109,7 @@ def _scan_native_directive_lines(
     source_backend: str,
     seen: set[tuple[str, int, str, str, str, str | None]],
     variant: str | None = None,
-) -> list["ProjectNativeDirective"]:
+) -> list[ProjectNativeDirective]:
     native_directives: list[ProjectNativeDirective] = []
     conditional_stack: list[_IncludeConditionalFrame] = []
     for line_number, line in enumerate(lines, start=1):
@@ -5170,7 +5170,7 @@ def _scan_native_directive_planning(
     relative_path: str,
     *,
     source_backend: str,
-) -> list["ProjectNativeDirective"]:
+) -> list[ProjectNativeDirective]:
     source_spec = SOURCE_REGISTRY.get(source_backend)
     if source_spec is None or source_spec.native_directive_classifier is None:
         return []
