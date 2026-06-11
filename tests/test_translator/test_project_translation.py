@@ -6378,6 +6378,49 @@ def test_translate_project_generates_metal_and_spirv_for_modular_mojo_vector_add
     assert "IdentifierNode(" not in spirv
 
 
+def test_translate_project_specializes_generic_helper_for_spirv(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "generic_helper.cgl").write_text(
+        textwrap.dedent("""
+            shader GenericHelper {
+                generic<T> fn identity(value: T) -> T {
+                    return value;
+                }
+
+                compute {
+                    void main() {
+                        float value = identity(1.0);
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["vulkan"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"]["error"] == 0
+    artifact = payload["artifacts"][0]
+    assert artifact["target"] == "vulkan"
+    spirv = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "; SPIR-V" in spirv
+    assert "OpFunctionCall" in spirv
+    assert "unspecialized generic helper" not in spirv
+
+
 def test_translate_project_lowers_glsl_vertex_index_for_graphics_targets(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
