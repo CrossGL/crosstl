@@ -13891,6 +13891,80 @@ def test_translate_project_rust_gpu_storage_buffer_declares_opengl_ssbo(tmp_path
     assert_compute_glsl_validates_if_available(opengl_output, tmp_path)
 
 
+def test_translate_project_rust_gpu_storage_buffer_declares_directx_resource(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    source_dir = repo / "src"
+    source_dir.mkdir(parents=True)
+    (source_dir / "lib.rs").write_text(
+        textwrap.dedent("""
+            use glam::UVec3;
+            use spirv_std::{glam, spirv};
+
+            pub fn collatz(mut n: u32) -> Option<u32> {
+                let mut i = 0;
+                if n == 0 {
+                    return None;
+                }
+                while n != 1 {
+                    n = if n.is_multiple_of(2) {
+                        n / 2
+                    } else {
+                        if n >= 0x5555_5555 {
+                            return None;
+                        }
+                        3 * n + 1
+                    };
+                    i += 1;
+                }
+                Some(i)
+            }
+
+            #[spirv(compute(threads(64)))]
+            pub fn main_cs(
+                #[spirv(global_invocation_id)] id: UVec3,
+                #[spirv(storage_buffer, descriptor_set = 0, binding = 0)]
+                prime_indices: &mut [u32],
+            ) {
+                let index = id.x as usize;
+                prime_indices[index] =
+                    collatz(prime_indices[index]).unwrap_or(u32::MAX);
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["src"]
+            targets = ["directx"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    directx_output = (repo / "translated" / "directx" / "src" / "lib.hlsl").read_text(
+        encoding="utf-8"
+    )
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    assert "RWStructuredBuffer<uint> prime_indices : register(u0);" in directx_output
+    assert "void CSMain(uint3 id : SV_DispatchThreadID)" in directx_output
+    assert (
+        "prime_indices[index] = "
+        "collatz_unwrap_or(prime_indices[index], 4294967295u);"
+    ) in directx_output
+    assert "uint prime_indices[]" not in directx_output
+    assert re.search(r"void CSMain\([^)]*prime_indices", directx_output) is None
+    HLSLParser(HLSLLexer(directx_output).tokenize()).parse()
+    assert_directx_compute_validates_if_available(directx_output, tmp_path)
+
+
 def test_translate_project_rust_option_helpers_lower_to_directx_compute(tmp_path):
     repo = tmp_path / "repo"
     source_dir = repo / "src"
