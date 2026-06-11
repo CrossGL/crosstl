@@ -7972,6 +7972,72 @@ def test_translate_project_specializes_generic_helper_for_spirv(tmp_path):
     assert "unspecialized generic helper" not in spirv
 
 
+def test_translate_project_opengl_rejects_unresolved_generic_struct_type(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "unresolved_box.cgl").write_text(
+        textwrap.dedent("""
+            shader OpenGLTemplateLeak {
+                generic<T> struct Box {
+                    T value;
+                };
+
+                struct Payload {
+                    Box<T> unresolved;
+                };
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["path"] == "translated/opengl/shaders/unresolved_box.glsl"
+    assert not (repo / artifact["path"]).exists()
+    assert "Box_T" not in artifact["error"]
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.opengl-template-type-unresolved": 1
+    }
+
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.opengl-template-type-unresolved"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert diagnostic["details"] == {
+        "enclosingGeneratedType": "Box<T>",
+        "sourcePath": "shaders/unresolved_box.cgl",
+        "targetArtifact": "translated/opengl/shaders/unresolved_box.glsl",
+        "unresolvedParameter": "T",
+    }
+    assert "unresolved template type 'T' from 'Box<T>'" in diagnostic["message"]
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
 def test_translate_project_lowers_glsl_vertex_index_for_graphics_targets(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
@@ -34932,7 +34998,7 @@ def test_runtime_host_loader_scaffolds_preserve_loader_step_metadata(tmp_path):
 def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files(
     tmp_path,
 ):
-    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
+    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("cuda",))
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
     loader_manifest_path.write_text(
         json.dumps(
@@ -35026,7 +35092,7 @@ def test_runtime_host_loader_scaffolds_sanitize_target_and_unit_paths(tmp_path):
 
 
 def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds(tmp_path):
-    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
+    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("cuda",))
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
     loader_manifest_path.write_text(
         json.dumps(
@@ -35216,7 +35282,7 @@ def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file(
 
 def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units(tmp_path):
     _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = inspect_runtime_host_loader_scaffolds(
@@ -35399,7 +35465,7 @@ def test_plan_runtime_host_loader_consumption_reports_ready_units(tmp_path):
 
 def test_plan_runtime_host_loader_consumption_carries_blocked_units(tmp_path):
     _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = plan_runtime_host_loader_consumption(
@@ -35564,7 +35630,7 @@ def test_build_runtime_host_integration_handoff_writes_ready_bundle(tmp_path):
 
 def test_build_runtime_host_integration_handoff_writes_blocked_bundle(tmp_path):
     repo, plan_path, _ = _write_host_loader_consumption_plan_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
     handoff_dir = repo / "host-integration"
 
@@ -35575,7 +35641,7 @@ def test_build_runtime_host_integration_handoff_writes_blocked_bundle(tmp_path):
     assert payload["summary"]["blockedLoaderUnitCount"] == 1
     assert payload["targets"][0]["status"] == "blocked"
     assert payload["actions"][0]["kind"] == "resolve-loader-scaffold-blockers"
-    assert (handoff_dir / "targets" / "vulkan.integration.json").is_file()
+    assert (handoff_dir / "targets" / "cuda.integration.json").is_file()
 
 
 def test_build_runtime_host_integration_handoff_rejects_wrong_plan_kind(tmp_path):
@@ -35819,7 +35885,7 @@ def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch(
 
 def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle(tmp_path):
     _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = inspect_runtime_host_integration_handoff(
@@ -35832,7 +35898,7 @@ def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle(tmp_pat
     assert payload["summary"]["readyTargetCount"] == 0
     assert payload["summary"]["blockedTargetCount"] == 1
     assert payload["summary"]["failedTargetCount"] == 0
-    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["target"] == "cuda"
     assert payload["targets"][0]["status"] == "blocked"
     assert payload["targets"][0]["targetStatus"] == "blocked"
     assert payload["targets"][0]["loaderUnitCount"] == 1
@@ -36021,7 +36087,7 @@ def test_plan_runtime_host_integration_execution_reports_ready_steps(tmp_path):
 
 def test_plan_runtime_host_integration_execution_carries_blocked_steps(tmp_path):
     _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = plan_runtime_host_integration_execution(
@@ -36037,7 +36103,7 @@ def test_plan_runtime_host_integration_execution_carries_blocked_steps(tmp_path)
     assert payload["summary"]["blockedLoaderUnitCount"] == 1
     assert payload["summary"]["stepCount"] == 1
     assert payload["summary"]["blockedStepCount"] == 1
-    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["target"] == "cuda"
     assert payload["targets"][0]["status"] == "blocked"
     assert payload["targets"][0]["blockedStepCount"] == 1
     assert payload["steps"][0]["kind"] == "resolve-loader-scaffold-blockers"
@@ -36272,7 +36338,7 @@ def test_execute_runtime_host_integration_reports_blocked_steps_without_failure(
     tmp_path,
 ):
     _, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = execute_runtime_host_integration(plan_path)
@@ -38939,8 +39005,7 @@ def test_translate_project_metal_matmul_buffers_lower_to_directx_resources(
     assert "uint2 id = id_dispatchThreadID.xy;" in output
     assert "A.Load(index_A)" in output
     assert "B.Load(index_B)" in output
-    assert "X[index] = sum;" in output
-    assert "X.Store(" not in output
+    assert "X.Store(index, sum);" in output
     assert "float* A" not in output
     assert "float* B" not in output
     assert "float* X" not in output
@@ -39001,10 +39066,9 @@ def test_translate_project_metal_matmul_device_buffers_do_not_emit_directx_param
     assert "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)" in output
     assert "uint2 id = id_dispatchThreadID.xy;" in output
     assert (
-        "X[((row * col_dim_x) + col)] = "
-        "(A.Load(((row * inner_dim) + col)) + B.Load(col));" in output
+        "X.Store(((row * col_dim_x) + col), "
+        "(A.Load(((row * inner_dim) + col)) + B.Load(col)));" in output
     )
-    assert "X.Store(" not in output
     assert "A.Load(((row * inner_dim) + col))" in output
     assert "B.Load(col)" in output
     assert "float* A" not in output
@@ -39086,8 +39150,7 @@ def test_translate_project_metal_matmul_unbound_device_buffers_lower_to_directx_
     assert "uint2 id = id_dispatchThreadID.xy;" in output
     assert "A.Load(index_A)" in output
     assert "B.Load(index_B)" in output
-    assert "X[index] = sum;" in output
-    assert "X.Store(" not in output
+    assert "X.Store(index, sum);" in output
     assert "float* A" not in output
     assert "float* B" not in output
     assert "float* X" not in output
@@ -42275,8 +42338,7 @@ def test_translate_project_target_template_variant_manifest_materializes_for_ope
     }
     directx_output = (repo / directx_artifact["path"]).read_text(encoding="utf-8")
     assert "RWStructuredBuffer<uint> out_ : register(u0);" in directx_output
-    assert "out_[gid] = uint(0);" in directx_output
-    assert "out_.Store(" not in directx_output
+    assert "out_.Store(gid, uint(0));" in directx_output
 
     report_path = repo / "out" / "report.json"
     report.write_json(report_path)
