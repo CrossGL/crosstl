@@ -79,9 +79,12 @@ class WGSLCodeGen:
         "callable",
     }
     VECTOR_TYPE_RE = re.compile(r"^(?:vec|float|int|uint|bool|ivec|uvec|bvec)([234])$")
+    FLOAT16_VECTOR_TYPE_RE = re.compile(r"^(?:f16vec|half)([234])$")
     MATRIX_TYPE_RE = re.compile(r"^(?:mat|float)([234])(?:x([234]))?$")
     TYPE_CONSTRUCTOR_RE = re.compile(
-        r"^(?:vec[234]|float[234]|int[234]|uint[234]|bool[234]|ivec[234]|uvec[234]|bvec[234]|mat[234](?:x[234])?|float[234]x[234])$"
+        r"^(?:f16vec[234]|half[234]|vec[234]|float[234]|int[234]|uint[234]|"
+        r"bool[234]|ivec[234]|uvec[234]|bvec[234]|mat[234](?:x[234])?|"
+        r"float[234]x[234])$"
     )
 
     PRIMITIVE_TYPE_MAP = {
@@ -97,6 +100,8 @@ class WGSLCodeGen:
         "unsigned": "u32",
         "float": "f32",
         "f32": "f32",
+        "f16": "f32",
+        "float16": "f32",
         "half": "f32",
         "double": "f32",
         "f64": "f32",
@@ -2515,6 +2520,9 @@ class WGSLCodeGen:
                         "module-scope storage bindings"
                     )
                 return f"array<{self.type_name_string(storage_element)}>"
+            generic_vector = self.generic_vector_type_name(vtype)
+            if generic_vector is not None:
+                return generic_vector
             if vtype.generic_args:
                 raise ValueError("WGSL target does not support generic named types yet")
             return self.map_type_name(vtype.name)
@@ -2593,6 +2601,10 @@ class WGSLCodeGen:
             element = wgsl_vector_match.group(2)
             return f"vec{size}<{self.map_type_name(element)}>"
 
+        float16_vector_match = self.FLOAT16_VECTOR_TYPE_RE.match(lower)
+        if float16_vector_match:
+            return f"vec{float16_vector_match.group(1)}<f32>"
+
         vector_match = self.VECTOR_TYPE_RE.match(lower)
         if vector_match:
             size = vector_match.group(1)
@@ -2612,6 +2624,30 @@ class WGSLCodeGen:
             return f"mat{columns}x{rows}<f32>"
 
         return self.type_identifier_name(normalized)
+
+    def generic_vector_type_name(self, vtype):
+        if not isinstance(vtype, NamedType):
+            return None
+        if str(vtype.name).lower() not in {"vec", "vector"}:
+            return None
+        if len(vtype.generic_args) < 2:
+            return None
+        size = self.literal_integer_value(vtype.generic_args[1])
+        if size not in {2, 3, 4}:
+            return None
+        return f"vec{size}<{self.type_name_string(vtype.generic_args[0])}>"
+
+    def literal_integer_value(self, value):
+        if isinstance(value, int):
+            return value
+        if isinstance(value, LiteralNode):
+            return self.literal_integer_value(value.value)
+        if isinstance(value, str):
+            try:
+                return int(value, 0)
+            except ValueError:
+                return None
+        return None
 
     def is_resource_type_name(self, lower_type_name):
         return lower_type_name in self.RESOURCE_TYPE_NAMES
