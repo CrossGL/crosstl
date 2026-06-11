@@ -15,7 +15,7 @@ shader main {
         return vec4(0.5, 0.5, 0.5, (1.0 - min(line, 1.0)));
     }
 
-    vec4 main(FragmentInput input) @location(0) @ outColor {
+    vec4 main(FragmentInput input) @location(0) {
         vec4 outColor;
         float t = ((-input.nearPoint.y) / (input.farPoint.y - input.nearPoint.y));
         vec3 pos = (input.nearPoint + (t * (input.farPoint - input.nearPoint)));

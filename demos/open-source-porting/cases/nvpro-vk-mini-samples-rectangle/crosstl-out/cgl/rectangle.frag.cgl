@@ -6,7 +6,7 @@ shader main {
     };
 
     fragment {
-    vec4 main(FragmentInput input) @location(0) @ outColor {
+    vec4 main(FragmentInput input) @location(0) {
         vec4 outColor;
         outColor = vec4(input.inFragColor, 1.0);
         return outColor;

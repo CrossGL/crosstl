@@ -9,6 +9,7 @@
       "sourceBackend": "directx",
       "targets": [
         "cgl",
+        "metal",
         "directx",
         "vulkan"
       ],
@@ -22,6 +23,7 @@
       "sourceBackend": "directx",
       "targets": [
         "cgl",
+        "metal",
         "directx",
         "vulkan"
       ],

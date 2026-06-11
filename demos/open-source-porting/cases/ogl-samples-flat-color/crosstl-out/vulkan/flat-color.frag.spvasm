@@ -10,7 +10,7 @@ OpExecutionMode %13 OriginUpperLeft
 OpName %9 "Uniforms"
 OpMemberName %9 0 "Diffuse"
 OpName %11 "Uniforms"
-OpName %16 "main_return_Color"
+OpName %16 "CrossGL_fragment_output_main"
 OpName %18 "Color"
 OpDecorate %9 Block
 OpMemberDecorate %9 0 Offset 0

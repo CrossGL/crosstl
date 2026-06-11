@@ -1,6 +1,6 @@
 [project]
 source_roots = ["."]
 include = ["alpha_stitch.glsl"]
-targets = ["cgl", "opengl", "directx", "vulkan"]
+targets = ["cgl", "opengl", "metal", "directx", "vulkan"]
 output_dir = "crosstl-out"
 external_corpus_manifest = "corpus.json"

@@ -29,7 +29,7 @@ shader main {
         return vec4(linearToSrgb(linear.rgb), linear.a);
     }
 
-    vec4 main(FragmentInput input) @location(0) @ uFragColor {
+    vec4 main(FragmentInput input) @location(0) {
         vec4 uFragColor;
         vec3 dX = ddx(input.frag_pos);
         vec3 dY = ddy(input.frag_pos);

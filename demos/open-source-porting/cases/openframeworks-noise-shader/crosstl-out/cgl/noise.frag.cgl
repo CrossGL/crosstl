@@ -7,7 +7,7 @@ shader main {
     };
 
     fragment {
-    vec4 main() @ fragColor {
+    vec4 main() @location(0) {
         vec4 fragColor;
         float xVal = gl_FragCoord.x;
         float yVal = gl_FragCoord.y;

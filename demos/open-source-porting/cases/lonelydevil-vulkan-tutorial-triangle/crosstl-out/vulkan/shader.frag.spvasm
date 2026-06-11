@@ -9,7 +9,7 @@ OpEntryPoint Fragment %11 "main" %14 %16
 OpExecutionMode %11 OriginUpperLeft
 OpName %9 "FragmentInput"
 OpMemberName %9 0 "fragColor"
-OpName %14 "main_return_outColor"
+OpName %14 "CrossGL_fragment_output_main"
 OpName %16 "CrossGL_fragment_input_input_fragColor"
 OpName %20 "input"
 OpName %22 "outColor"

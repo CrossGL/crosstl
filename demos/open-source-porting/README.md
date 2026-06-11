@@ -48,10 +48,10 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `directx-sdk-samples-tutorial02` | `walbourn/directx-sdk-samples-reworked` at `1ad8f0f6a3e4d9be7e54ca52640ac12b6565ab0c` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Direct3D 11 Tutorial02 effect include unchanged. |
 | `diligent-samples-vrs-cube-vertex` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream VRS cube vertex shader unchanged. The paired fragment-density stage remains outside the checked set because the translator now diagnoses it as unsupported. |
 | `glslang-push-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream push-constant vertex shader unchanged. |
-| `godot-betsy-alpha-stitch` | `godotengine/godot` at `3df26a02c446710c979daa541b74f87edeca81b0` | MIT | GLSL | CrossGL, OpenGL, DirectX, Vulkan | Removes the Godot shader-section marker so the compute shader is standalone GLSL. Metal texture-read coordinate lowering is tracked in issue #887. |
+| `godot-betsy-alpha-stitch` | `godotengine/godot` at `3df26a02c446710c979daa541b74f87edeca81b0` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Removes the Godot shader-section marker so the compute shader is standalone GLSL. |
 | `libgdx-batch-shader` | `libgdx/libgdx` at `846d63a746e4604a7699133f803ff844fdc8c9fe` | Apache-2.0 | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream batch shader pair unchanged apart from line-ending and trailing-whitespace normalization. |
 | `lonelydevil-vulkan-tutorial-triangle` | `lonelydevil/vulkan-tutorial-C-implementation` at `780ff146a6eccd7064a10e86363f3c2f7323825d` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream triangle shader pair unchanged. |
-| `monogame-sprite-effect` | `MonoGame/MonoGame` at `d4893ac09e06bc203792d01d6f151f1891cc1ab5` | MS-PL and MIT | DirectX/HLSL | CrossGL, DirectX, Vulkan | Uses the upstream SpriteEffect source and macro include with whitespace normalization. OpenGL sampler lowering is tracked in issue #900, and Metal texture-resource lowering is tracked in issue #873. |
+| `monogame-sprite-effect` | `MonoGame/MonoGame` at `d4893ac09e06bc203792d01d6f151f1891cc1ab5` | MS-PL and MIT | DirectX/HLSL | CrossGL, Metal, DirectX, Vulkan | Uses the upstream SpriteEffect source and macro include with whitespace normalization. OpenGL sampler lowering is tracked in issue #900; Metal warning cleanup is tracked in issue #917. |
 | `spirv-cross-round-fragment` | `KhronosGroup/SPIRV-Cross` at `146679ff8255a6068518685599d7fb8761d1b570` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream fragment reference shader unchanged. |
 | `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. |
 | `angle-simple-texture-2d` | `google/angle` at `52232eaf409a28d77947df5622af274e1ef770c6` | BSD-style | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses extracted upstream SimpleTexture2D shader strings. |
@@ -61,7 +61,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, Metal, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. Host launch and memory-management integration remain outside the demo scope. |
 | `nvpro-vk-mini-samples-rectangle` | `nvpro-samples/vk_mini_samples` at `994ac9f446ef44962c563b9600c8e9f117a3725d` | Apache-2.0 | GLSL | CrossGL, Metal, OpenGL, Vulkan | Uses the upstream rectangle shader pair unchanged. |
 | `ogl-samples-flat-color` | `g-truc/ogl-samples` at `38cada7a9458864265e25415ae61586d500ff5fc` | MIT | GLSL | CrossGL, Metal, OpenGL, Vulkan | Uses the upstream GLSL 330 flat-color shader pair unchanged. |
-| `openframeworks-noise-shader` | `openframeworks/openFrameworks` at `63eb03828c40de713b85db7810f1c519d8b9b0cc` | MIT | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream noise shader pair with whitespace normalization. DirectX fragment-output semantic lowering is tracked in issue #875. |
+| `openframeworks-noise-shader` | `openframeworks/openFrameworks` at `63eb03828c40de713b85db7810f1c519d8b9b0cc` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream noise shader pair with whitespace normalization. |
 | `opencl-sdk-saxpy` | `KhronosGroup/OpenCL-SDK` at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` | Apache-2.0 | OpenCL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream SAXPY compute kernel unchanged. |
 | `rocm-examples-add-kernel` | `ROCm/rocm-examples` at `cf369da68f209c315074204bd0eb61d1a5c015d1` | MIT | HIP | CrossGL, Metal, Vulkan | Uses the upstream sphinx-marked add-kernel slice. Host HIP runtime setup remains outside the demo scope. |
 | `raylib-base-fragment` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream base fragment shader unchanged. |
@@ -110,25 +110,23 @@ checked with the other source targets.
 The `MonoGame/MonoGame` SpriteEffect case keeps the upstream effect source and
 macro include semantically unchanged, with indentation normalized by repository
 formatting. DirectX output is checked after issue #869 restored valid HLSL
-resource declarations. OpenGL is excluded because the generated GLSL still
-retains HLSL-style sampler declarations and stage structs, tracked in issue
-#900. Metal is excluded because texture-resource lookup for this effect still
-fails during Metal generation, tracked in issue #873.
+resource declarations. Metal output was retested after issue #873 closed and is
+now checked. OpenGL is excluded because the generated GLSL still retains
+HLSL-style sampler declarations and stage structs, tracked in issue #900. The
+Metal artifact compiles, with remaining warning cleanup tracked in issue #917.
 
 The `openframeworks/openFrameworks` noise shader pair keeps the upstream shader
 statements unchanged, with indentation and trailing whitespace normalized by
 repository formatting. OpenGL and Metal output were retested after issue #840
-and issue #841 closed and are now checked. DirectX is excluded because the
-generated pixel shader currently emits a user output name as an HLSL semantic,
-tracked in issue #875.
+and issue #841 closed and are now checked. DirectX output was retested after
+issue #875 closed and is now checked.
 
 The `godotengine/godot` Betsy alpha-stitch case removes the upstream
 `#[compute]` shader-section marker before `#version`. That marker is part of
 Godot's shader packaging format and is not valid standalone GLSL; shader
 statements, resource declarations, and entry-point logic are unchanged. Vulkan
 and DirectX output were retested after issue #829 closed and are now checked.
-Metal is excluded because generated integer texture reads use signed
-coordinates that the Metal compiler rejects, tracked in issue #887.
+Metal output was retested after issue #887 closed and is now checked.
 
 The `glfw/glfw` OpenGL triangle shader strings were tested as a candidate and
 exposed a CrossGL intermediate keyword collision: the fragment shader uses

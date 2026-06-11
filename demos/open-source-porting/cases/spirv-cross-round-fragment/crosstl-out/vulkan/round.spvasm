@@ -10,7 +10,7 @@ OpExecutionMode %11 OriginUpperLeft
 OpName %9 "FragmentInput"
 OpMemberName %9 0 "vA"
 OpMemberName %9 1 "vB"
-OpName %14 "main_return_FragColor"
+OpName %14 "CrossGL_fragment_output_main"
 OpName %16 "CrossGL_fragment_input_input_vA"
 OpName %19 "CrossGL_fragment_input_input_vB"
 OpName %23 "input"
