@@ -5019,6 +5019,34 @@ def test_hlsl_output_return_semantics_still_emit():
     assert "uint PSMain(): SV_TARGET3" in integer_target_output
     assert "gl_FragData" not in integer_target_output
 
+    scalar_target_code = """
+    shader ValidScalarTargetReturnSemantic {
+        fragment {
+            float main() @ SV_Target0 {
+                return 1.0;
+            }
+        }
+    }
+    """
+    scalar_target_output = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(scalar_target_code), "fragment"
+    )
+    assert "float PSMain(): SV_Target0" in scalar_target_output
+
+    integer_vector_target_code = """
+    shader ValidIntegerVectorTargetReturnSemantic {
+        fragment {
+            ivec2 main() @ SV_Target1 {
+                return ivec2(1);
+            }
+        }
+    }
+    """
+    integer_vector_target_output = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(integer_vector_target_code), "fragment"
+    )
+    assert "int2 PSMain(): SV_Target1" in integer_vector_target_output
+
     coverage_code = """
     shader ValidCoverageReturnSemantic {
         fragment {
@@ -5037,8 +5065,8 @@ def test_hlsl_output_return_semantics_still_emit():
     location_code = """
     shader ValidLocationReturnSemantic {
         fragment {
-            vec4 main() @ location(0) {
-                return vec4(1.0);
+            uint main() @ location(0) {
+                return 1u;
             }
         }
     }
@@ -5046,7 +5074,7 @@ def test_hlsl_output_return_semantics_still_emit():
     location_output = HLSLCodeGen().generate_stage(
         crosstl.translator.parse(location_code), "fragment"
     )
-    assert "float4 PSMain(): SV_Target0" in location_output
+    assert "uint PSMain(): SV_Target0" in location_output
     assert ": location" not in location_output
 
 
@@ -5054,10 +5082,16 @@ def test_hlsl_output_return_semantics_still_emit():
     ("stage", "return_type", "semantic", "value", "hlsl_semantic", "expected_type"),
     [
         ("vertex", "float", "gl_Position", "0.0", "SV_POSITION", "float4"),
-        ("fragment", "vec3", "gl_FragColor", "vec3(0.0)", "SV_TARGET", "float4"),
         ("fragment", "vec4", "gl_FragDepth", "vec4(0.0)", "SV_DEPTH", "float"),
         ("fragment", "int", "gl_SampleMask", "1", "SV_Coverage", "uint"),
-        ("fragment", "float", "SV_TARGET1", "0.0", "SV_TARGET1", "float4"),
+        (
+            "fragment",
+            "bool",
+            "SV_TARGET1",
+            "true",
+            "SV_TARGET1",
+            "scalar or vector numeric render target type",
+        ),
     ],
 )
 def test_hlsl_function_return_output_builtin_types_are_validated(
@@ -5452,7 +5486,9 @@ def test_hlsl_struct_output_builtin_array_member_types_are_validated():
     }
     """
 
-    with pytest.raises(ValueError, match="SV_TARGET.*float4"):
+    with pytest.raises(
+        ValueError, match="SV_TARGET.*scalar or vector numeric render target type"
+    ):
         HLSLCodeGen().generate(crosstl.translator.parse(code))
 
 
@@ -5489,10 +5525,13 @@ def test_hlsl_struct_return_output_builtin_stages_are_validated(
     ("member_decl", "hlsl_semantic", "expected_type"),
     [
         ("float position @ gl_Position", "SV_POSITION", "float4"),
-        ("vec3 color @ gl_FragColor", "SV_TARGET", "float4"),
         ("vec4 depth @ gl_FragDepth", "SV_DEPTH", "float"),
         ("int mask @ gl_SampleMask", "SV_Coverage", "uint"),
-        ("float rawColor @ SV_TARGET1", "SV_TARGET1", "float4"),
+        (
+            "bool rawColor @ SV_TARGET1",
+            "SV_TARGET1",
+            "scalar or vector numeric render target type",
+        ),
     ],
 )
 def test_hlsl_struct_output_builtin_types_are_validated(
