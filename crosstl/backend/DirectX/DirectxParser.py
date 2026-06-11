@@ -477,6 +477,8 @@ class HLSLParser:
                 )
                 global_variables.extend(declarations)
 
+        self.apply_struct_parameter_stage_qualifiers(functions, structs)
+
         return ShaderNode(
             includes=[],
             functions=functions,
@@ -2167,6 +2169,85 @@ class HLSLParser:
                 return "compute"
         return None
 
+    def apply_struct_parameter_stage_qualifiers(self, functions, structs):
+        structs_by_name = {
+            getattr(struct, "name", None): struct
+            for struct in structs
+            if isinstance(struct, StructNode)
+            and not getattr(struct, "is_forward_declaration", False)
+            and getattr(struct, "name", None)
+        }
+        if not structs_by_name:
+            return
+
+        for function in functions:
+            if getattr(function, "qualifier", None):
+                continue
+            qualifier = self.infer_struct_parameter_stage_qualifier(
+                function, structs_by_name
+            )
+            if qualifier is None:
+                continue
+            function.qualifier = qualifier
+            qualifiers = list(getattr(function, "qualifiers", []) or [])
+            if qualifier not in qualifiers:
+                qualifiers.append(qualifier)
+            function.qualifiers = qualifiers
+
+    def infer_struct_parameter_stage_qualifier(self, function, structs_by_name):
+        if str(getattr(function, "name", "")).lower() != "main":
+            return None
+
+        input_semantics = set()
+        output_semantics = set()
+        has_struct_output = False
+
+        for param in getattr(function, "params", []) or []:
+            struct = self.parameter_struct_node(param, structs_by_name)
+            if struct is None:
+                continue
+
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(param, "qualifiers", []) or []
+            }
+            param_semantics = self.struct_member_stage_semantics(struct)
+            if qualifiers & {"out", "inout"}:
+                has_struct_output = True
+                output_semantics.update(param_semantics)
+            if not qualifiers or "in" in qualifiers or "inout" in qualifiers:
+                input_semantics.update(param_semantics)
+
+        if not has_struct_output:
+            return None
+        if any(self.is_fragment_output_semantic(name) for name in output_semantics):
+            return "fragment"
+        if any(self.is_vertex_output_semantic(name) for name in output_semantics):
+            return "vertex"
+        if any(self.is_vertex_input_semantic(name) for name in input_semantics) or any(
+            self.is_vertex_attribute_semantic(name) for name in input_semantics
+        ):
+            return "vertex"
+        return None
+
+    def parameter_struct_node(self, param, structs_by_name):
+        type_name = str(getattr(param, "vtype", "") or "").strip()
+        if not type_name:
+            return None
+        if "<" in type_name and type_name.endswith(">"):
+            type_name = type_name.split("<", 1)[0].strip()
+        return structs_by_name.get(type_name)
+
+    def struct_member_stage_semantics(self, struct):
+        semantics = set()
+        for member in getattr(struct, "members", []) or []:
+            semantics.update(
+                self.semantic_names_for_stage_inference(
+                    getattr(member, "semantic", None)
+                )
+            )
+        return semantics
+
     def contains_function_call(self, node, function_name):
         target_name = str(function_name).lower()
         visited = set()
@@ -2233,6 +2314,22 @@ class HLSLParser:
 
     def is_vertex_input_semantic(self, semantic):
         return semantic in {"SV_VERTEXID", "SV_INSTANCEID"}
+
+    def is_vertex_attribute_semantic(self, semantic):
+        return semantic.startswith(
+            (
+                "ATTRIB",
+                "POSITION",
+                "NORMAL",
+                "TEXCOORD",
+                "COLOR",
+                "TANGENT",
+                "BINORMAL",
+                "BLENDWEIGHT",
+                "BLENDINDICES",
+                "PSIZE",
+            )
+        )
 
     def parse_parameters(self):
         self.eat("LPAREN")

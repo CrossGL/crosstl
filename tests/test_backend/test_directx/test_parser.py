@@ -230,6 +230,48 @@ def test_parse_vertex_pixel_shader():
     assert_parses(VERTEX_PIXEL_HLSL)
 
 
+def test_parse_main_struct_inout_parameters_infer_stage_qualifiers():
+    vertex_ast = parse_code(textwrap.dedent("""
+            struct VSInput {
+                float3 position : ATTRIB0;
+                float4 color : COLOR0;
+            };
+
+            struct VSOutput {
+                float4 position : SV_POSITION;
+                float4 color : COLOR0;
+            };
+
+            void main(in VSInput input, out VSOutput output) {
+                output.position = float4(input.position, 1.0);
+                output.color = input.color;
+            }
+            """))
+
+    fragment_ast = parse_code(textwrap.dedent("""
+            struct PSInput {
+                float4 position : SV_POSITION;
+                float4 color : COLOR0;
+            };
+
+            struct PSOutput {
+                float4 color : SV_TARGET;
+            };
+
+            void main(in PSInput input, out PSOutput output) {
+                output.color = input.color;
+            }
+            """))
+
+    vertex_main = vertex_ast.functions[0]
+    fragment_main = fragment_ast.functions[0]
+
+    assert vertex_main.qualifier == "vertex"
+    assert vertex_main.qualifiers == ["vertex"]
+    assert fragment_main.qualifier == "fragment"
+    assert fragment_main.qualifiers == ["fragment"]
+
+
 def test_parse_brace_initializer_declarations():
     ast = parse_code(textwrap.dedent("""
             struct MyPayload {
