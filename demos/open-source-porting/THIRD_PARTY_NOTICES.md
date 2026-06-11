@@ -205,7 +205,9 @@ should be treated with the same upstream license context when redistributed.
 
 - Repository: https://github.com/KhronosGroup/OpenCL-SDK
 - Commit: `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f`
-- Source path: `samples/core/saxpy/saxpy.cl`
+- Source paths:
+  - `samples/core/reduce/reduce.cl`
+  - `samples/core/saxpy/saxpy.cl`
 - License: Apache-2.0
 - License URL:
   https://github.com/KhronosGroup/OpenCL-SDK/blob/e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f/LICENSE
