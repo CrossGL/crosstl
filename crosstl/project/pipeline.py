@@ -2089,6 +2089,31 @@ DEFINE_DIRECTIVE_RE = re.compile(
 PREPROCESSOR_DIAGNOSTIC_DIRECTIVE_RE = re.compile(
     r"^\s*#\s*(?P<directive>error|warning)\b(?P<body>.*?)\s*$"
 )
+PREPROCESSOR_DIRECTIVE_RE = re.compile(
+    r"^\s*#\s*(?P<directive>[A-Za-z_][A-Za-z0-9_]*)\b(?P<body>.*?)\s*$"
+)
+FUNCTION_LIKE_DEFINE_RE = re.compile(
+    r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\((?P<params>.*?)\)(?P<replacement>.*)$"
+)
+PROJECT_KNOWN_PREPROCESSOR_DIRECTIVES = frozenset(
+    (
+        "define",
+        "elif",
+        "else",
+        "endif",
+        "error",
+        "extension",
+        "if",
+        "ifdef",
+        "ifndef",
+        "include",
+        "line",
+        "pragma",
+        "undef",
+        "version",
+        "warning",
+    )
+)
 REPORT_PATH_BARE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -4740,6 +4765,143 @@ def _scan_preprocessor_diagnostic_lines(
     return diagnostics
 
 
+def _unsupported_macro_form_diagnostic(
+    *,
+    relative_path: str,
+    line_number: int,
+    column: int,
+    source_backend: str,
+    reason: str,
+    form: str,
+    variant: str | None = None,
+) -> ProjectDiagnostic:
+    context = f" for variant {variant}" if variant else ""
+    return ProjectDiagnostic(
+        severity="warning",
+        code="project.scan.unsupported-macro-form",
+        message=(
+            f"Native macro form in {relative_path}:{line_number}{context} "
+            f"is not covered by project macro semantic planning for the "
+            f"{source_backend} frontend: {reason} ({form})."
+        ),
+        location=SourceLocation(
+            file=relative_path,
+            line=line_number,
+            column=column,
+            end_line=line_number,
+            end_column=column,
+        ),
+        source_backend=source_backend,
+        variant=variant,
+        missing_capabilities=["macro.native"],
+    )
+
+
+def _macro_form_label(directive: str, body: str) -> str:
+    if directive == "define":
+        body = _strip_preprocessor_line_comment(body)
+        function_like = FUNCTION_LIKE_DEFINE_RE.match(body)
+        if function_like:
+            return f"function-like define {function_like.group('name')}"
+        parts = body.strip().split(maxsplit=1)
+        if parts:
+            return f"object-like define {parts[0]}"
+        return "malformed define"
+    if directive == "undef":
+        parts = body.strip().split(maxsplit=1)
+        return f"undef {parts[0]}" if parts else "malformed undef"
+    return f"#{directive}"
+
+
+def _unsupported_macro_form_reason(
+    *,
+    directive: str,
+    body: str,
+    source_backend: str,
+) -> str | None:
+    if directive not in PROJECT_KNOWN_PREPROCESSOR_DIRECTIVES:
+        return "unknown preprocessor directive is preserved for backend-native handling"
+
+    supports_defines = _source_frontend_supports_lexer_keyword(source_backend, "defines")
+    if directive in {"define", "undef"} and not supports_defines:
+        return "source frontend does not accept project define forwarding"
+
+    if directive != "define":
+        return None
+
+    stripped = _strip_preprocessor_line_comment(body)
+    if not DEFINE_DIRECTIVE_RE.match(f"#define {stripped}"):
+        return "malformed define directive"
+
+    function_like = FUNCTION_LIKE_DEFINE_RE.match(stripped)
+    if function_like:
+        replacement = function_like.group("replacement")
+    else:
+        define_parts = stripped.split(None, 1)
+        replacement = define_parts[1] if len(define_parts) > 1 else ""
+    if "__VA_OPT__" in replacement:
+        return "__VA_OPT__ variadic expansion is not modeled by project macro planning"
+    if "#@" in replacement:
+        return "charizing macro operator is not modeled by project macro planning"
+    return None
+
+
+def _scan_native_macro_semantic_lines(
+    config: ProjectConfig,
+    lines: Sequence[str],
+    relative_path: str,
+    *,
+    source_backend: str,
+    seen: set[tuple[str, int, str, str, str | None]],
+    variant: str | None = None,
+) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    conditional_stack: list[_IncludeConditionalFrame] = []
+    for line_number, line in enumerate(lines, start=1):
+        directive_match = PREPROCESSOR_DIRECTIVE_RE.match(line)
+        if not directive_match:
+            continue
+
+        directive = directive_match.group("directive")
+        body = directive_match.group("body")
+        if directive in {"if", "ifdef", "ifndef", "elif", "else", "endif"}:
+            _apply_include_conditional_directive(
+                config,
+                conditional_stack,
+                directive,
+                body,
+            )
+            continue
+
+        if not _include_conditionals_active(conditional_stack):
+            continue
+
+        reason = _unsupported_macro_form_reason(
+            directive=directive,
+            body=body,
+            source_backend=source_backend,
+        )
+        if reason is None:
+            continue
+        form = _macro_form_label(directive, body)
+        key = (relative_path, line_number, directive, form, variant)
+        if key in seen:
+            continue
+        seen.add(key)
+        diagnostics.append(
+            _unsupported_macro_form_diagnostic(
+                relative_path=relative_path,
+                line_number=line_number,
+                column=max(1, line.find("#") + 1),
+                source_backend=source_backend,
+                reason=reason,
+                form=form,
+                variant=variant,
+            )
+        )
+    return diagnostics
+
+
 def _include_conditionals_active(stack: Sequence[_IncludeConditionalFrame]) -> bool:
     return all(frame.branch_active for frame in stack)
 
@@ -4930,7 +5092,9 @@ def _scan_resolved_include_dependencies(
     scanned_sources: set[str],
     define_shadowing_seen: set[tuple[str, int, str, str]],
     preprocessor_seen: set[tuple[str, int, str, str]],
+    macro_semantics_seen: set[tuple[str, int, str, str, str | None]],
     diagnostic_config: ProjectConfig,
+    source_backend: str,
     variant: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
     if resolved_path in include_stack:
@@ -4954,7 +5118,9 @@ def _scan_resolved_include_dependencies(
         scanned_sources=scanned_sources,
         define_shadowing_seen=define_shadowing_seen,
         preprocessor_seen=preprocessor_seen,
+        macro_semantics_seen=macro_semantics_seen,
         diagnostic_config=diagnostic_config,
+        source_backend=source_backend,
         variant=variant,
     )
 
@@ -4969,7 +5135,9 @@ def _scan_include_dependencies_for_source(
     scanned_sources: set[str],
     define_shadowing_seen: set[tuple[str, int, str, str]],
     preprocessor_seen: set[tuple[str, int, str, str]],
+    macro_semantics_seen: set[tuple[str, int, str, str, str | None]],
     diagnostic_config: ProjectConfig,
+    source_backend: str,
     variant: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
     dependencies: list[dict[str, Any]] = []
@@ -5009,6 +5177,16 @@ def _scan_include_dependencies_for_source(
             scan_lines,
             source_relative_path,
             seen=preprocessor_seen,
+            variant=variant,
+        )
+    )
+    diagnostics.extend(
+        _scan_native_macro_semantic_lines(
+            config,
+            scan_lines,
+            source_relative_path,
+            source_backend=source_backend,
+            seen=macro_semantics_seen,
             variant=variant,
         )
     )
@@ -5091,7 +5269,9 @@ def _scan_include_dependencies_for_source(
                             scanned_sources=scanned_sources,
                             define_shadowing_seen=define_shadowing_seen,
                             preprocessor_seen=preprocessor_seen,
+                            macro_semantics_seen=macro_semantics_seen,
                             diagnostic_config=diagnostic_config,
+                            source_backend=source_backend,
                             variant=variant,
                         )
                     )
@@ -5174,7 +5354,9 @@ def _scan_include_dependencies_for_source(
                     scanned_sources=scanned_sources,
                     define_shadowing_seen=define_shadowing_seen,
                     preprocessor_seen=preprocessor_seen,
+                    macro_semantics_seen=macro_semantics_seen,
                     diagnostic_config=diagnostic_config,
+                    source_backend=source_backend,
                     variant=variant,
                 )
             )
@@ -5185,12 +5367,16 @@ def _scan_include_dependencies_for_source(
 
 
 def _scan_include_dependencies(
-    config: ProjectConfig, unit_path: Path, relative_path: str
+    config: ProjectConfig,
+    unit_path: Path,
+    relative_path: str,
+    source_backend: str,
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
     dependencies: list[dict[str, Any]] = []
     diagnostics: list[ProjectDiagnostic] = []
     define_shadowing_seen: set[tuple[str, int, str, str]] = set()
     preprocessor_seen: set[tuple[str, int, str, str]] = set()
+    macro_semantics_seen: set[tuple[str, int, str, str, str | None]] = set()
     for variant, defines in _variant_jobs(config):
         scan_config = (
             replace(config, defines=defines) if variant is not None else config
@@ -5205,7 +5391,9 @@ def _scan_include_dependencies(
                 scanned_sources=set(),
                 define_shadowing_seen=define_shadowing_seen,
                 preprocessor_seen=preprocessor_seen,
+                macro_semantics_seen=macro_semantics_seen,
                 diagnostic_config=config,
+                source_backend=source_backend,
                 variant=variant,
             )
         )
@@ -6229,7 +6417,7 @@ def scan_project(
             continue
 
         include_dependencies, include_diagnostics = _scan_include_dependencies(
-            config, path, relative_path
+            config, path, relative_path, source_spec.name
         )
         diagnostics.extend(include_diagnostics)
         units.append(
@@ -19750,6 +19938,7 @@ def _current_include_dependency_scan_contract_reasons(
         include_config,
         unit_path,
         unit_path_value,
+        str(unit.get("sourceBackend") or ""),
     )
     current_keys = [
         key
@@ -19865,6 +20054,7 @@ def _current_include_scan_diagnostic_contract_reasons(
                 include_config,
                 unit_path,
                 unit_path_value,
+                str(unit.get("sourceBackend") or ""),
             )
         except (OSError, ValueError):
             continue

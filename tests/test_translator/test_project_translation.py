@@ -4191,6 +4191,134 @@ def test_scan_project_reports_include_define_shadowing(tmp_path):
     ] == [("material.inc", "resolved")]
 
 
+def test_scan_project_accepts_supported_native_macro_forms_across_source_frontends(
+    tmp_path,
+):
+    register_default_sources()
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    source_names = [
+        name
+        for name in sorted(SOURCE_REGISTRY.names())
+        if SOURCE_REGISTRY.get(name).supports_lexer_keyword("defines")
+    ]
+    assert source_names
+    source_overrides = []
+    for source_name in source_names:
+        shader_path = shader_dir / f"{source_name}.shader"
+        shader_path.write_text(
+            textwrap.dedent("""
+                #define OBJECT_MACRO 1
+                #define FUNCTION_MACRO(value) ((value) + OBJECT_MACRO)
+                #pragma once
+                void main() {}
+                """).strip(),
+            encoding="utf-8",
+        )
+        source_overrides.append(f'"shaders/{source_name}.shader" = "{source_name}"')
+    source_override_text = "\n".join(source_overrides)
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(f"""
+            [project]
+            source_roots = ["shaders"]
+
+            [project.sources]
+            {source_override_text}
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["cgl"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["summary"]["unitsBySourceBackend"] == {
+        source_name: 1 for source_name in source_names
+    }
+
+
+def test_scan_project_reports_unsupported_macro_forms_across_source_frontends(
+    tmp_path,
+):
+    register_default_sources()
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    source_names = sorted(SOURCE_REGISTRY.names())
+    assert source_names
+    source_overrides = []
+    for source_name in source_names:
+        shader_path = shader_dir / f"{source_name}.shader"
+        shader_path.write_text(
+            textwrap.dedent("""
+                #if defined(ENABLE_NATIVE_MACROS)
+                #define LOG_MESSAGE(fmt, ...) __VA_OPT__(fmt)
+                #endif
+                void main() {}
+                """).strip(),
+            encoding="utf-8",
+        )
+        source_overrides.append(f'"shaders/{source_name}.shader" = "{source_name}"')
+    source_override_text = "\n".join(source_overrides)
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(f"""
+            [project]
+            source_roots = ["shaders"]
+
+            [project.defines]
+            ENABLE_NATIVE_MACROS = "1"
+
+            [project.sources]
+            {source_override_text}
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["cgl"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    diagnostics = [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.scan.unsupported-macro-form"
+    ]
+
+    assert validation["success"] is True
+    assert len(diagnostics) == len(source_names)
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.scan.unsupported-macro-form": len(source_names)
+    }
+    assert payload["summary"]["diagnosticsBySourceBackend"] == {
+        source_name: 1 for source_name in source_names
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "macro.native": len(source_names)
+    }
+    assert {
+        diagnostic["sourceBackend"]: diagnostic["location"]["file"]
+        for diagnostic in diagnostics
+    } == {
+        source_name: f"shaders/{source_name}.shader" for source_name in source_names
+    }
+    for diagnostic in diagnostics:
+        assert diagnostic["missingCapabilities"] == ["macro.native"]
+        assert diagnostic["location"]["line"] == 2
+        if SOURCE_REGISTRY.get(diagnostic["sourceBackend"]).supports_lexer_keyword(
+            "defines"
+        ):
+            assert "__VA_OPT__ variadic expansion" in diagnostic["message"]
+        else:
+            assert "does not accept project define forwarding" in diagnostic["message"]
+
+
 def test_scan_project_scopes_define_shadowing_to_selected_variants(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
