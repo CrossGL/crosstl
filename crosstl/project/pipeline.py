@@ -8890,6 +8890,7 @@ class _MetalTemplateTypeDeclaration:
     parameters: tuple[str, ...]
     span: tuple[int, int]
     location: SourceLocation
+    is_functor: bool = False
 
 
 def _materialize_inherited_source_template_helpers(
@@ -11785,11 +11786,18 @@ def _template_materialization_unsupported_message(
             ):
                 declaration_text = f"{file_name}:{line}:{column}"
         signature = record.get("requiredSignature", name)
-        details.append(
-            f"{name} missing {missing_text} "
-            f"(declaration {declaration_text}, target {target}, "
-            f"required {signature})"
-        )
+        if missing:
+            details.append(
+                f"{name} missing {missing_text} "
+                f"(declaration {declaration_text}, target {target}, "
+                f"required {signature})"
+            )
+        else:
+            details.append(
+                f"{name} has an unmaterialized concrete template functor use "
+                f"(declaration {declaration_text}, target {target}, "
+                f"required {signature})"
+            )
     return (
         f"Template-hostile target '{target}' requires concrete template arguments "
         f"before translating '{unit.relative_path}': " + "; ".join(details)
@@ -11910,10 +11918,13 @@ def _metal_template_type_declarations(
             end = body_end
             if end < len(source) and source[end] == ";":
                 end += 1
+            body = source[body_start + 1 : body_end]
         elif semicolon is not None:
             end = semicolon + 1
+            body = ""
         else:
             end = declaration_start + declaration_match.end()
+            body = ""
 
         location = _source_location_at_offset(unit, source, start, max(end - start, 0))
         declarations.append(
@@ -11922,6 +11933,7 @@ def _metal_template_type_declarations(
                 parameters=parameters,
                 span=(start, end),
                 location=location,
+                is_functor=re.search(r"\boperator\s*\(\s*\)", body) is not None,
             )
         )
         pos = max(end, declaration_start + 1)
@@ -12033,6 +12045,88 @@ def _unresolved_metal_template_type_records(
     return records
 
 
+def _unmaterialized_metal_template_functor_records(
+    *,
+    preprocessor: Any,
+    unit: ProjectTranslationUnit,
+    source: str,
+    target: str,
+) -> list[dict[str, Any]]:
+    declarations = [
+        declaration
+        for declaration in _metal_template_type_declarations(preprocessor, unit, source)
+        if declaration.is_functor
+    ]
+    if not declarations:
+        return []
+
+    declarations_by_name = {
+        declaration.name: declaration for declaration in declarations
+    }
+    names_pattern = "|".join(
+        re.escape(name) for name in sorted(declarations_by_name, key=len, reverse=True)
+    )
+    if not names_pattern:
+        return []
+
+    template_parameter_names = {
+        parameter
+        for declaration in declarations
+        for parameter in declaration.parameters
+    }
+    declaration_spans = preprocessor._find_template_declaration_spans(source)
+    masked_source = _masked_metal_non_code_text(source)
+    records: list[dict[str, Any]] = []
+    seen_records: set[tuple[str, str]] = set()
+    for match in re.finditer(rf"\b(?P<name>{names_pattern})\s*<", masked_source):
+        if _source_offset_in_spans(match.start(), declaration_spans):
+            continue
+        declaration = declarations_by_name[match.group("name")]
+        angle_start = masked_source.find("<", match.start())
+        angle_end = preprocessor._find_matching_angle(source, angle_start)
+        if angle_end is None:
+            continue
+        arguments = [
+            argument.strip()
+            for argument in preprocessor._split_top_level_commas(
+                source[angle_start + 1 : angle_end]
+            )
+        ]
+        missing: list[str] = []
+        for argument in arguments:
+            for parameter in _template_argument_missing_parameters(
+                argument,
+                template_parameter_names,
+            ):
+                if parameter not in missing:
+                    missing.append(parameter)
+        if missing:
+            continue
+
+        required_signature = f"{declaration.name}<{', '.join(arguments)}>"
+        key = (declaration.name, required_signature)
+        if key in seen_records:
+            continue
+        seen_records.add(key)
+        records.append(
+            {
+                "name": declaration.name,
+                "parameters": list(declaration.parameters),
+                "missingParameters": [],
+                "reason": "missing-template-arguments",
+                "sourceDeclaration": {
+                    "file": declaration.location.file,
+                    "line": declaration.location.line,
+                    "column": declaration.location.column,
+                    "name": declaration.name,
+                },
+                "target": target,
+                "requiredSignature": required_signature,
+            }
+        )
+    return records
+
+
 def _project_template_materialization_for_artifact(
     *,
     unit: ProjectTranslationUnit,
@@ -12098,7 +12192,17 @@ def _project_template_materialization_for_artifact(
         source=discovery_source,
         target=target,
     )
-    if not source_template_parameters and not unresolved_type_records:
+    unmaterialized_functor_records = _unmaterialized_metal_template_functor_records(
+        preprocessor=discovery_preprocessor,
+        unit=unit,
+        source=discovery_source,
+        target=target,
+    )
+    unsupported_type_records = [
+        *unresolved_type_records,
+        *unmaterialized_functor_records,
+    ]
+    if not source_template_parameters and not unsupported_type_records:
         return None
 
     configured_parameters = {
@@ -12119,17 +12223,17 @@ def _project_template_materialization_for_artifact(
         for name, value in defines.items()
         if name not in configured_parameters
     }
-    if unresolved_type_records:
+    if unsupported_type_records:
         metadata = _template_materialization_metadata(
             specializations=[],
             configured_parameters={},
             configured_parameter_sources={},
-            unsupported=unresolved_type_records,
+            unsupported=unsupported_type_records,
         )
         message = _template_materialization_unsupported_message(
             target,
             unit,
-            unresolved_type_records,
+            unsupported_type_records,
         )
         return ProjectTemplateMaterializedSource(
             text=discovery_source,
@@ -12146,7 +12250,7 @@ def _project_template_materialization_for_artifact(
                     message=message,
                     location=_template_materialization_unsupported_location(
                         unit,
-                        unresolved_type_records,
+                        unsupported_type_records,
                     ),
                     target=target,
                     source_backend=unit.source_backend,
