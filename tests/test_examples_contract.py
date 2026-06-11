@@ -77,9 +77,13 @@ FULL_BACKEND_EXAMPLE_CASES = tuple(
 KNOWN_PRIMARY_GRAPHICS_GAPS = ()
 
 PRIMARY_GRAPHICS_FIXED_CASES = (
+    ("advanced/GenericPatternMatching.cgl", "cuda"),
     ("advanced/GenericPatternMatching.cgl", "directx"),
+    ("advanced/GenericPatternMatching.cgl", "hip"),
     ("advanced/GenericPatternMatching.cgl", "metal"),
     ("advanced/GenericPatternMatching.cgl", "opengl"),
+    ("advanced/GenericPatternMatching.cgl", "slang"),
+    ("advanced/GenericPatternMatching.cgl", "vulkan"),
     ("advanced/GenericPatternMatching.cgl", "webgl"),
     ("cross_platform/UniversalPBRShader.cgl", "directx"),
     ("cross_platform/UniversalPBRShader.cgl", "metal"),
@@ -106,6 +110,8 @@ GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES = (
         "Mojo generic payload enum specializations must be concrete",
     ),
 )
+
+GENERIC_FUNCTION_KNOWN_LEAK_BACKEND_CASES = ()
 
 KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
     (
@@ -271,6 +277,19 @@ def test_generic_function_examples_report_backend_diagnostics(
         crosstl.translate(
             str(_example_path(relative_path)), backend=backend, format_output=False
         )
+
+
+@pytest.mark.parametrize(
+    "relative_path,backend,expected_marker", GENERIC_FUNCTION_KNOWN_LEAK_BACKEND_CASES
+)
+def test_generic_function_examples_track_known_backend_generic_leaks(
+    relative_path, backend, expected_marker
+):
+    generated = crosstl.translate(
+        str(_example_path(relative_path)), backend=backend, format_output=False
+    )
+
+    assert expected_marker in generated
 
 
 @pytest.mark.parametrize(

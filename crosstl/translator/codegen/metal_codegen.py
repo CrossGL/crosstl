@@ -619,6 +619,78 @@ class MetalCodeGen:
             "uint",
         ),
     }
+    METAL_GLSL_SUBGROUP_VALUE_INTRINSICS = {
+        "subgroupAdd",
+        "subgroupMul",
+        "subgroupMin",
+        "subgroupMax",
+        "subgroupAnd",
+        "subgroupOr",
+        "subgroupXor",
+        "subgroupInclusiveAdd",
+        "subgroupInclusiveMul",
+        "subgroupInclusiveMin",
+        "subgroupInclusiveMax",
+        "subgroupInclusiveAnd",
+        "subgroupInclusiveOr",
+        "subgroupInclusiveXor",
+        "subgroupExclusiveAdd",
+        "subgroupExclusiveMul",
+        "subgroupExclusiveMin",
+        "subgroupExclusiveMax",
+        "subgroupExclusiveAnd",
+        "subgroupExclusiveOr",
+        "subgroupExclusiveXor",
+        "subgroupBroadcast",
+        "subgroupBroadcastFirst",
+        "subgroupShuffle",
+        "subgroupShuffleXor",
+        "subgroupShuffleUp",
+        "subgroupShuffleDown",
+        "subgroupClusteredAdd",
+        "subgroupClusteredMul",
+        "subgroupClusteredMin",
+        "subgroupClusteredMax",
+        "subgroupClusteredAnd",
+        "subgroupClusteredOr",
+        "subgroupClusteredXor",
+        "subgroupQuadBroadcast",
+        "subgroupQuadSwapHorizontal",
+        "subgroupQuadSwapVertical",
+        "subgroupQuadSwapDiagonal",
+    }
+    METAL_GLSL_SUBGROUP_BOOL_RESULT_INTRINSICS = {
+        "subgroupElect",
+        "subgroupAll",
+        "subgroupAny",
+        "subgroupAllEqual",
+        "subgroupInverseBallot",
+        "subgroupBallotBitExtract",
+    }
+    METAL_GLSL_SUBGROUP_UINT_RESULT_INTRINSICS = {
+        "subgroupBallotBitCount",
+        "subgroupBallotInclusiveBitCount",
+        "subgroupBallotExclusiveBitCount",
+        "subgroupBallotFindLSB",
+        "subgroupBallotFindMSB",
+    }
+    METAL_GLSL_SUBGROUP_UINT4_RESULT_INTRINSICS = {
+        "subgroupBallot",
+    }
+    METAL_GLSL_SUBGROUP_VOID_RESULT_INTRINSICS = {
+        "subgroupBarrier",
+        "subgroupMemoryBarrier",
+        "subgroupMemoryBarrierBuffer",
+        "subgroupMemoryBarrierShared",
+        "subgroupMemoryBarrierImage",
+    }
+    METAL_GLSL_SUBGROUP_INTRINSICS = (
+        METAL_GLSL_SUBGROUP_VALUE_INTRINSICS
+        | METAL_GLSL_SUBGROUP_BOOL_RESULT_INTRINSICS
+        | METAL_GLSL_SUBGROUP_UINT_RESULT_INTRINSICS
+        | METAL_GLSL_SUBGROUP_UINT4_RESULT_INTRINSICS
+        | METAL_GLSL_SUBGROUP_VOID_RESULT_INTRINSICS
+    )
     METAL_RAY_FLAG_VALUES = {
         "RAY_FLAG_NONE": 0x00,
         "RAY_FLAG_FORCE_OPAQUE": 0x01,
@@ -4731,6 +4803,37 @@ class MetalCodeGen:
             f"requires compute-stage {attribute} value */"
         )
 
+    def metal_glsl_subgroup_call_result_type(self, func_name, args):
+        if func_name in self.METAL_GLSL_SUBGROUP_VALUE_INTRINSICS and args:
+            return self.expression_result_type(args[0])
+        if func_name in self.METAL_GLSL_SUBGROUP_BOOL_RESULT_INTRINSICS:
+            return "bool"
+        if func_name in self.METAL_GLSL_SUBGROUP_UINT_RESULT_INTRINSICS:
+            return "uint"
+        if func_name in self.METAL_GLSL_SUBGROUP_UINT4_RESULT_INTRINSICS:
+            return "uint4"
+        if func_name in self.METAL_GLSL_SUBGROUP_VOID_RESULT_INTRINSICS:
+            return "void"
+        return None
+
+    def unsupported_metal_glsl_subgroup_call(self, func_name, args):
+        if (
+            func_name not in self.METAL_GLSL_SUBGROUP_INTRINSICS
+            or func_name in self.user_function_names
+        ):
+            return None
+        diagnostic = (
+            f"/* unsupported Metal GLSL subgroup intrinsic: {func_name} "
+            "requires explicit Metal simdgroup lowering */"
+        )
+        result_type = self.current_expression_expected_type or (
+            self.metal_glsl_subgroup_call_result_type(func_name, args)
+        )
+        if self.map_type(result_type) == "void":
+            return diagnostic
+        fallback = self.diagnostic_zero_value_for_type(result_type or "uint")
+        return f"{diagnostic} {fallback}"
+
     def metal_graphics_builtin_expression_name(self, name):
         if name is None or name in self.local_variable_types:
             return name
@@ -7790,6 +7893,11 @@ class MetalCodeGen:
                 return "RayDesc"
             if func_name in self.METAL_WAVE_INTRINSIC_ARITIES:
                 return self.metal_wave_result_type(func_name, args)
+            if (
+                func_name in self.METAL_GLSL_SUBGROUP_INTRINSICS
+                and func_name not in self.user_function_names
+            ):
+                return self.metal_glsl_subgroup_call_result_type(func_name, args)
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type:
                 return numeric_result_type
@@ -9011,6 +9119,12 @@ class MetalCodeGen:
             wave_call = self.generate_metal_wave_operation(func_name, expr.args)
             if wave_call is not None:
                 return wave_call
+
+            subgroup_call = self.unsupported_metal_glsl_subgroup_call(
+                func_name, expr.args
+            )
+            if subgroup_call is not None:
+                return subgroup_call
 
             atomic_call = self.generate_atomic_function_call(func_name, expr.args)
             if atomic_call is not None:
@@ -14649,13 +14763,12 @@ class MetalCodeGen:
         else:
             value_text = None
             if stage_node is not None:
-                value_text = (
-                    stage_layout_entry_value(stage_node, "max_vertices", "out")
-                    or stage_layout_entry_value(
-                        stage_node,
-                        "maxvertexcount",
-                        "out",
-                    )
+                value_text = stage_layout_entry_value(
+                    stage_node, "max_vertices", "out"
+                ) or stage_layout_entry_value(
+                    stage_node,
+                    "maxvertexcount",
+                    "out",
                 )
             if value_text is None:
                 raise ValueError(

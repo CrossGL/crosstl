@@ -535,6 +535,7 @@ def generate_enum_structs(generator, enums):
 
 def generate_enum_constructor_functions(generator, enums):
     code = ""
+    prefix = getattr(generator, "enum_constructor_function_prefix", "")
     for enum in enums or []:
         all_fields = enum_struct_fields(enum) or []
         for variant in enum.variants or []:
@@ -544,7 +545,7 @@ def generate_enum_constructor_functions(generator, enums):
                 for index, (_field_name, field_type) in enumerate(variant_fields)
             )
             code += (
-                f"{enum.name} "
+                f"{prefix}{enum.name} "
                 f"{enum_variant_constructor_name(enum.name, variant.name)}({params}) {{\n"
             )
             code += f"    {enum.name} result;\n"
@@ -606,6 +607,7 @@ def generate_generic_enum_structs(generator, specializations):
 
 def generate_generic_enum_constructor_functions(generator, specializations):
     code = ""
+    prefix = getattr(generator, "enum_constructor_function_prefix", "")
     for specialization in (specializations or {}).values():
         all_fields = generic_enum_specialized_fields(generator, specialization)
         definition = specialization["definition"]
@@ -620,7 +622,7 @@ def generate_generic_enum_constructor_functions(generator, specializations):
                 for index, (_field_name, field_type) in enumerate(variant_fields)
             )
             code += (
-                f"{specialization['struct_name']} "
+                f"{prefix}{specialization['struct_name']} "
                 f"{enum_variant_constructor_name(specialization['struct_name'], variant.name)}({params}) {{\n"
             )
             code += f"    {specialization['struct_name']} result;\n"

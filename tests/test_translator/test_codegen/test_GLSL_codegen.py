@@ -12517,6 +12517,59 @@ def test_opengl_version_330_keeps_resource_bindings_with_420pack_extension():
     assert "layout(std140, binding = 0) uniform Uniforms" in generated_code
 
 
+def test_opengl_version_330_upgrades_for_storage_image_resource_layouts():
+    shader = """
+    #version 330 core
+    shader StorageImage330Resources {
+        image2D storageImage @binding(2);
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return imageLoad(storageImage, ivec2(0, 0));
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert generated_code.lstrip().startswith("#version 420 core")
+    assert (
+        "layout(rgba32f, binding = 2) uniform image2D storageImage;" in generated_code
+    )
+    assert "#version 330 core" not in generated_code
+
+
+def test_opengl_version_330_upgrades_for_storage_buffer_resource_layouts():
+    shader = """
+    #version 330 core
+    shader StorageBuffer330Resources {
+        RWStructuredBuffer<int> values @binding(4);
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                int value = buffer_load(values, 0);
+                return vec4(float(value));
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert generated_code.lstrip().startswith("#version 430 core")
+    assert (
+        "layout(std430, binding = 4) buffer valuesBuffer { int values[]; };"
+        in generated_code
+    )
+    assert "int value = values[0];" in generated_code
+    assert "#version 330 core" not in generated_code
+
+
 def test_opengl_rejects_non_resource_shadow_of_global_resource():
     shader = """
     shader ResourceShadow {

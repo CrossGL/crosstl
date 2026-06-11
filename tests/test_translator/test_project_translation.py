@@ -12640,6 +12640,10 @@ def test_metal_project_materialization_concretizes_steel_attention_load_helper(
         "Rows": "2",
         "T": "float",
     }
+    assert re.search(
+        r"\bLoadTile\s*<\s*float\s*,\s*2\s*,\s*2\s*>\s+tile;",
+        materialized.text,
+    )
     assert "load_float_2_2(tile, src[gid]);" in materialized.text
     assert not re.search(r"\bload\s*\(", materialized.text)
 
@@ -18149,9 +18153,7 @@ def test_directx_toolchain_smoke_commands_use_monogame_sprite_entries(tmp_path):
         encoding="utf-8",
     )
 
-    commands = project_pipeline._toolchain_smoke_commands(
-        "directx", ["dxc"], shader
-    )
+    commands = project_pipeline._toolchain_smoke_commands("directx", ["dxc"], shader)
 
     assert commands == [
         (
@@ -18204,9 +18206,7 @@ def test_directx_toolchain_smoke_commands_prefer_report_entry_profiles(tmp_path)
         ["dxc"],
         shader,
         artifact={
-            "entryProfiles": [
-                {"entry": "ReportPixelShader", "profile": "ps_6_7"}
-            ]
+            "entryProfiles": [{"entry": "ReportPixelShader", "profile": "ps_6_7"}]
         },
     ) == [
         (
@@ -39348,8 +39348,7 @@ def test_translate_project_metal_matmul_buffers_lower_to_directx_resources(
     assert "uint2 id = id_dispatchThreadID.xy;" in output
     assert "A.Load(index_A)" in output
     assert "B.Load(index_B)" in output
-    assert "X[index] = sum;" in output
-    assert "X.Store(" not in output
+    assert "X.Store(index, sum);" in output
     assert "float* A" not in output
     assert "float* B" not in output
     assert "float* X" not in output
@@ -39410,10 +39409,9 @@ def test_translate_project_metal_matmul_device_buffers_do_not_emit_directx_param
     assert "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)" in output
     assert "uint2 id = id_dispatchThreadID.xy;" in output
     assert (
-        "X[((row * col_dim_x) + col)] = "
-        "(A.Load(((row * inner_dim) + col)) + B.Load(col));" in output
+        "X.Store(((row * col_dim_x) + col), "
+        "(A.Load(((row * inner_dim) + col)) + B.Load(col)));" in output
     )
-    assert "X.Store(" not in output
     assert "A.Load(((row * inner_dim) + col))" in output
     assert "B.Load(col)" in output
     assert "float* A" not in output
@@ -39495,8 +39493,7 @@ def test_translate_project_metal_matmul_unbound_device_buffers_lower_to_directx_
     assert "uint2 id = id_dispatchThreadID.xy;" in output
     assert "A.Load(index_A)" in output
     assert "B.Load(index_B)" in output
-    assert "X[index] = sum;" in output
-    assert "X.Store(" not in output
+    assert "X.Store(index, sum);" in output
     assert "float* A" not in output
     assert "float* B" not in output
     assert "float* X" not in output
@@ -42813,8 +42810,7 @@ def test_translate_project_target_template_variant_manifest_materializes_for_ope
     }
     directx_output = (repo / directx_artifact["path"]).read_text(encoding="utf-8")
     assert "RWStructuredBuffer<uint> out_ : register(u0);" in directx_output
-    assert "out_[gid] = uint(0);" in directx_output
-    assert "out_.Store(" not in directx_output
+    assert "out_.Store(gid, uint(0));" in directx_output
 
     report_path = repo / "out" / "report.json"
     report.write_json(report_path)

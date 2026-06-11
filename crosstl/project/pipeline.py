@@ -2434,9 +2434,7 @@ DIRECTX_HLSL_STRUCT_RE = re.compile(
 DIRECTX_HLSL_SHADER_ATTR_RE = re.compile(
     r"\[\s*shader\s*\(\s*\"([^\"]+)\"\s*\)\s*\]", re.IGNORECASE
 )
-DIRECTX_HLSL_NUMTHREADS_RE = re.compile(
-    r"\[\s*numthreads\s*\(", re.IGNORECASE
-)
+DIRECTX_HLSL_NUMTHREADS_RE = re.compile(r"\[\s*numthreads\s*\(", re.IGNORECASE)
 DIRECTX_HLSL_SEMANTIC_RE = re.compile(
     r":\s*(?P<semantic>[A-Za-z_]\w*)\b", re.IGNORECASE
 )
@@ -11899,8 +11897,24 @@ def _inline_metal_concrete_using_template_aliases(
     block_spans = _metal_block_spans(preprocessor, source)
     template_structs = _metal_template_struct_members(preprocessor, source)
     aliases: list[dict[str, Any]] = []
+    constants: list[dict[str, Any]] = []
     alias_spans: list[tuple[int, int]] = []
     excluded = list(excluded_spans)
+
+    def active_constants(position: int) -> dict[str, str]:
+        return {
+            str(constant["name"]): str(constant["value"])
+            for constant in constants
+            if constant["end"] <= position < constant["scope_end"]
+        }
+
+    def active_aliases(position: int) -> dict[str, str]:
+        return {
+            str(alias["name"]): str(alias["type"])
+            for alias in aliases
+            if alias["end"] <= position < alias["scope_end"]
+        }
+
     i = 0
     while i < len(source):
         if source[i] in "\"'":
@@ -11928,6 +11942,27 @@ def _inline_metal_concrete_using_template_aliases(
             continue
 
         ident, consumed = preprocessor._read_identifier(source, i)
+        scope_end = _metal_enclosing_block_end(block_spans, i)
+        if scope_end is not None:
+            semicolon = _metal_statement_semicolon(preprocessor, source, i)
+            if semicolon is not None:
+                constant = _metal_local_constant_declaration(
+                    source[i : semicolon + 1],
+                    active_constants(i),
+                )
+                if constant is not None:
+                    name, value = constant
+                    constants.append(
+                        {
+                            "name": name,
+                            "value": value,
+                            "end": semicolon + 1,
+                            "scope_end": scope_end,
+                        }
+                    )
+                    i = semicolon + 1
+                    continue
+
         if ident != "using":
             i += consumed
             continue
@@ -11950,7 +11985,16 @@ def _inline_metal_concrete_using_template_aliases(
             i += consumed
             continue
         raw_alias_type = source[j + 1 : semicolon]
+        scoped_constants = active_constants(i)
+        scoped_aliases = active_aliases(i)
         alias_type = _metal_concrete_using_alias_type(raw_alias_type)
+        if alias_type is not None:
+            alias_type = _metal_resolve_type_identifiers(
+                preprocessor,
+                alias_type,
+                aliases=scoped_aliases,
+                constants=scoped_constants,
+            )
         if alias_type is None:
             dependent_match = re.fullmatch(
                 r"\s*typename\s+([A-Za-z_][A-Za-z0-9_]*)::"
@@ -11961,11 +12005,21 @@ def _inline_metal_concrete_using_template_aliases(
             if dependent_match is not None:
                 owner, member = dependent_match.groups()
                 for candidate in reversed(aliases):
-                    if candidate["name"] != owner:
+                    if (
+                        candidate["name"] != owner
+                        or candidate["end"] > i
+                        or i >= candidate["scope_end"]
+                    ):
                         continue
                     alias_type = (candidate.get("members") or {}).get(member)
                     break
-        scope_end = _metal_enclosing_block_end(block_spans, i)
+            if alias_type is not None:
+                alias_type = _metal_resolve_type_identifiers(
+                    preprocessor,
+                    alias_type,
+                    aliases=scoped_aliases,
+                    constants=scoped_constants,
+                )
         if alias_type is None or scope_end is None:
             i = semicolon + 1
             continue
@@ -33864,7 +33918,9 @@ def _directx_dxc_entry_profiles_from_artifact(
         return ()
 
     candidates = []
-    for position, entry_point in enumerate(_directx_dxc_artifact_entry_points(artifact)):
+    for position, entry_point in enumerate(
+        _directx_dxc_artifact_entry_points(artifact)
+    ):
         name = entry_point.get("name")
         if not _is_non_empty_string(name):
             continue
@@ -34003,9 +34059,7 @@ def _directx_hlsl_struct_semantics(source: str) -> dict[str, tuple[str, ...]]:
     for match in DIRECTX_HLSL_STRUCT_RE.finditer(source):
         semantics_by_struct[match.group("name")] = tuple(
             semantic_match.group("semantic")
-            for semantic_match in DIRECTX_HLSL_SEMANTIC_RE.finditer(
-                match.group("body")
-            )
+            for semantic_match in DIRECTX_HLSL_SEMANTIC_RE.finditer(match.group("body"))
         )
     return semantics_by_struct
 
@@ -34030,9 +34084,7 @@ def _directx_hlsl_function_stage(
     if generic_stage is not None:
         return generic_stage
 
-    semantic_stage = _directx_hlsl_return_semantic_stage(
-        match.group("return_semantic")
-    )
+    semantic_stage = _directx_hlsl_return_semantic_stage(match.group("return_semantic"))
     if semantic_stage is not None:
         return semantic_stage
 

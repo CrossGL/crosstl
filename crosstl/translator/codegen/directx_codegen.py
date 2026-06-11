@@ -1041,6 +1041,65 @@ class HLSLCodeGen:
         """Generate HLSL source for a single requested shader stage."""
         return self.generate_program(ast, target_stage=shader_type)
 
+    def validate_directx_target_profile_feature(self, feature, requirement):
+        if self.target_profile != "dx11":
+            return
+
+        raise ValueError(
+            f"DirectX profile dx11 does not support {feature}; " f"{requirement}"
+        )
+
+    def validate_directx_stage_profile(self, shader_type):
+        stage = normalize_stage_name(shader_type)
+        if stage in self.hlsl_ray_stage_types():
+            self.validate_directx_target_profile_feature(
+                f"ray tracing shader stage '{stage}'",
+                "ray tracing stages require DirectX 12 / DXR",
+            )
+        elif stage in {"mesh", "task", "amplification", "object"}:
+            self.validate_directx_target_profile_feature(
+                f"mesh/amplification shader stage '{stage}'",
+                "mesh and amplification shaders require DirectX 12 / Shader Model 6.5",
+            )
+
+    def validate_directx_type_profile(self, mapped_type, context):
+        base_type, _array_suffix = split_array_type_suffix(str(mapped_type or ""))
+        base_type = base_type.split("<", 1)[0].strip()
+
+        if base_type == "RaytracingAccelerationStructure":
+            self.validate_directx_target_profile_feature(
+                f"RaytracingAccelerationStructure {context}",
+                "ray tracing resources require DirectX 12 / DXR",
+            )
+        elif base_type == "RayQuery":
+            self.validate_directx_target_profile_feature(
+                f"RayQuery {context}",
+                "ray query requires DirectX 12 / DXR",
+            )
+        elif base_type == "RayDesc":
+            self.validate_directx_target_profile_feature(
+                f"RayDesc {context}",
+                "ray tracing descriptors require DirectX 12 / DXR",
+            )
+        elif base_type == "BuiltInTriangleIntersectionAttributes":
+            self.validate_directx_target_profile_feature(
+                f"ray hit-attribute {context}",
+                "ray tracing hit attributes require DirectX 12 / DXR",
+            )
+        elif self.is_hlsl_feedback_texture_type(mapped_type):
+            self.validate_directx_target_profile_feature(
+                f"sampler feedback texture {context}",
+                "sampler feedback requires DirectX 12 / Shader Model 6.5",
+            )
+
+    def validate_directx_register_space_profile(self, space):
+        if not space:
+            return
+        self.validate_directx_target_profile_feature(
+            f"register space '{space}'",
+            "register spaces require DirectX 12",
+        )
+
     def with_hlsl_builtin_option_prelude(self, ast):
         if not self.hlsl_ast_needs_builtin_option(ast):
             return ast
@@ -1782,6 +1841,7 @@ class HLSLCodeGen:
             mapped_type = self.hlsl_struct_buffer_resource_type(
                 node, vtype
             ) or self.map_resource_type_with_format(vtype, node)
+            self.validate_directx_type_profile(mapped_type, f"resource '{var_name}'")
             if (
                 var_name in comparison_sampler_names
                 and mapped_type == "SamplerState"
@@ -2783,14 +2843,18 @@ class HLSLCodeGen:
     ):
         code = ""
         emitted_names = set(self.global_variable_types)
-        for members in self.hlsl_lowered_struct_resource_members.values():
-            for member_info in members.values():
+        for struct_name, members in self.hlsl_lowered_struct_resource_members.items():
+            for member_name, member_info in members.items():
                 var_name = member_info["global_name"]
                 if var_name in emitted_names:
                     continue
                 emitted_names.add(var_name)
                 vtype = member_info["type"]
                 mapped_type = self.map_resource_type_with_format(vtype)
+                self.validate_directx_type_profile(
+                    mapped_type,
+                    f"struct resource member '{struct_name}.{member_name}'",
+                )
                 declaration_type = self.directx_resource_declaration_type(mapped_type)
                 declaration = format_c_style_array_declaration(
                     declaration_type, var_name
@@ -2979,13 +3043,16 @@ class HLSLCodeGen:
         if self.is_multisample_texture_resource_type(texture_type):
             return None
 
-        comparison = is_texture_compare_operation(
-            func_name
-        ) or is_texture_gather_compare_operation(func_name)
+        comparison = (
+            is_texture_compare_operation(func_name)
+            or is_texture_gather_compare_operation(func_name)
+            or self.shadow_texture_sample_call_uses_compare(func_name, args)
+        )
         regular = (
             is_texture_sample_operation(func_name)
+            and not comparison
             or is_texture_sample_offset_operation(func_name)
-            or is_projected_texture_operation(func_name)
+            or (is_projected_texture_operation(func_name) and not comparison)
             or is_texture_gather_operation(func_name)
         )
         query_lod = is_texture_query_lod_operation(func_name)
@@ -3663,6 +3730,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 raw_param_type, p, getattr(func, "name", None)
             )
             param_type = self.directx_resource_declaration_type(param_type)
+            self.validate_directx_type_profile(param_type, f"parameter '{p.name}'")
             if self.is_texture_type(raw_param_type) or self.is_image_type(
                 raw_param_type
             ):
@@ -3982,6 +4050,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return code
 
         if effective_shader_type is not None:
+            self.validate_directx_stage_profile(effective_shader_type)
             self.validate_hlsl_function_return_semantic(
                 func, effective_shader_type, raw_return_type, return_semantic
             )
@@ -4159,6 +4228,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if id(stmt) in self.hlsl_hoisted_groupshared_declaration_ids:
                 return ""
             stmt_name = self.hlsl_declaration_identifier_name(stmt.name)
+            mapped_type = self.map_type(vtype)
+            self.validate_directx_type_profile(
+                mapped_type, f"local variable '{stmt.name}'"
+            )
             if self.is_unsupported_glsl_buffer_block_struct_type(vtype):
                 self.current_unsupported_glsl_buffer_block_local_variables.add(
                     stmt.name
@@ -4169,9 +4242,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     f"{self.unsupported_glsl_buffer_block_local_variable_placeholder('HLSL', vtype, stmt.name)};\n",
                 )
 
-            declaration = format_c_style_array_declaration(
-                self.map_type(vtype), stmt_name
-            )
+            declaration = format_c_style_array_declaration(mapped_type, stmt_name)
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
             initial_value = getattr(stmt, "initial_value", None)
             if isinstance(initial_value, MatchNode):
@@ -4984,6 +5055,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return "vec2"
             if is_texture_query_lod_operation(func_name):
                 return "vec2"
+            if self.shadow_texture_sample_call_uses_compare(func_name, args):
+                return "float"
             if is_texture_compare_operation(func_name):
                 return "float"
             if (
@@ -5696,16 +5769,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         elif isinstance(expr, WaveOpNode):
             return self.generate_wave_op_expression(expr)
         elif isinstance(expr, RayTracingOpNode):
+            self.validate_directx_ray_tracing_profile(expr.operation)
             args_str = ", ".join(
                 self.generate_expression(arg) for arg in expr.arguments
             )
             return f"{expr.operation}({args_str})"
         elif isinstance(expr, MeshOpNode):
+            self.validate_directx_mesh_operation_profile(expr.operation)
             args_str = ", ".join(
                 self.generate_expression(arg) for arg in expr.arguments
             )
             return f"{expr.operation}({args_str})"
         elif isinstance(expr, RayQueryOpNode):
+            self.validate_directx_ray_query_profile(expr.operation)
             query = self.generate_expression(expr.query_expr)
             args_str = ", ".join(
                 self.generate_expression(arg) for arg in expr.arguments
@@ -5756,6 +5832,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if original_func_name != func_name:
                 func_name = original_func_name
                 callee = original_func_name
+
+            ray_query_call = self.hlsl_ray_query_call_parts(expr)
+            if ray_query_call is not None:
+                operation, _query_expr, _args = ray_query_call
+                self.validate_directx_ray_query_profile(operation)
+            elif func_name in self.hlsl_ray_tracing_expected_arg_counts():
+                self.validate_directx_ray_tracing_profile(func_name)
+            elif func_name in {"DispatchMesh", "SetMeshOutputCounts"}:
+                self.validate_directx_mesh_operation_profile(func_name)
 
             byteaddress_interlocked_call = (
                 self.generate_hlsl_byteaddress_interlocked_member_call(
@@ -6365,6 +6450,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "wave intrinsics require DirectX 12 / Shader Model 6.0"
         )
 
+    def validate_directx_ray_tracing_profile(self, operation):
+        self.validate_directx_target_profile_feature(
+            f"ray tracing operation '{operation}'",
+            "ray tracing operations require DirectX 12 / DXR",
+        )
+
+    def validate_directx_ray_query_profile(self, operation):
+        self.validate_directx_target_profile_feature(
+            f"RayQuery operation '{operation}'",
+            "ray query operations require DirectX 12 / DXR",
+        )
+
+    def validate_directx_mesh_operation_profile(self, operation):
+        self.validate_directx_target_profile_feature(
+            f"mesh shader operation '{operation}'",
+            "mesh shader operations require DirectX 12 / Shader Model 6.5",
+        )
+
     def generate_hlsl_wave_intrinsic_call(self, operation, args):
         expected_args = self.HLSL_WAVE_INTRINSIC_ARITIES.get(operation)
         if expected_args is None:
@@ -6734,6 +6837,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "buffer_consume": 1,
             "buffer_increment_counter": 1,
             "buffer_decrement_counter": 1,
+            "buffer_load": 2,
+            "buffer_load2": 2,
+            "buffer_load3": 2,
+            "buffer_load4": 2,
+            "buffer_store": 3,
+            "buffer_store2": 3,
+            "buffer_store3": 3,
+            "buffer_store4": 3,
         }
         expected_args = helper_arg_counts.get(func_name)
         if expected_args is not None and len(args) != expected_args:
@@ -6741,6 +6852,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"DirectX buffer helper '{func_name}' requires "
                 f"{expected_args} argument(s), got {len(args)}"
             )
+        if func_name == "buffer_dimensions":
+            valid_counts = {2, 3}
+            if args:
+                resource_type = self.hlsl_buffer_helper_resource_type(args[0])
+                resource_name = self.hlsl_resource_type_name(resource_type)
+                if resource_name in {
+                    "Buffer",
+                    "ByteAddressBuffer",
+                    "RWBuffer",
+                    "RWByteAddressBuffer",
+                    "RasterizerOrderedBuffer",
+                    "RasterizerOrderedByteAddressBuffer",
+                }:
+                    valid_counts = {2}
+            if len(args) not in valid_counts:
+                expected = " or ".join(str(count) for count in sorted(valid_counts))
+                raise ValueError(
+                    f"DirectX buffer helper 'buffer_dimensions' requires "
+                    f"{expected} argument(s), got {len(args)}"
+                )
 
         if not args:
             return
@@ -6900,12 +7031,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value = self.generate_expression(args[2])
             resource_type = self.hlsl_buffer_helper_resource_type(args[0])
             resource_name = self.hlsl_resource_type_name(resource_type)
-            if resource_name in {
-                "RWBuffer",
-                "RWStructuredBuffer",
-                "RasterizerOrderedBuffer",
-                "RasterizerOrderedStructuredBuffer",
-            }:
+            if resource_name in {"RWBuffer", "RasterizerOrderedBuffer"}:
                 return f"{buffer}[{index}] = {value}"
             return f"{buffer}.Store({index}, {value})"
         if func_name == "buffer_append" and len(args) >= 2:
@@ -7128,14 +7254,27 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 func_expr = getattr(value, "function", getattr(value, "name", None))
                 func_name = self.expression_name(func_expr)
                 args = getattr(value, "arguments", getattr(value, "args", []))
-                if func_name in comparison_funcs and len(args) >= 3:
-                    texture_name = self.expression_name(args[0])
-                    texture_type = global_resource_types.get(texture_name)
+                texture_name = self.expression_name(args[0]) if args else None
+                texture_type = global_resource_types.get(texture_name)
+                shadow_compare = self.shadow_texture_sample_call_uses_compare(
+                    func_name,
+                    args,
+                    self.global_variable_types.get(texture_name),
+                )
+                if (func_name in comparison_funcs and len(args) >= 3) or (
+                    shadow_compare and len(args) >= 2
+                ):
                     if self.texture_call_is_diagnostic_only(func_name, texture_type):
                         return
                     if texture_name:
                         texture_names.add(texture_name)
-                    if len(args) >= 4:
+                    if func_name in comparison_funcs and len(args) >= 4:
+                        sampler_name = self.expression_name(args[1])
+                        if sampler_name:
+                            sampler_names.add(sampler_name)
+                    elif shadow_compare and self.texture_call_uses_explicit_sampler(
+                        args
+                    ):
                         sampler_name = self.expression_name(args[1])
                         if sampler_name:
                             sampler_names.add(sampler_name)
@@ -7189,6 +7328,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     args = getattr(node, "arguments", getattr(node, "args", []))
                     if not self.has_explicit_sampler_argument(
                         func_name_expr, args, sampler_params
+                    ):
+                        continue
+                    source_type = self.texture_source_type(args[0]) if args else None
+                    if self.shadow_texture_sample_call_uses_compare(
+                        func_name_expr, args, source_type
                     ):
                         continue
                     texture_type = self.texture_argument_analysis_type(
@@ -7281,6 +7425,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         sampler_names = set()
         global_sampler_names = self.collect_global_sampler_names(root)
         global_resource_types = self.collect_global_texture_types(root)
+        comparison_role = texture_funcs == self.comparison_texture_function_names()
         previous_local_variable_types = self.local_variable_types
         try:
             for func in self.collect_functions(root):
@@ -7299,9 +7444,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         continue
                     func_expr = getattr(node, "function", getattr(node, "name", None))
                     func_name = self.expression_name(func_expr)
-                    if func_name not in texture_funcs:
-                        continue
                     args = getattr(node, "arguments", getattr(node, "args", []))
+                    source_type = self.texture_source_type(args[0]) if args else None
+                    shadow_compare = self.shadow_texture_sample_call_uses_compare(
+                        func_name, args, source_type
+                    )
+                    if shadow_compare:
+                        if not comparison_role:
+                            continue
+                    elif func_name not in texture_funcs:
+                        continue
                     if not self.has_explicit_sampler_argument(
                         func_name, args, sampler_scope
                     ):
@@ -7332,9 +7484,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     func_expr = getattr(node, "function", getattr(node, "name", None))
                     func_name = self.expression_name(func_expr)
                     args = getattr(node, "arguments", getattr(node, "args", []))
-                    if (
-                        func_name in texture_funcs
-                        and self.has_explicit_sampler_argument(func_name, args, set())
+                    shadow_compare = self.shadow_texture_sample_call_uses_compare(
+                        func_name,
+                        args,
+                        self.texture_source_type(args[0]) if args else None,
+                    )
+                    direct_texture_call = False
+                    if shadow_compare:
+                        direct_texture_call = (
+                            texture_funcs == self.comparison_texture_function_names()
+                        )
+                    elif func_name in texture_funcs:
+                        direct_texture_call = True
+                    if direct_texture_call and self.has_explicit_sampler_argument(
+                        func_name, args, set()
                     ):
                         texture_type = self.texture_argument_analysis_type(
                             args[0], global_resource_types
@@ -8130,6 +8293,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     continue
                 if self.has_explicit_sampler_argument(func_name, args, sampler_names):
                     continue
+                if self.shadow_texture_sample_call_uses_compare(
+                    func_name,
+                    args,
+                    self.global_variable_types.get(texture_name),
+                ):
+                    continue
                 if self.projected_texture_call_is_diagnostic_only(
                     func_name, global_texture_types.get(texture_name)
                 ):
@@ -8302,40 +8471,61 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if not sampler_params:
                 continue
 
-            for node in self.walk_ast(getattr(func, "body", [])):
-                if not isinstance(node, FunctionCallNode):
-                    continue
-                func_expr = getattr(node, "function", getattr(node, "name", None))
-                if self.expression_name(func_expr) not in {
-                    *TEXTURE_COMPARE_INTRINSIC_NAMES,
-                    *TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES,
-                }:
-                    continue
-                args = getattr(node, "arguments", getattr(node, "args", []))
-                if len(args) < 4:
-                    continue
-                texture_name = self.expression_name(args[0])
-                texture_type = resource_param_types.get(texture_name)
-                if texture_type is not None:
-                    texture_type = self.map_resource_type_with_format(texture_type)
-                else:
-                    texture_type = self.texture_argument_analysis_type(
-                        args[0], global_resource_types
+            previous_local_variable_types = self.local_variable_types
+            self.local_variable_types = self.function_scope_variable_types(func)
+            try:
+                for node in self.walk_ast(getattr(func, "body", [])):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    func_expr = getattr(node, "function", getattr(node, "name", None))
+                    texture_func = self.expression_name(func_expr)
+                    args = getattr(node, "arguments", getattr(node, "args", []))
+                    texture_name = self.expression_name(args[0]) if args else None
+                    texture_type = resource_param_types.get(texture_name)
+                    if texture_type is not None:
+                        source_type = texture_type
+                        texture_type = self.map_resource_type_with_format(texture_type)
+                    else:
+                        source_type = (
+                            self.texture_source_type(args[0]) if args else None
+                        )
+                        texture_type = self.texture_argument_analysis_type(
+                            args[0], global_resource_types
+                        )
+
+                    shadow_compare = self.shadow_texture_sample_call_uses_compare(
+                        texture_func, args, source_type
                     )
-                texture_func = self.expression_name(func_expr)
-                sampler_name = self.expression_name(args[1])
-                if sampler_name in sampler_params:
-                    diagnostic_compare_params.setdefault(func_name, set()).add(
-                        sampler_name
-                    )
-                if self.texture_call_is_diagnostic_only(
-                    texture_func, texture_type
-                ) and not self.diagnostic_texture_compare_sampler_parameter_is_comparison(
-                    texture_func, texture_type
-                ):
-                    continue
-                if sampler_name in sampler_params:
-                    comparison_params.setdefault(func_name, set()).add(sampler_name)
+                    texture_compare = texture_func in {
+                        *TEXTURE_COMPARE_INTRINSIC_NAMES,
+                        *TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES,
+                    }
+                    if texture_compare:
+                        if len(args) < 4:
+                            continue
+                    elif shadow_compare:
+                        if not self.has_explicit_sampler_argument(
+                            texture_func, args, sampler_params
+                        ):
+                            continue
+                    else:
+                        continue
+
+                    sampler_name = self.expression_name(args[1])
+                    if sampler_name in sampler_params:
+                        diagnostic_compare_params.setdefault(func_name, set()).add(
+                            sampler_name
+                        )
+                    if self.texture_call_is_diagnostic_only(
+                        texture_func, texture_type
+                    ) and not self.diagnostic_texture_compare_sampler_parameter_is_comparison(
+                        texture_func, texture_type
+                    ):
+                        continue
+                    if sampler_name in sampler_params:
+                        comparison_params.setdefault(func_name, set()).add(sampler_name)
+            finally:
+                self.local_variable_types = previous_local_variable_types
 
         changed = True
         while changed:
@@ -8548,15 +8738,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 ):
                     continue
 
+                shadow_compare = self.shadow_texture_sample_call_uses_compare(
+                    texture_func, args, texture_param_types[texture_name]
+                )
                 query_lod = is_texture_query_lod_operation(texture_func)
                 regular = (
                     not query_lod
                     and texture_func in self.regular_texture_function_names()
+                    and not shadow_compare
                 )
                 comparison = (
                     not query_lod
                     and texture_func in self.comparison_texture_function_names()
-                )
+                ) or shadow_compare
                 self.add_implicit_texture_sampler_parameter(
                     implicit_params,
                     func_name,
@@ -8798,6 +8992,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for attr in getattr(func, "attributes", []) or []:
             if not self.hlsl_root_signature_attribute(attr):
                 continue
+            self.validate_directx_target_profile_feature(
+                "RootSignature attribute",
+                "root signatures require DirectX 12",
+            )
             arguments = getattr(attr, "arguments", []) or []
             if not arguments:
                 return "[RootSignature()]\n"
@@ -9011,10 +9209,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return value
         if stage_node is None:
             return None
-        return (
-            stage_layout_entry_value(stage_node, "max_vertices", "out")
-            or stage_layout_entry_value(stage_node, "maxvertexcount", "out")
-        )
+        return stage_layout_entry_value(
+            stage_node, "max_vertices", "out"
+        ) or stage_layout_entry_value(stage_node, "maxvertexcount", "out")
 
     def hlsl_geometry_maxvertexcount_int_value(self, func, stage_node=None):
         return self.hlsl_int_literal_value(
@@ -15381,6 +15578,58 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "samplerCubeArrayShadow",
         }
 
+    def shadow_texture_sample_compare_components(self, vtype):
+        return {
+            "sampler2DShadow": ("xy", "z"),
+            "sampler2DArrayShadow": ("xyz", "w"),
+            "samplerCubeShadow": ("xyz", "w"),
+        }.get(self.resource_base_type(vtype))
+
+    def shadow_texture_sample_compare_coordinate_components(self, vtype):
+        return {
+            "sampler2DShadow": 3,
+            "sampler2DArrayShadow": 4,
+            "samplerCubeShadow": 4,
+        }.get(self.resource_base_type(vtype))
+
+    def shadow_texture_sample_call_uses_compare(self, func_name, args, vtype=None):
+        if not args:
+            return False
+        if self.shadow_texture_projected_sample_call_uses_compare(
+            func_name, args, vtype
+        ):
+            return True
+        if not is_texture_sample_basic_operation(func_name):
+            return False
+        source_type = (
+            vtype if vtype is not None else self.expression_result_type(args[0])
+        )
+        source_base_type = self.resource_base_type(source_type)
+        if source_base_type == "samplerCubeArrayShadow":
+            coord_index = 2 if self.texture_call_uses_explicit_sampler(args) else 1
+            return len(args) > coord_index + 1
+        required_components = self.shadow_texture_sample_compare_coordinate_components(
+            source_type
+        )
+        if required_components is None or len(args) < 2:
+            return False
+        coord_components = self.expression_component_count(args[1])
+        if coord_components is None:
+            coord_components = self.value_component_count(
+                self.expression_result_type(args[1])
+            )
+        return coord_components is not None and coord_components >= required_components
+
+    def shadow_texture_projected_sample_call_uses_compare(
+        self, func_name, args, vtype=None
+    ):
+        if func_name != "textureProj" or not args:
+            return False
+        source_type = (
+            vtype if vtype is not None else self.expression_result_type(args[0])
+        )
+        return self.resource_base_type(source_type) == "sampler2DShadow"
+
     def is_multisample_sampler_type(self, vtype):
         return self.resource_base_type(vtype) in {
             "sampler2DMS",
@@ -15947,13 +16196,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         texture_name = self.generate_expression(args[0])
         texture_base_name = self.expression_name(args[0]) or texture_name
+        shadow_compare = self.shadow_texture_sample_call_uses_compare(
+            func_name, args, self.texture_source_type(args[0])
+        )
         if explicit_sampler:
             sampler_name = self.generate_expression(args[1])
-            if self.texture_call_uses_comparison_sampler(func_name):
+            if self.texture_call_uses_comparison_sampler(func_name, args):
                 sampler_name = self.hlsl_comparison_sampler_alias_expression(
                     args[1], sampler_name
                 )
-        elif self.implicit_call_uses_regular_sampler(func_name):
+        elif self.implicit_call_uses_regular_sampler(func_name) and not shadow_compare:
             member_sampler = self.hlsl_implicit_member_sampler_name(
                 args[0],
                 self.hlsl_member_sampler_info_for_call(func_name, args),
@@ -15980,12 +16232,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         extra_args = args[coord_index + 1 :]
         return texture_name, sampler_name, coord, extra_args
 
-    def texture_call_uses_comparison_sampler(self, func_name):
+    def texture_call_uses_comparison_sampler(self, func_name, args=None):
         return bool(
             func_name
             and (
                 is_texture_compare_operation(func_name)
                 or is_texture_gather_compare_operation(func_name)
+                or (
+                    args is not None
+                    and self.shadow_texture_sample_call_uses_compare(func_name, args)
+                )
             )
         )
 
@@ -16164,6 +16420,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if arg_type is None or not self.is_texture_or_image_type(arg_type):
             return None
         return self.map_resource_type_with_format(self.resource_base_type(arg_type))
+
+    def texture_source_type(self, texture_arg):
+        texture_name = self.expression_name(texture_arg)
+        if texture_name:
+            local_type = self.local_variable_types.get(texture_name)
+            if local_type is not None:
+                return local_type
+            global_type = self.global_variable_types.get(texture_name)
+            if global_type is not None:
+                return global_type
+        return self.expression_result_type(texture_arg)
 
     def texture_argument_resource_type(self, texture_arg):
         return self.texture_resource_type(texture_arg)
@@ -17303,6 +17570,86 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if swizzle:
             return self.vector_component(coord, swizzle)
         return coord
+
+    def shadow_texture_sample_compare_arguments(self, texture_arg, coord, vtype=None):
+        components = self.shadow_texture_sample_compare_components(
+            vtype if vtype is not None else self.expression_result_type(texture_arg)
+        )
+        if components is None:
+            return None
+        coord_component, compare_component = components
+        return (
+            self.vector_component(coord, coord_component),
+            self.vector_component(coord, compare_component),
+        )
+
+    def generate_shadow_texture_sample_call(self, func_name, args):
+        parts = self.texture_call_parts(args, func_name)
+        if parts is None:
+            return self.unsupported_texture_compare_call(
+                func_name, texture_coordinate_arguments_error()
+            )
+
+        texture_name, sampler_name, coord, extra_args = parts
+        if extra_args:
+            if (
+                self.resource_base_type(self.texture_source_type(args[0]))
+                != "samplerCubeArrayShadow"
+                or len(extra_args) != 1
+            ):
+                return self.unsupported_texture_compare_call(
+                    func_name, "shadow sampler shorthand accepts no extra arguments"
+                )
+            compare_args = (coord, self.generate_expression(extra_args[0]))
+        else:
+            compare_args = self.shadow_texture_sample_compare_arguments(
+                args[0], coord, self.texture_source_type(args[0])
+            )
+        if compare_args is None:
+            return None
+        sample_coord, compare = compare_args
+        return f"{texture_name}.SampleCmp({sampler_name}, {sample_coord}, {compare})"
+
+    def shadow_texture_projected_sample_compare_arguments(
+        self, texture_arg, coord_arg, coord
+    ):
+        source_type = self.texture_source_type(texture_arg)
+        if self.resource_base_type(source_type) != "sampler2DShadow":
+            return None
+        coord_type = self.resource_base_type(self.expression_result_type(coord_arg))
+        if coord_type not in {"vec4", "float4"}:
+            return None
+        divisor = self.vector_component(coord, "w")
+        return (
+            f"{self.vector_component(coord, 'xy')} / {divisor}",
+            f"{self.vector_component(coord, 'z')} / {divisor}",
+        )
+
+    def generate_shadow_texture_projected_sample_call(self, func_name, args):
+        parts = self.texture_call_parts(args, func_name)
+        if parts is None:
+            return self.unsupported_texture_compare_call(
+                func_name, texture_coordinate_arguments_error()
+            )
+
+        texture_name, sampler_name, coord, extra_args = parts
+        if extra_args:
+            return self.unsupported_texture_compare_call(
+                func_name,
+                "projected shadow sampler shorthand accepts no extra arguments",
+            )
+
+        coord_index = 2 if self.is_explicit_sampler_argument(args) else 1
+        compare_args = self.shadow_texture_projected_sample_compare_arguments(
+            args[0], args[coord_index], coord
+        )
+        if compare_args is None:
+            return self.unsupported_texture_compare_call(
+                func_name,
+                "projected sampler2DShadow shorthand requires a vec4 coordinate",
+            )
+        sample_coord, compare = compare_args
+        return f"{texture_name}.SampleCmp({sampler_name}, {sample_coord}, {compare})"
 
     def is_array_expression(self, node):
         type_name = self.expression_result_type(node)
@@ -19775,6 +20122,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def resource_register_suffix_for_space(self, register_prefix, binding, space=None):
+        self.validate_directx_register_space_profile(space)
         register = f"{register_prefix}{binding}"
         if space:
             return f" : register({register}, {space})"
@@ -21891,8 +22239,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if is_texture_sample_offset_operation(func_name):
             return self.generate_texture_sample_offset_call(func_name, args)
 
+        if self.shadow_texture_projected_sample_call_uses_compare(
+            func_name, args, self.texture_source_type(args[0])
+        ):
+            return self.generate_shadow_texture_projected_sample_call(func_name, args)
+
         if is_projected_texture_operation(func_name):
             return self.generate_texture_projected_call(func_name, args)
+
+        if self.shadow_texture_sample_call_uses_compare(
+            func_name, args, self.texture_source_type(args[0])
+        ):
+            return self.generate_shadow_texture_sample_call(func_name, args)
 
         if is_texture_sample_operation(func_name):
             parts = self.texture_call_parts(args, func_name)

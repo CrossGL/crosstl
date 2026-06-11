@@ -1918,8 +1918,7 @@ def test_hlsl_structured_buffer_register_t0_and_rw_register_u0():
         "RWStructuredBuffer<float4> outputPositions : register(u0);" in generated_code
     )
     assert "float4 pos = inputPositions.Load(index);" in generated_code
-    assert "outputPositions[index] = pos;" in generated_code
-    assert "outputPositions.Store(" not in generated_code
+    assert "outputPositions.Store(index, pos);" in generated_code
 
 
 def test_hlsl_stage_local_pointer_storage_buffer_lowers_to_structured_buffer():
@@ -2103,8 +2102,7 @@ def test_hlsl_metal_matmul_pointer_params_lower_to_resources(tmp_path):
     assert "float* X" not in generated_code
     assert "A.Load(((row * params.inner_dim) + k))" in generated_code
     assert "B.Load(((k * params.col_dim_x) + col))" in generated_code
-    assert "X[((row * params.col_dim_x) + col)] = sum;" in generated_code
-    assert "X.Store(" not in generated_code
+    assert "X.Store(((row * params.col_dim_x) + col), sum);" in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
@@ -2333,8 +2331,7 @@ def test_hlsl_structured_buffer_fixed_width_aliases_map_resource_generics():
     assert "StructuredBuffer<int64_t> signedValues : register(t4);" in generated_code
     assert "RWStructuredBuffer<uint64_t> offsets : register(u5);" in generated_code
     assert "min16uint count = counts.Load(index);" in generated_code
-    assert "counts[index] = (count + min16uint(1u));" in generated_code
-    assert "counts.Store(" not in generated_code
+    assert "counts.Store(index, (count + min16uint(1u)));" in generated_code
     assert "RWStructuredBuffer<uint16_t>" not in generated_code
     assert "RWStructuredBuffer<size_t>" not in generated_code
     assert "size_t" not in generated_code
@@ -2376,8 +2373,7 @@ def test_hlsl_structured_buffer_alias_arrays_infer_helper_parameter_sizes():
         in generated_code
     )
     assert "return localCounts[which].Load(index);" in generated_code
-    assert "counts[which][index] = (count + min16uint(1u));" in generated_code
-    assert "counts[which].Store(" not in generated_code
+    assert "counts[which].Store(index, (count + min16uint(1u)));" in generated_code
     assert "localCounts[]" not in generated_code
     assert "uint16_t" not in generated_code
     assert "size_t" not in generated_code
@@ -4334,8 +4330,7 @@ def test_rwstructured_buffer_counter_helpers_lower_to_native_methods():
     assert "RWStructuredBuffer<uint> counterArrays[2] : register(u4);" in generated
     assert "uint nextIndex = counters.IncrementCounter();" in generated
     assert "uint oldIndex = counterArrays[which].DecrementCounter();" in generated
-    assert "counterArrays[which][nextIndex] = oldIndex;" in generated
-    assert "counterArrays[which].Store(" not in generated
+    assert "counterArrays[which].Store(nextIndex, oldIndex);" in generated
     assert "buffer_increment_counter" not in generated
     assert "buffer_decrement_counter" not in generated
 
@@ -23629,6 +23624,38 @@ def test_directx_implicit_projected_stage_input_members_generate_samplers():
     assert "textureCompareProj" not in generated_code
 
 
+def test_directx_projected_shadow_sampler_shorthand_uses_sample_cmp():
+    shader = """
+    shader ProjectedShadowSamplerShorthand {
+        sampler2DShadow shadowMap @ register(t2, space3);
+
+        fragment {
+            float main(vec4 shadowCoord @ TEXCOORD0) @ gl_FragDepth {
+                return textureProj(shadowMap, shadowCoord);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2D shadowMap : register(t2, space3);" in generated_code
+    assert (
+        "SamplerComparisonState shadowMapSampler : register(s0, space3);"
+        in generated_code
+    )
+    assert "SamplerState shadowMapSampler" not in generated_code
+    assert (
+        "return shadowMap.SampleCmp("
+        "shadowMapSampler, shadowCoord.xy / shadowCoord.w, "
+        "shadowCoord.z / shadowCoord.w);" in generated_code
+    )
+    assert ".Sample(" not in generated_code
+    assert "textureProj(" not in generated_code
+
+
 def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
     shader = """
     shader ProjectedShadowCompareVariants {
@@ -29782,6 +29809,62 @@ def test_directx_mixed_implicit_cube_shadow_regular_sample_and_compare_split_sam
     )
 
 
+def test_directx_cube_array_shadow_texture_shorthand_uses_separate_compare():
+    shader = """
+    shader CubeArrayShadowTextureShorthand {
+        samplerCubeArrayShadow cubeShadowArray;
+        sampler shadowSampler;
+
+        struct FSInput {
+            vec4 cubeLayer @ TEXCOORD0;
+            float depth @ TEXCOORD1;
+        };
+
+        float explicitShadow(
+            samplerCubeArrayShadow tex,
+            sampler compareSampler,
+            vec4 cubeLayer,
+            float depth
+        ) {
+            return texture(tex, compareSampler, cubeLayer, depth);
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return texture(cubeShadowArray, input.cubeLayer, input.depth)
+                    + explicitShadow(
+                        cubeShadowArray,
+                        shadowSampler,
+                        input.cubeLayer,
+                        input.depth
+                    );
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "TextureCubeArray cubeShadowArray : register(t0);" in generated_code
+    assert (
+        "SamplerComparisonState cubeShadowArraySampler : register(s0);"
+        in generated_code
+    )
+    assert "SamplerComparisonState shadowSampler : register(s1);" in generated_code
+    assert (
+        "float explicitShadow(TextureCubeArray tex, SamplerComparisonState compareSampler, float4 cubeLayer, float depth)"
+        in generated_code
+    )
+    assert "return tex.SampleCmp(compareSampler, cubeLayer, depth);" in generated_code
+    assert (
+        "cubeShadowArray.SampleCmp(cubeShadowArraySampler, input.cubeLayer, input.depth)"
+        in generated_code
+    )
+    assert "SampleBias" not in generated_code
+    assert "texture(" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
 def test_directx_mixed_implicit_shadow_query_lod_and_compare_split_samplers():
     shader = """
     shader MixedShadowQueryLodCompare {
@@ -31345,6 +31428,31 @@ def test_directx_implicit_comparison_sampler_for_shadow_texture_parameter():
     )
 
 
+def test_directx_shadow_texture_shorthand_uses_sample_cmp():
+    shader = """
+    shader ShadowTextureShorthand {
+        sampler2DShadow shadowMap;
+
+        fragment {
+            float main(vec2 uv @ TEXCOORD0, float depth @ TEXCOORD1) @ gl_FragDepth {
+                return texture(shadowMap, vec3(uv, depth));
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Texture2D shadowMap : register(t0);" in generated_code
+    assert "SamplerComparisonState shadowMapSampler : register(s0);" in generated_code
+    assert (
+        "shadowMap.SampleCmp(shadowMapSampler, (float3(uv, depth)).xy, "
+        "(float3(uv, depth)).z)" in generated_code
+    )
+    assert "shadowMap.Sample(" not in generated_code
+    assert "texture(" not in generated_code
+
+
 def test_directx_shadow_compare_sampler_parameter_transitive():
     shader = """
     shader ShadowHelper {
@@ -32165,6 +32273,195 @@ def test_directx_dx11_profile_rejects_shader_model_6_wave_intrinsics():
         crosstl.translator.parse(code)
     )
     assert "WaveActiveSum(value)" in generated
+
+
+def test_directx_dx11_profile_rejects_ray_tracing_and_dx12_preserves_output():
+    code = """
+    shader Dx11RayTracing {
+        struct RayPayload {
+            vec4 color;
+        };
+
+        ray_generation {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                RayDesc ray;
+                RayPayload payload;
+                TraceRay(accel, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX profile dx11 does not support ray tracing shader stage "
+            "'ray_generation'.*DirectX 12 / DXR"
+        ),
+    ):
+        HLSLCodeGen(target_profile="dx11").generate(crosstl.translator.parse(code))
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(code)
+    )
+    assert '[shader("raygeneration")]' in generated
+    assert "RaytracingAccelerationStructure accel;" in generated
+    assert "TraceRay(accel, 0, 255, 0, 1, 0, ray, payload);" in generated
+
+
+def test_directx_dx11_profile_rejects_ray_query_and_dx12_preserves_output():
+    code = """
+    shader Dx11RayQuery {
+        compute {
+            void main() {
+                RayQuery<RAY_FLAG_NONE> rq;
+                bool proceed = rq.Proceed();
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX profile dx11 does not support RayQuery local variable "
+            "'rq'.*DirectX 12 / DXR"
+        ),
+    ):
+        HLSLCodeGen(target_profile="directx-11").generate(
+            crosstl.translator.parse(code)
+        )
+
+    generated = HLSLCodeGen(target_profile="directx-12").generate(
+        crosstl.translator.parse(code)
+    )
+    assert "RayQuery<RAY_FLAG_NONE> rq;" in generated
+    assert "bool proceed = rq.Proceed();" in generated
+
+
+def test_directx_dx11_profile_rejects_mesh_stage_and_dx12_preserves_output():
+    code = """
+    shader Dx11MeshShader {
+        mesh {
+            void main() @numthreads(1, 1, 1) @outputtopology(triangle) {
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX profile dx11 does not support mesh/amplification shader "
+            "stage 'mesh'.*Shader Model 6.5"
+        ),
+    ):
+        HLSLCodeGen(target_profile="dx11").generate(crosstl.translator.parse(code))
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(code)
+    )
+    assert '[shader("mesh")]' in generated
+    assert "[numthreads(1, 1, 1)]" in generated
+    assert '[outputtopology("triangle")]' in generated
+
+
+def test_directx_dx11_profile_rejects_root_signatures_and_register_spaces():
+    root_signature = """
+    shader Dx11RootSignature {
+        compute {
+            @ RootSignature("RootFlags(0)")
+            @ numthreads(8, 1, 1)
+            void main() {
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX profile dx11 does not support RootSignature attribute.*"
+            "root signatures require DirectX 12"
+        ),
+    ):
+        HLSLCodeGen(target_profile="dx11").generate(
+            crosstl.translator.parse(root_signature)
+        )
+
+    generated_root_signature = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(root_signature)
+    )
+    assert '[RootSignature("RootFlags(0)")]' in generated_root_signature
+
+    register_space = """
+    shader Dx11RegisterSpace {
+        sampler2D colorMap @register(t0, space1);
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX profile dx11 does not support register space 'space1'.*"
+            "register spaces require DirectX 12"
+        ),
+    ):
+        HLSLCodeGen(target_profile="dx11").generate(
+            crosstl.translator.parse(register_space)
+        )
+
+    generated_register_space = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(register_space)
+    )
+    assert "Texture2D colorMap : register(t0, space1);" in generated_register_space
+
+
+def test_directx_dx11_profile_rejects_lowered_struct_feedback_texture_member():
+    code = """
+    shader Dx11StructFeedbackMember {
+        struct FeedbackBundle {
+            feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedback;
+            float weight;
+        };
+
+        float getWeight(FeedbackBundle bundle) {
+            return bundle.weight;
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX profile dx11 does not support sampler feedback texture "
+            "struct resource member 'FeedbackBundle.feedback'.*Shader Model 6.5"
+        ),
+    ):
+        HLSLCodeGen(target_profile="dx11").generate(crosstl.translator.parse(code))
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(code)
+    )
+    feedback_bundle = re.search(
+        r"struct FeedbackBundle \{\n(?P<body>.*?)\};",
+        generated,
+        re.DOTALL,
+    )
+
+    assert feedback_bundle is not None
+    assert "FeedbackTexture2D" not in feedback_bundle.group("body")
+    assert (
+        "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedback : register(u0);"
+        in generated
+    )
 
 
 def test_directx_wave_active_sum_ballot_prefix_in_compute_expressions():
@@ -33718,8 +34015,7 @@ def test_structured_buffer_with_struct_element_type():
         "RWStructuredBuffer<Particle> particleOutput : register(u0);" in generated_code
     )
     assert "Particle p = particleInput.Load(index);" in generated_code
-    assert "particleOutput[index] = p;" in generated_code
-    assert "particleOutput.Store(" not in generated_code
+    assert "particleOutput.Store(index, p);" in generated_code
     assert "struct Particle" in generated_code
 
 
@@ -33806,6 +34102,71 @@ def test_byte_address_buffer_load_store_patterns():
     assert "buffer_store3(" not in generated_code
 
 
+@pytest.mark.parametrize(
+    ("statement", "match"),
+    [
+        (
+            "uint x = buffer_load(values);",
+            "DirectX buffer helper 'buffer_load' requires 2 argument(s), got 1",
+        ),
+        (
+            "uint x = buffer_load(values, index, index);",
+            "DirectX buffer helper 'buffer_load' requires 2 argument(s), got 3",
+        ),
+        (
+            "buffer_store(outValues, index);",
+            "DirectX buffer helper 'buffer_store' requires 3 argument(s), got 2",
+        ),
+        (
+            "buffer_store(outValues, index, value, value);",
+            "DirectX buffer helper 'buffer_store' requires 3 argument(s), got 4",
+        ),
+        (
+            "uvec2 pair = buffer_load2(rawData);",
+            "DirectX buffer helper 'buffer_load2' requires 2 argument(s), got 1",
+        ),
+        (
+            "buffer_store4(rawOut, index, vectorValue, vectorValue);",
+            "DirectX buffer helper 'buffer_store4' requires 3 argument(s), got 4",
+        ),
+        (
+            "buffer_dimensions(rawData, count, stride);",
+            "DirectX buffer helper 'buffer_dimensions' requires 2 argument(s), got 3",
+        ),
+        (
+            "buffer_dimensions(outValues);",
+            "DirectX buffer helper 'buffer_dimensions' requires "
+            "2 or 3 argument(s), got 1",
+        ),
+        (
+            "buffer_dimensions(outValues, count, stride, value);",
+            "DirectX buffer helper 'buffer_dimensions' requires "
+            "2 or 3 argument(s), got 4",
+        ),
+    ],
+)
+def test_buffer_helpers_reject_invalid_arity(statement, match):
+    shader = f"""
+    shader BufferHelperArityDiagnostics {{
+        StructuredBuffer<uint> values @register(t0);
+        RWStructuredBuffer<uint> outValues @register(u0);
+        ByteAddressBuffer rawData @register(t1);
+        RWByteAddressBuffer rawOut @register(u1);
+
+        compute {{
+            void main(uint index, uint value, uvec4 vectorValue) {{
+                uint count;
+                uint stride;
+                {statement}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
 def test_multiple_buffer_declarations_with_explicit_bindings():
     shader = """
     shader MultipleBufferBindings {
@@ -33854,8 +34215,7 @@ def test_multiple_buffer_declarations_with_explicit_bindings():
     assert "float4x4 viewProj;" in generated_code
     assert "float4 albedo;" in generated_code
     assert "vertices.Load(index)" in generated_code
-    assert "results[index] = value;" in generated_code
-    assert "results.Store(" not in generated_code
+    assert "results.Store(index, value);" in generated_code
     assert "rawData.Load(offset)" in generated_code
     assert "rawOutput.Store(offset, value);" in generated_code
 

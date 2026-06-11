@@ -546,7 +546,18 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                     output_name = self.register_identifier_name(param_name)
                     self.register_vector1_name(param_name, raw_type)
                     self.register_variable_type(param_name, param_type)
-                    params.append(f"{param_type} {output_name}")
+                    if self.is_opencl_kernel_resource_parameter_type(param_type):
+                        params.append(
+                            self.format_opencl_kernel_resource_parameter(
+                                raw_type,
+                                output_name,
+                                param_type,
+                                resource_binding,
+                            )
+                        )
+                        resource_binding += 1
+                    else:
+                        params.append(f"{param_type} {output_name}")
 
             self.emit(f"fn {kernel.name}(")
             self.indent_level += 1
@@ -626,6 +637,44 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         }:
             return "read"
         return "read_write"
+
+    def is_opencl_kernel_resource_parameter_type(self, param_type):
+        return self.opencl_kernel_resource_base_type(param_type) in {
+            "sampler",
+            "image1D",
+            "image1DArray",
+            "image2D",
+            "image2DArray",
+            "image3D",
+        }
+
+    def opencl_kernel_resource_base_type(self, param_type):
+        text = str(param_type).strip()
+        if "[" in text:
+            text = text.split("[", 1)[0].strip()
+        return text
+
+    def format_opencl_kernel_resource_parameter(
+        self, raw_type, output_name, param_type, binding
+    ):
+        attributes = [f"@binding({binding})"]
+        access_attribute = self.opencl_image_access_attribute(raw_type)
+        if (
+            access_attribute is not None
+            and self.opencl_kernel_resource_base_type(param_type) != "sampler"
+        ):
+            attributes.append(access_attribute)
+        return f"{param_type} {output_name} {' '.join(attributes)}"
+
+    def opencl_image_access_attribute(self, raw_type):
+        qualifiers = set(str(raw_type).split())
+        if qualifiers & {"read_write"}:
+            return "@readwrite"
+        if qualifiers & {"write_only"}:
+            return "@writeonly"
+        if qualifiers & {"read_only"}:
+            return "@readonly"
+        return None
 
     def visit_PreprocessorNode(self, node):
         content = self.format_preprocessor_content(node.content)

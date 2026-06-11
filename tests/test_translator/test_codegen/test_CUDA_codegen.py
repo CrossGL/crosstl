@@ -981,6 +981,7 @@ class TestCudaCodeGen:
         assert codegen.convert_crossgl_type_to_cuda("f64") == "double"
         assert codegen.convert_crossgl_type_to_cuda("bool") == "bool"
         assert codegen.convert_crossgl_type_to_cuda("string") == "const char*"
+        assert codegen.convert_crossgl_type_to_cuda("str") == "const char*"
         assert codegen.convert_crossgl_type_to_cuda("void") == "void"
         assert (
             codegen.convert_crossgl_type_to_cuda("sampler2D") == "cudaTextureObject_t"
@@ -18651,10 +18652,10 @@ class TestCudaCodeGen:
         assert "Mode::On" not in cuda_code
         assert "MatchNode" not in cuda_code
 
-    def test_match_expression_and_payload_pattern_diagnostics_are_compile_safe_for_cuda(
+    def test_match_expression_and_payload_pattern_lower_for_cuda(
         self,
     ):
-        """Test CUDA emits deterministic comments for unsupported match gaps."""
+        """Test CUDA lowers payload enum matches and keeps missing-value fallback safe."""
         source_code = """
         shader TestShader {
             enum Maybe {
@@ -18694,11 +18695,59 @@ class TestCudaCodeGen:
             "fallback = /* unsupported CUDA match expression: "
             "no wildcard arm handles remaining cases */ 0;" in cuda_code
         )
-        assert (
-            "/* unsupported CUDA match statement: enum constructor patterns "
-            "are not supported */" in cuda_code
-        )
+        assert "static const int Maybe_Some = 0;" in cuda_code
+        assert "struct Maybe" in cuda_code
+        assert "if ((maybeValue.variant == Maybe_Some))" in cuda_code
+        assert "int inner = maybeValue.Some_0;" in cuda_code
+        assert "result = inner;" in cuda_code
+        assert "else {" in cuda_code
+        assert "result = -1;" in cuda_code
+        assert "enum constructor patterns are not supported" not in cuda_code
         assert "Maybe::Some" not in cuda_code
+        assert "MatchNode" not in cuda_code
+
+    def test_match_generic_enum_constructor_pattern_binds_payload_for_cuda(self):
+        source_code = """
+        shader TestShader {
+            generic<T> struct Option {
+                enum OptionType {
+                    Some(T),
+                    None
+                }
+                OptionType variant;
+            }
+
+            struct State {
+                value: Option<int>;
+            }
+
+            compute {
+                void main(State state, int *out) {
+                    match state.value {
+                        Option::Some(value) => {
+                            out[0] = value;
+                        }
+                        Option::None => {
+                            out[0] = 0;
+                        }
+                    }
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "static const int Option_Some = 0;" in cuda_code
+        assert "static const int Option_None = 1;" in cuda_code
+        assert "struct Option_int" in cuda_code
+        assert "Option_int value;" in cuda_code
+        assert "if ((state.value.variant == Option_Some))" in cuda_code
+        assert "int value = state.value.Some_0;" in cuda_code
+        assert "else if ((state.value.variant == Option_None))" in cuda_code
+        assert "out[0] = value;" in cuda_code
+        assert "out[0] = 0;" in cuda_code
+        assert "enum constructor patterns are not supported" not in cuda_code
         assert "MatchNode" not in cuda_code
 
     def test_direct_ast_expression_statements_are_emitted(self):

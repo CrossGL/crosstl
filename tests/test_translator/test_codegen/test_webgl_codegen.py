@@ -161,6 +161,30 @@ def test_webgl_codegen_maps_separate_texture_resources_to_samplers():
     assert "uniform texture2D colorTex;" not in generated
 
 
+@pytest.mark.parametrize("qualifier", ("coherent", "volatile", "restrict"))
+def test_webgl_codegen_rejects_sampler_memory_qualifiers(qualifier):
+    shader = f"""
+    shader WebGLSamplerMemoryQualifier {{
+        {qualifier} sampler2D colorTex;
+
+        fragment {{
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {{
+                return texture(colorTex, uv);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target does not support resource memory qualifier\\(s\\) "
+            rf"'{qualifier}' on sampled resource 'colorTex'"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
 def test_webgl_codegen_omits_fragment_input_location_layouts():
     shader = """
     shader WebGLFragmentInput {
@@ -209,6 +233,42 @@ def test_webgl_codegen_omits_vertex_output_location_layouts():
     assert "out vec2 out_uv;" in generated
 
 
+@pytest.mark.parametrize("qualifier", ("noperspective", "sample"))
+def test_webgl_codegen_rejects_desktop_interpolation_qualifiers(qualifier):
+    shader = f"""
+    shader WebGLBadInterpolation {{
+        struct VSInput {{
+            vec3 position @ POSITION;
+            vec2 uv @ TEXCOORD0;
+        }};
+        struct VSOutput {{
+            vec4 position @ gl_Position;
+            vec2 uv @{qualifier} @TEXCOORD0;
+        }};
+        vertex {{
+            VSOutput main(VSInput input) {{
+                VSOutput output;
+                output.position = vec4(input.position, 1.0);
+                output.uv = input.uv;
+                return output;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target does not support interpolation qualifier "
+            rf"'{qualifier}' on 'uv'"
+        ),
+    ):
+        WebGLCodeGen().generate_program(
+            parse_shader(shader),
+            target_stage="vertex",
+        )
+
+
 def test_webgl_codegen_aligns_split_stage_varying_names_without_locations():
     shader = """
     shader WebGLLinkedVaryings {
@@ -249,6 +309,41 @@ def test_webgl_codegen_aligns_split_stage_varying_names_without_locations():
     assert "in_out_uv" not in combined_code
 
 
+def test_webgl_codegen_stage_builtin_parameter_aliases_to_glsl_builtin():
+    shader = """
+    shader WebGLBuiltinParam {
+        fragment {
+            vec4 main(vec4 coord @ gl_FragCoord) @ gl_FragColor {
+                return coord;
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "in vec4 coord;" not in generated
+    assert "fragColor = gl_FragCoord;" in generated
+
+
+def test_webgl_codegen_stage_builtin_parameter_semantics_validate_type():
+    shader = """
+    shader WebGLBadBuiltinParam {
+        fragment {
+            vec4 main(float coord @ gl_FragCoord) @ gl_FragColor {
+                return vec4(coord);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="gl_FragCoord parameter 'coord' must be vec4",
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
 def test_webgl_codegen_casts_texture_size_for_float_vector_arithmetic():
     shader = """
     shader WebGLTextureSizeCast {
@@ -265,6 +360,44 @@ def test_webgl_codegen_casts_texture_size_for_float_vector_arithmetic():
     generated = WebGLCodeGen().generate(parse_shader(shader))
 
     assert "vec2 texelSize = (1.0 / vec2(textureSize(shadowMap, 0)));" in generated
+
+
+def test_webgl_codegen_lowers_projected_texture_sampling():
+    shader = """
+    shader WebGLProjectedTexture {
+        sampler2D colorTex;
+
+        fragment {
+            vec4 main(vec3 uvq @ TEXCOORD0) @ gl_FragColor {
+                return textureProj(colorTex, uvq);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "uniform sampler2D colorTex;" in generated
+    assert "fragColor = textureProj(colorTex, uvq);" in generated
+
+
+def test_webgl_codegen_lowers_texel_fetch():
+    shader = """
+    shader WebGLTexelFetch {
+        sampler2D colorTex;
+
+        fragment {
+            vec4 main(ivec2 pixel @ TEXCOORD0) @ gl_FragColor {
+                return texelFetch(colorTex, pixel, 0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "flat in ivec2 pixel;" in generated
+    assert "fragColor = texelFetch(colorTex, pixel, 0);" in generated
 
 
 def test_webgl_codegen_lowers_dynamic_sampler_array_helper_call():
@@ -419,6 +552,94 @@ def test_webgl_codegen_lowers_nested_direct_dynamic_sampler_array_texture_call()
     assert "color = (crossgl_dynamic_sampler_value + vec4(0.25));" in generated
 
 
+def test_webgl_codegen_dynamic_sampler_array_ternary_return_keeps_diagnostic():
+    shader = """
+    shader WebGLDynamicSamplerTernary {
+        const int MAP_COUNT = 2;
+
+        fragment {
+            uniform sampler2D colorMaps[MAP_COUNT];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return colorIndex > 0 ? texture(colorMaps[colorIndex], uv) : vec4(1.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "texture(colorMaps[colorIndex]" not in generated
+    assert "switch (colorIndex)" not in generated
+    assert (
+        "unsupported WebGL dynamic sampler array expression: dynamic sampler arrays "
+        "cannot be lifted from ternary or short-circuit expressions"
+    ) in generated
+    assert (
+        "fragColor = /* unsupported WebGL dynamic sampler array expression:"
+        in generated
+    )
+    assert "fragColor = vec4(0.0);" not in generated
+    assert "return;" in generated
+
+
+def test_webgl_codegen_lowers_direct_dynamic_shadow_compare_sampler_array():
+    shader = """
+    shader WebGLDynamicShadowCompareArray {
+        const int MAP_COUNT = 2;
+
+        fragment {
+            uniform sampler2DShadow shadowMaps[MAP_COUNT];
+            uniform int shadowIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0, float depth @ TEXCOORD1) @ gl_FragColor {
+                float shadow = textureCompare(shadowMaps[shadowIndex], uv, depth);
+                return vec4(shadow);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "textureCompare(shadowMaps[shadowIndex]" not in generated
+    assert "textureCompare(shadowMaps[0]" not in generated
+    assert "switch (shadowIndex)" in generated
+    assert "shadow = texture(shadowMaps[0], vec3(uv, depth));" in generated
+    assert "shadow = texture(shadowMaps[1], vec3(uv, depth));" in generated
+    assert "shadow = 0.0;" in generated
+
+
+def test_webgl_codegen_dynamic_sampler_array_texture_offset_keeps_diagnostic():
+    shader = """
+    shader WebGLDynamicTextureOffsetArray {
+        const int MAP_COUNT = 2;
+
+        fragment {
+            uniform sampler2D colorMaps[MAP_COUNT];
+            uniform int colorIndex;
+            uniform ivec2 dynamicOffset;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureOffset(colorMaps[colorIndex], uv, dynamicOffset);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "textureOffset(colorMaps[colorIndex]" not in generated
+    assert "textureOffset(colorMaps[0]" not in generated
+    assert "switch (colorIndex)" in generated
+    assert (
+        "unsupported GLSL texture offset: textureOffset texel offsets must be "
+        "compile-time integer constants"
+    ) in generated
+    assert "fragColor = vec4(0.0);" in generated
+
+
 def test_webgl_codegen_lowers_dynamic_sampler_array_stage_return():
     shader = """
     shader WebGLDynamicSamplerReturn {
@@ -478,6 +699,170 @@ def test_webgl_codegen_lowers_nested_dynamic_sampler_array_stage_return():
     assert "crossgl_dynamic_sampler_value = sampleColor(colorMaps[1], uv);" in generated
     assert "fragColor = (crossgl_dynamic_sampler_value + vec4(0.25));" in generated
     assert "return (crossgl_dynamic_sampler_value" not in generated
+
+
+def test_webgl_codegen_lowers_dynamic_sampler_array_if_condition():
+    shader = """
+    shader WebGLDynamicSamplerArrayIfCondition {
+        vec4 sampleColor(sampler2D colorMap, vec2 uv) {
+            return texture(colorMap, uv);
+        }
+
+        fragment {
+            uniform sampler2D colorMaps[2];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                if (sampleColor(colorMaps[colorIndex], uv).r > 0.5) {
+                    return vec4(1.0);
+                }
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "sampleColor(colorMaps[colorIndex]" not in generated
+    assert "vec4 crossgl_dynamic_sampler_value;" in generated
+    assert "switch (colorIndex)" in generated
+    assert "crossgl_dynamic_sampler_value = sampleColor(colorMaps[0], uv);" in generated
+    assert "crossgl_dynamic_sampler_value = sampleColor(colorMaps[1], uv);" in generated
+    assert "if ((crossgl_dynamic_sampler_value.r > 0.5)) {" in generated
+
+
+def test_webgl_codegen_lowers_direct_dynamic_sampler_array_if_condition():
+    shader = """
+    shader WebGLDirectDynamicSamplerArrayIfCondition {
+        fragment {
+            uniform sampler2D colorMaps[2];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                if (texture(colorMaps[colorIndex], uv).r > 0.5) {
+                    return vec4(1.0);
+                }
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "texture(colorMaps[colorIndex]" not in generated
+    assert "vec4 crossgl_dynamic_sampler_value;" in generated
+    assert "switch (colorIndex)" in generated
+    assert "crossgl_dynamic_sampler_value = texture(colorMaps[0], uv);" in generated
+    assert "crossgl_dynamic_sampler_value = texture(colorMaps[1], uv);" in generated
+    assert "if ((crossgl_dynamic_sampler_value.r > 0.5)) {" in generated
+
+
+def test_webgl_codegen_lowers_dynamic_sampler_array_while_condition():
+    shader = """
+    shader WebGLDynamicSamplerArrayWhileCondition {
+        fragment {
+            uniform sampler2D colorMaps[2];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                float threshold = 0.25;
+                while (texture(colorMaps[colorIndex], uv).r > threshold) {
+                    threshold = threshold + 0.25;
+                }
+                return vec4(threshold);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "texture(colorMaps[colorIndex]" not in generated
+    assert "while (true) {" in generated
+    assert "switch (colorIndex)" in generated
+    assert "if (!((crossgl_dynamic_sampler_value.r > threshold))) {" in generated
+    assert "break;" in generated
+
+
+def test_webgl_codegen_lowers_dynamic_sampler_array_for_condition():
+    shader = """
+    shader WebGLDynamicSamplerArrayForCondition {
+        fragment {
+            uniform sampler2D colorMaps[2];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                float total = 0.0;
+                for (int i = 0; texture(colorMaps[colorIndex], uv).r > 0.5; i = i + 1) {
+                    total = total + float(i);
+                }
+                return vec4(total);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "texture(colorMaps[colorIndex]" not in generated
+    assert "for (int i = 0; ; i = (i + 1)) {" in generated
+    assert "switch (colorIndex)" in generated
+    assert "if (!((crossgl_dynamic_sampler_value.r > 0.5))) {" in generated
+    assert "break;" in generated
+
+
+def test_webgl_codegen_lowers_dynamic_sampler_array_do_while_condition():
+    shader = """
+    shader WebGLDynamicSamplerArrayDoWhileCondition {
+        fragment {
+            uniform sampler2D colorMaps[2];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec4 color = vec4(0.0);
+                do {
+                    color = color + vec4(0.25);
+                } while (texture(colorMaps[colorIndex], uv).r > 0.5);
+                return color;
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "texture(colorMaps[colorIndex]" not in generated
+    assert "while (true) {" in generated
+    assert "color = (color + vec4(0.25));" in generated
+    assert "switch (colorIndex)" in generated
+    assert "if (!((crossgl_dynamic_sampler_value.r > 0.5))) {" in generated
+    assert "break;" in generated
+
+
+def test_webgl_codegen_rejects_dynamic_sampler_array_do_while_condition_with_continue():
+    shader = """
+    shader WebGLDynamicSamplerArrayDoWhileContinue {
+        fragment {
+            uniform sampler2D colorMaps[2];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                do {
+                    continue;
+                } while (texture(colorMaps[colorIndex], uv).r > 0.5);
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="dynamic sampler array do-while condition",
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
 
 
 def test_webgl_aliases_format_as_glsl():
@@ -573,6 +958,33 @@ def test_webgl_control_flow_emits_if_for_while_and_continue():
     assert "while ((total < 3.0)) {" in generated
 
 
+def test_webgl_match_literal_and_wildcard_lowers_to_switch():
+    shader = """
+    shader WebGLMatch {
+        fragment {
+            vec4 main() @ gl_FragColor {
+                int mode = 1;
+                int value = 0;
+                match mode {
+                    0 => { value = 1; }
+                    1 => { value = 2; }
+                    _ => { value = 3; }
+                }
+                return vec4(float(value), 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "switch (mode)" in generated
+    assert "case 0:" in generated
+    assert "case 1:" in generated
+    assert "default:" in generated
+    assert "fragColor = vec4(float(value), 0.0, 0.0, 1.0);" in generated
+
+
 def test_webgl_function_declarations_and_calls_emit_glsl_es_helpers():
     shader = """
     shader WebGLFunctions {
@@ -644,6 +1056,64 @@ def test_webgl_vector_and_matrix_expressions_emit_glsl_es_arithmetic():
     assert "vec4 local = vec4(position, 1.0);" in generated
     assert "vec4 projected = (transform * local);" in generated
     assert "gl_Position = (projected + vec4(0.0, 0.0, 0.0, 0.0));" in generated
+
+
+@pytest.mark.parametrize(
+    ("stage", "return_type", "semantic", "return_value", "expected"),
+    (
+        ("vertex", "float", "gl_Position", "1.0", "must be vec4"),
+        ("fragment", "vec4", "gl_FragDepth", "vec4(1.0)", "must be scalar float"),
+    ),
+)
+def test_webgl_codegen_return_semantics_validate_builtin_types(
+    stage,
+    return_type,
+    semantic,
+    return_value,
+    expected,
+):
+    shader = f"""
+    shader WebGLBadReturnSemantic {{
+        {stage} {{
+            {return_type} main() @ {semantic} {{
+                return {return_value};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=rf"WebGL {stage} stage function 'main' return semantic '{semantic}' {expected}",
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+def test_webgl_codegen_struct_semantics_validate_builtin_types():
+    shader = """
+    shader WebGLBadStructSemantic {
+        struct VSOutput {
+            float position @ gl_Position;
+        };
+
+        vertex {
+            VSOutput main() {
+                VSOutput output;
+                output.position = 1.0;
+                return output;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL vertex stage struct 'VSOutput' member 'position' "
+            "semantic 'gl_Position' must be vec4"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
 
 
 def test_webgl_codegen_rejects_non_webgl_stages():
@@ -754,6 +1224,177 @@ def test_webgl_codegen_rejects_storage_image_resources():
         WebGLCodeGen().generate(parse_shader(shader))
 
 
+def test_webgl_codegen_rejects_atomic_counter_resources():
+    shader = """
+    shader WebGLNoAtomicCounter {
+        atomic_uint counter;
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target does not support atomic counter resource "
+            r"'counter' \(atomic_uint\)"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+@pytest.mark.parametrize(
+    "member_type,resource_kind,diagnostic_type",
+    (
+        ("sampler2D", "sampled", "sampler2D"),
+        ("texture2D", "sampled", "sampler2D"),
+        ("image2D", "storage image", "image2D"),
+        ("atomic_uint", "atomic counter", "atomic_uint"),
+    ),
+)
+def test_webgl_codegen_rejects_opaque_resource_members_in_cbuffers(
+    member_type,
+    resource_kind,
+    diagnostic_type,
+):
+    shader = f"""
+    shader WebGLNoOpaqueCBufferMember {{
+        cbuffer MaterialData {{
+            {member_type} resourceMember;
+            float factor;
+        }};
+
+        fragment {{
+            vec4 main() @ gl_FragColor {{
+                return vec4(factor);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"WebGL target does not support {resource_kind} resource member "
+            rf"'resourceMember' in constant buffer 'MaterialData' "
+            rf"\({diagnostic_type}\)"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+def test_webgl_codegen_rejects_opaque_resource_members_in_constant_buffers():
+    shader = """
+    shader WebGLNoOpaqueConstantBufferMember {
+        struct MaterialData {
+            sampler2D colorTex;
+            float factor;
+        };
+        ConstantBuffer<MaterialData> material @binding(0);
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target does not support sampled resource member "
+            r"'colorTex' in constant buffer 'material' \(sampler2D\)"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+def test_webgl_codegen_rejects_opaque_resource_members_in_uniform_blocks():
+    shader = """
+    shader WebGLNoOpaqueUniformBlockMember {
+        struct MaterialData {
+            texture2D colorTex;
+            vec4 tint;
+        };
+        uniform MaterialData material @binding(0);
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target does not support sampled resource member "
+            r"'colorTex' in uniform block 'material' \(sampler2D\)"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+def test_webgl_codegen_rejects_opaque_resource_members_in_interface_blocks():
+    shader = """
+    shader WebGLNoOpaqueInterfaceBlockMember {
+        @glsl_interface_block(in) @glsl_interface_instance(fragmentInput)
+        struct FragmentInputBlock {
+            sampler2D colorTex;
+            vec2 uv;
+        };
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target does not support sampled resource member "
+            r"'colorTex' in interface block 'FragmentInputBlock' \(sampler2D\)"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+def test_webgl_codegen_preserves_regular_uniform_blocks_and_sampler_uniforms():
+    shader = """
+    shader WebGLRegularUniformResources {
+        struct MaterialData {
+            vec4 tint;
+            float factor;
+        };
+        uniform MaterialData material @binding(0);
+        uniform sampler2D colorTex;
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(colorTex, uv) * material.tint * material.factor;
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "layout(std140) uniform MaterialData" in generated
+    assert "vec4 tint;" in generated
+    assert "float factor;" in generated
+    assert "uniform sampler2D colorTex;" in generated
+    assert "resource member" not in generated
+
+
 @pytest.mark.parametrize(
     "resource_type,diagnostic_type",
     (
@@ -847,7 +1488,10 @@ def test_webgl_codegen_rejects_storage_image_intrinsics():
     (
         "textureGather(colorTex, uv)",
         "textureGatherOffset(colorTex, uv, ivec2(0, 0))",
+        "textureGatherOffsets(colorTex, uv, ivec2(-1, 0), ivec2(0, -1), ivec2(1, 0), ivec2(0, 1))",
         "textureGatherCompare(colorTex, uv, 0.5)",
+        "textureGatherCompareOffset(colorTex, uv, 0.5, ivec2(0, 0))",
+        "textureGatherCompareOffsets(colorTex, uv, 0.5, ivec2(-1, 0), ivec2(0, -1), ivec2(1, 0), ivec2(0, 1))",
     ),
 )
 def test_webgl_codegen_rejects_glsl_es_310_texture_gather_intrinsics(call):
@@ -873,6 +1517,36 @@ def test_webgl_codegen_rejects_glsl_es_310_texture_gather_intrinsics(call):
         WebGLCodeGen().generate(parse_shader(shader))
 
 
+@pytest.mark.parametrize(
+    "call",
+    (
+        "float(textureQueryLevels(colorTex))",
+        "textureQueryLod(colorTex, uv).x",
+    ),
+)
+def test_webgl_codegen_rejects_desktop_texture_query_intrinsics(call):
+    shader = f"""
+    shader WebGLNoDesktopTextureQuery {{
+        sampler2D colorTex;
+
+        fragment {{
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {{
+                return vec4({call}, 0.0, 0.0, 1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target requires GLSL ES 3.00 and does not support "
+            "texture query intrinsic"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
 def test_webgl_codegen_rejects_atomics():
     shader = """
     shader WebGLNoAtomics {
@@ -889,6 +1563,53 @@ def test_webgl_codegen_rejects_atomics():
     with pytest.raises(
         ValueError,
         match="WebGL target does not support atomic operation 'atomicAdd'",
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+def test_webgl_codegen_rejects_wave_intrinsics():
+    shader = """
+    shader WebGLNoWave {
+        fragment {
+            vec4 main() @ gl_FragColor {
+                uint total = WaveActiveSum(1u);
+                return vec4(float(total));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target does not support wave/subgroup intrinsic " "'WaveActiveSum'"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+@pytest.mark.parametrize(
+    "call",
+    ("workgroupBarrier()", "memoryBarrier()", "GroupMemoryBarrierWithGroupSync()"),
+)
+def test_webgl_codegen_rejects_synchronization_intrinsics(call):
+    shader = f"""
+    shader WebGLNoSynchronization {{
+        fragment {{
+            vec4 main() @ gl_FragColor {{
+                {call};
+                return vec4(1.0);
+            }}
+        }}
+    }}
+    """
+
+    func_name = call.split("(", 1)[0]
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target does not support synchronization intrinsic " rf"'{func_name}'"
+        ),
     ):
         WebGLCodeGen().generate(parse_shader(shader))
 

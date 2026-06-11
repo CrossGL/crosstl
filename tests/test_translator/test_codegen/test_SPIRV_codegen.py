@@ -2156,6 +2156,36 @@ class TestVulkanSPIRVCodeGen:
         assert "SPIR-V codegen does not support generic functions" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_generic_numeric_trait_calls_specialize_to_spirv_arithmetic(self, tmp_path):
+        source_code = """
+        shader GenericNumericTraitLowering {
+            generic<T> fn add_one(value: T) -> T {
+                let one = T::one();
+                let zero = T::zero();
+                return value.add(one).sub(zero);
+            }
+
+            compute {
+                void main() {
+                    float f = add_one(2.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpFAdd" in spv_code
+        assert "OpFSub" in spv_code
+        assert "T::one" not in spv_code
+        assert "T::zero" not in spv_code
+        assert "Unknown type T" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_unspecialized_generic_function_reports_helper_context(self):
         source_code = """
         shader GenericFunctionDiagnostic {

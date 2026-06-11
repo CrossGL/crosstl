@@ -54,6 +54,45 @@ _SYNTHETIC_BUILTIN_ALIASES = {
     "thread_local_id": "gl_LocalInvocationID",
     "block_dim": "gl_WorkGroupSize",
 }
+_IMAGE_RESOURCE_TYPE_NAMES = {
+    "image1D",
+    "image1DArray",
+    "image2D",
+    "image2DArray",
+    "image2DMS",
+    "image2DMSArray",
+    "image3D",
+    "iimage1D",
+    "iimage1DArray",
+    "iimage2D",
+    "iimage2DArray",
+    "iimage2DMS",
+    "iimage2DMSArray",
+    "iimage3D",
+    "uimage1D",
+    "uimage1DArray",
+    "uimage2D",
+    "uimage2DArray",
+    "uimage2DMS",
+    "uimage2DMSArray",
+    "uimage3D",
+}
+_SAMPLER_RESOURCE_TYPE_NAMES = {
+    "sampler",
+    "sampler1D",
+    "sampler1DArray",
+    "sampler2D",
+    "sampler2DArray",
+    "sampler2DMS",
+    "sampler2DMSArray",
+    "sampler2DShadow",
+    "sampler2DArrayShadow",
+    "sampler3D",
+    "samplerCube",
+    "samplerCubeArray",
+    "samplerCubeShadow",
+    "samplerCubeArrayShadow",
+}
 
 
 class OpenCLTargetUnsupportedError(ValueError):
@@ -477,6 +516,43 @@ def _target_kernel_cbuffer(function_name, scalar_parameters, binding):
     )
 
 
+def _parameter_type_base_name(parameter):
+    param_type = getattr(parameter, "param_type", None)
+    while isinstance(param_type, ArrayType):
+        param_type = param_type.element_type
+    if isinstance(param_type, NamedType):
+        return param_type.name
+    return ""
+
+
+def _is_resource_parameter(parameter):
+    return _parameter_type_base_name(parameter) in (
+        _IMAGE_RESOURCE_TYPE_NAMES | _SAMPLER_RESOURCE_TYPE_NAMES
+    )
+
+
+def _has_binding_attribute(parameter):
+    return _parameter_binding(parameter) is not None
+
+
+def _target_resource_variable(function_name, parameter, binding):
+    attributes = list(getattr(parameter, "attributes", []) or [])
+    if not _has_binding_attribute(parameter):
+        attributes.append(_binding_attribute(binding))
+    variable = VariableNode(
+        parameter.name,
+        _clone_target_type(getattr(parameter, "param_type", None)),
+        attributes=attributes,
+    )
+    variable.resource_qualifiers = list(
+        getattr(parameter, "resource_qualifiers", []) or []
+    )
+    return _mark_directx_relocatable_binding(
+        variable,
+        f"OpenCL target-lowered resource parameter {function_name}.{parameter.name}",
+    )
+
+
 def _resource_qualifiers(parameter):
     return {
         str(qualifier).lower()
@@ -890,6 +966,15 @@ def normalize_opencl_intermediate_for_target(cgl_ast):
                             f"{function.name}.{parameter.name}"
                         ),
                     )
+                )
+                continue
+            if _is_resource_parameter(parameter):
+                binding = _parameter_binding(parameter)
+                if binding is None:
+                    binding = next_binding
+                next_binding = max(next_binding, binding + 1)
+                global_variables.append(
+                    _target_resource_variable(function.name, parameter, binding)
                 )
                 continue
             scalar_parameters.append(parameter)
