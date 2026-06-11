@@ -1322,6 +1322,12 @@ RUNTIME_REFERENCE_BUILD_EXTENSIONS = frozenset(
         ".vcxproj",
     )
 )
+TARGET_ONLY_UNSUPPORTED_SOURCE_ARTIFACT_EXTENSIONS = (
+    ".wgsl",
+    ".wesl",
+    ".webgl.glsl",
+    ".webgl.glsl.json",
+)
 RUNTIME_REFERENCE_NON_TARGET_BACKENDS = frozenset(("opencl",))
 RUNTIME_REFERENCE_RULES = (
     (
@@ -2667,9 +2673,17 @@ def _skipped_counts_by_extension(
         path = record.get("path")
         if not _is_non_empty_string(path):
             continue
-        extension = _extension_rollup_key(Path(path).suffix.lower())
+        extension = _extension_rollup_key(_skipped_source_extension(path))
         counts[extension] = counts.get(extension, 0) + 1
     return dict(sorted(counts.items()))
+
+
+def _skipped_source_extension(path: str) -> str:
+    filename = PurePosixPath(path.replace("\\", "/")).name.lower()
+    for extension in TARGET_ONLY_UNSUPPORTED_SOURCE_ARTIFACT_EXTENSIONS:
+        if filename.endswith(extension):
+            return extension
+    return Path(path).suffix.lower()
 
 
 def _skipped_counts_by_source_override(
@@ -5675,6 +5689,10 @@ def _iter_scan_candidates(config: ProjectConfig) -> list[Path]:
     )
     if not explicit_include_patterns:
         include_patterns = [f"**/*{extension}" for extension in known_extensions]
+        include_patterns.extend(
+            f"**/*{extension}"
+            for extension in TARGET_ONLY_UNSUPPORTED_SOURCE_ARTIFACT_EXTENSIONS
+        )
         include_patterns.extend(source_override_patterns)
 
     candidates: set[Path] = set()

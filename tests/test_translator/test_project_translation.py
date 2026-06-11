@@ -1135,39 +1135,92 @@ def test_scan_project_reports_extensionless_unsupported_sources(tmp_path):
     )
 
 
-def test_scan_project_skips_known_unsupported_source_artifacts(tmp_path):
+@pytest.mark.parametrize("explicit_include", (False, True))
+def test_scan_project_skips_known_unsupported_source_artifacts(
+    tmp_path,
+    explicit_include,
+):
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "crosstl.toml").write_text(
-        textwrap.dedent("""
-            [project]
-            include = ["**/*"]
-            exclude = []
-            """).strip(),
-        encoding="utf-8",
-    )
+    if explicit_include:
+        (repo / "crosstl.toml").write_text(
+            textwrap.dedent("""
+                [project]
+                include = ["**/*"]
+                exclude = []
+                """).strip(),
+            encoding="utf-8",
+        )
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
     (repo / "compiled.spv").write_bytes(b"\x03\x02#shader-binary")
     (repo / "future.wgsl").write_text("@compute fn main() {}\n", encoding="utf-8")
+    (repo / "future.wesl").write_text("@compute fn main() {}\n", encoding="utf-8")
+    (repo / "generated.webgl.glsl").write_text(
+        "#version 300 es\nvoid main() {}\n",
+        encoding="utf-8",
+    )
+    (repo / "generated.webgl.glsl.json").write_text(
+        '{"stage": "fragment"}\n',
+        encoding="utf-8",
+    )
 
     config = load_project_config(repo)
     scan = scan_project(config)
     payload = scan.to_report(targets=["cgl"]).to_json()
 
-    assert [unit.relative_path for unit in scan.units] == ["simple.cgl"]
-    assert scan.skipped == [
-        {"path": "compiled.spv", "reason": "unsupported-extension"},
+    expected_skipped = [
+        {"path": "future.wesl", "reason": "unsupported-extension"},
         {"path": "future.wgsl", "reason": "unsupported-extension"},
+        {"path": "generated.webgl.glsl", "reason": "unsupported-extension"},
+        {"path": "generated.webgl.glsl.json", "reason": "unsupported-extension"},
     ]
-    assert payload["summary"]["skippedByReason"] == {"unsupported-extension": 2}
-    assert payload["summary"]["skippedByExtension"] == {".spv": 1, ".wgsl": 1}
+    if explicit_include:
+        expected_skipped.insert(
+            0,
+            {"path": "compiled.spv", "reason": "unsupported-extension"},
+        )
+    expected_skipped_by_extension = {
+        ".webgl.glsl": 1,
+        ".webgl.glsl.json": 1,
+        ".wesl": 1,
+        ".wgsl": 1,
+    }
+    if explicit_include:
+        expected_skipped_by_extension[".spv"] = 1
+
+    assert [unit.relative_path for unit in scan.units] == ["simple.cgl"]
+    assert scan.skipped == expected_skipped
+    assert payload["summary"]["skippedByReason"] == {
+        "unsupported-extension": len(expected_skipped),
+    }
+    assert payload["summary"]["skippedByExtension"] == expected_skipped_by_extension
     diagnostics_by_file = {
         diagnostic.location.file: diagnostic for diagnostic in scan.diagnostics
     }
-    assert diagnostics_by_file["compiled.spv"].code == "project.scan.unsupported-source"
-    assert "Binary SPIR-V input files" in diagnostics_by_file["compiled.spv"].message
+    if explicit_include:
+        assert (
+            diagnostics_by_file["compiled.spv"].code
+            == "project.scan.unsupported-source"
+        )
+        assert (
+            "Binary SPIR-V input files" in diagnostics_by_file["compiled.spv"].message
+        )
     assert diagnostics_by_file["future.wgsl"].code == "project.scan.unsupported-source"
     assert "WGSL/WebGPU source files" in diagnostics_by_file["future.wgsl"].message
+    assert diagnostics_by_file["future.wesl"].code == "project.scan.unsupported-source"
+    assert "WGSL/WebGPU source files" in diagnostics_by_file["future.wesl"].message
+    assert (
+        diagnostics_by_file["generated.webgl.glsl"].code
+        == "project.scan.unsupported-source"
+    )
+    assert "WebGL target files" in diagnostics_by_file["generated.webgl.glsl"].message
+    assert (
+        diagnostics_by_file["generated.webgl.glsl.json"].code
+        == "project.scan.unsupported-source"
+    )
+    assert (
+        "WebGL target files" in diagnostics_by_file["generated.webgl.glsl.json"].message
+    )
 
 
 def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units(tmp_path):
