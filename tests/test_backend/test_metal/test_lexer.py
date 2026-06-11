@@ -62,6 +62,16 @@ def assert_literal_present(
     assert False, f"Literal {raw} not found in tokens"
 
 
+def test_tokenizes_numeric_heavy_generated_identifier_as_single_token():
+    tokens = tokenize_code(
+        "float nvfp4_quantize_float_gs_16_b_4(float value) { return value; }"
+    )
+
+    assert ("IDENTIFIER", "nvfp4_quantize_float_gs_16_b_4") in tokens
+    assert ("NUMBER", "16") not in tokens
+    assert ("NUMBER", "4") not in tokens
+
+
 def test_tokenizes_structs_functions_and_attributes():
     code = """
     #include <metal_stdlib>
