@@ -2365,11 +2365,81 @@ DIRECTX_DXC_ENTRY_PROFILES = (
     ("MSMain", "ms_6_5"),
 )
 DIRECTX_DXC_DEFAULT_ENTRY_PROFILE = ("VSMain", "vs_6_0")
+DIRECTX_DXC_PROFILE_BY_ENTRY = dict(DIRECTX_DXC_ENTRY_PROFILES)
+DIRECTX_DXC_STAGE_PROFILES = {
+    "vertex": "vs_6_0",
+    "fragment": "ps_6_0",
+    "pixel": "ps_6_0",
+    "compute": "cs_6_0",
+    "geometry": "gs_6_0",
+    "tessellation_control": "hs_6_0",
+    "hull": "hs_6_0",
+    "tessellation_evaluation": "ds_6_0",
+    "domain": "ds_6_0",
+    "task": "as_6_5",
+    "amplification": "as_6_5",
+    "mesh": "ms_6_5",
+}
+DIRECTX_DXC_STAGE_BY_ENTRY = {
+    entry: stage
+    for entry, stage in (
+        ("VSMain", "vertex"),
+        ("PSMain", "fragment"),
+        ("CSMain", "compute"),
+        ("GSMain", "geometry"),
+        ("HSMain", "tessellation_control"),
+        ("DSMain", "tessellation_evaluation"),
+        ("ASMain", "task"),
+        ("MSMain", "mesh"),
+    )
+}
+DIRECTX_DXC_STAGE_BY_SHADER_ATTRIBUTE = {
+    "vertex": "vertex",
+    "pixel": "fragment",
+    "fragment": "fragment",
+    "compute": "compute",
+    "geometry": "geometry",
+    "hull": "tessellation_control",
+    "domain": "tessellation_evaluation",
+    "amplification": "task",
+    "mesh": "mesh",
+}
+DIRECTX_DXC_LIBRARY_STAGES = frozenset(
+    (
+        "ray_generation",
+        "ray_intersection",
+        "ray_any_hit",
+        "ray_closest_hit",
+        "ray_miss",
+        "ray_callable",
+    )
+)
 DIRECTX_DXC_VRS_MIN_PROFILE_BY_STAGE = {
     "vs": "vs_6_4",
     "ps": "ps_6_4",
     "gs": "gs_6_4",
 }
+DIRECTX_HLSL_FUNCTION_RE = re.compile(
+    r"(?P<attributes>(?:\s*\[[^\]]+\]\s*)*)"
+    r"(?P<return_type>(?:[A-Za-z_][\w:<>,]*\s+)+?)"
+    r"(?P<name>[A-Za-z_]\w*)\s*"
+    r"\((?P<parameters>[^;{}]*)\)"
+    r"(?:\s*:\s*(?P<return_semantic>[A-Za-z_]\w*))?\s*\{",
+    re.MULTILINE,
+)
+DIRECTX_HLSL_STRUCT_RE = re.compile(
+    r"\bstruct\s+(?P<name>[A-Za-z_]\w*)\s*\{(?P<body>.*?)\}\s*;",
+    re.DOTALL,
+)
+DIRECTX_HLSL_SHADER_ATTR_RE = re.compile(
+    r"\[\s*shader\s*\(\s*\"([^\"]+)\"\s*\)\s*\]", re.IGNORECASE
+)
+DIRECTX_HLSL_NUMTHREADS_RE = re.compile(
+    r"\[\s*numthreads\s*\(", re.IGNORECASE
+)
+DIRECTX_HLSL_SEMANTIC_RE = re.compile(
+    r":\s*(?P<semantic>[A-Za-z_]\w*)\b", re.IGNORECASE
+)
 TOOLCHAIN_SMOKE_TIMEOUT_SECONDS = 30
 TOOLCHAIN_TIMEOUT_RETURNCODE = 124
 RUNTIME_ADAPTER_CATALOG = {
@@ -20406,7 +20476,8 @@ def _runtime_loader_directx_entry_profiles(
     if not _is_non_empty_string(package_path):
         return (DIRECTX_DXC_DEFAULT_ENTRY_PROFILE,)
     return _directx_dxc_entry_profiles(
-        _runtime_loader_package_artifact_path(package_path, package_root)
+        _runtime_loader_package_artifact_path(package_path, package_root),
+        artifact=adapter,
     )
 
 
@@ -33582,7 +33653,9 @@ def _toolchain_smoke_commands(
     if target == "directx":
         return [
             (command, "artifact")
-            for command in _directx_dxc_smoke_commands(tools[0], artifact_path)
+            for command in _directx_dxc_smoke_commands(
+                tools[0], artifact_path, artifact=artifact
+            )
         ]
     if target in {"opengl", "webgl"}:
         source_stage = _glslang_source_stage(artifact)
@@ -33616,7 +33689,10 @@ def _toolchain_smoke_command(
     artifact: Mapping[str, Any] | None = None,
 ) -> tuple[list[str], str] | None:
     if target == "directx":
-        return _directx_dxc_smoke_command(tools[0], artifact_path), "artifact"
+        return (
+            _directx_dxc_smoke_command(tools[0], artifact_path, artifact=artifact),
+            "artifact",
+        )
     if target in {"opengl", "webgl"}:
         return (
             [tools[0], "--stdin", "-S", _glslang_stage(artifact_path, artifact)],
@@ -33697,12 +33773,22 @@ def _filter_glslang_guarded_stage_source(source: str, macro: str) -> str:
     return "".join(output)
 
 
-def _directx_dxc_smoke_command(tool: str, artifact_path: Path) -> list[str]:
-    return _directx_dxc_smoke_commands(tool, artifact_path)[0]
+def _directx_dxc_smoke_command(
+    tool: str,
+    artifact_path: Path,
+    *,
+    artifact: Mapping[str, Any] | None = None,
+) -> list[str]:
+    return _directx_dxc_smoke_commands(tool, artifact_path, artifact=artifact)[0]
 
 
-def _directx_dxc_smoke_commands(tool: str, artifact_path: Path) -> list[list[str]]:
-    entry_profiles = _directx_dxc_entry_profiles(artifact_path)
+def _directx_dxc_smoke_commands(
+    tool: str,
+    artifact_path: Path,
+    *,
+    artifact: Mapping[str, Any] | None = None,
+) -> list[list[str]]:
+    entry_profiles = _directx_dxc_entry_profiles(artifact_path, artifact=artifact)
     if entry_profiles is None:
         return [[tool, "-T", "lib_6_3", str(artifact_path), "-Fo", os.devnull]]
 
@@ -33736,11 +33822,13 @@ def _directx_dxc_entry_profile(artifact_path: Path) -> tuple[str, str] | None:
 
 def _directx_dxc_entry_profiles(
     artifact_path: Path,
+    *,
+    artifact: Mapping[str, Any] | None = None,
 ) -> tuple[tuple[str, str], ...] | None:
     try:
         source = artifact_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return (DIRECTX_DXC_DEFAULT_ENTRY_PROFILE,)
+        source = ""
 
     lowered = source.lower()
     if any(
@@ -33749,21 +33837,257 @@ def _directx_dxc_entry_profiles(
     ):
         return None
 
-    matches = []
-    for entry, profile in DIRECTX_DXC_ENTRY_PROFILES:
-        match = re.search(rf"\b{re.escape(entry)}\s*\(", source)
-        if match:
-            matches.append(
-                (
-                    match.start(),
-                    entry,
-                    _directx_dxc_profile_for_source(profile, source),
-                )
-            )
-    if not matches:
-        return (DIRECTX_DXC_DEFAULT_ENTRY_PROFILE,)
+    artifact_entry_profiles = _directx_dxc_entry_profiles_from_artifact(
+        artifact, source=source
+    )
+    if artifact_entry_profiles is None:
+        return None
+    if artifact_entry_profiles:
+        return artifact_entry_profiles
 
-    return tuple((entry, profile) for _position, entry, profile in sorted(matches))
+    if source:
+        source_entry_profiles = _directx_dxc_entry_profiles_from_source(source)
+        if source_entry_profiles is None:
+            return None
+        if source_entry_profiles:
+            return source_entry_profiles
+
+    return (DIRECTX_DXC_DEFAULT_ENTRY_PROFILE,)
+
+
+def _directx_dxc_entry_profiles_from_artifact(
+    artifact: Mapping[str, Any] | None,
+    *,
+    source: str,
+) -> tuple[tuple[str, str], ...] | None:
+    if not isinstance(artifact, Mapping):
+        return ()
+
+    candidates = []
+    for position, entry_point in enumerate(_directx_dxc_artifact_entry_points(artifact)):
+        name = entry_point.get("name")
+        if not _is_non_empty_string(name):
+            continue
+        profile = _directx_dxc_profile_for_entry_record(entry_point)
+        if profile is None:
+            return None
+        if not _is_non_empty_string(profile):
+            continue
+        candidates.append(
+            (
+                position,
+                str(name),
+                _directx_dxc_profile_for_source(str(profile), source),
+                str(name) in DIRECTX_DXC_PROFILE_BY_ENTRY,
+            )
+        )
+
+    return _directx_dxc_preferred_entry_profiles(candidates)
+
+
+def _directx_dxc_artifact_entry_points(
+    artifact: Mapping[str, Any],
+) -> list[Mapping[str, Any]]:
+    entry_points: list[Mapping[str, Any]] = []
+
+    for entry_point in _record_sequence(artifact.get("entryPoints")):
+        if isinstance(entry_point, Mapping):
+            entry_points.append(entry_point)
+
+    for entry_profile in _record_sequence(artifact.get("entryProfiles")):
+        if not isinstance(entry_profile, Mapping):
+            continue
+        entry = entry_profile.get("entry", entry_profile.get("name"))
+        if not _is_non_empty_string(entry):
+            continue
+        entry_points.append(
+            {
+                "name": entry,
+                "profile": entry_profile.get("profile"),
+                "stage": entry_profile.get("stage"),
+            }
+        )
+
+    host_interface = artifact.get("hostInterface")
+    if isinstance(host_interface, Mapping):
+        for entry_point in _record_sequence(host_interface.get("entryPoints")):
+            if isinstance(entry_point, Mapping):
+                entry_points.append(entry_point)
+
+    return entry_points
+
+
+def _directx_dxc_profile_for_entry_record(
+    entry_point: Mapping[str, Any],
+) -> str | None:
+    profile = entry_point.get("profile", entry_point.get("shaderModel"))
+    if _is_non_empty_string(profile):
+        return str(profile)
+
+    stage = entry_point.get("stage")
+    if _is_non_empty_string(stage):
+        return _directx_dxc_profile_for_stage(str(stage))
+
+    name = entry_point.get("name")
+    if _is_non_empty_string(name):
+        generic_profile = DIRECTX_DXC_PROFILE_BY_ENTRY.get(str(name))
+        if generic_profile is not None:
+            return generic_profile
+    return ""
+
+
+def _directx_dxc_profile_for_stage(stage: str) -> str | None:
+    normalized = stage.strip().lower().replace("-", "_")
+    if normalized in DIRECTX_DXC_LIBRARY_STAGES:
+        return None
+    return DIRECTX_DXC_STAGE_PROFILES.get(normalized, "")
+
+
+def _directx_dxc_entry_profiles_from_source(
+    source: str,
+) -> tuple[tuple[str, str], ...] | None:
+    struct_semantics = _directx_hlsl_struct_semantics(source)
+    candidates = []
+    for match in DIRECTX_HLSL_FUNCTION_RE.finditer(source):
+        name = match.group("name")
+        stage = _directx_hlsl_function_stage(match, struct_semantics)
+        if stage is None:
+            continue
+        profile = _directx_dxc_profile_for_stage(stage)
+        if profile is None:
+            return None
+        if not profile:
+            continue
+        candidates.append(
+            (
+                match.start(),
+                name,
+                _directx_dxc_profile_for_source(profile, source),
+                name in DIRECTX_DXC_PROFILE_BY_ENTRY,
+            )
+        )
+
+    return _directx_dxc_preferred_entry_profiles(candidates)
+
+
+def _directx_dxc_preferred_entry_profiles(
+    candidates: Sequence[tuple[int, str, str, bool]],
+) -> tuple[tuple[str, str], ...]:
+    if not candidates:
+        return ()
+
+    concrete_stages = {
+        profile.split("_", 1)[0]
+        for _position, _entry, profile, is_generic in candidates
+        if not is_generic
+    }
+    selected = [
+        (position, entry, profile)
+        for position, entry, profile, is_generic in candidates
+        if not is_generic or profile.split("_", 1)[0] not in concrete_stages
+    ]
+
+    deduped = []
+    seen_entries: set[tuple[str, str]] = set()
+    for position, entry, profile in sorted(selected):
+        key = (entry, profile)
+        if key in seen_entries:
+            continue
+        seen_entries.add(key)
+        deduped.append((entry, profile))
+    return tuple(deduped)
+
+
+def _directx_hlsl_struct_semantics(source: str) -> dict[str, tuple[str, ...]]:
+    semantics_by_struct: dict[str, tuple[str, ...]] = {}
+    for match in DIRECTX_HLSL_STRUCT_RE.finditer(source):
+        semantics_by_struct[match.group("name")] = tuple(
+            semantic_match.group("semantic")
+            for semantic_match in DIRECTX_HLSL_SEMANTIC_RE.finditer(
+                match.group("body")
+            )
+        )
+    return semantics_by_struct
+
+
+def _directx_hlsl_function_stage(
+    match: re.Match[str],
+    struct_semantics: Mapping[str, Sequence[str]],
+) -> str | None:
+    attributes = match.group("attributes") or ""
+    shader_match = DIRECTX_HLSL_SHADER_ATTR_RE.search(attributes)
+    if shader_match:
+        attribute = shader_match.group(1).strip().lower()
+        if attribute in DIRECTX_DXC_LIBRARY_ATTRIBUTES:
+            return _directx_dxc_library_stage(attribute)
+        return DIRECTX_DXC_STAGE_BY_SHADER_ATTRIBUTE.get(attribute)
+
+    if DIRECTX_HLSL_NUMTHREADS_RE.search(attributes):
+        return "compute"
+
+    name = match.group("name")
+    generic_stage = DIRECTX_DXC_STAGE_BY_ENTRY.get(name)
+    if generic_stage is not None:
+        return generic_stage
+
+    semantic_stage = _directx_hlsl_return_semantic_stage(
+        match.group("return_semantic")
+    )
+    if semantic_stage is not None:
+        return semantic_stage
+
+    return_type = _directx_hlsl_return_type_name(match.group("return_type") or "")
+    return _directx_hlsl_struct_stage(struct_semantics.get(return_type, ()))
+
+
+def _directx_dxc_library_stage(attribute: str) -> str:
+    return {
+        "raygeneration": "ray_generation",
+        "intersection": "ray_intersection",
+        "anyhit": "ray_any_hit",
+        "closesthit": "ray_closest_hit",
+        "miss": "ray_miss",
+        "callable": "ray_callable",
+    }.get(attribute, f"ray_{attribute}")
+
+
+def _directx_hlsl_return_type_name(return_type: str) -> str:
+    qualifiers = {
+        "const",
+        "precise",
+        "static",
+        "row_major",
+        "column_major",
+        "inline",
+    }
+    tokens = [
+        token
+        for token in re.findall(r"[A-Za-z_]\w*", return_type)
+        if token not in qualifiers
+    ]
+    return tokens[-1] if tokens else ""
+
+
+def _directx_hlsl_return_semantic_stage(semantic: str | None) -> str | None:
+    if not _is_non_empty_string(semantic):
+        return None
+    normalized = str(semantic).upper()
+    if normalized.startswith(("SV_TARGET", "SV_DEPTH", "SV_COVERAGE")):
+        return "fragment"
+    if normalized == "SV_STENCILREF":
+        return "fragment"
+    if normalized == "SV_POSITION":
+        return "vertex"
+    return None
+
+
+def _directx_hlsl_struct_stage(semantics: Sequence[str]) -> str | None:
+    stages = [_directx_hlsl_return_semantic_stage(semantic) for semantic in semantics]
+    if "fragment" in stages:
+        return "fragment"
+    if "vertex" in stages:
+        return "vertex"
+    return None
 
 
 def _directx_dxc_profile_for_source(profile: str, source: str) -> str:
