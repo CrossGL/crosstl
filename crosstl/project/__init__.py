@@ -1,5 +1,15 @@
 """Project scanning, translation, validation, and reporting APIs."""
 
+from .host_reflection import (
+    REFLECTION_AMBIGUOUS_BINDING,
+    REFLECTION_EMPTY,
+    REFLECTION_INCOMPLETE_OUTPUT,
+    REFLECTION_PARSE_FAILED,
+    REFLECTION_TOOL_UNAVAILABLE,
+    REFLECTION_UNSUPPORTED_FORMAT,
+    ReflectionDiagnostic,
+    reflect_target_host_interface,
+)
 from .pipeline import (
     ProjectConfig,
     ProjectDiagnostic,
@@ -26,16 +36,6 @@ from .pipeline import (
     scan_project,
     translate_project,
     validate_project_report,
-)
-from .host_reflection import (
-    REFLECTION_AMBIGUOUS_BINDING,
-    REFLECTION_EMPTY,
-    REFLECTION_INCOMPLETE_OUTPUT,
-    REFLECTION_PARSE_FAILED,
-    REFLECTION_TOOL_UNAVAILABLE,
-    REFLECTION_UNSUPPORTED_FORMAT,
-    ReflectionDiagnostic,
-    reflect_target_host_interface,
 )
 from .runtime_verification import (
     DirectXRuntimeParityAdapter,
