@@ -31,6 +31,9 @@ from crosstl.translator.codegen.directx_codegen import (
 )
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from tests.test_backend.test_SPIRV.test_codegen import (
+    SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
+)
 
 
 def tokenize_code(code: str) -> List:
@@ -348,6 +351,31 @@ def test_glsl_pervertex_position_output_lowers_to_hlsl_sv_position(tmp_path):
     assert "float4 gl_Position: TEXCOORD" not in generated_code
     assert "float3 outColor: TEXCOORD0;" in generated_code
     assert generated_code.count(": TEXCOORD0") == 1
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_spirv_pervertex_position_output_lowers_to_hlsl_vertex_contract(tmp_path):
+    shader_path = tmp_path / "glpervertex.vert.spvasm"
+    shader_path.write_text(
+        SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
+        encoding="utf-8",
+    )
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+    )
+
+    assert "struct VertexInput" in generated_code
+    assert "float4 ua_position: TEXCOORD0;" in generated_code
+    assert "struct VertexOutput" in generated_code
+    assert "float4 position: SV_POSITION;" in generated_code
+    assert "VertexOutput VSMain(VertexInput input)" in generated_code
+    assert "output.position = input.ua_position;" in generated_code
+    assert "return output;" in generated_code
+    assert "gl_Position" not in generated_code
+    assert "_ua_position" not in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 

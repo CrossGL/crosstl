@@ -40,6 +40,9 @@ from crosstl.project import (
     validate_project_report,
 )
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
+from tests.test_backend.test_SPIRV.test_codegen import (
+    SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -7565,6 +7568,42 @@ def test_translate_project_spirv_assembly_vertex_position_lowers_to_wgsl(tmp_pat
     if shutil.which("naga"):
         assert payload["validation"]["artifacts"][0]["status"] == "ok"
         assert payload["validation"]["toolchainRuns"][0]["status"] == "ok"
+
+
+def test_translate_project_spirv_pervertex_position_lowers_to_directx(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "basic_src.spvasm").write_text(
+        SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    hlsl = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    assert "struct VertexInput" in hlsl
+    assert "float4 ua_position: TEXCOORD0;" in hlsl
+    assert "struct VertexOutput" in hlsl
+    assert "float4 position: SV_POSITION;" in hlsl
+    assert "VertexOutput VSMain(VertexInput input)" in hlsl
+    assert "output.position = input.ua_position;" in hlsl
+    assert "return output;" in hlsl
+    assert "gl_Position" not in hlsl
+    assert "_ua_position" not in hlsl
+    assert_directx_vertex_validates_if_available(hlsl, tmp_path)
 
 
 def test_translate_project_glsl_usampler_texel_fetch_lowers_to_cuda_hip_slang(
