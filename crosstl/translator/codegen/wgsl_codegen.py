@@ -259,6 +259,7 @@ class WGSLCodeGen:
         "store3",
         "store4",
     }
+    SUPPORTED_GLSL_BUFFER_BLOCK_LAYOUTS = {"std430"}
     SAMPLED_TEXTURE_TYPE_MAP = {
         "sampler1d": "texture_1d<f32>",
         "sampler2d": "texture_2d<f32>",
@@ -336,7 +337,9 @@ class WGSLCodeGen:
         self._structs_by_name = {}
         self._struct_member_types = {}
         self._struct_resource_paths = {}
+        self._glsl_buffer_block_struct_names = set()
         self._module_variable_types = {}
+        self._module_storage_access_modes = {}
         self._module_resource_bindings = {}
         self._function_resource_member_parameters = {}
         self._reserved_bindings_by_group = {}
@@ -359,7 +362,9 @@ class WGSLCodeGen:
         self._structs_by_name = {}
         self._struct_member_types = {}
         self._struct_resource_paths = {}
+        self._glsl_buffer_block_struct_names = set()
         self._module_variable_types = {}
+        self._module_storage_access_modes = {}
         self._module_resource_bindings = {}
         self._function_resource_member_parameters = {}
         self._reserved_bindings_by_group = {}
@@ -390,6 +395,21 @@ class WGSLCodeGen:
             for node in global_variable_nodes
             if getattr(node, "name", "")
         }
+        helper_function_nodes = list(self._helper_functions(ast, target_stage))
+        all_function_nodes = list(helper_function_nodes)
+        all_function_nodes.extend(
+            stage_node.entry_point
+            for stage_node in self._stage_nodes(ast, target_stage)
+            if getattr(stage_node, "entry_point", None) is not None
+        )
+        self._glsl_buffer_block_struct_names = (
+            self.collect_glsl_buffer_block_struct_names(
+                global_variable_nodes, all_function_nodes
+            )
+        )
+        self._module_storage_access_modes = self.module_storage_access_modes(
+            global_variable_nodes
+        )
         self.reserve_explicit_resource_bindings(cbuffers, global_variable_nodes)
         if structs:
             emitted_sections.append(
@@ -414,8 +434,7 @@ class WGSLCodeGen:
             emitted_sections.append("\n".join(global_variables))
 
         helper_functions = [
-            self.generate_function(func)
-            for func in self._helper_functions(ast, target_stage)
+            self.generate_function(func) for func in helper_function_nodes if func
         ]
         if helper_functions:
             emitted_sections.append("\n\n".join(helper_functions))
@@ -580,6 +599,11 @@ class WGSLCodeGen:
     def generate_parameter(self, node):
         attributes = self.wgsl_attributes(node.attributes, direction="in")
         prefix = f"{attributes} " if attributes else ""
+        if self.is_glsl_buffer_block_parameter(node):
+            raise ValueError(
+                "WGSL target does not support GLSL buffer block parameters yet; "
+                "use module-scope storage bindings"
+            )
         unsupported_storage_type = self.unsupported_storage_buffer_type_name(
             node.param_type
         )
@@ -750,10 +774,19 @@ class WGSLCodeGen:
     def generate_struct(self, node):
         if getattr(node, "generic_params", None):
             raise ValueError("WGSL target does not support generic structs yet")
+        if node.name in self._glsl_buffer_block_struct_names:
+            self.validate_glsl_buffer_block_struct(node)
         lines = [f"struct {node.name} {{"]
         for member in node.members:
             resource_type_name = self.struct_member_resource_type_name(member)
             if resource_type_name:
+                if node.name in self._glsl_buffer_block_struct_names:
+                    raise ValueError(
+                        "WGSL target does not support resource member "
+                        f"{node.name}.{member.name} of type {resource_type_name} "
+                        "inside GLSL buffer blocks; declare textures, samplers, "
+                        "and storage resources as module-scope bindings"
+                    )
                 if self.supported_struct_resource_member(member):
                     continue
                 raise ValueError(
@@ -800,6 +833,8 @@ class WGSLCodeGen:
             return self.generate_sampler_global_variable(node)
         if self.is_buffer_pointer_type(node.var_type, node.qualifiers):
             return self.generate_buffer_pointer_global_variable(node)
+        if self.is_glsl_buffer_block_variable(node):
+            return self.generate_glsl_buffer_block_global_variable(node)
 
         qualifier_names = {str(qualifier).lower() for qualifier in node.qualifiers}
         address_space = "private"
@@ -939,6 +974,20 @@ class WGSLCodeGen:
             f"{self.buffer_pointer_storage_type(node.var_type)};"
         )
 
+    def generate_glsl_buffer_block_global_variable(self, node):
+        self.validate_glsl_buffer_block_variable(node)
+        if node.initial_value is not None:
+            raise ValueError(
+                "WGSL target does not support initializers for GLSL buffer block "
+                f"resource {node.name}"
+            )
+        attributes = (
+            self.explicit_binding_attributes(node) or self.next_binding_attributes()
+        )
+        access = self.glsl_buffer_block_access(node)
+        type_name = self.glsl_buffer_block_struct_name(node.var_type)
+        return f"{attributes}\nvar<storage, {access}> {node.name}: {type_name};"
+
     def generate_statement(self, stmt, indent=0):
         pad = "    " * indent
         if isinstance(stmt, BlockNode):
@@ -1077,6 +1126,7 @@ class WGSLCodeGen:
         return "\n".join(lines)
 
     def generate_assignment(self, node):
+        self.validate_storage_assignment_target(node.target)
         return (
             f"{self.generate_expression(node.target)} {node.operator} "
             f"{self.generate_expression(node.value)}"
@@ -1130,6 +1180,11 @@ class WGSLCodeGen:
             resource_binding = self.resource_member_binding_for_access(expr)
             if resource_binding is not None:
                 return resource_binding["binding_name"]
+            if (
+                isinstance(expr.object_expr, IdentifierNode)
+                and self.is_pointer_identifier(expr.object_expr.name)
+            ):
+                return f"(*{expr.object_expr.name}).{expr.member}"
             return f"{self.generate_expression(expr.object_expr)}." f"{expr.member}"
         if isinstance(expr, SwizzleNode):
             return f"{self.generate_expression(expr.vector_expr)}." f"{expr.components}"
@@ -1771,6 +1826,135 @@ class WGSLCodeGen:
             return vtype.strip()
         return str(vtype)
 
+    def is_glsl_buffer_block_variable(self, node):
+        if self.is_buffer_pointer_type(
+            getattr(node, "var_type", None), getattr(node, "qualifiers", [])
+        ):
+            return False
+        if self.glsl_buffer_block_attribute(node) is not None:
+            return True
+        qualifier_names = {
+            str(qualifier).lower() for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if "buffer" not in qualifier_names:
+            return False
+        struct_name = self.glsl_buffer_block_struct_name(
+            getattr(node, "var_type", None)
+        )
+        return struct_name in self._structs_by_name
+
+    def is_glsl_buffer_block_parameter(self, node):
+        return self.glsl_buffer_block_attribute(node) is not None
+
+    def glsl_buffer_block_attribute(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            key = self.semantic_key(str(getattr(attr, "name", attr)))
+            if key == "glsl_buffer_block":
+                return attr
+        return None
+
+    def glsl_buffer_block_layout(self, node):
+        attr = self.glsl_buffer_block_attribute(node)
+        if attr is None:
+            qualifier_names = {
+                self.semantic_key(str(qualifier))
+                for qualifier in getattr(node, "qualifiers", []) or []
+            }
+            if "buffer" in qualifier_names:
+                return "std430"
+            return None
+        arguments = getattr(attr, "arguments", []) or []
+        if not arguments:
+            return None
+        return self.semantic_key(self.generate_attribute_argument(arguments[0]))
+
+    def glsl_buffer_block_struct_name(self, vtype):
+        return self.struct_type_name(self.array_element_type(vtype))
+
+    def glsl_buffer_block_access(self, node):
+        qualifiers = {
+            self.semantic_key(str(qualifier))
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        attributes = {
+            self.semantic_key(str(getattr(attr, "name", attr)))
+            for attr in getattr(node, "attributes", []) or []
+        }
+        names = qualifiers | attributes
+        if "readonly" in names:
+            return "read"
+        if "writeonly" in names:
+            return "write"
+        return "read_write"
+
+    def validate_glsl_buffer_block_layout(self, node, resource_name):
+        layout = self.glsl_buffer_block_layout(node)
+        if layout not in self.SUPPORTED_GLSL_BUFFER_BLOCK_LAYOUTS:
+            layout_name = layout or "unspecified"
+            raise ValueError(
+                "WGSL target only supports std430 GLSL buffer block layout "
+                f"for {resource_name}; got {layout_name}"
+            )
+
+    def validate_glsl_buffer_block_variable(self, node):
+        self.validate_glsl_buffer_block_layout(node, node.name)
+        if isinstance(getattr(node, "var_type", None), ArrayType):
+            raise ValueError(
+                "WGSL target does not support GLSL buffer block arrays yet; "
+                "declare each block as a separate storage binding"
+            )
+        struct_name = self.glsl_buffer_block_struct_name(node.var_type)
+        if not struct_name:
+            raise ValueError(
+                "WGSL target requires GLSL buffer block resource "
+                f"{node.name} to use a named struct type"
+            )
+
+    def validate_glsl_buffer_block_struct(self, node):
+        members = list(getattr(node, "members", []) or [])
+        for index, member in enumerate(members):
+            member_type = getattr(member, "member_type", None)
+            resource_type_name = self.struct_member_resource_type_name(member)
+            if resource_type_name:
+                continue
+            if self.structured_buffer_element_type(self.array_element_type(member_type)):
+                raise ValueError(
+                    "WGSL target does not support storage-buffer resource member "
+                    f"{node.name}.{member.name} inside GLSL buffer blocks"
+                )
+            if (
+                self.unsized_array_type(member_type) is not None
+                and index != len(members) - 1
+            ):
+                raise ValueError(
+                    "WGSL target requires runtime-sized array member "
+                    f"{node.name}.{member.name} to be the final GLSL buffer block member"
+                )
+
+    def collect_glsl_buffer_block_struct_names(self, global_variables, functions):
+        struct_names = set()
+        for variable in global_variables:
+            if not self.is_glsl_buffer_block_variable(variable):
+                continue
+            struct_name = self.glsl_buffer_block_struct_name(variable.var_type)
+            if struct_name:
+                struct_names.add(struct_name)
+        for function in functions:
+            for parameter in getattr(function, "parameters", []) or []:
+                if not self.is_glsl_buffer_block_parameter(parameter):
+                    continue
+                struct_name = self.glsl_buffer_block_struct_name(parameter.param_type)
+                if struct_name:
+                    struct_names.add(struct_name)
+        return struct_names
+
+    def module_storage_access_modes(self, global_variables):
+        modes = {}
+        for variable in global_variables:
+            if self.is_glsl_buffer_block_variable(variable):
+                modes[variable.name] = self.glsl_buffer_block_access(variable)
+        return modes
+
     def is_buffer_pointer_type(self, vtype, qualifiers=()):
         if not isinstance(vtype, PointerType):
             return False
@@ -2063,6 +2247,20 @@ class WGSLCodeGen:
         if alias is not None:
             return alias
         return self._module_resource_bindings.get((root_name, tuple(path)))
+
+    def storage_access_mode(self, name):
+        return self._module_storage_access_modes.get(name)
+
+    def validate_storage_assignment_target(self, target):
+        access_path = self.expression_access_path(target)
+        if access_path is None:
+            return
+        root_name, _path = access_path
+        if self.storage_access_mode(root_name) == "read":
+            raise ValueError(
+                "WGSL target cannot write read-only GLSL buffer block resource "
+                f"{root_name}"
+            )
 
     def resource_member_parameter_declarations(self, root_name, root_type):
         declarations = []

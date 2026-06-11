@@ -132,6 +132,25 @@ shader ExternalValidatorWGSLCompute {
 """
 
 
+CROSSGL_WGSL_BUFFER_BLOCK_SHADER = """
+shader ExternalValidatorWGSLBufferBlock {
+    layout(std430, set = 1, binding = 2) readonly buffer InputBlock {
+        float values[];
+    } inputBlock;
+    layout(std430, binding = 3) buffer OutputBlock {
+        float values[];
+    } outputBlock;
+    compute {
+        layout(local_size_x = 4, local_size_y = 1, local_size_z = 1) in;
+        void main(uint3 gid @ gl_GlobalInvocationID) {
+            outputBlock.values[gid.x] = inputBlock.values[gid.x];
+            return;
+        }
+    }
+}
+"""
+
+
 GLSL_SPECIALIZATION_CONSTANT_VERTEX_SHADER = """
 #version 400
 
@@ -2042,6 +2061,7 @@ def _run_validator_or_skip_unsupported_extension(
         CROSSGL_WGSL_GRAPHICS_SHADER,
         CROSSGL_WGSL_RESOURCE_SHADER,
         CROSSGL_WGSL_COMPUTE_SHADER,
+        CROSSGL_WGSL_BUFFER_BLOCK_SHADER,
     ),
 )
 def test_generated_wgsl_validates_with_naga(tmp_path, shader_source):

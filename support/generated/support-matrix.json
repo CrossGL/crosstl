@@ -399,7 +399,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 58,
+        "unsupported_marker_count": 63,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
@@ -443,6 +443,10 @@
           },
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
+            "text": "\"WGSL target does not support GLSL buffer block parameters yet; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/wgsl_codegen.py",
             "text": "unsupported_storage_type = self.unsupported_storage_buffer_type_name("
           },
           {
@@ -476,10 +480,6 @@
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
             "text": "\"WGSL target does not support implicit builtin identifier(s): \""
-          },
-          {
-            "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "+ \", \".join(unsupported)"
           }
         ]
       },
@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 58
+        "test_count": 63
       },
       "translator_codegen": {
         "exists": true,
@@ -1330,17 +1330,7 @@
       }
     }
   ],
-  "backlog": [
-    {
-      "backend": "WebGPU / WGSL",
-      "backend_id": "wgsl",
-      "category": "resources",
-      "feature": "GLSL buffer block lowering",
-      "feature_id": "resources.glsl_buffer_blocks",
-      "notes": "textureSize calls lower to WGSL textureDimensions for sampled texture resources with optional mip-level operands. LOD queries, level-count queries, sample-count queries, storage-image queries, multisample resources, and array/cube-array coordinate-specialization edge cases remain deterministic diagnostics or future work.",
-      "status": "partial"
-    }
-  ],
+  "backlog": [],
   "features": [
     {
       "category": "target",
@@ -3729,10 +3719,14 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_glsl_buffer_blocks_to_storage_struct_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_glsl_buffer_block_parameters",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsupported_glsl_buffer_block_shapes",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_writes_to_readonly_glsl_buffer_blocks",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_wgsl_validates_with_naga"
           ],
-          "notes": "textureSize calls lower to WGSL textureDimensions for sampled texture resources with optional mip-level operands. LOD queries, level-count queries, sample-count queries, storage-image queries, multisample resources, and array/cube-array coordinate-specialization edge cases remain deterministic diagnostics or future work.",
-          "status": "partial"
+          "notes": "GLSL layout(std430) buffer blocks and explicit @glsl_buffer_block variables lower to WGSL storage-buffer struct bindings with explicit or automatic group/binding metadata, read-only/read-write access modes, direct member and runtime-array member access, read-only write diagnostics, and Naga validation coverage. Non-std430 layouts, block arrays, buffer-block helper parameters, and resource or storage-buffer members inside blocks remain deterministic WGSL diagnostics under this feature contract.",
+          "status": "supported"
         }
       }
     },
@@ -15254,7 +15248,7 @@
   },
   "summary": {
     "backend_count": 11,
-    "backlog_count": 1,
+    "backlog_count": 0,
     "feature_count": 67,
     "status_counts": {
       "cuda": {
@@ -15339,8 +15333,8 @@
       },
       "wgsl": {
         "diagnostic": 20,
-        "partial": 1,
-        "supported": 39,
+        "partial": 0,
+        "supported": 40,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 7
