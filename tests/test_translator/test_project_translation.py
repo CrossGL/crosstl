@@ -34070,6 +34070,82 @@ def test_translate_project_metal_matmul_device_buffers_do_not_emit_directx_param
     assert "void CSMain(float*" not in output
 
 
+def test_translate_project_metal_matmul_buffers_lower_to_wgsl_resources(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "matmul.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct MatMulParams {
+                uint row_dim_x;
+                uint col_dim_x;
+                uint inner_dim;
+            };
+
+            kernel void mat_mul_simple1(
+                constant MatMulParams& params [[buffer(0)]],
+                device const float* A [[buffer(1)]],
+                device const float* B [[buffer(2)]],
+                device float* X [[buffer(3)]],
+                uint3 gid [[thread_position_in_grid]]
+            ) {
+                uint row = gid.y;
+                uint col = gid.x;
+                float sum = 0.0;
+
+                if (row < params.row_dim_x && col < params.col_dim_x) {
+                    for (uint inner = 0; inner < params.inner_dim; inner++) {
+                        uint index_A = (row * params.inner_dim) + inner;
+                        uint index_B = (inner * params.col_dim_x) + col;
+                        sum += A[index_A] * B[index_B];
+                    }
+
+                    uint index = (row * params.col_dim_x) + col;
+                    X[index] = sum;
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["wgsl"],
+        output_dir="out",
+        validate=True,
+    ).to_json()
+
+    assert payload["summary"]["diagnosticCounts"]["error"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("wgsl", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "@group(0) @binding(0)\nvar<uniform> params: MatMulParams;" in output
+    assert "@group(0) @binding(1)\nvar<storage, read> A: array<f32>;" in output
+    assert "@group(0) @binding(2)\nvar<storage, read> B: array<f32>;" in output
+    assert "@group(0) @binding(3)\nvar<storage, read_write> X: array<f32>;" in output
+    assert "fn compute_main(@builtin(global_invocation_id) gid: vec3<u32>)" in output
+    assert "A[index_A]" in output
+    assert "B[index_B]" in output
+    assert "X[index] = sum;" in output
+    assert "params.row_dim_x" in output
+    assert "params.col_dim_x" in output
+    assert "params.inner_dim" in output
+    assert "StructuredBuffer<float> A" not in output
+    assert "StructuredBuffer<float> B" not in output
+    assert "RWStructuredBuffer<float> X" not in output
+    assert "constant MatMulParams" not in output
+    assert "float* A" not in output
+    assert "float* B" not in output
+    assert "float* X" not in output
+
+
 def test_translate_project_metal_matmul_buffers_lower_to_opengl_resources(
     tmp_path,
 ):
