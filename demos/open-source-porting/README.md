@@ -55,7 +55,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `spirv-cross-round-fragment` | `KhronosGroup/SPIRV-Cross` at `146679ff8255a6068518685599d7fb8761d1b570` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream fragment reference shader unchanged. |
 | `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. |
 | `angle-simple-texture-2d` | `google/angle` at `52232eaf409a28d77947df5622af274e1ef770c6` | BSD-style | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses extracted upstream SimpleTexture2D shader strings. |
-| `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. OpenGL and Vulkan target lowering are tracked in issues #971 and #972. |
+| `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, OpenGL, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. Metal target validation is tracked in issue #988. |
 | `arm-opengl-es-sdk-cube` | `ARM-software/opengl-es-sdk-for-android` at `c3caf759bb2e71fa9a118b3e3abd996cf00e660a` | MIT | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream cube shader pair unchanged. |
 | `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. OpenGL resource lowering is tracked in issue #973, and DirectX buffer-resource lowering is tracked in issue #974. |
 | `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, Metal, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. Host launch and memory-management integration remain outside the demo scope. |
@@ -152,10 +152,11 @@ Metal, and Vulkan. DirectX output was retested after issue #959 closed and is
 now checked with the other generated targets.
 
 The `donaldwuid/apple_metal_sample_code` mesh view-direction slice is checked
-through CrossGL. Returned `viewDir` preservation was retested after issue #951
-closed, but target artifacts remain excluded until OpenGL uniform-block member
-qualification and SPIR-V constant-buffer member diagnostics are resolved in
-issues #971 and #972.
+through CrossGL, OpenGL, DirectX, and Vulkan. Returned `viewDir` preservation
+was retested after issue #951 closed, and OpenGL and Vulkan output were
+restored after issues #971 and #972 closed. Metal output remains excluded
+until resource attributes are emitted outside `stage_in` wrapper structs; that
+translator follow-up is tracked in issue #988.
 
 The `DiligentGraphics/DiligentSamples` Tutorial02 Cube shaders from
 `Tutorials/Tutorial02_Cube/assets/cube.vsh` and

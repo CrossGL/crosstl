@@ -8,7 +8,10 @@
       "path": "AAPLMeshRenderer.metal",
       "sourceBackend": "metal",
       "targets": [
-        "cgl"
+        "cgl",
+        "opengl",
+        "directx",
+        "vulkan"
       ],
       "repository": "https://github.com/donaldwuid/apple_metal_sample_code",
       "commit": "0bc50e5b3670b3169855ab260e8da5ff07b53749",

@@ -87,6 +87,7 @@ jobs:
             --run-toolchains \
             --require-toolchain-runs \
             --case angle-simple-texture-2d \
+            --case apple-modern-rendering-mesh-viewdir \
             --case arm-opengl-es-sdk-cube \
             --case directx-graphics-samples-hello-triangle \
             --case directx-graphics-samples-hello-texture \
@@ -239,6 +240,7 @@ jobs:
             --case monogame-sprite-effect \
             --case openframeworks-noise-shader \
             --case angle-simple-texture-2d \
+            --case apple-modern-rendering-mesh-viewdir \
             --case arm-opengl-es-sdk-cube \
             --case sascha-willems-vulkan-headless-compute \
             --case slang-hello-world-compute \
@@ -277,6 +279,7 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/directx/noise.frag.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.vert.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.frag.hlsl PSMain ps_6_0
+          compile_hlsl demos/open-source-porting/cases/apple-modern-rendering-mesh-viewdir/crosstl-out/directx/AAPLMeshRenderer.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.vert.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.frag.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/directx/headless.hlsl CSMain cs_6_0
