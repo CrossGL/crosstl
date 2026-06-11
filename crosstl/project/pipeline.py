@@ -9143,7 +9143,15 @@ def _materialize_implicit_template_function_calls(
     materialized: str,
 ) -> _ImplicitTemplateMaterialization:
     templates = preprocessor._find_template_functions(materialized)
-    templates_by_name = {template.name: template for template in templates}
+    templates_by_name: dict[str, Any] = {}
+    overloaded_template_names: set[str] = set()
+    for template in templates:
+        if template.name in templates_by_name:
+            overloaded_template_names.add(template.name)
+            continue
+        templates_by_name[template.name] = template
+    for template_name in overloaded_template_names:
+        templates_by_name.pop(template_name, None)
     template_spans = preprocessor._find_template_declaration_spans(materialized)
     reachable_function_spans = preprocessor._reachable_function_spans(
         materialized,
@@ -9567,6 +9575,41 @@ def _metal_function_parameter_declarations(
         type_text, name = parsed
         declarations.append((type_text, name, variadic))
     return declarations
+
+
+def _metal_template_call_arity_matches(
+    parameter_declarations: Sequence[tuple[str, str, bool]],
+    call_argument_count: int,
+) -> bool:
+    if not any(variadic for _type_text, _name, variadic in parameter_declarations):
+        return len(parameter_declarations) == call_argument_count
+
+    minimum_argument_count = sum(
+        1 for _type_text, _name, variadic in parameter_declarations if not variadic
+    )
+    return call_argument_count >= minimum_argument_count
+
+
+def _metal_template_materialized_name(
+    preprocessor: Any,
+    function_name: str,
+    arguments: Sequence[str],
+    parameter_declarations: Sequence[tuple[str, str, bool]],
+    existing_names: Mapping[tuple[str, tuple[str, ...], tuple[str, ...]], str],
+) -> str:
+    base_name = preprocessor._template_specialization_identifier(
+        function_name,
+        list(arguments),
+    )
+    if base_name not in set(existing_names.values()):
+        return base_name
+
+    signature_parts = [
+        _normalize_metal_type_text(type_text).replace("...", "variadic")
+        for type_text, _name, _variadic in parameter_declarations
+    ]
+    suffix = hashlib.sha1("|".join(signature_parts).encode("utf-8")).hexdigest()[:8]
+    return f"{base_name}_{len(parameter_declarations)}_{suffix}"
 
 
 def _metal_function_return_type(
@@ -10004,6 +10047,11 @@ def _infer_plain_template_helper_arguments(
     )
     if not parameter_declarations:
         return None
+    if not _metal_template_call_arity_matches(
+        parameter_declarations,
+        len(call_arguments),
+    ):
+        return None
 
     template_parameters = set(getattr(template, "template_parameters", []) or [])
     variadic_parameters = set(
@@ -10112,9 +10160,9 @@ def _materialize_plain_template_helper_calls(
     str,
     list[dict[str, Any]],
     set[str],
-    dict[tuple[str, tuple[str, ...]], str],
+    dict[tuple[str, tuple[str, ...], tuple[str, ...]], str],
 ]:
-    materialized_names: dict[tuple[str, tuple[str, ...]], str] = {}
+    materialized_names: dict[tuple[str, tuple[str, ...], tuple[str, ...]], str] = {}
     specialization_records: list[dict[str, Any]] = []
     materialized_template_names: set[str] = set()
     working = source
@@ -10128,7 +10176,9 @@ def _materialize_plain_template_helper_calls(
                 materialized_template_names,
                 materialized_names,
             )
-        templates_by_name = {template.name: template for template in templates}
+        templates_by_name: dict[str, list[Any]] = {}
+        for template in templates:
+            templates_by_name.setdefault(template.name, []).append(template)
         template_spans = preprocessor._find_template_declaration_spans(working)
         reachable_function_spans = preprocessor._reachable_function_spans(
             working,
@@ -10172,25 +10222,40 @@ def _materialize_plain_template_helper_calls(
                 [function.body_span],
             )
             for function_name, call_arguments, span in calls:
-                template = templates_by_name.get(function_name)
-                if template is None:
+                candidate_templates = templates_by_name.get(function_name, [])
+                inferred_matches: list[tuple[Any, list[str], list[tuple[str, str, bool]]]] = []
+                for template in candidate_templates:
+                    arguments = _infer_plain_template_helper_arguments(
+                        preprocessor,
+                        template,
+                        call_arguments,
+                        type_environment,
+                        return_types,
+                    )
+                    if not arguments or not preprocessor._template_arguments_satisfy_parameters(
+                        template,
+                        arguments,
+                    ):
+                        continue
+                    parameter_declarations = _metal_function_parameter_declarations(
+                        preprocessor,
+                        _metal_template_header(template),
+                    )
+                    inferred_matches.append(
+                        (template, arguments, parameter_declarations)
+                    )
+                if len(inferred_matches) != 1:
                     continue
-                arguments = _infer_plain_template_helper_arguments(
-                    preprocessor,
-                    template,
-                    call_arguments,
-                    type_environment,
-                    return_types,
-                )
-                if not arguments or not preprocessor._template_arguments_satisfy_parameters(
-                    template,
-                    arguments,
-                ):
-                    continue
-                key = preprocessor._template_specialization_key(
+                template, arguments, parameter_declarations = inferred_matches[0]
+                specialization_key = preprocessor._template_specialization_key(
                     function_name,
                     arguments,
                 )
+                signature_key = tuple(
+                    _normalize_metal_type_text(type_text)
+                    for type_text, _name, _variadic in parameter_declarations
+                )
+                key = (specialization_key[0], specialization_key[1], signature_key)
                 materialized_name = materialized_names.get(key)
                 if materialized_name is None:
                     unique_count = len(materialized_names) + 1
@@ -10225,9 +10290,12 @@ def _materialize_plain_template_helper_calls(
                             requested_signature=requested_signature,
                             suggested_action=suggested_action,
                         )
-                    materialized_name = preprocessor._template_specialization_identifier(
+                    materialized_name = _metal_template_materialized_name(
+                        preprocessor,
                         function_name,
                         list(key[1]),
+                        parameter_declarations,
+                        materialized_names,
                     )
                     materialized_names[key] = materialized_name
                     materialized = preprocessor._materialize_template_function_with_name(
