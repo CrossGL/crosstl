@@ -1040,9 +1040,11 @@ EXTERNAL_FIXTURES = [
         "source_path": "mlx/backend/metal/kernels/fp_quantized.h",
         "roundtrip": True,
         "contains": [
-            "const int bytes_per_pack = get_bytes_per_pack_u3c32_u3e();",
+            "const int bytes_per_pack = get_bytes_per_pack_32();",
+            "int16 get_bytes_per_pack_32()",
+            "return 32 / 8;",
         ],
-        "not_contains": ["get_bytes_per_pack<32>"],
+        "not_contains": ["get_bytes_per_pack<32>", "get_bytes_per_pack_u3c32_u3e"],
         "source": (
             """
             // Reduced from MLX fp_qmv_fast_impl:

@@ -431,6 +431,37 @@ def test_metal_template_helper_specializes_to_concrete_opengl(tmp_path):
     assert not re.search(r"\b(?:T|U|IdxT)\b", generated)
 
 
+def test_metal_explicit_template_helper_specializes_to_concrete_opengl(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "explicit-template-helper.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template <typename T, typename IdxT, int Offset>
+        METAL_FUNC T add_offset(T value, IdxT index) {
+            return value + T(index + Offset);
+        }
+
+        kernel void k(device float* out [[buffer(0)]],
+                      uint gid [[thread_position_in_grid]]) {
+            out[gid] = add_offset<float, uint, 7>(1.0, gid);
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="opengl", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "float add_offset_float_uint_7(float value, uint index)" in generated
+    assert "return (value + float((index + 7)));" in generated
+    assert "add_offset_float_uint_7(1.0, gid)" in generated
+    assert not re.search(r"\b(?:T|IdxT|Offset)\b", generated)
+
+
 def test_metal_uint2_dispatch_id_promotes_to_directx_uint3(tmp_path):
     source_path = _write_source(
         tmp_path,
