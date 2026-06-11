@@ -28163,6 +28163,27 @@ def test_webgl_runtime_package_preserves_graphics_stage_artifacts(tmp_path):
         ["glslangValidator", "--stdin", "-S", "vert"],
         ["glslangValidator", "--stdin", "-S", "frag"],
     ]
+    assert [
+        load_unit["loadSteps"][-1]["metadata"]["commandInput"]
+        for load_unit in loader_manifest["loadUnits"]
+    ] == [
+        {
+            "mode": "stdin",
+            "source": {
+                "field": "packagePath",
+                "path": "artifacts/out/webgl/graphics.vert.webgl.glsl",
+            },
+            "stage": "vert",
+        },
+        {
+            "mode": "stdin",
+            "source": {
+                "field": "packagePath",
+                "path": "artifacts/out/webgl/graphics.frag.webgl.glsl",
+            },
+            "stage": "frag",
+        },
+    ]
     load_metadata = [
         load_unit["loadSteps"][0]["metadata"]
         for load_unit in loader_manifest["loadUnits"]
@@ -28453,12 +28474,20 @@ def test_runtime_loader_manifest_reports_blocked_host_interface_metadata(tmp_pat
         "load-source-remap",
         "validate-target-toolchain",
     ]
-    assert load_unit["loadSteps"][2]["command"] == [
+    validate_step = load_unit["loadSteps"][2]
+    assert validate_step["command"] == [
         "spirv-as",
         "artifacts/out/vulkan/simple.spvasm",
         "-o",
         project_pipeline.os.devnull,
     ]
+    assert validate_step["metadata"]["commandInput"] == {
+        "mode": "path",
+        "source": {
+            "field": "packagePath",
+            "path": "artifacts/out/vulkan/simple.spvasm",
+        },
+    }
     assert len(load_unit["blockers"]) == 1
     assert load_unit["blockers"][0]["kind"] == "resolve-host-interface-metadata"
     assert load_unit["blockers"][0]["severity"] == "warning"
