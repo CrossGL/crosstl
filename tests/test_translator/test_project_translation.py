@@ -40335,6 +40335,98 @@ def test_translate_project_groups_unresolved_template_bindings_by_signature(
     )
 
 
+def test_translate_project_metal_void_cast_before_unresolved_helper_is_diagnostic(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "steel_attention_nax_min.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename U>
+            U convert_value(uint value) {
+                return U(value);
+            }
+
+            template <typename T>
+            kernel void launch(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                (void)gid;
+                out[0] = convert_value(gid);
+            }
+
+            instantiate_kernel("launch_f32", launch, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl", "vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    expected_targets = {"directx", "opengl", "vulkan"}
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 3
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.template-materialization-unsupported": 3
+    }
+    assert "project.translate.failed" not in payload["summary"]["diagnosticsByCode"]
+    assert len(payload["diagnostics"]) == 3
+
+    for artifact in payload["artifacts"]:
+        assert artifact["target"] in expected_targets
+        assert artifact["status"] == "failed"
+        assert "list index out of range" not in artifact["error"]
+        assert "convert_value missing U" in artifact["error"]
+        materialization = artifact["templateMaterialization"]
+        assert materialization["status"] == "unsupported"
+        assert materialization["specializations"] == [
+            {
+                "name": "launch",
+                "materializedName": "launch_f32",
+                "parameters": {"T": "float"},
+                "parameterSources": {"T": "source-instantiation"},
+                "source": "source-instantiation",
+                "hostName": "launch_f32",
+            }
+        ]
+        assert materialization["unsupported"] == [
+            {
+                "name": "convert_value",
+                "parameters": ["U"],
+                "missingParameters": ["U"],
+                "reason": "missing-template-arguments",
+                "sourceDeclaration": {
+                    "file": "steel_attention_nax_min.metal",
+                    "line": 4,
+                    "column": 1,
+                    "name": "convert_value",
+                },
+                "target": artifact["target"],
+                "requiredSignature": "convert_value<U>",
+            }
+        ]
+
+    for diagnostic in payload["diagnostics"]:
+        assert diagnostic["code"] == (
+            "project.translate.template-materialization-unsupported"
+        )
+        assert diagnostic["target"] in expected_targets
+        assert diagnostic["sourceBackend"] == "metal"
+        assert diagnostic["location"]["file"] == "steel_attention_nax_min.metal"
+        assert diagnostic["location"]["line"] == 4
+        assert diagnostic["location"]["column"] == 1
+        assert diagnostic["missingCapabilities"] == ["template.specialization"]
+        assert "convert_value missing U" in diagnostic["message"]
+        assert "list index out of range" not in diagnostic["message"]
+
+
 def test_translate_project_variadic_template_helper_materializes_for_opengl(
     tmp_path,
 ):
