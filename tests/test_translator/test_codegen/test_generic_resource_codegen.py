@@ -74,7 +74,7 @@ def test_structured_buffer_parameters_preserve_element_type_for_core_backends():
         in hlsl
     )
     assert "float value = input.Load(index);" in hlsl
-    assert "data.Store(index, (value * 2.0));" in hlsl
+    assert "data[index] = (value * 2.0);" in hlsl
 
     metal = MetalCodeGen().generate(ast)
     assert (
@@ -125,7 +125,7 @@ def test_buffer_builtin_aliases_do_not_instantiate_same_named_generics():
 
     hlsl = HLSLCodeGen().generate(ast)
     assert "float value = input.Load(index);" in hlsl
-    assert "data.Store(index, (value * 2.0));" in hlsl
+    assert "data[index] = (value * 2.0);" in hlsl
     assert "buffer_load_" not in hlsl
     assert "buffer_store_" not in hlsl
 

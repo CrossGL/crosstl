@@ -968,9 +968,10 @@ def test_verify_runtime_test_manifest_runs_runtime_parity_adapter_pipeline(tmp_p
     assert report["success"] is True
     assert result["status"] == PASSED
     assert result["executor"]["name"] == "opengl-runtime-parity"
-    assert result["executor"]["details"]["runtimeParityAdapter"][
-        "runtimeAdapter"
-    ] == "vector-add-runtime"
+    assert (
+        result["executor"]["details"]["runtimeParityAdapter"]["runtimeAdapter"]
+        == "vector-add-runtime"
+    )
     assert [
         step["phase"] for step in result["executor"]["details"]["adapterSteps"]
     ] == [

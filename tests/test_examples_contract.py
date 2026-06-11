@@ -41,16 +41,12 @@ MOJO_PLACEHOLDER_EXAMPLE_CASES = (
     (
         "compute/ParticleSimulation.cgl",
         "mojo",
-        (
-            "# CrossGL GPU builtin placeholders",
-            "# CrossGL synchronization placeholders",
-        ),
+        ("# CrossGL synchronization placeholders",),
     ),
     (
         "gpu_computing/MatrixMultiplication.cgl",
         "mojo",
         (
-            "# CrossGL GPU builtin placeholders",
             "# CrossGL synchronization placeholders",
             "# CrossGL wave/subgroup placeholders",
         ),
@@ -58,18 +54,12 @@ MOJO_PLACEHOLDER_EXAMPLE_CASES = (
     (
         "cross_platform/UniversalPBRShader.cgl",
         "mojo",
-        (
-            "# CrossGL GPU builtin placeholders",
-            "# CrossGL resource placeholders",
-        ),
+        ("# CrossGL resource placeholders",),
     ),
     (
         "graphics/ComplexShader.cgl",
         "mojo",
-        (
-            "# CrossGL GPU builtin placeholders",
-            "# CrossGL resource placeholders",
-        ),
+        ("# CrossGL resource placeholders",),
     ),
 )
 MOJO_PLACEHOLDER_EXAMPLE_CASE_KEYS = {
@@ -95,41 +85,25 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
     ("cross_platform/UniversalPBRShader.cgl", "metal"),
     ("cross_platform/UniversalPBRShader.cgl", "opengl"),
     ("cross_platform/UniversalPBRShader.cgl", "webgl"),
+    ("cross_platform/UniversalPBRShader.cgl", "wgsl"),
     ("graphics/ComplexShader.cgl", "directx"),
     ("graphics/ComplexShader.cgl", "metal"),
     ("graphics/ComplexShader.cgl", "opengl"),
     ("graphics/ComplexShader.cgl", "webgl"),
+    ("graphics/ComplexShader.cgl", "wgsl"),
 )
 
-ADDITIONAL_FIXED_CASES = (("cross_platform/UniversalPBRShader.cgl", "slang"),)
+ADDITIONAL_FIXED_CASES = (
+    ("advanced/GenericPatternMatching.cgl", "hip"),
+    ("advanced/GenericPatternMatching.cgl", "slang"),
+    ("cross_platform/UniversalPBRShader.cgl", "slang"),
+)
 
 GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES = (
     (
         "advanced/GenericPatternMatching.cgl",
-        "vulkan",
-        "SPIR-V codegen does not support unspecialized generic helper "
-        "'safe_divide' with generic parameters (T); specialize the function "
-        "before SPIR-V generation",
-    ),
-    (
-        "advanced/GenericPatternMatching.cgl",
-        "cuda",
-        "CUDA codegen does not support generic functions",
-    ),
-    (
-        "advanced/GenericPatternMatching.cgl",
-        "hip",
-        "HIP codegen does not support generic functions",
-    ),
-    (
-        "advanced/GenericPatternMatching.cgl",
         "mojo",
-        "Mojo codegen does not support generic functions",
-    ),
-    (
-        "advanced/GenericPatternMatching.cgl",
-        "slang",
-        "Slang codegen does not support generic functions",
+        "Mojo generic payload enum specializations must be concrete",
     ),
 )
 
@@ -140,21 +114,6 @@ KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
         ValueError,
         "WGSL target cannot specialize generic struct Option; "
         "member OptionType uses unsupported EnumNode",
-    ),
-    (
-        "cross_platform/UniversalPBRShader.cgl",
-        "wgsl",
-        ValueError,
-        "WGSL target does not support resource arrays of sampler2D; "
-        "WebGPU/WGSL requires texture, sampler, image, and storage-buffer "
-        "resources to be declared as individual module-scope bindings",
-    ),
-    (
-        "graphics/ComplexShader.cgl",
-        "wgsl",
-        ValueError,
-        "WGSL target does not support CrossGL resource type image2D yet; "
-        "split texture/sampler/storage bindings are required",
     ),
 )
 

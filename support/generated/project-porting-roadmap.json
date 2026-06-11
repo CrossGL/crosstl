@@ -6183,6 +6183,146 @@
     },
     {
       "category": "project",
+      "description": "Execute deterministic host integration readiness checks from saved execution plans.",
+      "id": "project.runtime_host_integration_execution_result",
+      "name": "Runtime host integration execution result",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_json_writes_output"
+          ],
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, records scaffold-root and package-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_json_writes_output"
+          ],
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, records scaffold-root and package-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_json_writes_output"
+          ],
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, records scaffold-root and package-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_json_writes_output"
+          ],
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, records scaffold-root and package-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_json_writes_output"
+          ],
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, records scaffold-root and package-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_json_writes_output"
+          ],
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, records scaffold-root and package-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_json_writes_output"
+          ],
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, records scaffold-root and package-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_json_writes_output"
+          ],
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, records scaffold-root and package-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_json_writes_output"
+          ],
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, records scaffold-root and package-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_json_writes_output"
+          ],
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, records scaffold-root and package-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "wgsl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_json_writes_output"
+          ],
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, records scaffold-root and package-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Inspect existing project portability reports as concise JSON, text, or SARIF summaries for triage and migration planning.",
       "id": "project.report_inspection",
       "name": "Project report inspection",
@@ -9108,12 +9248,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 25,
+    "feature_count": 26,
     "status_counts": {
       "cuda": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 24,
+        "supported": 25,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9121,7 +9261,7 @@
       "directx": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 24,
+        "supported": 25,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9129,7 +9269,7 @@
       "hip": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 24,
+        "supported": 25,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9137,7 +9277,7 @@
       "metal": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 24,
+        "supported": 25,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9145,7 +9285,7 @@
       "mojo": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 24,
+        "supported": 25,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9153,7 +9293,7 @@
       "opengl": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 24,
+        "supported": 25,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9161,7 +9301,7 @@
       "rust": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 24,
+        "supported": 25,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9169,7 +9309,7 @@
       "slang": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 24,
+        "supported": 25,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9177,7 +9317,7 @@
       "vulkan": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 24,
+        "supported": 25,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9185,7 +9325,7 @@
       "webgl": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 24,
+        "supported": 25,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9193,7 +9333,7 @@
       "wgsl": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 24,
+        "supported": 25,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

@@ -718,10 +718,12 @@ class WGSLCodeGen:
                 ),
             ]
         self._stage_interface_builtin_members = self.stage_interface_builtin_members(
-            ast, target_stage, {getattr(struct, "name", ""): struct for struct in structs}
+            ast,
+            target_stage,
+            {getattr(struct, "name", ""): struct for struct in structs},
         )
-        self._stage_interface_member_locations = (
-            self.stage_interface_member_locations(ast, target_stage, structs)
+        self._stage_interface_member_locations = self.stage_interface_member_locations(
+            ast, target_stage, structs
         )
         cbuffers = self._collect_cbuffers(ast, target_stage)
         global_variable_nodes = self._collect_global_variables(ast, target_stage)
@@ -807,8 +809,8 @@ class WGSLCodeGen:
         self._uniform_buffer_struct_names = self.uniform_buffer_struct_names(
             cbuffers, global_variable_nodes, stage_resource_parameters
         )
-        self._uniform_scalar_array_wrappers = (
-            self.uniform_scalar_array_wrapper_names(cbuffers, structs)
+        self._uniform_scalar_array_wrappers = self.uniform_scalar_array_wrapper_names(
+            cbuffers, structs
         )
         self._module_storage_access_modes = self.module_storage_access_modes(
             global_variable_nodes, stage_resource_parameters
@@ -1430,9 +1432,7 @@ class WGSLCodeGen:
         parameters = ", ".join(
             list(leading_parameters)
             + [
-                self.generate_parameter(
-                    param, include_attributes=parameter_attributes
-                )
+                self.generate_parameter(param, include_attributes=parameter_attributes)
                 for param in func.parameters
                 if id(param) not in skip_parameter_ids
             ]
@@ -1670,7 +1670,9 @@ class WGSLCodeGen:
                 )
             attributes = self.wgsl_attributes(member.attributes, direction="generic")
             binding_kind, explicit_location = self.member_stage_binding(member)
-            builtin = self._stage_interface_builtin_members.get((node.name, member.name))
+            builtin = self._stage_interface_builtin_members.get(
+                (node.name, member.name)
+            )
             if builtin is not None:
                 attributes = f"@builtin({builtin})"
                 binding_kind = "builtin"
@@ -1690,9 +1692,7 @@ class WGSLCodeGen:
             base_location = (
                 implicit_location
                 if implicit_location is not None
-                else explicit_location
-                if binding_kind == "location"
-                else None
+                else explicit_location if binding_kind == "location" else None
             )
             if stage_array is not None and base_location is not None:
                 for index in range(stage_array["size"]):
@@ -1758,9 +1758,7 @@ class WGSLCodeGen:
             else:
                 member_type_name = self.type_name_string(member_type)
             prefix = f"{attributes} " if attributes else ""
-            lines.append(
-                f"    {prefix}{member_name}: {member_type_name},"
-            )
+            lines.append(f"    {prefix}{member_name}: {member_type_name},")
         lines.append("};")
         return "\n".join(lines)
 
@@ -1768,8 +1766,7 @@ class WGSLCodeGen:
         return {
             struct.name: struct
             for struct in structs
-            if getattr(struct, "name", None)
-            and getattr(struct, "generic_params", None)
+            if getattr(struct, "name", None) and getattr(struct, "generic_params", None)
         }
 
     def monomorphized_structs(self, ast, target_stage, source_structs):
@@ -1803,9 +1800,9 @@ class WGSLCodeGen:
                 or key in self._generic_struct_specialized_names
             ):
                 return
-            self._generic_struct_specialized_names[
-                key
-            ] = self.generic_struct_specialized_name_from_key(key)
+            self._generic_struct_specialized_names[key] = (
+                self.generic_struct_specialized_name_from_key(key)
+            )
             pending.append(vtype)
 
         def enqueue_from_ast_value(value):
@@ -1971,9 +1968,7 @@ class WGSLCodeGen:
                 return False
             _, generic_args = parsed
             return any(
-                self.type_node_contains_generic_parameter(
-                    arg, generic_parameter_names
-                )
+                self.type_node_contains_generic_parameter(arg, generic_parameter_names)
                 for arg in generic_args
             )
         if isinstance(vtype, NamedType):
@@ -2040,9 +2035,7 @@ class WGSLCodeGen:
         if isinstance(vtype, GenericType):
             return vtype.name
         if isinstance(vtype, str):
-            match = re.fullmatch(
-                r"\s*([A-Za-z_][0-9A-Za-z_]*)\s*<(.+)>\s*", vtype
-            )
+            match = re.fullmatch(r"\s*([A-Za-z_][0-9A-Za-z_]*)\s*<(.+)>\s*", vtype)
             if match is not None:
                 args = self.split_generic_constructor_arguments(match.group(2))
                 if args is not None:
@@ -2084,7 +2077,8 @@ class WGSLCodeGen:
             member_name = self.struct_member_identifier_name(node.name, member.name)
             prefix = (
                 "@align(16) "
-                if self.uniform_scalar_array_wrapper_name(member.member_type) is not None
+                if self.uniform_scalar_array_wrapper_name(member.member_type)
+                is not None
                 else ""
             )
             lines.append(
@@ -2427,11 +2421,8 @@ class WGSLCodeGen:
             var_type = self.local_variable_declaration_type(stmt)
             initializer = ""
             if stmt.initial_value is not None:
-                initializer = (
-                    " = "
-                    + self.generate_expression_for_target(
-                        stmt.initial_value, var_type
-                    )
+                initializer = " = " + self.generate_expression_for_target(
+                    stmt.initial_value, var_type
                 )
             variable_name = self.declare_local_identifier(stmt.name)
             line = (
@@ -2531,11 +2522,8 @@ class WGSLCodeGen:
             var_type = self.local_variable_declaration_type(init)
             initializer = ""
             if init.initial_value is not None:
-                initializer = (
-                    " = "
-                    + self.generate_expression_for_target(
-                        init.initial_value, var_type
-                    )
+                initializer = " = " + self.generate_expression_for_target(
+                    init.initial_value, var_type
                 )
             variable_name = self.declare_local_identifier(init.name)
             line = (
@@ -2587,13 +2575,13 @@ class WGSLCodeGen:
         )
 
     def generate_assignment_statement(self, node, indent):
-        stage_array_assignment = self.generate_stage_interface_array_assignment_statement(
-            node, indent
+        stage_array_assignment = (
+            self.generate_stage_interface_array_assignment_statement(node, indent)
         )
         if stage_array_assignment is not None:
             return stage_array_assignment
-        stage_matrix_assignment = self.generate_stage_interface_matrix_assignment_statement(
-            node, indent
+        stage_matrix_assignment = (
+            self.generate_stage_interface_matrix_assignment_statement(node, indent)
         )
         if stage_matrix_assignment is not None:
             return stage_matrix_assignment
@@ -2717,7 +2705,10 @@ class WGSLCodeGen:
         self, value_expression, value_type, component_index, component_count
     ):
         value_component_count = self.vector_component_count(value_type)
-        if value_component_count is not None and value_component_count >= component_count:
+        if (
+            value_component_count is not None
+            and value_component_count >= component_count
+        ):
             return f"({value_expression}).{'xyzw'[component_index]}"
         return value_expression
 
@@ -2888,10 +2879,9 @@ class WGSLCodeGen:
             if self.is_uniform_bool_member_access(expr):
                 access = f"{self.generate_expression(expr.object_expr)}.{member_name}"
                 return f"({access} != 0u)"
-            if (
-                isinstance(expr.object_expr, IdentifierNode)
-                and self.is_pointer_identifier(expr.object_expr.name)
-            ):
+            if isinstance(
+                expr.object_expr, IdentifierNode
+            ) and self.is_pointer_identifier(expr.object_expr.name):
                 pointer_name = self.identifier_name(expr.object_expr.name)
                 return f"(*{pointer_name}).{member_name}"
             return f"{self.generate_expression(expr.object_expr)}." f"{member_name}"
@@ -3176,7 +3166,9 @@ class WGSLCodeGen:
 
     def generate_call_arguments(self, function_name, arguments, function=None):
         metadata_key = (
-            self.function_signature_key(function) if function is not None else function_name
+            self.function_signature_key(function)
+            if function is not None
+            else function_name
         )
         texture_parameter_indices = self._function_texture_parameters.get(
             metadata_key, self._function_texture_parameters.get(function_name, ())
@@ -3198,9 +3190,11 @@ class WGSLCodeGen:
                 for parameter in getattr(function, "parameters", []) or []
             ]
             return ", ".join(
-                self.generate_expression_for_target(arg, parameter_types[index])
-                if index < len(parameter_types)
-                else self.generate_expression(arg)
+                (
+                    self.generate_expression_for_target(arg, parameter_types[index])
+                    if index < len(parameter_types)
+                    else self.generate_expression(arg)
+                )
                 for index, arg in enumerate(arguments)
             )
 
@@ -3236,7 +3230,10 @@ class WGSLCodeGen:
         parameters = list(getattr(resolved_function, "parameters", []) or [])
         dynamic_texture_args = []
         for index, (argument, parameter) in enumerate(zip(node.arguments, parameters)):
-            if self.sampled_texture_type(getattr(parameter, "param_type", None)) is None:
+            if (
+                self.sampled_texture_type(getattr(parameter, "param_type", None))
+                is None
+            ):
                 continue
             array_info = self.sampled_texture_array_access(argument)
             if array_info is None:
@@ -3292,7 +3289,9 @@ class WGSLCodeGen:
             if info.get("kind") == "texture_sample":
                 helpers.append(self.generate_sampled_texture_array_sample_helper(info))
             else:
-                helpers.append(self.generate_sampled_texture_array_dispatch_helper(info))
+                helpers.append(
+                    self.generate_sampled_texture_array_dispatch_helper(info)
+                )
         return "\n\n".join(helpers)
 
     def generate_sampled_texture_array_sample_helper(self, info):
@@ -4080,8 +4079,7 @@ class WGSLCodeGen:
             return vtype.name
         if isinstance(vtype, VectorType):
             return (
-                f"vec{vtype.size}<"
-                f"{self.raw_type_name_string(vtype.element_type)}>"
+                f"vec{vtype.size}<" f"{self.raw_type_name_string(vtype.element_type)}>"
             )
         if isinstance(vtype, MatrixType):
             return (
@@ -4107,9 +4105,7 @@ class WGSLCodeGen:
         if isinstance(vtype, ReferenceType):
             return self.raw_type_name_string(vtype.referenced_type)
         if isinstance(vtype, PointerType):
-            return (
-                f"{self.raw_type_name_string(vtype.pointee_type)}*"
-            )
+            return f"{self.raw_type_name_string(vtype.pointee_type)}*"
         return str(vtype)
 
     def builtin_option_payload_type(self, vtype):
@@ -4127,7 +4123,9 @@ class WGSLCodeGen:
     def builtin_option_specialization(self, vtype):
         if self.builtin_option_payload_type(vtype) is None:
             return None
-        return self._builtin_option_specializations.get(self.raw_type_name_string(vtype))
+        return self._builtin_option_specializations.get(
+            self.raw_type_name_string(vtype)
+        )
 
     def builtin_option_specialized_type_name(self, vtype):
         specialization = self.builtin_option_specialization(vtype)
@@ -4406,7 +4404,8 @@ class WGSLCodeGen:
         if self.glsl_buffer_block_attribute(node) is not None:
             return True
         qualifier_names = {
-            str(qualifier).lower() for qualifier in getattr(node, "qualifiers", []) or []
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
         }
         if "buffer" not in qualifier_names:
             return False
@@ -4489,7 +4488,9 @@ class WGSLCodeGen:
             resource_type_name = self.struct_member_resource_type_name(member)
             if resource_type_name:
                 continue
-            if self.structured_buffer_element_type(self.array_element_type(member_type)):
+            if self.structured_buffer_element_type(
+                self.array_element_type(member_type)
+            ):
                 raise ValueError(
                     "WGSL target does not support storage-buffer resource member "
                     f"{node.name}.{member.name} inside GLSL buffer blocks"
@@ -4520,7 +4521,9 @@ class WGSLCodeGen:
                     struct_names.add(struct_name)
         return struct_names
 
-    def module_storage_access_modes(self, global_variables, stage_resource_parameters=()):
+    def module_storage_access_modes(
+        self, global_variables, stage_resource_parameters=()
+    ):
         modes = {}
         for variable in global_variables:
             if self.is_glsl_buffer_block_variable(variable):
@@ -4708,7 +4711,9 @@ class WGSLCodeGen:
             struct_name = self.struct_type_name(object_type)
             if struct_name not in self._uniform_buffer_struct_names:
                 return False
-            member_type = self._struct_member_types.get((struct_name, array_expr.member))
+            member_type = self._struct_member_types.get(
+                (struct_name, array_expr.member)
+            )
             return self.uniform_scalar_array_wrapper_name(member_type) is not None
         return False
 
@@ -4828,11 +4833,15 @@ class WGSLCodeGen:
         array_expr = expr.array_expr
         if not isinstance(array_expr, MemberAccessNode):
             return None
-        object_type = self.array_element_type(self.expression_type(array_expr.object_expr))
+        object_type = self.array_element_type(
+            self.expression_type(array_expr.object_expr)
+        )
         struct_name = self.struct_type_name(object_type)
         if struct_name is None:
             return None
-        member_info = self.stage_interface_array_member_info(struct_name, array_expr.member)
+        member_info = self.stage_interface_array_member_info(
+            struct_name, array_expr.member
+        )
         if member_info is None:
             return None
         return {
@@ -4998,9 +5007,12 @@ class WGSLCodeGen:
 
     def require_writable_storage_texture_resource(self, resource, function_name):
         resource_type = self.expression_type(resource)
-        if self.STORAGE_TEXTURE_DIMENSION_MAP.get(
-            self.resource_type_name(resource_type) or ""
-        ) is None:
+        if (
+            self.STORAGE_TEXTURE_DIMENSION_MAP.get(
+                self.resource_type_name(resource_type) or ""
+            )
+            is None
+        ):
             raise ValueError(
                 f"WGSL target requires {function_name}() to use a storage image "
                 "resource"
@@ -5014,9 +5026,12 @@ class WGSLCodeGen:
 
     def require_readable_storage_texture_resource(self, resource, function_name):
         resource_type = self.expression_type(resource)
-        if self.STORAGE_TEXTURE_DIMENSION_MAP.get(
-            self.resource_type_name(resource_type) or ""
-        ) is None:
+        if (
+            self.STORAGE_TEXTURE_DIMENSION_MAP.get(
+                self.resource_type_name(resource_type) or ""
+            )
+            is None
+        ):
             raise ValueError(
                 f"WGSL target requires {function_name}() to use a storage image "
                 "resource"
@@ -5113,9 +5128,11 @@ class WGSLCodeGen:
         ]
         module_names = [
             getattr(node, "name", "")
-            for node in list(constants)
-            + list(global_variables)
-            + list(stage_resource_parameters)
+            for node in (
+                list(constants)
+                + list(global_variables)
+                + list(stage_resource_parameters)
+            )
         ]
         function_groups = self.function_groups_by_name(helper_functions)
         self._function_overloads_by_name = function_groups
@@ -5140,9 +5157,7 @@ class WGSLCodeGen:
                     overload_name, used_function_names
                 )
                 function_names.append(emitted_name)
-                function_name_keys[self.function_signature_key(function)] = (
-                    emitted_name
-                )
+                function_name_keys[self.function_signature_key(function)] = emitted_name
         module_scope_names = self.wgsl_identifier_map(
             type_names + function_names + module_names
         )
@@ -5430,7 +5445,9 @@ class WGSLCodeGen:
         struct_name = self.struct_type_name(object_type)
         if struct_name not in self._uniform_buffer_struct_names:
             return False
-        return self.is_bool_type(self._struct_member_types.get((struct_name, expr.member)))
+        return self.is_bool_type(
+            self._struct_member_types.get((struct_name, expr.member))
+        )
 
     def vector_shape(self, vtype):
         try:
@@ -5757,9 +5774,9 @@ class WGSLCodeGen:
     def function_types_compatible(self, actual_type, expected_type):
         if actual_type is None or expected_type is None:
             return False
-        return self.function_type_match_name(actual_type) == self.function_type_match_name(
-            expected_type
-        )
+        return self.function_type_match_name(
+            actual_type
+        ) == self.function_type_match_name(expected_type)
 
     def function_type_match_name(self, vtype):
         try:
@@ -5777,9 +5794,9 @@ class WGSLCodeGen:
 
     def member_access_identifier_name(self, expr):
         object_type = self.array_element_type(self.expression_type(expr.object_expr))
-        if self.vector_component_type(object_type) is not None and self.is_vector_member(
-            expr.member
-        ):
+        if self.vector_component_type(
+            object_type
+        ) is not None and self.is_vector_member(expr.member):
             return expr.member
         struct_name = self.struct_type_name(object_type)
         if not struct_name:
@@ -6069,9 +6086,7 @@ class WGSLCodeGen:
                         f"{self.resource_binding_diagnostic_name(owner)} "
                         f"both declare @group({group}) @binding({numeric_binding})"
                     )
-                target_binding = self.next_available_binding(
-                    group, numeric_binding + 1
-                )
+                target_binding = self.next_available_binding(group, numeric_binding + 1)
             self._hlsl_register_binding_allocations[source_key] = target_binding
             self._explicit_binding_owners[group][target_binding] = node
             self._explicit_binding_register_classes[(group, target_binding)] = (
@@ -6382,9 +6397,9 @@ class WGSLCodeGen:
     def _collect_global_variables(self, ast, target_stage):
         variables = list(getattr(ast, "global_variables", []) or [])
         for stage_node in self._stage_nodes(ast, target_stage):
-            lowered_output_name = (
-                self._stage_output_lowerings.get(id(stage_node), {}).get("source_name")
-            )
+            lowered_output_name = self._stage_output_lowerings.get(
+                id(stage_node), {}
+            ).get("source_name")
             variables.extend(
                 variable
                 for variable in getattr(stage_node, "local_variables", []) or []

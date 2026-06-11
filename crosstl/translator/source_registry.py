@@ -78,9 +78,9 @@ class SourceSpec:
     reverse_codegen_factory: Callable[[], Any] | None = None
     aliases: Sequence[str] = ()
     shader_type_from_path: Callable[[str], str | None] | None = None
-    native_directive_classifier: Callable[
-        [str, str], Mapping[str, Any] | None
-    ] | None = None
+    native_directive_classifier: (
+        Callable[[str, str], Mapping[str, Any] | None] | None
+    ) = None
 
     def parse(
         self,

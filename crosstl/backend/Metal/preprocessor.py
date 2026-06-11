@@ -141,8 +141,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             )
         self.max_template_specializations = specialization_limit
         self.template_specialization_limit_source = (
-            template_specialization_limit_source
-            or "max_template_specializations"
+            template_specialization_limit_source or "max_template_specializations"
         )
         self.macros.setdefault(
             "TARGET_OS_SIMULATOR",
@@ -261,9 +260,11 @@ class MetalPreprocessor(HLSLPreprocessor):
 
             replacements: List[Tuple[int, int, str]] = []
             new_materializations: List[str] = []
-            for function_name, template_arguments, spans in (
-                self._dedupe_explicit_template_function_calls(calls)
-            ):
+            for (
+                function_name,
+                template_arguments,
+                spans,
+            ) in self._dedupe_explicit_template_function_calls(calls):
                 key = self._template_specialization_key(
                     function_name, template_arguments
                 )
@@ -1240,9 +1241,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 names.append(tokens[-1])
         return names
 
-    def _template_parameter_defaults(
-        self, template_parameters: str
-    ) -> Dict[str, str]:
+    def _template_parameter_defaults(self, template_parameters: str) -> Dict[str, str]:
         defaults: Dict[str, str] = {}
         for parameter in self._split_top_level_commas(template_parameters):
             if "=" not in parameter:
@@ -1296,7 +1295,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         argument_index = 0
         for parameter_index, name in enumerate(template.template_parameters):
             if name in template.variadic_template_parameters:
-                remaining_fixed = len(template.template_parameters) - parameter_index - 1
+                remaining_fixed = (
+                    len(template.template_parameters) - parameter_index - 1
+                )
                 variadic_count = max(
                     0,
                     len(template_arguments) - argument_index - remaining_fixed,
