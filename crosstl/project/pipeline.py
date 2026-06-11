@@ -8239,7 +8239,10 @@ def _project_template_materialization_for_artifact(
     if "template" not in source:
         return None
 
-    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+    from crosstl.backend.Metal.preprocessor import (
+        MetalPreprocessor,
+        MetalTemplateSpecializationError,
+    )
 
     source_template_parameters = _metal_template_parameter_names(source)
     if not source_template_parameters:
@@ -8264,6 +8267,10 @@ def _project_template_materialization_for_artifact(
     if "max_template_specializations" in source_options:
         preprocessor_kwargs["max_template_specializations"] = source_options[
             "max_template_specializations"
+        ]
+    if "template_specialization_limit_source" in source_options:
+        preprocessor_kwargs["template_specialization_limit_source"] = source_options[
+            "template_specialization_limit_source"
         ]
     preprocessor = MetalPreprocessor(**preprocessor_kwargs)
     try:
@@ -8293,9 +8300,15 @@ def _project_template_materialization_for_artifact(
         arguments = list(instantiation.template_arguments)
         if template is None or len(arguments) < len(template.template_parameters):
             continue
+        normalized_arguments = list(
+            preprocessor._template_specialization_key(
+                instantiation.function_name,
+                arguments,
+            )[1]
+        )
         key = (
             instantiation.function_name,
-            tuple(arguments),
+            tuple(normalized_arguments),
             instantiation.host_name,
         )
         if key in seen_source_instantiations:
@@ -8306,7 +8319,7 @@ def _project_template_materialization_for_artifact(
             template.name,
         )
         parameters = {
-            parameter: str(arguments[index])
+            parameter: str(normalized_arguments[index])
             for index, parameter in enumerate(template.template_parameters)
         }
         specializations.append(
@@ -8342,17 +8355,18 @@ def _project_template_materialization_for_artifact(
         template = templates_by_name.get(function_name)
         if template is None or len(arguments) < len(template.template_parameters):
             continue
-        key = (function_name, tuple(arguments))
+        key = preprocessor._template_specialization_key(function_name, arguments)
         if key in seen_call_specializations:
             continue
         seen_call_specializations.add(key)
         explicit_template_names.add(function_name)
+        normalized_arguments = list(key[1])
         materialized_name = preprocessor._template_specialization_identifier(
             function_name,
-            list(arguments),
+            normalized_arguments,
         )
         parameters = {
-            parameter: str(arguments[index])
+            parameter: str(normalized_arguments[index])
             for index, parameter in enumerate(template.template_parameters)
         }
         specializations.append(
@@ -8368,6 +8382,8 @@ def _project_template_materialization_for_artifact(
         materialized = preprocessor._materialize_explicit_template_function_calls(
             preprocessed
         )
+    except MetalTemplateSpecializationError:
+        raise
     except Exception:  # noqa: BLE001
         return None
 
@@ -8995,14 +9011,42 @@ def translate_project(
                 source_options = _source_options_for_unit(
                     config, unit.source_backend, unit.relative_path
                 )
-                template_materialization = _project_template_materialization_for_artifact(
-                    unit=unit,
-                    target=target,
-                    variant=variant,
-                    defines=defines,
-                    include_paths=include_paths,
-                    source_options=source_options,
-                )
+                try:
+                    template_materialization = (
+                        _project_template_materialization_for_artifact(
+                            unit=unit,
+                            target=target,
+                            variant=variant,
+                            defines=defines,
+                            include_paths=include_paths,
+                            source_options=source_options,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    failure_message = _translation_failure_message(
+                        exc,
+                        target,
+                        unit,
+                        artifact.get("path"),
+                    )
+                    artifact["status"] = "failed"
+                    artifact["error"] = failure_message
+                    diagnostics.append(
+                        ProjectDiagnostic(
+                            severity="error",
+                            code=_translation_failure_code(exc, target),
+                            message=failure_message,
+                            location=_translation_failure_location(exc, unit),
+                            target=target,
+                            source_backend=unit.source_backend,
+                            variant=variant,
+                            missing_capabilities=_translation_failure_missing_capabilities(
+                                exc, target
+                            ),
+                        )
+                    )
+                    artifacts.append(artifact)
+                    continue
                 if template_materialization is not None:
                     artifact["templateMaterialization"] = dict(
                         template_materialization.metadata
