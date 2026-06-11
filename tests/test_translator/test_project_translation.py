@@ -20115,6 +20115,63 @@ def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
     assert "asuint(" not in generated
 
 
+def test_translate_project_reports_mlx_sort_vulkan_storage_buffer_recursion(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "sort_reduced.cgl").write_text(
+        textwrap.dedent("""
+            shader ReducedSortRecursion {
+                compute {
+                    @ stage_entry
+                    void block_sort(
+                        StructuredBuffer<int> inp @buffer(0),
+                        RWStructuredBuffer<int> out_ @buffer(1),
+                        uvec3 tid @gl_WorkGroupID
+                    ) {
+                        block_sort(inp, out_, tid, tid);
+                    }
+                }
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["vulkan"], output_dir="out").to_json()
+
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.unsupported-feature": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "spirv.storage_buffer_function_overload": 1
+    }
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "vulkan"
+    assert artifact["source"] == "sort_reduced.cgl"
+    assert "storage-buffer function inlining" in artifact["error"]
+    assert "overloaded storage-buffer helper calls are not supported" in artifact[
+        "error"
+    ]
+    assert "maximum recursion depth exceeded" not in artifact["error"]
+    assert "generatedHash" not in artifact
+    assert not (repo / artifact["path"]).exists()
+
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.unsupported-feature"
+    assert diagnostic["target"] == "vulkan"
+    assert diagnostic["location"]["file"] == "sort_reduced.cgl"
+    assert diagnostic["missingCapabilities"] == [
+        "spirv.storage_buffer_function_overload"
+    ]
+    assert "maximum recursion depth exceeded" not in diagnostic["message"]
+
+
 def test_translate_project_drops_mlx_metal_system_includes_for_opengl(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
