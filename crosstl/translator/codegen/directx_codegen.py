@@ -93,6 +93,7 @@ from .enum_utils import (
     generic_enum_specialized_type_name,
     generic_type_parts,
     infer_enum_constructor_type,
+    sanitize_type_name,
 )
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
@@ -305,6 +306,7 @@ from .stage_utils import (
     collect_stage_local_structs,
     collect_stage_local_variables,
     compute_local_size,
+    declaration_signature,
     deduplicate_named_declarations,
     normalize_stage_name,
     order_functions_by_dependencies,
@@ -598,6 +600,7 @@ class HLSLCodeGen:
         self.local_variable_types = {}
         self.global_variable_types = {}
         self.hlsl_struct_buffer_resource_types = {}
+        self.hlsl_promoted_entry_resource_parameter_names = {}
         self.struct_member_types = {}
         self.structs_by_name = {}
         self.hlsl_lowered_struct_resource_members = {}
@@ -989,6 +992,7 @@ class HLSLCodeGen:
         self.local_variable_types = {}
         self.global_variable_types = {}
         self.hlsl_struct_buffer_resource_types = {}
+        self.hlsl_promoted_entry_resource_parameter_names = {}
         self.current_global_resource_declaration_nodes = None
         self.current_hlsl_available_functions = {}
         self.current_hlsl_hull_output_control_points = None
@@ -3288,6 +3292,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if self.hlsl_entry_resource_parameter_global_type(parameter, func)
                 is not None
             }
+            self.apply_hlsl_promoted_entry_resource_parameter_aliases(
+                param_list,
+                promoted_entry_resource_parameter_ids,
+                func,
+            )
         for p in param_list:
             if id(p) in promoted_entry_resource_parameter_ids:
                 continue
@@ -6986,7 +6995,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             root, target_stage, self.is_stage_local_resource_variable
         )
         entry_resource_params = self.hlsl_stage_entry_resource_parameter_globals(
-            root, target_stage
+            root,
+            target_stage,
+            global_vars + stage_resource_vars,
         )
         return deduplicate_named_declarations(
             global_vars + stage_resource_vars + entry_resource_params,
@@ -7007,8 +7018,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             or self.is_glsl_buffer_block_variable(node, vtype)
         )
 
-    def hlsl_stage_entry_resource_parameter_globals(self, root, target_stage=None):
+    def hlsl_stage_entry_resource_parameter_globals(
+        self, root, target_stage=None, base_declarations=None
+    ):
         globals_ = []
+        declarations_by_name = {}
+        used_names = set()
+        for node in base_declarations or []:
+            name = getattr(node, "name", getattr(node, "variable_name", None))
+            if not name:
+                continue
+            declarations_by_name.setdefault(name, declaration_signature(node))
+            used_names.add(name)
+
         entries = collect_stage_entry_records(
             root, target_stage, self.stage_entry_types()
         )
@@ -7016,8 +7038,74 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             for parameter in getattr(func, "parameters", getattr(func, "params", [])):
                 proxy = self.hlsl_entry_resource_parameter_global(parameter, func)
                 if proxy is not None:
+                    original_name = getattr(parameter, "name", None)
+                    emitted_name = getattr(proxy, "name", None)
+                    signature = declaration_signature(proxy)
+                    existing_signature = declarations_by_name.get(emitted_name)
+                    if (
+                        emitted_name
+                        and existing_signature is not None
+                        and existing_signature != signature
+                    ):
+                        emitted_name = self.hlsl_scoped_entry_resource_name(
+                            func,
+                            original_name,
+                            used_names,
+                        )
+                        proxy.name = emitted_name
+                    if emitted_name:
+                        self.hlsl_promoted_entry_resource_parameter_names[
+                            id(parameter)
+                        ] = emitted_name
+                        declarations_by_name.setdefault(emitted_name, signature)
+                        used_names.add(emitted_name)
                     globals_.append(proxy)
         return globals_
+
+    def hlsl_scoped_entry_resource_name(self, func, parameter_name, used_names):
+        func_name = sanitize_type_name(getattr(func, "name", None) or "entry")
+        parameter_name = sanitize_type_name(parameter_name or "resource")
+        base_name = "_".join(part for part in (func_name, parameter_name) if part)
+        if not base_name:
+            base_name = "entry_resource"
+        if base_name[0].isdigit():
+            base_name = f"entry_{base_name}"
+
+        candidate = base_name
+        suffix = 2
+        while (
+            candidate in used_names
+            or candidate in self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES
+        ):
+            candidate = f"{base_name}_{suffix}"
+            suffix += 1
+        return candidate
+
+    def apply_hlsl_promoted_entry_resource_parameter_aliases(
+        self, param_list, promoted_parameter_ids, func
+    ):
+        for parameter in param_list:
+            if id(parameter) not in promoted_parameter_ids:
+                continue
+            parameter_name = getattr(parameter, "name", None)
+            if not parameter_name:
+                continue
+            emitted_name = self.hlsl_promoted_entry_resource_parameter_names.get(
+                id(parameter),
+                parameter_name,
+            )
+            promoted_type = self.global_variable_types.get(emitted_name)
+            if promoted_type is None:
+                promoted_type = self.hlsl_entry_resource_parameter_global_type(
+                    parameter,
+                    func,
+                )
+            if promoted_type:
+                self.local_variable_types[parameter_name] = self.type_name_string(
+                    promoted_type
+                )
+            if emitted_name != parameter_name:
+                self.current_identifier_aliases[parameter_name] = emitted_name
 
     def hlsl_entry_resource_parameter_global(self, parameter, func=None):
         mapped_type = self.hlsl_entry_resource_parameter_global_type(parameter, func)
