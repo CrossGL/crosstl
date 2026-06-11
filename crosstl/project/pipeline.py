@@ -12998,6 +12998,18 @@ def _runtime_loader_metadata_source(
     return {"field": field, "path": path}
 
 
+def _runtime_loader_package_command_path(package_path: Any) -> str:
+    return PurePosixPath(str(package_path).replace("\\", "/")).as_posix()
+
+
+def _runtime_loader_normalize_package_command_path(
+    command: Sequence[str], package_path: Any
+) -> list[str]:
+    native_path = str(Path(str(package_path)))
+    command_path = _runtime_loader_package_command_path(package_path)
+    return [command_path if part == native_path else part for part in command]
+
+
 def _runtime_loader_metadata_slug(value: Any, fallback: str) -> str:
     text = value if isinstance(value, str) else ""
     text = text.strip().lower()
@@ -13175,13 +13187,13 @@ def _runtime_loader_directx_commands(
     package_path = adapter.get("packagePath")
     if not _is_non_empty_string(package_path) or not tools:
         return []
-    command_path = Path(str(package_path))
+    command_path = _runtime_loader_package_command_path(package_path)
     entry_profiles = _runtime_loader_directx_entry_profiles(
         adapter, package_root=package_root
     )
     tool = tools[0]
     if entry_profiles is None:
-        return [[tool, "-T", "lib_6_3", str(command_path), "-Fo", os.devnull]]
+        return [[tool, "-T", "lib_6_3", command_path, "-Fo", os.devnull]]
     return [
         _directx_dxc_entry_smoke_command(tool, command_path, entry, profile)
         for entry, profile in entry_profiles
@@ -13436,7 +13448,12 @@ def _runtime_loader_validation_command(
         return [tools[0], "--stdin", "-S", stage]
 
     if normalized_target == "wgsl":
-        return [tools[0], "--input-kind", "wgsl", str(package_path)]
+        return [
+            tools[0],
+            "--input-kind",
+            "wgsl",
+            _runtime_loader_package_command_path(package_path),
+        ]
 
     if normalized_target == "directx":
         commands = _runtime_loader_directx_commands(
@@ -13451,7 +13468,9 @@ def _runtime_loader_validation_command(
         artifact=adapter,
     )
     if smoke_command is not None:
-        return smoke_command[0]
+        return _runtime_loader_normalize_package_command_path(
+            smoke_command[0], package_path
+        )
 
     availability_command = TOOLCHAIN_AVAILABILITY_COMMANDS.get(normalized_target)
     return list(availability_command) if availability_command is not None else None
