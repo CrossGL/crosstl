@@ -4,7 +4,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   MLX_COMMIT: "968d264f2903d578e699c4452a4dbf48633921aa"
   OPENGL_ARANGE_BINDING_ISSUE: "https://github.com/CrossGL/crosstl/issues/852"
-  PLAIN_TEMPLATE_HELPER_SCANNING_ISSUE: "https://github.com/CrossGL/crosstl/issues/1146"
+  DEPENDENT_TEMPLATE_GRAPH_ISSUE: "https://github.com/CrossGL/crosstl/issues/1184"
 
 on:
   push:

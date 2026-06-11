@@ -26,7 +26,7 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
 EXPECTED_METAL_KERNEL_COUNT = 40
 FULL_CORPUS_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/852",
-    "https://github.com/CrossGL/crosstl/issues/1146",
+    "https://github.com/CrossGL/crosstl/issues/1184",
 )
 OPENGL_ARANGE_BINDING_ISSUE = "https://github.com/CrossGL/crosstl/issues/852"
 OPENGL_ARANGE_BINDING_ERROR = "Conflicting OpenGL resource binding"
@@ -79,6 +79,7 @@ RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1124",
     "https://github.com/CrossGL/crosstl/issues/1126",
     "https://github.com/CrossGL/crosstl/issues/1127",
+    "https://github.com/CrossGL/crosstl/issues/1146",
     "https://github.com/CrossGL/crosstl/issues/1155",
     "https://github.com/CrossGL/crosstl/issues/1160",
 )

@@ -18,7 +18,7 @@ from collections import Counter
 from dataclasses import dataclass, field, replace
 from importlib import metadata as importlib_metadata
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
 from crosstl.translator.codegen import (
@@ -9375,44 +9375,18 @@ def _plain_template_call_replacements(
     included_spans: Sequence[tuple[int, int]] | None,
 ) -> list[tuple[int, int, str]]:
     replacements: list[tuple[int, int, str]] = []
-    i = 0
-    excluded = list(excluded_spans)
-    included = list(included_spans) if included_spans is not None else None
-    while i < len(source):
-        if source[i] in "\"'":
-            _literal, consumed = preprocessor._read_string(source, i)
-            i += consumed
-            continue
-        if source.startswith("//", i):
-            end = source.find("\n", i)
-            if end == -1:
-                break
-            i = end + 1
-            continue
-        if source.startswith("/*", i):
-            end = source.find("*/", i + 2)
-            if end == -1:
-                break
-            i = end + 2
-            continue
-        span = preprocessor._containing_span(i, excluded)
-        if span is not None:
-            i = span[1]
-            continue
-        if included is not None and preprocessor._containing_span(i, included) is None:
-            i += 1
-            continue
-        if source[i].isalpha() or source[i] == "_":
-            ident, consumed = preprocessor._read_identifier(source, i)
-            replacement = replacements_by_name.get(ident)
-            j = i + consumed
-            while j < len(source) and source[j].isspace():
-                j += 1
-            if replacement is not None and j < len(source) and source[j] == "(":
-                replacements.append((i, i + consumed, replacement))
-            i += consumed
-            continue
-        i += 1
+    for _ident, replacement, i, consumed, scan_end in _template_replacement_scan_sites(
+        preprocessor,
+        source,
+        replacements_by_name,
+        excluded_spans,
+        included_spans,
+    ):
+        j = i + consumed
+        while j < scan_end and source[j].isspace():
+            j += 1
+        if j < scan_end and source[j] == "(":
+            replacements.append((i, i + consumed, replacement))
     return replacements
 
 
@@ -9459,61 +9433,80 @@ def _explicit_template_call_replacements(
     included_spans: Sequence[tuple[int, int]] | None,
 ) -> list[tuple[int, int, str]]:
     replacements: list[tuple[int, int, str]] = []
-    i = 0
-    excluded = list(excluded_spans)
-    included = list(included_spans) if included_spans is not None else None
-    while i < len(source):
-        if source[i] in "\"'":
-            _literal, consumed = preprocessor._read_string(source, i)
-            i += consumed
+    for _ident, replacement, i, consumed, scan_end in _template_replacement_scan_sites(
+        preprocessor,
+        source,
+        replacements_by_name,
+        excluded_spans,
+        included_spans,
+    ):
+        j = i + consumed
+        while j < scan_end and source[j].isspace():
+            j += 1
+        if j >= scan_end or source[j] != "<":
             continue
-        if source.startswith("//", i):
-            end = source.find("\n", i)
-            if end == -1:
-                break
-            i = end + 1
+        angle_end = preprocessor._find_matching_angle(source, j)
+        if angle_end is None or angle_end >= scan_end:
             continue
-        if source.startswith("/*", i):
-            end = source.find("*/", i + 2)
-            if end == -1:
-                break
-            i = end + 2
-            continue
-        span = preprocessor._containing_span(i, excluded)
-        if span is not None:
-            i = span[1]
-            continue
-        if included is not None and preprocessor._containing_span(i, included) is None:
-            i += 1
-            continue
-        if source[i].isalpha() or source[i] == "_":
-            ident, consumed = preprocessor._read_identifier(source, i)
-            replacement = replacements_by_name.get(ident)
-            j = i + consumed
-            while j < len(source) and source[j].isspace():
-                j += 1
-            if replacement is None or j >= len(source) or source[j] != "<":
-                i += consumed
-                continue
-            angle_end = preprocessor._find_matching_angle(source, j)
-            if angle_end is None:
-                i += consumed
-                continue
-            k = angle_end + 1
-            while k < len(source) and source[k].isspace():
-                k += 1
-            if k < len(source) and source[k] == "(":
-                replacements.append(
-                    (
-                        preprocessor._scoped_identifier_start(source, i),
-                        angle_end + 1,
-                        replacement,
-                    )
+        k = angle_end + 1
+        while k < scan_end and source[k].isspace():
+            k += 1
+        if k < scan_end and source[k] == "(":
+            replacements.append(
+                (
+                    preprocessor._scoped_identifier_start(source, i),
+                    angle_end + 1,
+                    replacement,
                 )
-            i = angle_end + 1
-            continue
-        i += 1
+            )
     return replacements
+
+
+def _template_replacement_scan_sites(
+    preprocessor: Any,
+    source: str,
+    replacements_by_name: Mapping[str, str],
+    excluded_spans: Sequence[tuple[int, int]],
+    included_spans: Sequence[tuple[int, int]] | None,
+) -> Iterator[tuple[str, str, int, int, int]]:
+    excluded = _SpanLookup(excluded_spans)
+    scan_spans = (
+        [(0, len(source))]
+        if included_spans is None
+        else _SpanLookup(included_spans)._spans
+    )
+    for span_start, span_end in scan_spans:
+        i = span_start
+        scan_end = min(span_end, len(source))
+        while i < scan_end:
+            if source[i] in "\"'":
+                _literal, consumed = preprocessor._read_string(source, i)
+                i += consumed
+                continue
+            if source.startswith("//", i):
+                end = source.find("\n", i, scan_end)
+                if end == -1:
+                    break
+                i = end + 1
+                continue
+            if source.startswith("/*", i):
+                end = source.find("*/", i + 2, scan_end)
+                if end == -1:
+                    break
+                i = end + 2
+                continue
+            excluded_span = excluded.containing(i)
+            if excluded_span is not None:
+                i = min(excluded_span[1], scan_end)
+                continue
+            if source[i].isalpha() or source[i] == "_":
+                ident, consumed = preprocessor._read_identifier(source, i)
+                replacement = replacements_by_name.get(ident)
+                if replacement is not None:
+                    yield ident, replacement, i, consumed, scan_end
+                i += consumed
+                continue
+            i += 1
 
 
 METAL_TEMPLATE_TYPE_QUALIFIERS = frozenset(
@@ -11016,7 +11009,19 @@ def _metal_statement_semicolon(
     return None
 
 
-def _metal_concrete_using_alias_type(alias_type: str) -> str | None:
+def _materialized_template_suffix(arguments: Sequence[str]) -> str:
+    parts = [
+        re.sub(r"[^A-Za-z0-9_]+", "_", str(argument)).strip("_")
+        for argument in arguments
+    ]
+    parts = [part for part in parts if part]
+    return "_".join(parts)
+
+
+def _metal_concrete_using_alias_type(
+    preprocessor: Any,
+    alias_type: str,
+) -> str | None:
     alias_type = str(alias_type or "").strip()
     if alias_type.startswith("typename "):
         alias_type = alias_type[len("typename ") :].strip()
@@ -11024,6 +11029,19 @@ def _metal_concrete_using_alias_type(alias_type: str) -> str | None:
         return None
     if any(character in alias_type for character in "{};="):
         return None
+    angle_start = alias_type.find("<")
+    angle_end = preprocessor._find_matching_angle(alias_type, angle_start)
+    if angle_end is None:
+        return None
+    if alias_type[angle_end + 1 :].strip():
+        return None
+    base_type = alias_type[:angle_start].strip()
+    arguments = preprocessor._split_top_level_commas(
+        alias_type[angle_start + 1 : angle_end]
+    )
+    suffix = _materialized_template_suffix(arguments)
+    if suffix and base_type.endswith(f"_{suffix}"):
+        return base_type
     return alias_type
 
 
@@ -11184,7 +11202,10 @@ def _inline_metal_concrete_using_template_aliases(
             i += consumed
             continue
         raw_alias_type = source[j + 1 : semicolon]
-        alias_type = _metal_concrete_using_alias_type(raw_alias_type)
+        alias_type = _metal_concrete_using_alias_type(
+            preprocessor,
+            raw_alias_type,
+        )
         if alias_type is None:
             dependent_match = re.fullmatch(
                 r"\s*typename\s+([A-Za-z_][A-Za-z0-9_]*)::"

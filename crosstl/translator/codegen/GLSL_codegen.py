@@ -16870,6 +16870,10 @@ class GLSLCodeGen:
         if generic_struct_type is not None:
             return generic_struct_type
 
+        materialized_generic_type = self.materialized_generic_type_name(vtype_str)
+        if materialized_generic_type is not None:
+            return materialized_generic_type
+
         if vtype_str in getattr(self, "enum_type_names", set()):
             return "int"
 
@@ -16885,6 +16889,22 @@ class GLSLCodeGen:
             )
 
         return self.type_mapping.get(vtype_str, vtype_str)
+
+    def materialized_generic_type_name(self, type_name):
+        base_type, array_suffix = split_array_type_suffix(str(type_name or "").strip())
+        if array_suffix:
+            return None
+        base_name, generic_args = generic_type_parts(base_type)
+        if not base_name or not generic_args:
+            return None
+        suffix_parts = [sanitize_type_name(arg) for arg in generic_args]
+        suffix_parts = [part for part in suffix_parts if part]
+        if not suffix_parts:
+            return None
+        suffix = "_".join(suffix_parts)
+        if base_name.endswith(f"_{suffix}"):
+            return base_name
+        return None
 
     def unresolved_template_placeholder_type(self, type_name):
         if not getattr(self, "enforce_concrete_glsl_types", False):
@@ -18083,6 +18103,8 @@ class GLSLCodeGen:
             return f"{referenced_type}&"
         generic_args = getattr(type_node, "generic_args", [])
         type_name = getattr(type_node, "name", None)
+        if type_name is None and hasattr(type_node, "value"):
+            return str(type_node.value)
         if type_name and generic_args:
             converted_args = []
             for arg in generic_args:

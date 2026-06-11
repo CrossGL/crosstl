@@ -1858,6 +1858,61 @@ def test_hlsl_stage_entry_buffer_pointer_params_promote_to_resources():
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
+def test_hlsl_metal_matmul_pointer_params_lower_to_resources(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct MatMulParams {
+        uint row_dim_x;
+        uint col_dim_x;
+        uint inner_dim;
+    };
+
+    kernel void mat_mul_simple1(
+        device const float* A [[buffer(0)]],
+        device const float* B [[buffer(1)]],
+        device float* X [[buffer(2)]],
+        constant MatMulParams& params [[buffer(3)]],
+        uint3 id [[thread_position_in_grid]])
+    {
+        uint row = id.y;
+        uint col = id.x;
+        if (row >= params.row_dim_x || col >= params.col_dim_x) {
+            return;
+        }
+        float sum = 0.0;
+        for (uint k = 0; k < params.inner_dim; k++) {
+            sum += A[row * params.inner_dim + k] *
+                B[k * params.col_dim_x + col];
+        }
+        X[row * params.col_dim_x + col] = sum;
+    }
+    """
+    shader_path = tmp_path / "mat_mul_simple1.metal"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "StructuredBuffer<float> A : register(t0);" in generated_code
+    assert "StructuredBuffer<float> B : register(t1);" in generated_code
+    assert "RWStructuredBuffer<float> X : register(u2);" in generated_code
+    assert "ConstantBuffer<MatMulParams> params : register(b3);" in generated_code
+    assert "void CSMain(uint3 id : SV_DispatchThreadID)" in generated_code
+    assert "float* A" not in generated_code
+    assert "float* B" not in generated_code
+    assert "float* X" not in generated_code
+    assert "A.Load(((row * params.inner_dim) + k))" in generated_code
+    assert "B.Load(((k * params.col_dim_x) + col))" in generated_code
+    assert "X.Store(((row * params.col_dim_x) + col), sum);" in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
 def test_hlsl_default_integer_storage_image_vector_load_store_from_compiler_fixture():
     # Reduced from CrossGL-Compiler
     # tests/frontend/fixtures/StorageImageHIRShader.cgl.

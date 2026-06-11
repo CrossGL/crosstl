@@ -26,7 +26,7 @@
       "vulkan"
     ],
     "artifacts": 120,
-    "blocked_by": "https://github.com/CrossGL/crosstl/issues/1146",
+    "blocked_by": "https://github.com/CrossGL/crosstl/issues/1184",
     "last_completed": {
       "translated_artifacts": 47,
       "failed_artifacts": 73,
@@ -45,10 +45,10 @@
       "summary": "Disambiguate OpenGL resource bindings for materialized multi-entry Metal kernels."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1146",
-      "scope": "metal-plain-template-helper-call-site-scan-budget",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1184",
+      "scope": "metal-dependent-template-graph-materialization",
       "status": "open",
-      "summary": "Bound plain Metal template helper call-site scanning for large helper graphs."
+      "summary": "Materialize dependent Metal template graphs for project translation."
     }
   ],
   "resolved_issues": [
@@ -100,6 +100,7 @@
     "https://github.com/CrossGL/crosstl/issues/1124",
     "https://github.com/CrossGL/crosstl/issues/1126",
     "https://github.com/CrossGL/crosstl/issues/1127",
+    "https://github.com/CrossGL/crosstl/issues/1146",
     "https://github.com/CrossGL/crosstl/issues/1155",
     "https://github.com/CrossGL/crosstl/issues/1160"
   ]
