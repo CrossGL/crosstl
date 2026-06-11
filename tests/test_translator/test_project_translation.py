@@ -13777,6 +13777,70 @@ def test_translate_project_rust_option_helpers_lower_to_opengl_compute(tmp_path)
     assert_compute_glsl_validates_if_available(opengl_output, tmp_path)
 
 
+def test_translate_project_rust_option_helpers_lower_to_directx_compute(tmp_path):
+    repo = tmp_path / "repo"
+    source_dir = repo / "src"
+    source_dir.mkdir(parents=True)
+    (source_dir / "collatz.rs").write_text(
+        textwrap.dedent("""
+            fn collatz(n: u32) -> Option<u32> {
+                if n == 0u32 {
+                    return None;
+                }
+                return Some(n);
+            }
+
+            fn read_option(item: Option<u32>) -> u32 {
+                match item {
+                    Some(value) => { return value; },
+                    None => { return 0u32; }
+                }
+            }
+
+            #[spirv(compute(threads(1, 1, 1)))]
+            pub fn main() {
+                let value = read_option(collatz(7u32));
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["src"]
+            targets = ["directx"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    directx_output = (
+        repo / "translated" / "directx" / "src" / "collatz.hlsl"
+    ).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["diagnostics"] == []
+    assert "struct Option_u32" in directx_output
+    assert "Option_u32 Option_u32_Some_make(uint payload0)" in directx_output
+    assert "Option_u32 Option_u32_Absent_make()" in directx_output
+    assert "bool is_Some_u32(Option_u32 item)" in directx_output
+    assert "uint unwrap_Some_u32(Option_u32 item)" in directx_output
+    assert "Option_u32 collatz(uint n)" in directx_output
+    assert "uint read_option(Option_u32 item)" in directx_output
+    assert "return Option_u32_Absent_make();" in directx_output
+    assert "return Option_u32_Some_make(n);" in directx_output
+    assert "uint value = unwrap_Some_u32(item);" in directx_output
+    assert "(item.variant == Option_Absent)" in directx_output
+    assert "Option<" not in directx_output
+    assert "Option::" not in directx_output
+    assert re.search(r"\bSome\s*\(", directx_output) is None
+    assert "None" not in directx_output
+    assert "auto value" not in directx_output
+    assert_directx_compute_validates_if_available(directx_output, tmp_path)
+
+
 def test_translate_project_rust_option_helpers_lower_to_wgsl_compute(tmp_path):
     repo = tmp_path / "repo"
     source_dir = repo / "src"
