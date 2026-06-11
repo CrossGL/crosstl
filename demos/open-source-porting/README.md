@@ -53,7 +53,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `lonelydevil-vulkan-tutorial-triangle` | `lonelydevil/vulkan-tutorial-C-implementation` at `780ff146a6eccd7064a10e86363f3c2f7323825d` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream triangle shader pair unchanged. |
 | `monogame-sprite-effect` | `MonoGame/MonoGame` at `d4893ac09e06bc203792d01d6f151f1891cc1ab5` | MS-PL and MIT | DirectX/HLSL | CrossGL, Metal, DirectX, Vulkan | Uses the upstream SpriteEffect source and macro include with whitespace normalization. OpenGL reserved-identifier lowering is tracked in issue #947. |
 | `spirv-cross-round-fragment` | `KhronosGroup/SPIRV-Cross` at `146679ff8255a6068518685599d7fb8761d1b570` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream fragment reference shader unchanged. |
-| `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. |
+| `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. DirectX semantic lowering is tracked in issue #959. |
 | `angle-simple-texture-2d` | `google/angle` at `52232eaf409a28d77947df5622af274e1ef770c6` | BSD-style | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses extracted upstream SimpleTexture2D shader strings. |
 | `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. Target backend lowering is tracked in issue #951. |
 | `arm-opengl-es-sdk-cube` | `ARM-software/opengl-es-sdk-for-android` at `c3caf759bb2e71fa9a118b3e3abd996cf00e660a` | MIT | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream cube shader pair unchanged. |
@@ -148,8 +148,10 @@ after issue #813 and issue #856 closed and is now checked for DirectX and
 Metal output alongside OpenGL and Vulkan.
 
 The `KhronosGroup/Vulkan-Samples` dynamic line grid fragment shader was
-retested after issue #922 closed and is now checked for DirectX output
-alongside CrossGL, OpenGL, Metal, and Vulkan.
+retested after issue #922 closed and is now checked for CrossGL, OpenGL,
+Metal, and Vulkan. DirectX remains excluded because generated fragment
+varyings currently collide on the same HLSL input semantic; that translator
+issue is tracked in issue #959.
 
 The `donaldwuid/apple_metal_sample_code` mesh view-direction slice is checked
 through CrossGL. Target backend artifacts remain excluded because generated
