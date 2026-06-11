@@ -31706,54 +31706,83 @@ def _run_toolchain_smoke(
         smoke_commands = _toolchain_smoke_commands(
             target, tools, artifact_path, artifact=artifact
         )
-        for command, check_kind in smoke_commands:
-            if not command or not shutil.which(command[0]):
-                continue
-            try:
-                stdin = (
-                    _toolchain_smoke_stdin(target, command, artifact_path)
-                    if "--stdin" in command
-                    else None
-                )
-                completed = subprocess.run(
-                    command,
-                    cwd=str(root),
-                    input=stdin,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=TOOLCHAIN_SMOKE_TIMEOUT_SECONDS,
-                )
-                returncode = completed.returncode
-                stdout = _toolchain_output_text(completed.stdout)
-                stderr = _toolchain_output_text(completed.stderr)
-            except subprocess.TimeoutExpired as exc:
-                returncode = TOOLCHAIN_TIMEOUT_RETURNCODE
-                stdout = _toolchain_output_text(getattr(exc, "stdout", None))
-                stderr = _toolchain_output_text(getattr(exc, "stderr", None))
-                timeout_message = (
-                    "Validation toolchain timed out after "
-                    f"{TOOLCHAIN_SMOKE_TIMEOUT_SECONDS} seconds."
-                )
-                stderr = f"{stderr.rstrip()}\n{timeout_message}".strip()
-            run = {
-                "source": str(artifact.get("source", "")),
-                "target": target,
-                "path": str(artifact["path"]),
-                "command": command,
-                "checkKind": check_kind,
-                "returncode": returncode,
-                "status": "ok" if returncode == 0 else "failed",
-                "stdout": stdout[-4000:],
-                "stderr": stderr[-4000:],
-            }
-            if _is_non_empty_string(artifact.get("sourceBackend")):
-                run["sourceBackend"] = artifact["sourceBackend"]
-            if _is_non_empty_string(artifact.get("stage")):
-                run["stage"] = artifact["stage"]
-            if artifact.get("variant") is not None:
-                run["variant"] = artifact["variant"]
-            runs.append(run)
+        cleanup_paths = _toolchain_smoke_cleanup_paths(target, artifact_path)
+        try:
+            vulkan_spvasm_assembled = False
+            for command, check_kind in smoke_commands:
+                if not command or not shutil.which(command[0]):
+                    continue
+                if (
+                    target == "vulkan"
+                    and artifact_path.suffix.lower() == ".spvasm"
+                    and command[:1] == [tools[0]]
+                    and not vulkan_spvasm_assembled
+                ):
+                    continue
+                try:
+                    stdin = (
+                        _toolchain_smoke_stdin(target, command, artifact_path)
+                        if "--stdin" in command
+                        else None
+                    )
+                    completed = subprocess.run(
+                        command,
+                        cwd=str(root),
+                        input=stdin,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=TOOLCHAIN_SMOKE_TIMEOUT_SECONDS,
+                    )
+                    returncode = completed.returncode
+                    stdout = _toolchain_output_text(completed.stdout)
+                    stderr = _toolchain_output_text(completed.stderr)
+                except subprocess.TimeoutExpired as exc:
+                    returncode = TOOLCHAIN_TIMEOUT_RETURNCODE
+                    stdout = _toolchain_output_text(getattr(exc, "stdout", None))
+                    stderr = _toolchain_output_text(getattr(exc, "stderr", None))
+                    timeout_message = (
+                        "Validation toolchain timed out after "
+                        f"{TOOLCHAIN_SMOKE_TIMEOUT_SECONDS} seconds."
+                    )
+                    stderr = f"{stderr.rstrip()}\n{timeout_message}".strip()
+                run = {
+                    "source": str(artifact.get("source", "")),
+                    "target": target,
+                    "path": str(artifact["path"]),
+                    "command": command,
+                    "checkKind": check_kind,
+                    "returncode": returncode,
+                    "status": "ok" if returncode == 0 else "failed",
+                    "stdout": stdout[-4000:],
+                    "stderr": stderr[-4000:],
+                }
+                if _is_non_empty_string(artifact.get("sourceBackend")):
+                    run["sourceBackend"] = artifact["sourceBackend"]
+                if _is_non_empty_string(artifact.get("stage")):
+                    run["stage"] = artifact["stage"]
+                if artifact.get("variant") is not None:
+                    run["variant"] = artifact["variant"]
+                runs.append(run)
+                if (
+                    target == "vulkan"
+                    and artifact_path.suffix.lower() == ".spvasm"
+                    and command[:1] == [tools[1]]
+                ):
+                    vulkan_spvasm_assembled = returncode == 0
+                if (
+                    target == "vulkan"
+                    and artifact_path.suffix.lower() == ".spvasm"
+                    and command[:1] == [tools[1]]
+                    and returncode != 0
+                ):
+                    break
+        finally:
+            for cleanup_path in cleanup_paths:
+                try:
+                    cleanup_path.unlink()
+                except FileNotFoundError:
+                    pass
     return runs
 
 
@@ -31778,6 +31807,16 @@ def _toolchain_smoke_commands(
             return [
                 ([tools[0], "--stdin", "-S", stage], "artifact") for stage in stages
             ]
+    if (
+        target == "vulkan"
+        and artifact_path.suffix.lower() == ".spvasm"
+        and len(tools) > 1
+    ):
+        binary_path = _vulkan_assembled_smoke_path(artifact_path)
+        return [
+            ([tools[1], str(artifact_path), "-o", str(binary_path)], "artifact"),
+            ([tools[0], str(binary_path)], "artifact"),
+        ]
     smoke_command = _toolchain_smoke_command(
         target,
         tools,
@@ -31811,6 +31850,16 @@ def _toolchain_smoke_command(
     if availability_command is None:
         return None
     return list(availability_command), "tool-availability"
+
+
+def _vulkan_assembled_smoke_path(artifact_path: Path) -> Path:
+    return artifact_path.with_suffix(f"{artifact_path.suffix}.spv")
+
+
+def _toolchain_smoke_cleanup_paths(target: str, artifact_path: Path) -> tuple[Path, ...]:
+    if target == "vulkan" and artifact_path.suffix.lower() == ".spvasm":
+        return (_vulkan_assembled_smoke_path(artifact_path),)
+    return ()
 
 
 def _toolchain_smoke_stdin(target: str, command: Sequence[str], artifact_path: Path):

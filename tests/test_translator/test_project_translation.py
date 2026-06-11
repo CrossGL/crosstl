@@ -17731,6 +17731,14 @@ def test_vulkan_toolchain_smoke_command_selects_spirv_tool(tmp_path):
     assembly_shader.write_text("; SPIR-V\n", encoding="utf-8")
     binary_shader = tmp_path / "shader.spv"
     binary_shader.write_bytes(b"\x03\x02\x23\x07")
+    assembled_shader = project_pipeline._vulkan_assembled_smoke_path(assembly_shader)
+
+    assert project_pipeline._toolchain_smoke_commands(
+        "vulkan", ["spirv-val", "spirv-as"], assembly_shader
+    ) == [
+        (["spirv-as", str(assembly_shader), "-o", str(assembled_shader)], "artifact"),
+        (["spirv-val", str(assembled_shader)], "artifact"),
+    ]
 
     assert project_pipeline._toolchain_smoke_command(
         "vulkan", ["spirv-val", "spirv-as"], assembly_shader
@@ -26489,6 +26497,68 @@ def test_validate_project_report_assembles_vulkan_spirv_assembly(tmp_path, monke
         tmp_path / "repo", target="vulkan", extension="spvasm"
     )
     artifact_path = (report_path.parent / "out" / "vulkan" / "simple.spvasm").resolve()
+    assembled_path = project_pipeline._vulkan_assembled_smoke_path(artifact_path)
+    calls = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: f"/usr/bin/{tool}" if tool in {"spirv-val", "spirv-as"} else None,
+    )
+
+    def run_toolchain(command, **kwargs):
+        calls.append((command, kwargs))
+        assert kwargs["input"] is None
+        if command[0] == "spirv-as":
+            assert command == [
+                "spirv-as",
+                str(artifact_path),
+                "-o",
+                str(assembled_path),
+            ]
+        else:
+            assert command == ["spirv-val", str(assembled_path)]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is True
+    assert len(calls) == 2
+    assembler_run = payload["validation"]["toolchainRuns"][0]
+    validator_run = payload["validation"]["toolchainRuns"][1]
+    for run in (assembler_run, validator_run):
+        assert run["source"] == "simple.cgl"
+        assert run["sourceBackend"] == "cgl"
+        assert run["target"] == "vulkan"
+        assert run["path"] == "out/vulkan/simple.spvasm"
+        assert run["checkKind"] == "artifact"
+        assert run["status"] == "ok"
+    assert assembler_run["command"] == [
+        "spirv-as",
+        str(artifact_path),
+        "-o",
+        str(assembled_path),
+    ]
+    assert validator_run["command"] == ["spirv-val", str(assembled_path)]
+    assert payload["toolchainRunStatusByCheckKind"] == {
+        "artifact": {"runCount": 2, "okCount": 2, "failedCount": 0}
+    }
+    assert payload["toolchainRunStatusByTool"] == {
+        "spirv-as": {"runCount": 1, "okCount": 1, "failedCount": 0},
+        "spirv-val": {"runCount": 1, "okCount": 1, "failedCount": 0},
+    }
+
+
+def test_validate_project_report_stops_vulkan_validation_after_assembly_failure(
+    tmp_path, monkeypatch
+):
+    report_path = _write_target_toolchain_report(
+        tmp_path / "repo", target="vulkan", extension="spvasm"
+    )
+    artifact_path = (report_path.parent / "out" / "vulkan" / "simple.spvasm").resolve()
+    assembled_path = project_pipeline._vulkan_assembled_smoke_path(artifact_path)
     calls = []
 
     monkeypatch.setattr(
@@ -26503,16 +26573,15 @@ def test_validate_project_report_assembles_vulkan_spirv_assembly(tmp_path, monke
             "spirv-as",
             str(artifact_path),
             "-o",
-            project_pipeline.os.devnull,
+            str(assembled_path),
         ]
-        assert kwargs["input"] is None
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=1, stdout="", stderr="assembler rejected")
 
     monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
 
     payload = validate_project_report(report_path, run_toolchains=True)
 
-    assert payload["success"] is True
+    assert payload["success"] is False
     assert len(calls) == 1
     run = payload["validation"]["toolchainRuns"][0]
     assert run["source"] == "simple.cgl"
@@ -26523,15 +26592,16 @@ def test_validate_project_report_assembles_vulkan_spirv_assembly(tmp_path, monke
         "spirv-as",
         str(artifact_path),
         "-o",
-        project_pipeline.os.devnull,
+        str(assembled_path),
     ]
     assert run["checkKind"] == "artifact"
-    assert run["status"] == "ok"
+    assert run["status"] == "failed"
+    assert run["stderr"] == "assembler rejected"
     assert payload["toolchainRunStatusByCheckKind"] == {
-        "artifact": {"runCount": 1, "okCount": 1, "failedCount": 0}
+        "artifact": {"runCount": 1, "okCount": 0, "failedCount": 1}
     }
     assert payload["toolchainRunStatusByTool"] == {
-        "spirv-as": {"runCount": 1, "okCount": 1, "failedCount": 0}
+        "spirv-as": {"runCount": 1, "okCount": 0, "failedCount": 1}
     }
 
 
@@ -26542,6 +26612,7 @@ def test_validate_project_report_runs_vulkan_assembly_when_only_assembler_availa
         tmp_path / "repo", target="vulkan", extension="spvasm"
     )
     artifact_path = (report_path.parent / "out" / "vulkan" / "simple.spvasm").resolve()
+    assembled_path = project_pipeline._vulkan_assembled_smoke_path(artifact_path)
     calls = []
 
     monkeypatch.setattr(
@@ -26566,7 +26637,7 @@ def test_validate_project_report_runs_vulkan_assembly_when_only_assembler_availa
                 "spirv-as",
                 str(artifact_path),
                 "-o",
-                project_pipeline.os.devnull,
+                str(assembled_path),
             ],
             {
                 "cwd": str(report_path.parent),
@@ -26583,7 +26654,7 @@ def test_validate_project_report_runs_vulkan_assembly_when_only_assembler_availa
         "spirv-as",
         str(artifact_path),
         "-o",
-        project_pipeline.os.devnull,
+        str(assembled_path),
     ]
     assert payload["toolchainRunStatusByTool"] == {
         "spirv-as": {"runCount": 1, "okCount": 1, "failedCount": 0}

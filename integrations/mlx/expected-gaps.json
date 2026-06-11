@@ -3,13 +3,20 @@
   "repository": "https://github.com/ml-explore/mlx",
   "commit": "968d264f2903d578e699c4452a4dbf48633921aa",
   "frontier_status": {
-    "status": "passing",
+    "status": "artifact-generation-passing",
     "sources": 5,
     "targets": [
       "directx",
       "vulkan"
     ],
-    "artifacts": 10
+    "artifacts": 10,
+    "vulkan_validation": {
+      "status": "blocked-by-tracked-issues",
+      "blocked_by": [
+        "https://github.com/CrossGL/crosstl/issues/1239",
+        "https://github.com/CrossGL/crosstl/issues/1240"
+      ]
+    }
   },
   "opengl_smoke_status": {
     "status": "passing",
@@ -26,7 +33,10 @@
       "vulkan"
     ],
     "artifacts": 120,
-    "blocked_by": [],
+    "blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1239",
+      "https://github.com/CrossGL/crosstl/issues/1240"
+    ],
     "last_completed": {
       "translated_artifacts": 56,
       "failed_artifacts": 64,
@@ -37,7 +47,10 @@
       }
     }
   },
-  "tracked_issues": [],
+  "tracked_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1239",
+    "https://github.com/CrossGL/crosstl/issues/1240"
+  ],
   "resolved_issues": [
     "https://github.com/CrossGL/crosstl/issues/939",
     "https://github.com/CrossGL/crosstl/issues/940",

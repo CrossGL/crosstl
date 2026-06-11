@@ -14,7 +14,8 @@ The current harness verifies:
 - DirectX and Vulkan artifact generation for the current reduced frontier:
   `arange.metal`, `binary_two.metal`, `fence.metal`, `random.metal`, and
   `ternary.metal`;
-- Vulkan assembly validation when SPIR-V tools are available;
+- artifact manifest validation for that DirectX/Vulkan frontier, with Vulkan
+  validator clean-pass currently tracked separately;
 - OpenGL artifact generation for `arange.metal`.
 
 The last completed full-corpus scout against the same pinned MLX revision
@@ -63,10 +64,13 @@ The harness writes reports, generated artifacts, and command logs under
 
 ## Current Translator Gaps
 
-No active MLX full-corpus translator issue is listed here after the latest
-mainline merge. The next full-corpus scout should either update the translated
-artifact counts or add new issue-backed blockers with concrete repros. Host
-runtime integration gaps should be handled in MLX-specific integration code or
+The current DirectX/Vulkan frontier generates all expected artifacts, but the
+Vulkan artifacts do not yet pass a full `spirv-as` plus `spirv-val` check.
+CrossGL/crosstl#1239 tracks invalid complex helper calls in generated SPIR-V,
+and CrossGL/crosstl#1240 tracks the fence helper initializer type mismatch.
+The next full-corpus scout should update the translated artifact counts and add
+new issue-backed blockers only when there are concrete repros. Host runtime
+integration gaps should be handled in MLX-specific integration code or
 downstream runtime adapters, not hidden as shader translation successes.
 
 ## Resolved Frontier Issues

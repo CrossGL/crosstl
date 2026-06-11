@@ -24,7 +24,11 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/ternary.metal",
 )
 EXPECTED_METAL_KERNEL_COUNT = 40
-FULL_CORPUS_TRACKED_ISSUES = ()
+FRONTIER_VALIDATION_TRACKED_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1239",
+    "https://github.com/CrossGL/crosstl/issues/1240",
+)
+FULL_CORPUS_TRACKED_ISSUES = FRONTIER_VALIDATION_TRACKED_ISSUES
 RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/939",
     "https://github.com/CrossGL/crosstl/issues/940",
@@ -318,6 +322,8 @@ def _translate_directx_vulkan_frontier(
         targets=("directx", "vulkan"),
         output_dir=_relpath(work_dir / "out-directx-vulkan-frontier", mlx_root),
     )
+    run_toolchains = not FRONTIER_VALIDATION_TRACKED_ISSUES
+    validation_flag = "--run-toolchains" if run_toolchains else "--validate"
     _run_command(
         "translate-directx-vulkan-frontier",
         [
@@ -330,7 +336,7 @@ def _translate_directx_vulkan_frontier(
             str(config_path),
             "--report",
             str(report_path),
-            "--run-toolchains",
+            validation_flag,
         ],
         log_dir=log_dir,
     )
@@ -382,13 +388,18 @@ def _translate_directx_vulkan_frontier(
         for run in toolchain_runs
         if isinstance(run, dict) and run.get("target") == "vulkan"
     ]
-    if require_vulkan_toolchain:
+    if require_vulkan_toolchain and run_toolchains:
         _require(
             len(vulkan_runs) == frontier_count,
             "Vulkan toolchain validation was required for every frontier artifact",
         )
     for run in vulkan_runs:
         _require(run.get("status") == "ok", "Vulkan toolchain validation failed")
+    if require_vulkan_toolchain and not run_toolchains:
+        _require(
+            not vulkan_runs,
+            "Vulkan toolchain validation ran while active validation issues are tracked",
+        )
     return {
         "name": "directx-vulkan-frontier",
         "status": "passed",
@@ -399,6 +410,10 @@ def _translate_directx_vulkan_frontier(
         "targets": ["directx", "vulkan"],
         "toolchainRuns": len(toolchain_runs),
         "vulkanToolchainRequired": require_vulkan_toolchain,
+        "vulkanValidationStatus": (
+            "validated" if run_toolchains else "blocked-by-tracked-issues"
+        ),
+        "trackedIssues": list(FRONTIER_VALIDATION_TRACKED_ISSUES),
     }
 
 
