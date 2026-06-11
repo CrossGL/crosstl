@@ -1223,6 +1223,7 @@ class MojoCodeGen:
         self.struct_types = {}
         self.function_return_types = {}
         self.function_parameter_types = {}
+        self.function_overload_signatures = {}
         self.function_return_resource_aliases = {}
         self.function_return_resource_static_aliases = {}
         self.function_return_resource_field_aliases = {}
@@ -1484,6 +1485,7 @@ class MojoCodeGen:
         self.struct_types = {}
         self.function_return_types = {}
         self.function_parameter_types = {}
+        self.function_overload_signatures = {}
         self.function_return_resource_aliases = {}
         self.function_return_resource_static_aliases = {}
         self.function_return_resource_field_aliases = {}
@@ -2797,11 +2799,23 @@ class MojoCodeGen:
             return_type = self.convert_type_node_to_string(func.return_type)
         else:
             return_type = "void"
-        self.function_return_types[func.name] = return_type
-        self.function_parameter_types[func.name] = [
+        parameter_types = [
             self.function_parameter_type_name(param)
             for param in getattr(func, "parameters", getattr(func, "params", []))
         ]
+        self.function_return_types[func.name] = return_type
+        self.function_parameter_types[func.name] = parameter_types
+        signature = {
+            "return_type": return_type,
+            "parameter_types": parameter_types,
+        }
+        overloads = self.function_overload_signatures.setdefault(func.name, [])
+        if not any(
+            existing["return_type"] == return_type
+            and existing["parameter_types"] == parameter_types
+            for existing in overloads
+        ):
+            overloads.append(signature)
 
     def register_function_return_resource_aliases(self, func):
         if not hasattr(func, "name"):
@@ -10257,7 +10271,7 @@ class MojoCodeGen:
         return args, None
 
     def generate_user_function_call_arguments(self, func_name, args):
-        parameter_types = self.function_parameter_types.get(func_name, [])
+        parameter_types = self.selected_function_parameter_types(func_name, args)
         generated_args = []
         for index, arg in enumerate(args):
             target_type = (
@@ -14461,15 +14475,9 @@ class MojoCodeGen:
         if isinstance(expr, BinaryOpNode):
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
-            left_info = self.vector_type_info(left_type)
-            right_info = self.vector_type_info(right_type)
-            if left_info is not None and right_info is not None:
-                return left_type if left_info == right_info else left_type
-            if left_info is not None:
-                return left_type
-            if right_info is not None:
-                return right_type
-            return left_type if left_type == right_type else left_type or right_type
+            return self.binary_expression_result_type(
+                expr.op, left_type, right_type
+            )
         if isinstance(expr, TernaryOpNode):
             true_type = self.expression_result_type(expr.true_expr)
             false_type = self.expression_result_type(expr.false_expr)
@@ -14498,7 +14506,7 @@ class MojoCodeGen:
             if func_name in MOJO_MATRIX_TYPES:
                 return func_name
             if func_name in self.function_return_types:
-                return self.function_return_types[func_name]
+                return self.selected_function_return_type(func_name, expr.args)
             if func_name in self.scalar_constructor_map:
                 return func_name
             if func_name in {"fract", "frac"} and expr.args:
@@ -14754,6 +14762,113 @@ class MojoCodeGen:
             return func_expr
         return None
 
+    def binary_expression_result_type(self, op, left_type, right_type):
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        mapped_op = self.map_operator(op)
+        if left_info is not None and right_info is not None:
+            if left_info == right_info:
+                return left_type
+            if (
+                mapped_op in MOJO_VECTOR_ARITHMETIC_OPS
+                and left_info[0] == right_info[0]
+                and left_info[2] == right_info[2]
+                and left_info[0] != "DType.bool"
+            ):
+                return self.vector_type_name_for_dtype_width(
+                    left_info[0], max(left_info[1], right_info[1])
+                )
+            return left_type
+        if left_info is not None:
+            return left_type
+        if right_info is not None:
+            return right_type
+        return left_type if left_type == right_type else left_type or right_type
+
+    def selected_function_return_type(self, func_name, args):
+        signature = self.select_function_overload_signature(func_name, args)
+        if signature is not None:
+            return signature["return_type"]
+        return self.function_return_types.get(func_name)
+
+    def selected_function_parameter_types(self, func_name, args):
+        signature = self.select_function_overload_signature(func_name, args)
+        if signature is not None:
+            return signature["parameter_types"]
+        return self.function_parameter_types.get(func_name, [])
+
+    def select_function_overload_signature(self, func_name, args):
+        overloads = self.function_overload_signatures.get(func_name) or []
+        if not overloads:
+            return None
+
+        indexed = list(enumerate(overloads))
+        matching_arity = [
+            item
+            for item in indexed
+            if len(item[1]["parameter_types"]) == len(args)
+        ]
+        candidates = matching_arity or indexed
+        arg_types = [self.expression_result_type(arg) for arg in args]
+        best = None
+        for index, signature in candidates:
+            score = self.function_overload_match_score(
+                arg_types, signature["parameter_types"]
+            )
+            if score is None:
+                continue
+            key = (score, index)
+            if best is None or key < best[0]:
+                best = (key, signature)
+
+        if best is not None:
+            return best[1]
+        return candidates[-1][1] if candidates else None
+
+    def function_overload_match_score(self, arg_types, parameter_types):
+        score = 0
+        for arg_type, parameter_type in zip(arg_types, parameter_types):
+            part_score = self.function_overload_argument_match_score(
+                arg_type, parameter_type
+            )
+            if part_score is None:
+                return None
+            score += part_score
+        return score + abs(len(arg_types) - len(parameter_types)) * 100
+
+    def function_overload_argument_match_score(self, arg_type, parameter_type):
+        if arg_type is None or parameter_type is None:
+            return 10
+
+        arg_name = self.type_name(arg_type)
+        parameter_name = self.type_name(parameter_type)
+        if arg_name == parameter_name:
+            return 0
+
+        arg_vector = self.vector_type_info(arg_name)
+        parameter_vector = self.vector_type_info(parameter_name)
+        if arg_vector is not None or parameter_vector is not None:
+            if arg_vector is None or parameter_vector is None:
+                return None
+            if arg_vector == parameter_vector:
+                return 0
+            if self.compatible_numeric_vector_target(arg_vector, parameter_vector):
+                return 1
+            if self.compatible_storage_vector_target(arg_vector, parameter_vector):
+                return 2
+            return None
+
+        arg_dtype = MOJO_SCALAR_DTYPES.get(arg_name)
+        parameter_dtype = MOJO_SCALAR_DTYPES.get(parameter_name)
+        if arg_dtype is not None or parameter_dtype is not None:
+            if arg_dtype is None or parameter_dtype is None:
+                return None
+            if "DType.bool" in {arg_dtype, parameter_dtype}:
+                return None
+            return 1
+
+        return None
+
     def buffer_op_result_type(self, expr):
         operation = MOJO_BUFFER_OP_ALIASES.get(getattr(expr, "operation", ""))
         if operation is None:
@@ -14938,6 +15053,17 @@ class MojoCodeGen:
         if "DType.bool" in {source_dtype, target_dtype}:
             return False
         return source_dtype in MOJO_DTYPE_SUFFIX and target_dtype in MOJO_DTYPE_SUFFIX
+
+    def compatible_storage_vector_target(self, source_info, target_info):
+        if source_info is None or target_info is None:
+            return False
+        source_dtype, source_width, source_storage_width, _ = source_info
+        target_dtype, target_width, target_storage_width, _ = target_info
+        if source_dtype != target_dtype or source_dtype == "DType.bool":
+            return False
+        if source_storage_width != target_storage_width:
+            return False
+        return source_width <= target_width
 
     def generate_numeric_vector_binary_op(self, expr, target_type, target_context=None):
         op = self.map_operator(expr.op)
