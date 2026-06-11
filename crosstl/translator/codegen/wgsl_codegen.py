@@ -551,6 +551,20 @@ class WGSLCodeGen:
             "workgroupBarrier, storageBarrier, or textureBarrier explicitly"
         ),
     }
+    UNSUPPORTED_SUBGROUP_INTRINSIC_PREFIXES = (
+        "subgroup",
+        "warp",
+        "shfl",
+        "ballot",
+    )
+    UNSUPPORTED_SUBGROUP_INTRINSIC_NAMES = {
+        "activemask",
+        "alllanesactive",
+        "allsync",
+        "anysync",
+        "matchallsync",
+        "matchanysync",
+    }
     WGSL_RESERVED_IDENTIFIERS = {
         "NULL",
         "Self",
@@ -3427,6 +3441,13 @@ class WGSLCodeGen:
                 f"{function_name}; WebGPU storage textures do not expose image "
                 "atomic operations"
             )
+        if self.is_unsupported_subgroup_intrinsic_call(
+            node, function_name, normalized_name, expected_type=expected_type
+        ):
+            raise ValueError(
+                "WGSL target does not support subgroup/warp intrinsic "
+                f"{function_name} yet"
+            )
         if (
             normalized_name in self.BARRIER_FUNCTION_NAMES
             and not self.is_user_defined_function_call(
@@ -3486,6 +3507,21 @@ class WGSLCodeGen:
         elif isinstance(node.function, MemberAccessNode):
             mapped_name = self.generate_expression(node.function)
         return f"{mapped_name}({args})"
+
+    def is_unsupported_subgroup_intrinsic_call(
+        self, node, function_name, normalized_name, expected_type=None
+    ):
+        if not isinstance(node.function, IdentifierNode):
+            return False
+        if self.is_user_defined_function_call(
+            node, function_name, expected_type=expected_type
+        ):
+            return False
+        compact_name = normalized_name.replace("_", "")
+        return compact_name in self.UNSUPPORTED_SUBGROUP_INTRINSIC_NAMES or any(
+            compact_name.startswith(prefix)
+            for prefix in self.UNSUPPORTED_SUBGROUP_INTRINSIC_PREFIXES
+        )
 
     def generate_derivative_call(self, node, mapped_name, function_name):
         if len(node.arguments) != 1:

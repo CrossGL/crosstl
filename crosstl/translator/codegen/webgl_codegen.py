@@ -704,6 +704,87 @@ class WebGLCodeGen(GLSLCodeGen):
         code += f"{indent_str}return {rendered_expr};\n"
         return code
 
+    def generate_if(self, node, indent, is_main=False):
+        indent_str = "    " * indent
+        condition_node = (
+            node.condition if hasattr(node, "condition") else node.if_condition
+        )
+        prefix, condition = self.webgl_dynamic_sampler_condition_expression(
+            condition_node,
+            indent,
+        )
+        prefixes = [prefix]
+
+        else_if_conditions = []
+        if hasattr(node, "else_if_conditions") and node.else_if_conditions:
+            for else_if_condition in node.else_if_conditions:
+                else_if_prefix, else_if_rendered = (
+                    self.webgl_dynamic_sampler_condition_expression(
+                        else_if_condition,
+                        indent,
+                    )
+                )
+                prefixes.append(else_if_prefix)
+                else_if_conditions.append(else_if_rendered)
+
+        code = "".join(prefixes)
+        code += f"{indent_str}if ({condition}) {{\n"
+        if_body = node.if_body
+        code += self.generate_scoped_statement_body(if_body, indent + 1)
+        code += f"{indent_str}}}"
+        if hasattr(node, "else_if_conditions") and node.else_if_conditions:
+            for else_if_condition, else_if_body in zip(
+                else_if_conditions,
+                node.else_if_bodies,
+            ):
+                code += f" else if ({else_if_condition}) {{\n"
+                code += self.generate_scoped_statement_body(else_if_body, indent + 1)
+                code += f"{indent_str}}}"
+
+        if hasattr(node, "else_body") and node.else_body:
+            code += " else {\n"
+            else_body = node.else_body
+            code += self.generate_scoped_statement_body(else_body, indent + 1)
+            code += f"{indent_str}}}"
+
+        code += "\n"
+        return code
+
+    def webgl_dynamic_sampler_condition_expression(self, expr, indent):
+        direct_dispatch = self.glsl_dynamic_resource_call_dispatch_info(expr)
+        if direct_dispatch is not None:
+            return_type = direct_dispatch.get(
+                "return_type"
+            ) or self.expression_result_type(expr)
+            temp_name, code = self.webgl_generate_nested_dynamic_sampler_prefix(
+                {
+                    "dispatch": direct_dispatch,
+                    "return_type": return_type or "bool",
+                },
+                indent,
+            )
+            return code, temp_name
+
+        nested_info = self.webgl_nested_dynamic_sampler_expression_info(expr)
+        if nested_info is not None:
+            temp_name, code = self.webgl_generate_nested_dynamic_sampler_prefix(
+                nested_info,
+                indent,
+            )
+            rendered_expr = self.webgl_render_expression_with_replacement(
+                expr,
+                nested_info["call"],
+                temp_name,
+                "bool",
+            )
+            return code, rendered_expr
+
+        unliftable_info = self.webgl_unliftable_dynamic_sampler_expression_info(expr)
+        if unliftable_info is not None:
+            return "", self.webgl_unliftable_dynamic_sampler_value("bool")
+
+        return "", self.generate_expression(expr)
+
     def should_emit_stage_io_layout(self, stage_name, direction):
         normalized_stage = normalize_stage_name(stage_name)
         if (

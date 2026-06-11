@@ -701,6 +701,64 @@ def test_webgl_codegen_lowers_nested_dynamic_sampler_array_stage_return():
     assert "return (crossgl_dynamic_sampler_value" not in generated
 
 
+def test_webgl_codegen_lowers_dynamic_sampler_array_if_condition():
+    shader = """
+    shader WebGLDynamicSamplerArrayIfCondition {
+        vec4 sampleColor(sampler2D colorMap, vec2 uv) {
+            return texture(colorMap, uv);
+        }
+
+        fragment {
+            uniform sampler2D colorMaps[2];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                if (sampleColor(colorMaps[colorIndex], uv).r > 0.5) {
+                    return vec4(1.0);
+                }
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "sampleColor(colorMaps[colorIndex]" not in generated
+    assert "vec4 crossgl_dynamic_sampler_value;" in generated
+    assert "switch (colorIndex)" in generated
+    assert "crossgl_dynamic_sampler_value = sampleColor(colorMaps[0], uv);" in generated
+    assert "crossgl_dynamic_sampler_value = sampleColor(colorMaps[1], uv);" in generated
+    assert "if ((crossgl_dynamic_sampler_value.r > 0.5)) {" in generated
+
+
+def test_webgl_codegen_lowers_direct_dynamic_sampler_array_if_condition():
+    shader = """
+    shader WebGLDirectDynamicSamplerArrayIfCondition {
+        fragment {
+            uniform sampler2D colorMaps[2];
+            uniform int colorIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                if (texture(colorMaps[colorIndex], uv).r > 0.5) {
+                    return vec4(1.0);
+                }
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "texture(colorMaps[colorIndex]" not in generated
+    assert "vec4 crossgl_dynamic_sampler_value;" in generated
+    assert "switch (colorIndex)" in generated
+    assert "crossgl_dynamic_sampler_value = texture(colorMaps[0], uv);" in generated
+    assert "crossgl_dynamic_sampler_value = texture(colorMaps[1], uv);" in generated
+    assert "if ((crossgl_dynamic_sampler_value.r > 0.5)) {" in generated
+
+
 def test_webgl_aliases_format_as_glsl():
     assert format_shader_code("void main(){}", "webgl") == format_shader_code(
         "void main(){}", "glsl"

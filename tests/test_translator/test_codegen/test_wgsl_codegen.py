@@ -2585,6 +2585,25 @@ def test_wgsl_codegen_rejects_wave_intrinsics():
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+def test_wgsl_codegen_rejects_subgroup_intrinsic_calls():
+    shader = """
+    shader WGSLSubgroupIntrinsic {
+        compute {
+            void main() {
+                uint sum = subgroupAdd(1u);
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="WGSL target does not support subgroup/warp intrinsic subgroupAdd",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_lowers_literal_match_statements_to_switch():
     shader = """
     shader WGSLMatchStatement {

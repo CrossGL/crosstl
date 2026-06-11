@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1122
+        "test_count": 1123
       },
       "translator_codegen": {
         "exists": true,
@@ -371,7 +371,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_webgl_codegen.py"
         ],
-        "test_count": 60
+        "test_count": 62
       },
       "translator_codegen": {
         "exists": true,
@@ -399,7 +399,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 94,
+        "unsupported_marker_count": 101,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
@@ -424,6 +424,14 @@
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
             "text": "MULTISAMPLED_TEXTURE_UNSUPPORTED_FUNCTIONS = {"
+          },
+          {
+            "path": "crosstl/translator/codegen/wgsl_codegen.py",
+            "text": "UNSUPPORTED_SUBGROUP_INTRINSIC_PREFIXES = ("
+          },
+          {
+            "path": "crosstl/translator/codegen/wgsl_codegen.py",
+            "text": "UNSUPPORTED_SUBGROUP_INTRINSIC_NAMES = {"
           },
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
@@ -472,14 +480,6 @@
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
             "text": "unsupported_multisampled_type = self.unsupported_multisampled_texture_type_name("
-          },
-          {
-            "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "if unsupported_multisampled_type is not None:"
-          },
-          {
-            "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "\"WGSL target does not support multisampled array texture resource \""
           }
         ]
       },
@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 164
+        "test_count": 165
       },
       "translator_codegen": {
         "exists": true,

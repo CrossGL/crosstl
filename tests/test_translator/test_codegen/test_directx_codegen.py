@@ -32368,6 +32368,46 @@ def test_directx_dx11_profile_rejects_root_signatures_and_register_spaces():
     assert "Texture2D colorMap : register(t0, space1);" in generated_register_space
 
 
+def test_directx_dx11_profile_rejects_lowered_struct_feedback_texture_member():
+    code = """
+    shader Dx11StructFeedbackMember {
+        struct FeedbackBundle {
+            feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedback;
+            float weight;
+        };
+
+        float getWeight(FeedbackBundle bundle) {
+            return bundle.weight;
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX profile dx11 does not support sampler feedback texture "
+            "struct resource member 'FeedbackBundle.feedback'.*Shader Model 6.5"
+        ),
+    ):
+        HLSLCodeGen(target_profile="dx11").generate(crosstl.translator.parse(code))
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(code)
+    )
+    feedback_bundle = re.search(
+        r"struct FeedbackBundle \{\n(?P<body>.*?)\};",
+        generated,
+        re.DOTALL,
+    )
+
+    assert feedback_bundle is not None
+    assert "FeedbackTexture2D" not in feedback_bundle.group("body")
+    assert (
+        "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedback : register(u0);"
+        in generated
+    )
+
+
 def test_directx_wave_active_sum_ballot_prefix_in_compute_expressions():
     code = """
     shader WaveExpressionCoverage {

@@ -2843,14 +2843,18 @@ class HLSLCodeGen:
     ):
         code = ""
         emitted_names = set(self.global_variable_types)
-        for members in self.hlsl_lowered_struct_resource_members.values():
-            for member_info in members.values():
+        for struct_name, members in self.hlsl_lowered_struct_resource_members.items():
+            for member_name, member_info in members.items():
                 var_name = member_info["global_name"]
                 if var_name in emitted_names:
                     continue
                 emitted_names.add(var_name)
                 vtype = member_info["type"]
                 mapped_type = self.map_resource_type_with_format(vtype)
+                self.validate_directx_type_profile(
+                    mapped_type,
+                    f"struct resource member '{struct_name}.{member_name}'",
+                )
                 declaration_type = self.directx_resource_declaration_type(mapped_type)
                 declaration = format_c_style_array_declaration(
                     declaration_type, var_name
