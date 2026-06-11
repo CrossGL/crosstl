@@ -2496,7 +2496,9 @@ def _include_dependencies_for_artifact(
     dependencies: Sequence[Mapping[str, Any]], variant: str | None
 ) -> list[Mapping[str, Any]]:
     if variant is None:
-        return [dependency for dependency in dependencies if "variant" not in dependency]
+        return [
+            dependency for dependency in dependencies if "variant" not in dependency
+        ]
     return [
         dependency
         for dependency in dependencies
@@ -19608,11 +19610,13 @@ def _artifact_include_dependency_processing_contract_reasons(
             )
         ):
             expected_status = "rejected"
-        elif counts["systemDependencyCount"] and _is_non_empty_string(
-            artifact.get("sourceBackend")
-        ) and (
-            artifact.get("sourceBackend")
-            in SOURCE_FRONTENDS_PRESERVING_UNRESOLVED_SYSTEM_INCLUDES
+        elif (
+            counts["systemDependencyCount"]
+            and _is_non_empty_string(artifact.get("sourceBackend"))
+            and (
+                artifact.get("sourceBackend")
+                in SOURCE_FRONTENDS_PRESERVING_UNRESOLVED_SYSTEM_INCLUDES
+            )
         ):
             expected_status = "preserved"
         elif counts["systemDependencyCount"]:

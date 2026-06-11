@@ -950,6 +950,10 @@ class HLSLCodeGen:
             "gl_LocalInvocationID": "SV_GroupThreadID",
             "gl_WorkGroupID": "SV_GroupID",
             "gl_LocalInvocationIndex": "SV_GroupIndex",
+            "thread_position_in_grid": "SV_DispatchThreadID",
+            "thread_position_in_threadgroup": "SV_GroupThreadID",
+            "threadgroup_position_in_grid": "SV_GroupID",
+            "thread_index_in_threadgroup": "SV_GroupIndex",
             "mesh_DispatchMeshID": "SV_DispatchMeshID",
             "payload": "payload",
             "hit_attribute": "hit_attribute",
@@ -1669,7 +1673,7 @@ class HLSLCodeGen:
             elif self.is_hlsl_uav_buffer_type(mapped_type):
                 space = self.explicit_resource_register_space(node)
                 binding = self.explicit_resource_binding_index(
-                    node, {"binding", "texture", "uav"}, ("u",)
+                    node, {"binding", "buffer", "texture", "uav"}, ("u",)
                 )
                 if binding is None:
                     binding = self.next_available_resource_register(
@@ -1719,7 +1723,7 @@ class HLSLCodeGen:
             elif self.is_hlsl_texture_buffer_type(mapped_type):
                 space = self.explicit_resource_register_space(node)
                 binding = self.explicit_resource_binding_index(
-                    node, {"binding", "texture"}, ("t",)
+                    node, {"binding", "buffer", "texture"}, ("t",)
                 )
                 if binding is None:
                     binding = self.next_available_resource_register(
@@ -1744,7 +1748,7 @@ class HLSLCodeGen:
             elif self.is_hlsl_readonly_buffer_type(mapped_type):
                 space = self.explicit_resource_register_space(node)
                 binding = self.explicit_resource_binding_index(
-                    node, {"binding", "texture"}, ("t",)
+                    node, {"binding", "buffer", "texture"}, ("t",)
                 )
                 if binding is None:
                     binding = self.next_available_resource_register(
@@ -14223,16 +14227,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 attribute_names = {"binding", "texture", "uav"}
             elif self.is_hlsl_uav_buffer_type(mapped_type):
                 prefix = "u"
-                attribute_names = {"binding", "texture", "uav"}
+                attribute_names = {"binding", "buffer", "texture", "uav"}
             elif self.is_hlsl_constant_buffer_type(mapped_type):
                 prefix = "b"
                 attribute_names = {"binding", "buffer"}
             elif self.is_hlsl_texture_buffer_type(mapped_type):
                 prefix = "t"
-                attribute_names = {"binding", "texture"}
+                attribute_names = {"binding", "buffer", "texture"}
             elif self.is_hlsl_readonly_buffer_type(mapped_type):
                 prefix = "t"
-                attribute_names = {"binding", "texture"}
+                attribute_names = {"binding", "buffer", "texture"}
             elif mapped_type in ["SamplerState", "SamplerComparisonState"]:
                 prefix = "s"
                 attribute_names = {"binding", "sampler"}
@@ -18466,6 +18470,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if vtype is None:
             return self.map_type(vtype)
 
+        metal_buffer_type = self.hlsl_metal_buffer_pointer_resource_type(vtype, node)
+        if metal_buffer_type is not None:
+            return metal_buffer_type
+
         constant_reference_type = self.hlsl_constant_reference_parameter_type(
             vtype, node
         )
@@ -18522,6 +18530,66 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return f"{mapped_type}{array_suffix}"
 
         return self.map_resource_type_with_format(vtype, node)
+
+    def hlsl_metal_buffer_pointer_resource_type(self, vtype, node=None):
+        if node is None:
+            return None
+
+        attributes = getattr(node, "attributes", []) or []
+        if not any(
+            str(getattr(attr, "name", "")).lower() == "buffer" for attr in attributes
+        ):
+            return None
+
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if not qualifiers.intersection({"device", "constant"}):
+            return None
+
+        element_type = self.hlsl_pointer_element_type(vtype)
+        if not element_type:
+            return None
+
+        buffer_type = (
+            "StructuredBuffer"
+            if qualifiers.intersection({"constant", "const"})
+            else "RWStructuredBuffer"
+        )
+        return f"{buffer_type}<{self.map_type(element_type)}>"
+
+    def hlsl_pointer_element_type(self, vtype):
+        if isinstance(vtype, PointerType):
+            return self.type_name_string(vtype.pointee_type)
+
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return None
+        type_name = str(type_name).strip()
+        pointer_depth = 0
+        while type_name.endswith("*") or type_name.endswith("&"):
+            if type_name.endswith("*"):
+                pointer_depth += 1
+            type_name = type_name[:-1].strip()
+        if pointer_depth == 0:
+            return None
+
+        if type_name.startswith("metal::"):
+            type_name = type_name.split("metal::", 1)[1].strip()
+        metal_qualifiers = {
+            "const",
+            "constant",
+            "device",
+            "thread",
+            "threadgroup",
+            "volatile",
+            "restrict",
+        }
+        parts = type_name.split()
+        while parts and parts[0].lower() in metal_qualifiers:
+            parts.pop(0)
+        return " ".join(parts) if parts else None
 
     def hlsl_constant_reference_parameter_type(self, vtype, node=None):
         if not isinstance(vtype, ReferenceType):
