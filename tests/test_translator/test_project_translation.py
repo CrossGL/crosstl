@@ -10190,6 +10190,131 @@ def test_translate_project_metal_rope_missing_variant_data_reports_template_diag
     assert "project.translate.failed" not in payload["summary"]["diagnosticsByCode"]
 
 
+def test_plain_metal_helper_call_scan_uses_indexed_excluded_spans(monkeypatch):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    preprocessor = MetalPreprocessor()
+    parts: list[str] = []
+    excluded_spans: list[tuple[int, int]] = []
+    offset = 0
+    for index in range(1500):
+        block = textwrap.dedent(f"""
+            template <typename T>
+            struct ExcludedHelper{index} {{
+                T value;
+            }};
+            """)
+        parts.append(block)
+        excluded_spans.append((offset, offset + len(block)))
+        offset += len(block)
+    function_source = textwrap.dedent("""
+        uint call_plain(uint value) {
+            return plain_helper(value);
+        }
+        """)
+    parts.append(function_source)
+    source = "".join(parts)
+    function_start = source.find("uint call_plain")
+    body_start = source.find("{", function_start) + 1
+    body_end = source.find("}", body_start)
+
+    def fail_linear_span_lookup(*_args):
+        raise AssertionError("plain helper scan should use indexed span lookup")
+
+    monkeypatch.setattr(preprocessor, "_containing_span", fail_linear_span_lookup)
+
+    calls = project_pipeline._plain_template_helper_call_sites(
+        preprocessor,
+        source,
+        {"plain_helper": [object()]},
+        excluded_spans,
+        [(body_start, body_end)],
+    )
+
+    helper_start = source.find("plain_helper")
+    assert calls == [
+        (
+            "plain_helper",
+            ["value"],
+            (helper_start, helper_start + len("plain_helper")),
+        )
+    ]
+
+
+def test_translate_project_bounds_mlx_like_plain_helper_scan_across_targets(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    excluded_structs = "\n\n".join(
+        textwrap.dedent(f"""
+            template <typename T>
+            struct ExcludedSpan{index} {{
+                T value;
+            }};
+            """).strip()
+        for index in range(400)
+    )
+    (shader_dir / "fp_quantized_nax_like.metal").write_text(
+        textwrap.dedent(f"""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_fp_quantized_nax(name, type) \\
+                instantiate_kernel("fp_quantized_nax_" #name, fp_quantized_nax, type)
+
+            {excluded_structs}
+
+            template <typename T>
+            T dequantize_plain(T value) {{
+                return value + T(1);
+            }}
+
+            template <typename T>
+            [[kernel]] void fp_quantized_nax(
+                device const T* in [[buffer(0)]],
+                device T* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {{
+                T value = in[gid];
+                out[gid] = dequantize_plain(value);
+            }}
+
+            instantiate_fp_quantized_nax(float32, float)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx", "opengl", "vulkan"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    for artifact in payload["artifacts"]:
+        materialization = artifact["templateMaterialization"]
+        assert materialization["status"] == "materialized"
+        assert materialization["unsupported"] == []
+        assert any(
+            record["name"] == "dequantize_plain"
+            and record["materializedName"] == "dequantize_plain_float"
+            for record in materialization["specializations"]
+        )
+
+
 def test_translate_project_opengl_uses_metal_default_template_helper_type(
     tmp_path,
 ):

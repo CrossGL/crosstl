@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import bisect
 import fnmatch
 import hashlib
 import json
@@ -10233,6 +10234,29 @@ def _split_metal_expression_operator(expression: str, operator_text: str) -> lis
     return [part for part in parts if part]
 
 
+class _SpanLookup:
+    def __init__(self, spans: Sequence[tuple[int, int]]):
+        merged: list[tuple[int, int]] = []
+        for start, end in sorted(
+            (int(start), int(end)) for start, end in spans if start < end
+        ):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        self._spans = merged
+        self._starts = [start for start, _end in merged]
+
+    def containing(self, position: int) -> tuple[int, int] | None:
+        index = bisect.bisect_right(self._starts, position) - 1
+        if index < 0:
+            return None
+        start, end = self._spans[index]
+        if start <= position < end:
+            return start, end
+        return None
+
+
 def _plain_template_helper_call_sites(
     preprocessor: Any,
     source: str,
@@ -10241,8 +10265,8 @@ def _plain_template_helper_call_sites(
     included_spans: Sequence[tuple[int, int]],
 ) -> list[tuple[str, list[str], tuple[int, int]]]:
     calls: list[tuple[str, list[str], tuple[int, int]]] = []
-    excluded = list(excluded_spans)
-    included = list(included_spans)
+    excluded = _SpanLookup(excluded_spans)
+    included = _SpanLookup(included_spans)
     i = 0
     while i < len(source):
         if source[i] in "\"'":
@@ -10261,11 +10285,11 @@ def _plain_template_helper_call_sites(
                 break
             i = end + 2
             continue
-        span = preprocessor._containing_span(i, excluded)
+        span = excluded.containing(i)
         if span is not None:
             i = span[1]
             continue
-        if preprocessor._containing_span(i, included) is None:
+        if included.containing(i) is None:
             i += 1
             continue
         if source[i].isalpha() or source[i] == "_":
