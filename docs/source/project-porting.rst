@@ -669,6 +669,9 @@ configuration contract is intentionally small:
    [project.source_options.metal]
    max_template_specializations = 2048
 
+   [project.source_options.metal.source_patterns."kernels/scan*.metal"]
+   max_template_specializations = 4096
+
    [project.variants.debug]
    USE_FAST_PATH = "0"
 
@@ -706,7 +709,12 @@ variants are recorded in project reports. Source frontend options can also be
 set under ``[project.source_options.<source-backend>]`` and are forwarded only
 to source lexers that expose matching keyword options. Metal source imports
 support ``max_template_specializations`` for project-specific explicit helper
-materialization budgets. Project reports include
+materialization budgets. Use
+``[project.source_options.metal.source_patterns."<repo-relative-glob>"]`` to
+raise or lower the Metal budget for matching sources. When a Metal helper
+materialization budget is exceeded, project diagnostics report the unique
+concrete signature count, the active limit, the configuration field that set
+the limit, and a suggested remediation. Project reports include
 order-preserving include-directory status records and status counts so missing,
 non-directory, outside-project, and frontend-visible active include directories
 can be triaged without re-running discovery. Missing include directories,

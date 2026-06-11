@@ -399,7 +399,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 57,
+        "unsupported_marker_count": 58,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 52
+        "test_count": 58
       },
       "translator_codegen": {
         "exists": true,
@@ -615,7 +615,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 994
+        "test_count": 996
       },
       "translator_codegen": {
         "exists": true,
@@ -1331,24 +1331,6 @@
     }
   ],
   "backlog": [
-    {
-      "backend": "WebGPU / WGSL",
-      "backend_id": "wgsl",
-      "category": "resources",
-      "feature": "Resource arrays",
-      "feature_id": "resources.resource_arrays",
-      "notes": "Basic sampled texture calls lower to WGSL textureSample for combined texture/coords and explicit texture/sampler/coords forms, including helper texture parameters with companion sampler threading. Shadow comparison sampling, texture arrays, struct-held handles, and advanced sampling forms remain deterministic diagnostics or future work.",
-      "status": "partial"
-    },
-    {
-      "backend": "WebGPU / WGSL",
-      "backend_id": "wgsl",
-      "category": "resources",
-      "feature": "Texture and sampler object model",
-      "feature_id": "resources.texture_sampler_split",
-      "notes": "Explicit textureLod calls lower to WGSL textureSampleLevel for implicit companion samplers and explicit sampler operands. Gradient, bias, offset, projected, shadow-compare, arrayed-resource, and target-invalid coordinate forms remain deterministic diagnostics or future work.",
-      "status": "partial"
-    },
     {
       "backend": "WebGPU / WGSL",
       "backend_id": "wgsl",
@@ -3439,10 +3421,12 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_sampled_texture_resources_and_calls",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_explicit_sampler_texture_calls",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_resource_array_declarations",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_resource_array_parameters"
           ],
-          "notes": "Basic sampled texture calls lower to WGSL textureSample for combined texture/coords and explicit texture/sampler/coords forms, including helper texture parameters with companion sampler threading. Shadow comparison sampling, texture arrays, struct-held handles, and advanced sampling forms remain deterministic diagnostics or future work.",
-          "status": "partial"
+          "notes": "Core WebGPU/WGSL does not expose descriptor/resource binding arrays. The WGSL backend now rejects fixed and unsized texture, sampler, image, and StructuredBuffer resource arrays, including resource-array function parameters, with deterministic diagnostics that direct callers to individual module-scope bindings. Ordinary sampled texture resources, texture_2d_array resource types, struct-held texture handles lowered to module bindings, and storage buffers remain covered by their separate rows.",
+          "status": "diagnostic"
         }
       }
     },
@@ -3555,10 +3539,14 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_split_sampler_lod_grad_and_offset_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_shadow_textures_and_comparison_samplers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_plain_sampler_for_explicit_shadow_compare",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_nonzero_shadow_compare_lod"
           ],
-          "notes": "Explicit textureLod calls lower to WGSL textureSampleLevel for implicit companion samplers and explicit sampler operands. Gradient, bias, offset, projected, shadow-compare, arrayed-resource, and target-invalid coordinate forms remain deterministic diagnostics or future work.",
-          "status": "partial"
+          "notes": "Covers WGSL split texture and sampler module bindings, automatic companion samplers without binding collisions, explicit sampler operands, helper texture-parameter sampler threading, non-arrayed LOD/gradient/offset call-site sampler threading, depth texture bindings, comparison sampler bindings, and textureCompare lowering with deterministic diagnostics for invalid depth texture or comparison sampler operands. Resource arrays and broader projected/gather/query/multisample texture-operation coverage remain tracked by their dedicated support rows.",
+          "status": "supported"
         }
       }
     },
@@ -15266,7 +15254,7 @@
   },
   "summary": {
     "backend_count": 11,
-    "backlog_count": 3,
+    "backlog_count": 1,
     "feature_count": 67,
     "status_counts": {
       "cuda": {
@@ -15350,9 +15338,9 @@
         "validated_rejection": 9
       },
       "wgsl": {
-        "diagnostic": 19,
-        "partial": 3,
-        "supported": 38,
+        "diagnostic": 20,
+        "partial": 1,
+        "supported": 39,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 7

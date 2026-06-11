@@ -70,10 +70,10 @@ class WGSLCodeGen:
         "ray_callable",
         "callable",
     }
-    VECTOR_TYPE_RE = re.compile(r"^(?:vec|float|int|uint|bool)([234])$")
+    VECTOR_TYPE_RE = re.compile(r"^(?:vec|float|int|uint|bool|ivec|uvec|bvec)([234])$")
     MATRIX_TYPE_RE = re.compile(r"^(?:mat|float)([234])(?:x([234]))?$")
     TYPE_CONSTRUCTOR_RE = re.compile(
-        r"^(?:vec[234]|float[234]|int[234]|uint[234]|bool[234]|mat[234](?:x[234])?|float[234]x[234])$"
+        r"^(?:vec[234]|float[234]|int[234]|uint[234]|bool[234]|ivec[234]|uvec[234]|bvec[234]|mat[234](?:x[234])?|float[234]x[234])$"
     )
 
     PRIMITIVE_TYPE_MAP = {
@@ -196,6 +196,8 @@ class WGSLCodeGen:
         "sampler3d",
         "samplercube",
         "samplercubearray",
+        "samplercubearrayshadow",
+        "samplercubeshadow",
         "samplerstate",
         "samplercomparisonstate",
         "texture1d",
@@ -261,9 +263,13 @@ class WGSLCodeGen:
         "sampler1d": "texture_1d<f32>",
         "sampler2d": "texture_2d<f32>",
         "sampler2darray": "texture_2d_array<f32>",
+        "sampler2darrayshadow": "texture_depth_2d_array",
+        "sampler2dshadow": "texture_depth_2d",
         "sampler3d": "texture_3d<f32>",
         "samplercube": "texture_cube<f32>",
         "samplercubearray": "texture_cube_array<f32>",
+        "samplercubearrayshadow": "texture_depth_cube_array",
+        "samplercubeshadow": "texture_depth_cube",
         "texture1d": "texture_1d<f32>",
         "texture2d": "texture_2d<f32>",
         "texture2darray": "texture_2d_array<f32>",
@@ -275,8 +281,12 @@ class WGSLCodeGen:
         "sampler",
         "samplerstate",
     }
+    COMPARISON_SAMPLER_TYPE_NAMES = {
+        "samplercomparisonstate",
+    }
     TEXTURE_FUNCTION_NAMES = {
         "texture",
+        "texturebias",
         "texturecompare",
         "texturecomparegrad",
         "texturecompareoffset",
@@ -587,10 +597,11 @@ class WGSLCodeGen:
         if sampled_texture_type is not None:
             return (
                 f"{prefix}{node.name}: {sampled_texture_type}, "
-                f"{self.texture_sampler_name(node.name)}: sampler"
+                f"{self.texture_sampler_name(node.name)}: "
+                f"{self.companion_sampler_type(node.param_type)}"
             )
         if self.is_sampler_type(node.param_type):
-            return f"{prefix}{node.name}: sampler"
+            return f"{prefix}{node.name}: {self.sampler_type(node.param_type)}"
         if self.is_buffer_pointer_type(node.param_type, node.qualifiers):
             return f"{prefix}{node.name}: {self.buffer_pointer_parameter_type(node.param_type)}"
         parameter = f"{prefix}{node.name}: {self.type_name_string(node.param_type)}"
@@ -855,7 +866,8 @@ class WGSLCodeGen:
         sampler_name = self.texture_sampler_name(node.name)
         return (
             f"{texture_attributes}\nvar {node.name}: {texture_type};\n"
-            f"{sampler_attributes}\nvar {sampler_name}: sampler;"
+            f"{sampler_attributes}\nvar {sampler_name}: "
+            f"{self.companion_sampler_type(node.var_type)};"
         )
 
     def generate_sampler_global_variable(self, node):
@@ -867,7 +879,7 @@ class WGSLCodeGen:
         attributes = (
             self.explicit_binding_attributes(node) or self.next_binding_attributes()
         )
-        return f"{attributes}\nvar {node.name}: sampler;"
+        return f"{attributes}\nvar {node.name}: {self.sampler_type(node.var_type)};"
 
     def generate_resource_member_global_variables(self, root_name, root_type):
         declarations = []
@@ -894,14 +906,18 @@ class WGSLCodeGen:
             sampler_name = self.texture_sampler_name(binding_name)
             return (
                 f"{texture_attributes}\nvar {binding_name}: {sampled_texture_type};\n"
-                f"{sampler_attributes}\nvar {sampler_name}: sampler;"
+                f"{sampler_attributes}\nvar {sampler_name}: "
+                f"{self.companion_sampler_type(info['member_type'])};"
             )
         if self.is_sampler_type(info["member_type"]):
             attributes = (
                 self.explicit_binding_attributes(member)
                 or self.next_binding_attributes()
             )
-            return f"{attributes}\nvar {binding_name}: sampler;"
+            return (
+                f"{attributes}\nvar {binding_name}: "
+                f"{self.sampler_type(info['member_type'])};"
+            )
         raise ValueError(
             "WGSL target does not support resource member "
             f"{info['owner_struct']}.{member.name} of type {info['resource_type_name']}; "
@@ -1340,11 +1356,60 @@ class WGSLCodeGen:
             return self.generate_texture_sample_call(function_name, args)
         if normalized_name == "texturelod":
             return self.generate_texture_sample_level_call(function_name, args)
+        if normalized_name == "texturelodoffset":
+            return self.generate_texture_sample_level_offset_call(function_name, args)
+        if normalized_name == "texturegrad":
+            return self.generate_texture_sample_grad_call(function_name, args)
+        if normalized_name == "texturegradoffset":
+            return self.generate_texture_sample_grad_offset_call(function_name, args)
+        if normalized_name == "textureoffset":
+            return self.generate_texture_sample_offset_call(function_name, args)
+        if normalized_name == "texturecompare":
+            return self.generate_texture_sample_compare_call(function_name, args)
+        if normalized_name == "texturecompareoffset":
+            return self.generate_texture_sample_compare_offset_call(function_name, args)
+        if normalized_name == "texturecomparelod":
+            return self.generate_texture_sample_compare_level_call(function_name, args)
+        if normalized_name == "texturecomparelodoffset":
+            return self.generate_texture_sample_compare_level_offset_call(
+                function_name, args
+            )
         if normalized_name == "texturesize":
             return self.generate_texture_dimensions_call(args)
         raise ValueError(
             "WGSL target does not support CrossGL texture function "
             f"{function_name} yet"
+        )
+
+    def generate_texture_call_args(self, args, *, function_name, implicit, explicit):
+        if len(args) == implicit:
+            texture = args[0]
+            return [
+                self.generate_expression(texture),
+                self.texture_sampler_expression(texture),
+                *(self.generate_expression(arg) for arg in args[1:]),
+            ]
+        if len(args) == explicit:
+            return [self.generate_expression(arg) for arg in args]
+        raise ValueError(
+            f"WGSL target supports {function_name}() calls with {implicit} or "
+            f"{explicit} argument(s); got {len(args)}"
+        )
+
+    def generate_texture_builtin_call(
+        self, builtin_name, function_name, args, *, implicit, explicit
+    ):
+        return (
+            f"{builtin_name}("
+            + ", ".join(
+                self.generate_texture_call_args(
+                    args,
+                    function_name=function_name,
+                    implicit=implicit,
+                    explicit=explicit,
+                )
+            )
+            + ")"
         )
 
     def generate_texture_sample_call(self, function_name, args):
@@ -1391,6 +1456,90 @@ class WGSLCodeGen:
             f"{len(args)} argument(s) for {function_name}"
         )
 
+    def generate_texture_sample_level_offset_call(self, function_name, args):
+        return self.generate_texture_builtin_call(
+            "textureSampleLevel", function_name, args, implicit=4, explicit=5
+        )
+
+    def generate_texture_sample_grad_call(self, function_name, args):
+        return self.generate_texture_builtin_call(
+            "textureSampleGrad", function_name, args, implicit=4, explicit=5
+        )
+
+    def generate_texture_sample_grad_offset_call(self, function_name, args):
+        return self.generate_texture_builtin_call(
+            "textureSampleGrad", function_name, args, implicit=5, explicit=6
+        )
+
+    def generate_texture_sample_offset_call(self, function_name, args):
+        if len(args) == 3:
+            return self.generate_texture_builtin_call(
+                "textureSample", function_name, args, implicit=3, explicit=4
+            )
+        if len(args) == 4:
+            if self.is_sampler_type(self.expression_type(args[1])):
+                return self.generate_texture_builtin_call(
+                    "textureSample", function_name, args, implicit=3, explicit=4
+                )
+            texture, coords, offset, bias = (
+                self.generate_expression(arg) for arg in args
+            )
+            return (
+                "textureSampleBias("
+                f"{texture}, {self.texture_sampler_expression(args[0])}, "
+                f"{coords}, {bias}, {offset})"
+            )
+        if len(args) == 5:
+            call_args = self.generate_texture_call_args(
+                args, function_name=function_name, implicit=4, explicit=5
+            )
+            texture, sampler, coords, offset, bias = call_args
+            return (
+                "textureSampleBias("
+                f"{texture}, {sampler}, {coords}, {bias}, {offset})"
+            )
+        raise ValueError(
+            "WGSL target supports textureOffset() calls with texture/coords/offset, "
+            "texture/sampler/coords/offset, or texture/sampler/coords/offset/bias "
+            f"arguments; got {len(args)} argument(s)"
+        )
+
+    def generate_texture_sample_compare_call(self, function_name, args):
+        self.require_depth_texture_operand(args[0], function_name)
+        self.require_comparison_sampler_operand(args, function_name, implicit=3)
+        return self.generate_texture_builtin_call(
+            "textureSampleCompare", function_name, args, implicit=3, explicit=4
+        )
+
+    def generate_texture_sample_compare_offset_call(self, function_name, args):
+        self.require_depth_texture_operand(args[0], function_name)
+        self.require_comparison_sampler_operand(args, function_name, implicit=4)
+        return self.generate_texture_builtin_call(
+            "textureSampleCompare", function_name, args, implicit=4, explicit=5
+        )
+
+    def generate_texture_sample_compare_level_call(self, function_name, args):
+        self.require_depth_texture_operand(args[0], function_name)
+        self.require_comparison_sampler_operand(args, function_name, implicit=4)
+        self.require_zero_compare_level_operand(args, function_name, implicit=4)
+        call_args = self.generate_texture_call_args(
+            args, function_name=function_name, implicit=4, explicit=5
+        )
+        call_args.pop()
+        return "textureSampleCompareLevel(" + ", ".join(call_args) + ")"
+
+    def generate_texture_sample_compare_level_offset_call(self, function_name, args):
+        self.require_depth_texture_operand(args[0], function_name)
+        self.require_comparison_sampler_operand(args, function_name, implicit=5)
+        self.require_zero_compare_level_operand(args, function_name, implicit=5)
+        call_args = self.generate_texture_call_args(
+            args, function_name=function_name, implicit=5, explicit=6
+        )
+        offset = call_args.pop()
+        call_args.pop()
+        call_args.append(offset)
+        return "textureSampleCompareLevel(" + ", ".join(call_args) + ")"
+
     def generate_texture_dimensions_call(self, args):
         if len(args) not in {1, 2}:
             raise ValueError(
@@ -1412,6 +1561,42 @@ class WGSLCodeGen:
         raise ValueError(
             "WGSL target cannot infer a companion sampler for texture expression "
             f"{self.generate_expression(texture_expr)}; pass an explicit sampler"
+        )
+
+    def require_depth_texture_operand(self, texture_expr, function_name):
+        texture_type = self.expression_type(texture_expr)
+        if not self.is_depth_texture_type(texture_type):
+            raise ValueError(
+                f"WGSL target requires {function_name}() to use a shadow/depth "
+                "texture resource"
+            )
+
+    def require_comparison_sampler_operand(self, args, function_name, *, implicit):
+        if len(args) == implicit:
+            return
+        if len(args) != implicit + 1:
+            return
+        sampler_type = self.expression_type(args[1])
+        if not self.is_comparison_sampler_type(sampler_type):
+            raise ValueError(
+                f"WGSL target requires {function_name}() explicit sampler operand "
+                "to use samplerComparisonState"
+            )
+
+    def require_zero_compare_level_operand(self, args, function_name, *, implicit):
+        if self.semantic_key(function_name).endswith("offset"):
+            level_index = len(args) - 2
+        else:
+            level_index = len(args) - 1
+        if len(args) <= level_index:
+            return
+        level_expr = args[level_index]
+        if isinstance(level_expr, LiteralNode) and level_expr.value in {0, 0.0}:
+            return
+        raise ValueError(
+            f"WGSL target only lowers {function_name}() when the explicit LOD "
+            "operand is literal 0 because textureSampleCompareLevel samples "
+            "mip level 0"
         )
 
     def pointer_argument_expression(self, pointer_expr):
@@ -1449,6 +1634,7 @@ class WGSLCodeGen:
                 f"{self.type_name_string(vtype.element_type)}>"
             )
         if isinstance(vtype, ArrayType):
+            self.validate_not_resource_array(vtype)
             element = self.type_name_string(vtype.element_type)
             if vtype.size is None:
                 return f"array<{element}>"
@@ -1499,11 +1685,11 @@ class WGSLCodeGen:
         if vector_match:
             size = vector_match.group(1)
             element = "f32"
-            if lower.startswith("int"):
+            if lower.startswith(("int", "ivec")):
                 element = "i32"
-            elif lower.startswith("uint"):
+            elif lower.startswith(("uint", "uvec")):
                 element = "u32"
-            elif lower.startswith("bool"):
+            elif lower.startswith(("bool", "bvec")):
                 element = "bool"
             return f"vec{size}<{element}>"
 
@@ -1557,6 +1743,33 @@ class WGSLCodeGen:
         ):
             return str(vtype.name)
         return None
+
+    def validate_not_resource_array(self, vtype):
+        resource_type = self.resource_array_element_type_name(vtype)
+        if resource_type is None:
+            return
+        raise ValueError(
+            "WGSL target does not support resource arrays of "
+            f"{resource_type}; WebGPU/WGSL requires texture, sampler, image, "
+            "and storage-buffer resources to be declared as individual "
+            "module-scope bindings"
+        )
+
+    def resource_array_element_type_name(self, vtype):
+        if not isinstance(vtype, ArrayType):
+            return None
+        element_type = self.array_element_type(vtype)
+        resource_type = self.resource_type_name(element_type)
+        if resource_type is not None and self.is_resource_type_name(resource_type):
+            return self.type_display_name(element_type)
+        return self.storage_buffer_like_type_name(element_type)
+
+    def type_display_name(self, vtype):
+        if isinstance(vtype, NamedType):
+            return str(vtype.name)
+        if isinstance(vtype, str):
+            return vtype.strip()
+        return str(vtype)
 
     def is_buffer_pointer_type(self, vtype, qualifiers=()):
         if not isinstance(vtype, PointerType):
@@ -1621,9 +1834,34 @@ class WGSLCodeGen:
             return None
         return self.SAMPLED_TEXTURE_TYPE_MAP.get(type_name)
 
+    def is_depth_texture_type(self, vtype):
+        type_name = self.resource_type_name(vtype)
+        return type_name in {
+            "sampler2darrayshadow",
+            "sampler2dshadow",
+            "samplercubearrayshadow",
+            "samplercubeshadow",
+        }
+
     def is_sampler_type(self, vtype):
         type_name = self.resource_type_name(vtype)
-        return type_name in self.SAMPLER_TYPE_NAMES
+        return (
+            type_name in self.SAMPLER_TYPE_NAMES
+            or type_name in self.COMPARISON_SAMPLER_TYPE_NAMES
+        )
+
+    def is_comparison_sampler_type(self, vtype):
+        return self.resource_type_name(vtype) in self.COMPARISON_SAMPLER_TYPE_NAMES
+
+    def sampler_type(self, vtype):
+        if self.is_comparison_sampler_type(vtype):
+            return "sampler_comparison"
+        return "sampler"
+
+    def companion_sampler_type(self, texture_type):
+        if self.is_depth_texture_type(texture_type):
+            return "sampler_comparison"
+        return "sampler"
 
     def resource_type_name(self, vtype):
         if isinstance(vtype, NamedType) and not vtype.generic_args:
@@ -1834,10 +2072,13 @@ class WGSLCodeGen:
             if sampled_texture_type is not None:
                 declarations.append(f"{binding_name}: {sampled_texture_type}")
                 declarations.append(
-                    f"{self.texture_sampler_name(binding_name)}: sampler"
+                    f"{self.texture_sampler_name(binding_name)}: "
+                    f"{self.companion_sampler_type(info['member_type'])}"
                 )
             elif self.is_sampler_type(info["member_type"]):
-                declarations.append(f"{binding_name}: sampler")
+                declarations.append(
+                    f"{binding_name}: {self.sampler_type(info['member_type'])}"
+                )
         return declarations
 
     def resource_member_call_arguments(self, arg, resource_paths):
