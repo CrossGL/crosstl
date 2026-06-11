@@ -791,10 +791,7 @@ def test_translate_project_glsl_overloaded_vector_helper_to_wgsl(tmp_path):
     assert "fn linearToSrgb_vec4_f32(linear: vec4<f32>) -> vec4<f32>" in generated
     assert "linearToSrgb_f32(linear.r)" in generated
     assert "linearToSrgb_vec3_f32(linear.rgb)" in generated
-    assert (
-        "fragColor = linearToSrgb_vec4_f32((light * textureSample("
-        in generated
-    )
+    assert "fragColor = linearToSrgb_vec4_f32((light * textureSample(" in generated
     assert "fragColor = linearToSrgb((light * textureSample(" not in generated
 
 
@@ -10545,6 +10542,78 @@ def test_translate_project_opengl_materializes_mlx_pointer_and_value_bindings(
     assert "float factor;" in output
     assert "dst[gid] = (float(src[gid]) * factor);" in output
     assert not re.search(r"\b(?:T|U)\b", output)
+
+
+def test_translate_project_ignores_unreachable_metal_template_family(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "copy.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_copy(name, type) \\
+                instantiate_kernel("copy" #name, copy_values, type)
+
+            template <typename T>
+            [[kernel]] void copy_values(
+                device const T* src [[buffer(0)]],
+                device T* dst [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                dst[gid] = src[gid];
+            }
+
+            template <typename Value, typename Missing>
+            Value unused_convert(Value value) {
+                return Missing(value);
+            }
+
+            template <typename Missing>
+            Missing unused_family(Missing value) {
+                return unused_convert<Missing, Missing>(value);
+            }
+
+            instantiate_copy(float32, float)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx", "opengl", "vulkan"]
+            output_dir = "translated"
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+    for artifact in payload["artifacts"]:
+        materialization = artifact["templateMaterialization"]
+        assert materialization["status"] == "materialized"
+        assert materialization["unsupported"] == []
+        assert all(
+            record["name"] not in {"unused_convert", "unused_family"}
+            for record in materialization["specializations"]
+        )
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        assert "unused_convert" not in output
+        assert "unused_family" not in output
+        assert "Missing" not in output
 
 
 def test_translate_project_opengl_validates_implicit_metal_matmul_resources(
@@ -40514,8 +40583,7 @@ def test_translate_project_cli_cuda_vector_add_demo_directx_outputs_valid_hlsl(
             targets = ["cgl", "metal", "vulkan"]
             output_dir = "crosstl-out"
             external_corpus_manifest = "corpus.json"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     config_path.write_text(
@@ -40567,8 +40635,7 @@ def test_translate_project_cli_cuda_vector_add_demo_directx_outputs_valid_hlsl(
                     C[i] = A[i] + B[i];
                 }
             }
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
