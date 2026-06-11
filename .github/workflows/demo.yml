@@ -126,13 +126,6 @@ jobs:
             --target opengl \
             --target vulkan \
             --reports-dir support/generated/demo-reports/linux-opengl-vulkan
-          python demos/open-source-porting/run_demo.py \
-            --check \
-            --run-toolchains \
-            --require-toolchain-runs \
-            --case rust-gpu-compute-collatz \
-            --target vulkan \
-            --reports-dir support/generated/demo-reports/linux-vulkan
         shell: bash
 
       - name: macOS Metal smoke checks

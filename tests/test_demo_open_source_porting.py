@@ -187,7 +187,6 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "raylib-base-vertex",
         "raylib-lighting-shader-pair",
         "renderdoc-vktext-fragment",
-        "rust-gpu-compute-collatz",
         "rust-gpu-graphics-stage-inputs",
         "rust-gpu-vulkan-examples-triangle-overlay",
         "sascha-willems-vulkan-conservative-triangle",

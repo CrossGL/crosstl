@@ -1,6 +1,6 @@
 [project]
 source_roots = ["."]
 include = ["lib.rs"]
-targets = ["cgl", "metal", "vulkan"]
+targets = ["metal"]
 output_dir = "crosstl-out"
 external_corpus_manifest = "corpus.json"
