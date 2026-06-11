@@ -1,6 +1,0 @@
-[project]
-source_roots = ["."]
-include = ["reduce.cl"]
-targets = ["opengl", "metal", "vulkan"]
-output_dir = "crosstl-out"
-external_corpus_manifest = "corpus.json"

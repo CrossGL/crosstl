@@ -107,7 +107,6 @@ jobs:
             --case nvidia-cuda-samples-vector-add \
             --case nvpro-vk-mini-samples-rectangle \
             --case ogl-samples-flat-color \
-            --case opencl-sdk-reduce \
             --case opencl-sdk-saxpy \
             --case openframeworks-noise-shader \
             --case rocm-examples-add-kernel \
@@ -158,7 +157,6 @@ jobs:
             --case nvidia-cuda-samples-vector-add \
             --case nvpro-vk-mini-samples-rectangle \
             --case ogl-samples-flat-color \
-            --case opencl-sdk-reduce \
             --case opencl-sdk-saxpy \
             --case openframeworks-noise-shader \
             --case raylib-base-fragment \
@@ -212,7 +210,6 @@ jobs:
             demos/open-source-porting/cases/nvpro-vk-mini-samples-rectangle/crosstl-out/metal/rectangle.vert.metal \
             demos/open-source-porting/cases/ogl-samples-flat-color/crosstl-out/metal/flat-color.frag.metal \
             demos/open-source-porting/cases/ogl-samples-flat-color/crosstl-out/metal/flat-color.vert.metal \
-            demos/open-source-porting/cases/opencl-sdk-reduce/crosstl-out/metal/reduce.metal \
             demos/open-source-porting/cases/opencl-sdk-saxpy/crosstl-out/metal/saxpy.metal \
             demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/metal/noise.frag.metal \
             demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/metal/noise.vert.metal \

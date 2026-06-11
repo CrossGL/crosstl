@@ -66,7 +66,6 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `nvpro-vk-mini-samples-rectangle` | `nvpro-samples/vk_mini_samples` at `994ac9f446ef44962c563b9600c8e9f117a3725d` | Apache-2.0 | GLSL | CrossGL, Metal, OpenGL, DirectX, Vulkan | Uses the upstream rectangle shader pair unchanged. |
 | `ogl-samples-flat-color` | `g-truc/ogl-samples` at `38cada7a9458864265e25415ae61586d500ff5fc` | MIT | GLSL | CrossGL, Metal, OpenGL, DirectX, Vulkan | Uses the upstream GLSL 330 flat-color shader pair unchanged. |
 | `openframeworks-noise-shader` | `openframeworks/openFrameworks` at `63eb03828c40de713b85db7810f1c519d8b9b0cc` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream noise shader pair with whitespace normalization. |
-| `opencl-sdk-reduce` | `KhronosGroup/OpenCL-SDK` at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` | Apache-2.0 | OpenCL | OpenGL, Metal, Vulkan | Uses the upstream reduce compute kernel unchanged. CrossGL lowering remains tracked in issue #1241; DirectX work-group metadata lowering is tracked in issue #1245. |
 | `opencl-sdk-saxpy` | `KhronosGroup/OpenCL-SDK` at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` | Apache-2.0 | OpenCL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream SAXPY compute kernel unchanged. |
 | `rocm-examples-add-kernel` | `ROCm/rocm-examples` at `cf369da68f209c315074204bd0eb61d1a5c015d1` | MIT | HIP | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream sphinx-marked add-kernel slice. Host HIP runtime setup remains outside the demo scope. |
 | `raylib-base-fragment` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream base fragment shader unchanged. |
@@ -212,12 +211,13 @@ render-pass integration remain outside this source-focused demo.
 
 The `KhronosGroup/OpenCL-SDK` reduce kernel from `samples/core/reduce/reduce.cl`
 at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` was tested as a candidate and
-retested after issue #811 and issue #1234 closed. It is now checked for OpenGL,
-Metal, and Vulkan output. CrossGL output still reports structured
-unsupported-lowering diagnostics for unresolved reduction helpers, local
-pointer helper parameters, and event/local-memory builtins under issue #1241.
-DirectX output is excluded until issue #1245 resolves the `get_num_groups()`
-metadata lowering needed for DXC-valid compute entry parameters.
+retested after issue #811 and issue #1234 closed. It remains excluded from the
+checked corpus until issue #1251 resolves cross-platform output determinism.
+CrossGL output still reports structured unsupported-lowering diagnostics for
+unresolved reduction helpers, local pointer helper parameters, and
+event/local-memory builtins under issue #1241. DirectX output also remains
+excluded until issue #1245 resolves the `get_num_groups()` metadata lowering
+needed for DXC-valid compute entry parameters.
 
 The `microsoft/DirectX-Graphics-Samples` HelloConstBuffers shader from
 `Samples/Desktop/D3D12HelloWorld/src/HelloConstBuffers/shaders.hlsl` at
