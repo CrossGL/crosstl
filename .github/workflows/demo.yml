@@ -257,6 +257,7 @@ jobs:
             --case libgdx-batch-shader \
             --case lonelydevil-vulkan-tutorial-triangle \
             --case monogame-sprite-effect \
+            --case nvidia-cuda-samples-vector-add \
             --case openframeworks-noise-shader \
             --case angle-simple-texture-2d \
             --case apple-modern-rendering-mesh-viewdir \
@@ -301,6 +302,7 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.frag.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/monogame-sprite-effect/crosstl-out/directx/SpriteEffect.hlsl SpriteVertexShader vs_6_0
           compile_hlsl demos/open-source-porting/cases/monogame-sprite-effect/crosstl-out/directx/SpriteEffect.hlsl SpritePixelShader ps_6_0
+          compile_hlsl demos/open-source-porting/cases/nvidia-cuda-samples-vector-add/crosstl-out/directx/vectorAdd_kernel.hlsl CSMain cs_6_0
           compile_hlsl demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/directx/noise.vert.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/directx/noise.frag.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/directx/SimpleTexture2D.vert.hlsl VSMain vs_6_0
