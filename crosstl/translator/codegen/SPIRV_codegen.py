@@ -22956,7 +22956,7 @@ class VulkanSPIRVCodeGen:
         """Reject generic functions that have no concrete SPIR-V specialization."""
         specialized_source_names = {
             key[0]
-            for key in (self.generic_function_specializations or {})
+            for key in self.generic_function_specializations or {}
             if isinstance(key, tuple) and key
         }
         for func in iter_function_nodes(ast_node):
