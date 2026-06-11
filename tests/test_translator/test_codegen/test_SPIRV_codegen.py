@@ -24441,6 +24441,120 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_mlx_arange_u64_storage_buffer_access_chain_validates(self, tmp_path):
+        source_code = """
+        shader MLXArangeU64StorageBufferAccess {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer u64* offsets;
+                layout(set = 0, binding = 1) buffer uint* outValues;
+
+                void main() {
+                    uint index = gl_GlobalInvocationID.x;
+                    u64 value = offsets[index] + u64(index);
+                    offsets[index] = value;
+                    outValues[index] = uint(value);
+                    return;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        u64_type = re.search(r"(%\d+) = OpTypeInt 64 0\b", spv_code)
+        assert u64_type is not None
+        u64_runtime_array = re.search(
+            rf"(%\d+) = OpTypeRuntimeArray {re.escape(u64_type.group(1))}\b",
+            spv_code,
+        )
+        assert u64_runtime_array is not None
+        assert f"OpDecorate {u64_runtime_array.group(1)} ArrayStride 8" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mlx_binary_two_u64_storage_buffer_access_chain_validates(self, tmp_path):
+        source_code = """
+        shader MLXBinaryTwoU64StorageBufferAccess {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer u64* leftValues;
+                layout(set = 0, binding = 1) buffer u64* rightValues;
+                layout(set = 0, binding = 2) buffer u64* outValues;
+
+                void main() {
+                    uint index = gl_GlobalInvocationID.x;
+                    u64 value = leftValues[index] + rightValues[index + uint(1)];
+                    outValues[index] = value;
+                    return;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        u64_type = re.search(r"(%\d+) = OpTypeInt 64 0\b", spv_code)
+        assert u64_type is not None
+        u64_runtime_array = re.search(
+            rf"(%\d+) = OpTypeRuntimeArray {re.escape(u64_type.group(1))}\b",
+            spv_code,
+        )
+        assert u64_runtime_array is not None
+        assert f"OpDecorate {u64_runtime_array.group(1)} ArrayStride 8" in spv_code
+        assert re.search(
+            rf"%\d+ = OpIAdd {re.escape(u64_type.group(1))} %\d+ %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mlx_ternary_mixed_u64_uint_storage_buffer_access_validates(self, tmp_path):
+        source_code = """
+        shader MLXTernaryMixedStorageBufferAccess {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer u64* trueValues;
+                layout(set = 0, binding = 1) buffer uint* falseValues;
+                layout(set = 0, binding = 2) buffer u64* outValues;
+
+                void main() {
+                    uint index = gl_GlobalInvocationID.x;
+                    bool chooseLeft = (index & uint(1)) == uint(0);
+                    u64 value = chooseLeft ? trueValues[index] : falseValues[index];
+                    outValues[index] = value;
+                    return;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        u64_type = re.search(r"(%\d+) = OpTypeInt 64 0\b", spv_code)
+        assert u64_type is not None
+        u64_runtime_array = re.search(
+            rf"(%\d+) = OpTypeRuntimeArray {re.escape(u64_type.group(1))}\b",
+            spv_code,
+        )
+        assert u64_runtime_array is not None
+        assert f"OpDecorate {u64_runtime_array.group(1)} ArrayStride 8" in spv_code
+        assert re.search(
+            rf"%\d+ = OpSelect {re.escape(u64_type.group(1))} %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_mlx_random_for_in_over_fixed_array_row_validates(self, tmp_path):
         source_code = """
         shader MLXRandomForInArrayRow {
