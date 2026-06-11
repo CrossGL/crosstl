@@ -1411,6 +1411,9 @@ class MetalToCrossGLConverter:
 
     def map_variable_type(self, var):
         raw_type = getattr(var, "vtype", None)
+        constant_buffer_type = self.constant_buffer_pointer_type(var)
+        if constant_buffer_type:
+            return constant_buffer_type
         structured_buffer_type = self.structured_buffer_pointer_type(var)
         if structured_buffer_type:
             return structured_buffer_type
@@ -1440,7 +1443,9 @@ class MetalToCrossGLConverter:
         return mapped_type
 
     def address_space_qualifier_prefix(self, var):
-        if self.structured_buffer_pointer_type(var):
+        if self.constant_buffer_pointer_type(
+            var
+        ) or self.structured_buffer_pointer_type(var):
             return ""
 
         qualifiers = [
@@ -3054,6 +3059,8 @@ class MetalToCrossGLConverter:
         if not element_type:
             return None
         element_type = self.resolve_type_alias(element_type)
+        if "constant" in qualifiers and element_type in self.struct_member_types:
+            return None
 
         buffer_type = (
             "StructuredBuffer"
@@ -3061,6 +3068,24 @@ class MetalToCrossGLConverter:
             else "RWStructuredBuffer"
         )
         return f"{buffer_type}<{self.map_type(element_type)}>"
+
+    def constant_buffer_pointer_type(self, var):
+        if not self.has_attribute(var, "buffer"):
+            return None
+
+        qualifiers = {
+            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
+        }
+        if "constant" not in qualifiers:
+            return None
+
+        element_type = self.pointer_element_type(getattr(var, "vtype", None))
+        if not element_type:
+            return None
+        element_type = self.resolve_type_alias(element_type)
+        if element_type not in self.struct_member_types:
+            return None
+        return f"ConstantBuffer<{self.map_type(element_type)}>"
 
     def is_structured_buffer_expression(self, expr):
         name = self.expression_base_name(expr)

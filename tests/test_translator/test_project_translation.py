@@ -32433,6 +32433,87 @@ def test_translate_project_metal_matmul_buffers_lower_to_opengl_resources(
     assert "thread_position_in_grid" not in output
 
 
+def test_translate_project_metal_matmul_constant_pointer_params_lower_to_resources(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "matmul.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct MatMulParams {
+                uint rows;
+                uint cols;
+                uint inner;
+            };
+
+            kernel void matmul(
+                constant MatMulParams* params [[buffer(0)]],
+                device const float* A [[buffer(1)]],
+                device const float* B [[buffer(2)]],
+                device float* X [[buffer(3)]],
+                uint3 gid [[thread_position_in_grid]]
+            ) {
+                if (gid.x >= params->cols || gid.y >= params->rows) {
+                    return;
+                }
+                float sum = 0.0;
+                for (uint k = 0; k < params->inner; ++k) {
+                    sum += A[gid.y * params->inner + k] * B[k * params->cols + gid.x];
+                }
+                X[gid.y * params->cols + gid.x] = sum;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl", "directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("opengl", "translated"), ("directx", "translated")}
+
+    outputs = {
+        artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in payload["artifacts"]
+    }
+
+    opengl = outputs["opengl"]
+    assert "layout(std140, binding = 0) uniform MatMulParams" in opengl
+    assert "} params;" in opengl
+    assert "layout(std430, binding = 1) readonly buffer ABuffer { float A[]; };" in opengl
+    assert "layout(std430, binding = 2) readonly buffer BBuffer { float B[]; };" in opengl
+    assert "layout(std430, binding = 3) buffer XBuffer { float X[]; };" in opengl
+    assert "params.cols" in opengl
+    assert "params.rows" in opengl
+    assert "params.inner" in opengl
+    assert "paramsBuffer" not in opengl
+    assert "void matmul(" not in opengl
+    assert "float* A" not in opengl
+    assert "float* B" not in opengl
+    assert "float* X" not in opengl
+
+    directx = outputs["directx"]
+    assert "ConstantBuffer<MatMulParams> params : register(b0);" in directx
+    assert "StructuredBuffer<float> A : register(t1);" in directx
+    assert "StructuredBuffer<float> B : register(t2);" in directx
+    assert "RWStructuredBuffer<float> X : register(u3);" in directx
+    assert "void CSMain(uint3 gid : SV_DispatchThreadID)" in directx
+    assert "params.cols" in directx
+    assert "params.rows" in directx
+    assert "params.inner" in directx
+    assert "StructuredBuffer<MatMulParams> params" not in directx
+    assert "float* A" not in directx
+    assert "float* B" not in directx
+    assert "float* X" not in directx
+
+
 def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(
     tmp_path,
 ):
