@@ -1,4 +1,3 @@
-
 #version 450 core
 #ifdef GL_VERTEX_SHADER
 in vec2 pos;

@@ -7,7 +7,12 @@
       "id": "godot-betsy-alpha-stitch",
       "path": "alpha_stitch.glsl",
       "sourceBackend": "opengl",
-      "targets": ["cgl", "opengl"],
+      "targets": [
+        "cgl",
+        "opengl",
+        "directx",
+        "vulkan"
+      ],
       "repository": "https://github.com/godotengine/godot",
       "commit": "3df26a02c446710c979daa541b74f87edeca81b0",
       "sourceUrl": "https://github.com/godotengine/godot/blob/3df26a02c446710c979daa541b74f87edeca81b0/modules/betsy/alpha_stitch.glsl"

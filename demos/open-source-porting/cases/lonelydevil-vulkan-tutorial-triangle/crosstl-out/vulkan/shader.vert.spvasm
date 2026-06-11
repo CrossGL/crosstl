@@ -1,21 +1,21 @@
 ; SPIR-V
 ; Version: 1.0
 ; Generator: CrossGL Vulkan SPIR-V Generator
-; Bound: 52
+; Bound: 56
 OpCapability Shader
 %1 = OpExtInstImport "GLSL.std.450"
 OpMemoryModel Logical GLSL450
-OpEntryPoint Vertex %25 "main" %28 %30
+OpEntryPoint Vertex %29 "main" %32 %34
 OpName %9 "VertexOutput"
 OpMemberName %9 0 "fragColor"
 OpMemberName %9 1 "gl_Position"
-OpName %16 "positions"
-OpName %23 "colors"
-OpName %28 "CrossGL_vertex_output_main_fragColor"
-OpName %30 "gl_Position"
-OpName %32 "output"
-OpDecorate %28 Location 0
-OpDecorate %30 BuiltIn Position
+OpName %20 "positions"
+OpName %27 "colors"
+OpName %32 "CrossGL_vertex_output_main_fragColor"
+OpName %34 "gl_Position"
+OpName %36 "output"
+OpDecorate %32 Location 0
+OpDecorate %34 BuiltIn Position
 %2 = OpTypeVoid
 %3 = OpTypeBool
 %4 = OpTypeInt 32 1
@@ -27,50 +27,54 @@ OpDecorate %30 BuiltIn Position
 %11 = OpConstant %4 3
 %10 = OpTypeArray %6 %11
 %12 = OpConstant %5 0.0
-%13 = OpConstant %5 0.5
-%15 = OpTypePointer Private %10
-%17 = OpTypeArray %7 %11
-%18 = OpConstantComposite %7 %13 %13 %12
-%19 = OpConstantComposite %7 %12 %13 %13
-%20 = OpConstantComposite %7 %13 %12 %13
-%21 = OpConstantComposite %17 %18 %19 %20
-%22 = OpTypePointer Private %17
-%24 = OpTypeFunction %2
-%27 = OpTypePointer Output %7
-%29 = OpTypePointer Output %8
-%31 = OpTypePointer Function %9
-%33 = OpTypePointer Private %6
-%36 = OpConstant %5 1.0
-%40 = OpConstant %4 1
-%41 = OpTypePointer Function %8
-%43 = OpTypePointer Private %7
-%46 = OpConstant %4 0
-%47 = OpTypePointer Function %7
-%16 = OpVariable %15 Private
-%23 = OpVariable %22 Private %21
-%28 = OpVariable %27 Output
-%30 = OpVariable %29 Output
-%14 = OpFNegate %5 %13
-%25 = OpFunction %2 None %24
-%26 = OpLabel
-%32 = OpVariable %31 Function
+%13 = OpConstant %5 -0.5
+%14 = OpConstantComposite %6 %12 %13
+%15 = OpConstant %5 0.5
+%16 = OpConstantComposite %6 %15 %15
+%17 = OpConstantComposite %6 %13 %15
+%18 = OpConstantComposite %10 %14 %16 %17
+%19 = OpTypePointer Private %10
+%21 = OpTypeArray %7 %11
+%22 = OpConstantComposite %7 %15 %15 %12
+%23 = OpConstantComposite %7 %12 %15 %15
+%24 = OpConstantComposite %7 %15 %12 %15
+%25 = OpConstantComposite %21 %22 %23 %24
+%26 = OpTypePointer Private %21
+%28 = OpTypeFunction %2
+%31 = OpTypePointer Output %7
+%33 = OpTypePointer Output %8
+%35 = OpTypePointer Function %9
+%37 = OpTypePointer Private %6
+%40 = OpConstant %5 1.0
+%44 = OpConstant %4 1
+%45 = OpTypePointer Function %8
+%47 = OpTypePointer Private %7
+%50 = OpConstant %4 0
+%51 = OpTypePointer Function %7
+%20 = OpVariable %19 Private %18
+%27 = OpVariable %26 Private %25
+%32 = OpVariable %31 Output
+%34 = OpVariable %33 Output
+%29 = OpFunction %2 None %28
+%30 = OpLabel
+%36 = OpVariable %35 Function
 ; WARNING: Unknown variable gl_VertexIndex
-%34 = OpAccessChain %33 %16 %12
-%35 = OpLoad %6 %34
-%37 = OpCompositeExtract %5 %35 0
-%38 = OpCompositeExtract %5 %35 1
-%39 = OpCompositeConstruct %8 %37 %38 %12 %36
-%42 = OpAccessChain %41 %32 %40
-OpStore %42 %39
+%38 = OpAccessChain %37 %20 %12
+%39 = OpLoad %6 %38
+%41 = OpCompositeExtract %5 %39 0
+%42 = OpCompositeExtract %5 %39 1
+%43 = OpCompositeConstruct %8 %41 %42 %12 %40
+%46 = OpAccessChain %45 %36 %44
+OpStore %46 %43
 ; WARNING: Unknown variable gl_VertexIndex
-%44 = OpAccessChain %43 %23 %12
-%45 = OpLoad %7 %44
-%48 = OpAccessChain %47 %32 %46
-OpStore %48 %45
-%49 = OpLoad %9 %32
-%50 = OpCompositeExtract %7 %49 0
-OpStore %28 %50
-%51 = OpCompositeExtract %8 %49 1
-OpStore %30 %51
+%48 = OpAccessChain %47 %27 %12
+%49 = OpLoad %7 %48
+%52 = OpAccessChain %51 %36 %50
+OpStore %52 %49
+%53 = OpLoad %9 %36
+%54 = OpCompositeExtract %7 %53 0
+OpStore %32 %54
+%55 = OpCompositeExtract %8 %53 1
+OpStore %34 %55
 OpReturn
 OpFunctionEnd

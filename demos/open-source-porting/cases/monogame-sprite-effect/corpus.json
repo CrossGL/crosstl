@@ -7,7 +7,11 @@
       "id": "monogame-sprite-effect",
       "path": "SpriteEffect.fx",
       "sourceBackend": "directx",
-      "targets": ["cgl", "directx", "vulkan"],
+      "targets": [
+        "cgl",
+        "directx",
+        "vulkan"
+      ],
       "repository": "https://github.com/MonoGame/MonoGame",
       "commit": "d4893ac09e06bc203792d01d6f151f1891cc1ab5",
       "sourceUrl": "https://github.com/MonoGame/MonoGame/blob/d4893ac09e06bc203792d01d6f151f1891cc1ab5/MonoGame.Framework/Platform/Graphics/Effect/Resources/SpriteEffect.fx"
@@ -16,7 +20,11 @@
       "id": "monogame-effect-macros",
       "path": "Macros.fxh",
       "sourceBackend": "directx",
-      "targets": ["cgl", "directx", "vulkan"],
+      "targets": [
+        "cgl",
+        "directx",
+        "vulkan"
+      ],
       "repository": "https://github.com/MonoGame/MonoGame",
       "commit": "d4893ac09e06bc203792d01d6f151f1891cc1ab5",
       "sourceUrl": "https://github.com/MonoGame/MonoGame/blob/d4893ac09e06bc203792d01d6f151f1891cc1ab5/MonoGame.Framework/Platform/Graphics/Effect/Resources/Macros.fxh"

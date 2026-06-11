@@ -1,6 +1,6 @@
 [project]
 source_roots = ["."]
 include = ["noise.vert", "noise.frag"]
-targets = ["cgl", "vulkan"]
+targets = ["cgl", "opengl", "metal", "vulkan"]
 output_dir = "crosstl-out"
 external_corpus_manifest = "corpus.json"

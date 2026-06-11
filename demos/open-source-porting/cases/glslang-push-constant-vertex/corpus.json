@@ -7,7 +7,13 @@
       "id": "glslang-push-constant-vertex",
       "path": "spv.pushConstant.vert",
       "sourceBackend": "opengl",
-      "targets": ["cgl", "opengl", "metal", "vulkan"],
+      "targets": [
+        "cgl",
+        "opengl",
+        "metal",
+        "directx",
+        "vulkan"
+      ],
       "repository": "https://github.com/KhronosGroup/glslang",
       "commit": "98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
       "sourceUrl": "https://github.com/KhronosGroup/glslang/blob/98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515/Test/spv.pushConstant.vert"

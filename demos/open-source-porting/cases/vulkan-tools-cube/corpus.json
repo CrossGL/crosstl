@@ -7,7 +7,13 @@
       "id": "vulkan-tools-cube-vertex",
       "path": "cube.vert",
       "sourceBackend": "opengl",
-      "targets": ["cgl", "metal", "opengl", "vulkan"],
+      "targets": [
+        "cgl",
+        "opengl",
+        "metal",
+        "directx",
+        "vulkan"
+      ],
       "repository": "https://github.com/KhronosGroup/Vulkan-Tools",
       "commit": "68749eafbf27114a1dd807d6c870e53306673e64",
       "sourceUrl": "https://github.com/KhronosGroup/Vulkan-Tools/blob/68749eafbf27114a1dd807d6c870e53306673e64/cube/cube.vert"
@@ -16,7 +22,13 @@
       "id": "vulkan-tools-cube-fragment",
       "path": "cube.frag",
       "sourceBackend": "opengl",
-      "targets": ["cgl", "metal", "opengl", "vulkan"],
+      "targets": [
+        "cgl",
+        "opengl",
+        "metal",
+        "directx",
+        "vulkan"
+      ],
       "repository": "https://github.com/KhronosGroup/Vulkan-Tools",
       "commit": "68749eafbf27114a1dd807d6c870e53306673e64",
       "sourceUrl": "https://github.com/KhronosGroup/Vulkan-Tools/blob/68749eafbf27114a1dd807d6c870e53306673e64/cube/cube.frag"

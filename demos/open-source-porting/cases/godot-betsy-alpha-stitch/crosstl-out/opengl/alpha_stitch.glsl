@@ -1,4 +1,3 @@
-
 #version 450
 layout(binding = 0) uniform usampler2D srcRGB;
 layout(binding = 1) uniform usampler2D srcAlpha;

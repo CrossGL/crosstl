@@ -1,4 +1,3 @@
-
 #version 450 core
 in vec4 a;
 // Fragment Shader

@@ -1,4 +1,3 @@
-
 #version 450 core
 #ifdef GL_VERTEX_SHADER
 layout(location = 4) out vec2 out_uv;

@@ -206,6 +206,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "nvpro-vk-mini-samples-rectangle",
         "ogl-samples-flat-color",
         "opencl-sdk-saxpy",
+        "openframeworks-noise-shader",
         "raylib-base-fragment",
         "raylib-base-vertex",
         "raylib-lighting-shader-pair",
@@ -228,12 +229,15 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "directx-graphics-samples-hello-texture",
         "directx-shader-compiler-neg1",
         "directx-sdk-samples-tutorial02",
+        "glslang-push-constant-vertex",
+        "godot-betsy-alpha-stitch",
         "libgdx-batch-shader",
         "slang-hello-world-compute",
         "lonelydevil-vulkan-tutorial-triangle",
         "monogame-sprite-effect",
         "sascha-willems-vulkan-headless-compute",
         "vulkan-samples-dynamic-line-grid",
+        "vulkan-tools-cube",
     }
 
 
@@ -295,11 +299,14 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
         "demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/directx/shaders.hlsl",
         "demos/open-source-porting/cases/directx-shader-compiler-neg1/crosstl-out/directx/neg1.hlsl",
         "demos/open-source-porting/cases/directx-sdk-samples-tutorial02/crosstl-out/directx/Tutorial02.hlsl",
+        "demos/open-source-porting/cases/godot-betsy-alpha-stitch/crosstl-out/directx/alpha_stitch.hlsl",
         "demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.vert.hlsl",
         "demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.frag.hlsl",
         "demos/open-source-porting/cases/monogame-sprite-effect/crosstl-out/directx/SpriteEffect.hlsl",
         "demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/directx/headless.hlsl",
         "demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/directx/hello-world.hlsl",
+        "demos/open-source-porting/cases/vulkan-tools-cube/crosstl-out/directx/cube.vert.hlsl",
+        "demos/open-source-porting/cases/vulkan-tools-cube/crosstl-out/directx/cube.frag.hlsl",
     } == directx_paths
     assert all((ROOT / path).is_file() for path in directx_paths)
 

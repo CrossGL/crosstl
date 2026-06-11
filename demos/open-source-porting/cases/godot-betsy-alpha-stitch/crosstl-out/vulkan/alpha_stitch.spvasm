@@ -1,0 +1,97 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 70
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %19 "main" %27
+OpExecutionMode %19 LocalSize 8 8 1
+OpName %13 "srcRGB"
+OpName %14 "srcAlpha"
+OpName %17 "dstTexture"
+OpName %23 "rgbBlock"
+OpName %27 "gl_GlobalInvocationID"
+OpName %41 "alphaBlock"
+OpDecorate %13 DescriptorSet 0
+OpDecorate %13 Binding 0
+OpDecorate %14 DescriptorSet 0
+OpDecorate %14 Binding 1
+OpDecorate %17 DescriptorSet 0
+OpDecorate %17 Binding 2
+OpDecorate %17 NonReadable
+OpDecorate %17 Restrict
+OpDecorate %27 BuiltIn GlobalInvocationId
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypeInt 32 0
+%10 = OpTypeImage %9 2D 0 0 0 1 Unknown
+%11 = OpTypeSampledImage %10
+%12 = OpTypePointer UniformConstant %11
+%15 = OpTypeImage %9 2D 0 0 0 2 Rgba32ui
+%16 = OpTypePointer UniformConstant %15
+%18 = OpTypeFunction %2
+%21 = OpTypeVector %9 2
+%22 = OpTypePointer Function %21
+%25 = OpTypeVector %9 3
+%26 = OpTypePointer Input %25
+%30 = OpTypeVector %4 2
+%36 = OpConstant %4 0
+%37 = OpTypeVector %9 4
+%13 = OpVariable %12 UniformConstant
+%14 = OpVariable %12 UniformConstant
+%17 = OpVariable %16 UniformConstant
+%27 = OpVariable %26 Input
+%19 = OpFunction %2 None %18
+%20 = OpLabel
+%23 = OpVariable %22 Function
+%41 = OpVariable %22 Function
+%24 = OpLoad %11 %13
+%28 = OpLoad %25 %27
+%29 = OpVectorShuffle %21 %28 %28 0 1
+%31 = OpCompositeExtract %9 %29 0
+%32 = OpBitcast %4 %31
+%33 = OpCompositeExtract %9 %29 1
+%34 = OpBitcast %4 %33
+%35 = OpCompositeConstruct %30 %32 %34
+%38 = OpImage %10 %24
+%39 = OpImageFetch %37 %38 %35 Lod %36
+%40 = OpVectorShuffle %21 %39 %39 0 1
+OpStore %23 %40
+%42 = OpLoad %11 %14
+%43 = OpLoad %25 %27
+%44 = OpVectorShuffle %21 %43 %43 0 1
+%45 = OpCompositeExtract %9 %44 0
+%46 = OpBitcast %4 %45
+%47 = OpCompositeExtract %9 %44 1
+%48 = OpBitcast %4 %47
+%49 = OpCompositeConstruct %30 %46 %48
+%50 = OpImage %10 %42
+%51 = OpImageFetch %37 %50 %49 Lod %36
+%52 = OpVectorShuffle %21 %51 %51 0 1
+OpStore %41 %52
+%53 = OpLoad %15 %17
+%54 = OpLoad %25 %27
+%55 = OpVectorShuffle %21 %54 %54 0 1
+%56 = OpCompositeExtract %9 %55 0
+%57 = OpBitcast %4 %56
+%58 = OpCompositeExtract %9 %55 1
+%59 = OpBitcast %4 %58
+%60 = OpCompositeConstruct %30 %57 %59
+%61 = OpLoad %21 %23
+%62 = OpVectorShuffle %21 %61 %61 0 1
+%63 = OpLoad %21 %41
+%64 = OpVectorShuffle %21 %63 %63 0 1
+%65 = OpCompositeExtract %9 %62 0
+%66 = OpCompositeExtract %9 %62 1
+%67 = OpCompositeExtract %9 %64 0
+%68 = OpCompositeExtract %9 %64 1
+%69 = OpCompositeConstruct %37 %65 %66 %67 %68
+OpImageWrite %53 %60 %69
+OpReturn
+OpFunctionEnd
