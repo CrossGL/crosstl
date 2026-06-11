@@ -7894,6 +7894,144 @@ def test_validate_project_report_fails_placeholder_marker_without_diagnostic(
     }
 
 
+def test_translate_project_rust_sampled_texture_uses_entry_resource_parameters(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "sampled.cgl").write_text(
+        textwrap.dedent("""
+            shader ProjectRustSampledTexture {
+                sampler2D colorMap @set(1) @binding(2);
+                sampler linearSampler @set(1) @binding(3);
+
+                fragment {
+                    vec4 main(vec2 uv) @ gl_FragColor {
+                        return texture(colorMap, linearSampler, uv);
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["rust"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    output = repo / "translated" / "rust" / "shaders" / "sampled.rs"
+
+    assert output.exists()
+    rust_code = output.read_text(encoding="utf-8")
+    assert payload["summary"]["translatedCount"] == 1
+    assert (
+        "// CrossGL resource metadata: name=colorMap kind=texture set=1 "
+        "binding=2 binding_source=explicit" in rust_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=linearSampler kind=sampler set=1 "
+        "binding=3 binding_source=explicit" in rust_code
+    )
+    assert (
+        '#[cfg_attr(feature = "crossgl_gpu", '
+        "spirv(descriptor_set = 1, binding = 2))] colorMap: Texture2D<f32>"
+        in rust_code
+    )
+    assert (
+        '#[cfg_attr(feature = "crossgl_gpu", '
+        "spirv(descriptor_set = 1, binding = 3))] linearSampler: Sampler"
+        in rust_code
+    )
+    assert "return sample_sampler(colorMap, linearSampler, uv);" in rust_code
+    assert "CrossGL Rust limitation: resource colorMap" not in rust_code
+    assert "CrossGL Rust limitation: resource linearSampler" not in rust_code
+    assert "static COLOR_MAP" not in rust_code
+    assert "static LINEAR_SAMPLER" not in rust_code
+    assert not [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == project_pipeline.GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE
+        and diagnostic.get("target") == "rust"
+    ]
+
+
+def test_translate_project_rust_storage_buffer_placeholder_has_report_diagnostic(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "storage.cgl").write_text(
+        textwrap.dedent("""
+            shader ProjectRustStorageBuffer {
+                RWStructuredBuffer<int> values @binding(0);
+
+                compute {
+                    void main(uint index) {
+                        int value = buffer_load(values, index);
+                        buffer_store(values, index, value + 1);
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["rust"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    output = repo / "translated" / "rust" / "shaders" / "storage.rs"
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    placeholder_diagnostics = [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == project_pipeline.GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE
+        and diagnostic.get("target") == "rust"
+    ]
+
+    assert output.exists()
+    rust_code = output.read_text(encoding="utf-8")
+    assert "CrossGL Rust limitation: resource values" in rust_code
+    assert "static VALUES: std::sync::LazyLock<RWStructuredBuffer<i32>>" in rust_code
+    assert len(placeholder_diagnostics) == 1
+    assert placeholder_diagnostics[0]["location"]["file"] == (
+        "translated/rust/shaders/storage.rs"
+    )
+    assert "rust-gpu resource binding" in placeholder_diagnostics[0]["message"]
+    assert validate_project_report(report_path)["success"] is True
+
+    missing_payload = copy.deepcopy(payload)
+    _clear_report_diagnostics(missing_payload)
+    missing_report_path = repo / "translated" / "missing-storage-diagnostic.json"
+    missing_report_path.write_text(json.dumps(missing_payload), encoding="utf-8")
+    missing_validation = validate_project_report(missing_report_path)
+
+    assert missing_validation["success"] is False
+    assert (
+        missing_validation["diagnosticsByCode"][
+            project_pipeline.PLACEHOLDER_DIAGNOSTIC_MISSING_CODE
+        ]
+        == 1
+    )
+
+
 def test_translate_project_filters_invalid_include_dirs_before_frontend(
     tmp_path, monkeypatch
 ):
