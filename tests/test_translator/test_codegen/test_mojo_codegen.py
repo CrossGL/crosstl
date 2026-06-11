@@ -2877,12 +2877,12 @@ def test_resource_placeholders_emit_for_sampler_types():
     assert "struct Sampler:" in generated_code
     assert "var ramp: Texture1D = Texture1D()" in generated_code
     assert "var lineArray: Texture1DArray = Texture1DArray()" in generated_code
-    assert "var colorMap: Texture2D = Texture2D()" in generated_code
+    assert "var colorMap: Texture2D = Texture2D(0, 2)" in generated_code
     assert "var layerMap: Texture2DArray = Texture2DArray()" in generated_code
     assert "var volumeMap: Texture3D = Texture3D()" in generated_code
     assert "var cubeMap: TextureCube = TextureCube()" in generated_code
     assert "var probeArray: TextureCubeArray = TextureCubeArray()" in generated_code
-    assert "var linearSampler: Sampler = Sampler()" in generated_code
+    assert "var linearSampler: Sampler = Sampler(0, 0)" in generated_code
     assert "fn sample(tex: Texture1D, coord: Float32)" in generated_code
     assert (
         "fn sample(tex: Texture1DArray, coord: SIMD[DType.float32, 2])"
@@ -2941,6 +2941,61 @@ def test_resource_placeholders_emit_for_sampler_types():
     assert "sampler linearSampler" not in generated_code
     assert "textureLod" not in generated_code
     assert "textureGrad" not in generated_code
+
+
+def test_hlsl_texture2d_sampler_uses_concrete_mojo_resource_bindings(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    Texture2D g_texture : register(t0);
+    SamplerState g_sampler : register(s0);
+
+    vec4 sampleColor(vec2 uv) {
+        return g_texture.Sample(g_sampler, uv);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "# CrossGL resource bindings" in generated_code
+    assert "# CrossGL resource placeholders" not in generated_code
+    assert "struct Texture2D:" in generated_code
+    assert "struct Sampler:" in generated_code
+    assert "var set: Int32" in generated_code
+    assert "var binding: Int32" in generated_code
+    assert "var texels: List[SIMD[DType.float32, 4]]" in generated_code
+    assert "fn _crossgl_texture_coord_index(coord: Float32, extent: Int32)" in (
+        generated_code
+    )
+    assert "var g_texture: Texture2D = Texture2D(0, 0)" in generated_code
+    assert "var g_sampler: Sampler = Sampler(0, 0)" in generated_code
+    assert "fn sample_sampler(tex: Texture2D, sampler: Sampler" in generated_code
+    assert "return tex.sample(coord, sampler)" in generated_code
+    assert "return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0)" not in generated_code
+    assert "return sample_sampler(g_texture, g_sampler, uv)" in generated_code
+
+    generated_code += """
+fn main():
+    var texels = List[SIMD[DType.float32, 4]]()
+    texels.append(SIMD[DType.float32, 4](1.0, 0.0, 0.0, 1.0))
+    texels.append(SIMD[DType.float32, 4](0.0, 2.0, 0.0, 1.0))
+    texels.append(SIMD[DType.float32, 4](0.0, 0.0, 3.0, 1.0))
+    texels.append(SIMD[DType.float32, 4](4.0, 4.0, 4.0, 1.0))
+    var tex = Texture2D(0, 0, 2, 2, texels)
+    var state = Sampler(0, 0)
+    print(sample_sampler(tex, state, SIMD[DType.float32, 2](0.75, 0.25))[1])
+    print(sample_sampler(tex, state, SIMD[DType.float32, 2](0.25, 0.75))[2])
+"""
+    source_path = tmp_path / "hlsl_texture2d_sampler_bindings.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["2.0", "3.0"]
 
 
 def test_mojo_integer_texture_lod_uses_integer_vector_result_types():
@@ -3092,10 +3147,10 @@ def test_hlsl_sampled_texture_aliases_compile_with_mojo(tmp_path):
     assert "struct Sampler:" in generated_code
     assert "struct Texture2D:" in generated_code
     assert "struct Texture2DMS:" in generated_code
-    assert "var colorMap: Texture2D = Texture2D()" in generated_code
+    assert "var colorMap: Texture2D = Texture2D(1, 0)" in generated_code
     assert "var samples: Texture2DMS = Texture2DMS()" in generated_code
-    assert "var linearSampler: Sampler = Sampler()" in generated_code
-    assert "var compareSampler: Sampler = Sampler()" in generated_code
+    assert "var linearSampler: Sampler = Sampler(0, 0)" in generated_code
+    assert "var compareSampler: Sampler = Sampler(0, 1)" in generated_code
     assert (
         "# CrossGL resource metadata: name=linearSampler kind=sampler set=0 "
         "binding=0 binding_source=explicit register=s0" in generated_code
@@ -4919,7 +4974,9 @@ def test_resource_query_helpers_use_mojo_metadata_fields(tmp_path):
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "struct Texture2D:" in generated_code
-    assert "fn __init__(inout self, width: Int32 = 0" in generated_code
+    assert "fn __init__(inout self, set: Int32 = 0, binding: Int32 = 0" in (
+        generated_code
+    )
     assert "fn _crossgl_mip_dimension(value: Int32, lod: Int32) -> Int32:" in (
         generated_code
     )

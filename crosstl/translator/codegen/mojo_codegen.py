@@ -410,6 +410,12 @@ MOJO_RESOURCE_TYPE_MAPPING = {
     "RayTracingAccelerationStructure": "RayTracingAccelerationStructure",
 }
 
+MOJO_CONCRETE_SAMPLED_TEXTURE_TYPES = frozenset({"Texture2D"})
+MOJO_CONCRETE_RESOURCE_TYPES = frozenset(
+    {"Sampler", *MOJO_CONCRETE_SAMPLED_TEXTURE_TYPES}
+)
+
+
 MOJO_HLSL_WRITABLE_TEXTURE_TYPE_MAPPING = {
     "RWTexture1D": ("Image1D", "IImage1D", "UImage1D"),
     "RWTexture1DArray": ("Image1DArray", "IImage1DArray", "UImage1DArray"),
@@ -1244,6 +1250,7 @@ class MojoCodeGen:
         self.mojo_resource_binding_cursors = {}
         self.mojo_source_resource_bindings = {}
         self.mojo_used_resource_bindings = {}
+        self.mojo_resource_binding_initializers = {}
         self.required_resource_types = set()
         self.required_resource_sample_types = set()
         self.required_resource_sample_sampler_types = set()
@@ -1506,6 +1513,7 @@ class MojoCodeGen:
         self.mojo_resource_binding_cursors = {}
         self.mojo_source_resource_bindings = {}
         self.mojo_used_resource_bindings = {}
+        self.mojo_resource_binding_initializers = {}
         self.required_resource_types = set()
         self.required_resource_sample_types = set()
         self.required_resource_sample_sampler_types = set()
@@ -1641,10 +1649,10 @@ class MojoCodeGen:
                 elif self.is_resource_type_name(vtype):
                     code += resource_comment
                     mapped_type = self.map_type(vtype)
-                    code += (
-                        f"var {var_name}: {mapped_type} = "
-                        f"{self.zero_value_for_type(vtype)}\n"
+                    init_value = self.resource_binding_initial_value(
+                        node.name, mapped_type, vtype
                     )
+                    code += f"var {var_name}: {mapped_type} = " f"{init_value}\n"
                 else:
                     code += (
                         f"var {var_name}: {self.map_type(vtype)} = "
@@ -4455,6 +4463,11 @@ class MojoCodeGen:
         memory_qualifiers = self.resource_memory_qualifiers(node)
         if memory_qualifiers:
             parts.append(f"memory={','.join(memory_qualifiers)}")
+        self.mojo_resource_binding_initializers[name] = {
+            "kind": resource_kind,
+            "set": set_index,
+            "binding": binding,
+        }
         return " ".join(parts) + "\n"
 
     def register_resource_access_metadata(self, node, type_name):
@@ -4464,6 +4477,22 @@ class MojoCodeGen:
         access = self.normalized_resource_access_metadata(node)
         if access:
             self.resource_access_qualifiers[name] = access
+
+    def resource_binding_initial_value(self, name, mapped_type, fallback_type):
+        if mapped_type not in MOJO_CONCRETE_RESOURCE_TYPES:
+            return self.zero_value_for_type(fallback_type)
+
+        initializer = self.mojo_resource_binding_initializers.get(name)
+        if not isinstance(initializer, dict):
+            return self.zero_value_for_type(fallback_type)
+
+        set_index = initializer.get("set", 0)
+        binding = initializer.get("binding", 0)
+        if mapped_type == "Texture2D":
+            return f"Texture2D({set_index}, {binding})"
+        if mapped_type == "Sampler":
+            return f"Sampler({set_index}, {binding})"
+        return self.zero_value_for_type(fallback_type)
 
     def register_resource_access_alias_metadata(self, name, type_name, initializer):
         if not name or initializer is None:
@@ -12346,68 +12375,85 @@ class MojoCodeGen:
             or self.required_byte_address_vector_load_helpers
             or self.required_byte_address_vector_store_helpers
         ):
-            code += "# CrossGL resource placeholders\n"
-            for resource_type in sorted(resource_types):
-                code += self.generate_resource_type(resource_type)
-            for buffer_type in sorted(self.required_buffer_resource_types):
-                code += self.generate_buffer_resource_type(buffer_type)
-            for resource_type in sorted(self.required_resource_sample_types):
-                code += self.generate_resource_sample_helper(resource_type)
-            for resource_type in sorted(self.required_resource_sample_sampler_types):
-                code += self.generate_resource_sample_sampler_helper(resource_type)
-            for resource_type in sorted(self.required_resource_lod_types):
-                code += self.generate_resource_lod_helper(resource_type)
-            for resource_type in sorted(self.required_resource_lod_sampler_types):
-                code += self.generate_resource_lod_sampler_helper(resource_type)
-            for resource_type in sorted(self.required_resource_grad_types):
-                code += self.generate_resource_grad_helper(resource_type)
-            for resource_type in sorted(self.required_resource_grad_sampler_types):
-                code += self.generate_resource_grad_sampler_helper(resource_type)
-            if any(
-                helper_name == "texture_size"
-                for helper_name, _resource_type in self.required_resource_size_helpers
-            ):
-                code += self.generate_mip_dimension_helper()
-            for helper_name, resource_type in sorted(
-                self.required_resource_size_helpers
-            ):
-                code += self.generate_resource_size_helper(helper_name, resource_type)
-            for resource_type in sorted(self.required_resource_query_level_types):
-                code += self.generate_resource_query_levels_helper(resource_type)
-            for helper_name, resource_type in sorted(
-                self.required_resource_sample_count_helpers
-            ):
-                code += self.generate_resource_sample_count_helper(
-                    helper_name, resource_type
-                )
-            for resource_type in sorted(self.required_resource_texel_fetch_types):
-                code += self.generate_texel_fetch_helper(resource_type)
-            for resource_type in sorted(
-                self.required_resource_texel_fetch_offset_types
-            ):
-                code += self.generate_texel_fetch_offset_helper(resource_type)
-            for resource_type in sorted(self.required_image_load_types):
-                code += self.generate_image_load_helper(resource_type)
-            for resource_type in sorted(self.required_image_store_types):
-                code += self.generate_image_store_helper(resource_type)
-            for key in sorted(self.required_resource_builtin_helpers):
-                code += self.generate_resource_builtin_helper(
-                    self.required_resource_builtin_helpers[key]
-                )
-            for key in sorted(self.required_buffer_load_helpers):
-                code += self.generate_buffer_load_helper(*key)
-            for key in sorted(self.required_buffer_store_helpers):
-                code += self.generate_buffer_store_helper(*key)
-            for key in sorted(self.required_buffer_append_helpers):
-                code += self.generate_buffer_append_helper(*key)
-            for key in sorted(self.required_buffer_consume_helpers):
-                code += self.generate_buffer_consume_helper(*key)
-            for key in sorted(self.required_buffer_dimensions_helpers):
-                code += self.generate_buffer_dimensions_helper(*key)
-            for key in sorted(self.required_byte_address_vector_load_helpers):
-                code += self.generate_byte_address_vector_load_helper(*key)
-            for key in sorted(self.required_byte_address_vector_store_helpers):
-                code += self.generate_byte_address_vector_store_helper(*key)
+            if self.resource_requirements_use_concrete_bindings(resource_types):
+                code += "# CrossGL resource bindings\n"
+                for resource_type in sorted(resource_types):
+                    code += self.generate_concrete_resource_type(resource_type)
+                for resource_type in sorted(
+                    self.required_resource_sample_sampler_types
+                ):
+                    code += self.generate_concrete_resource_sample_sampler_helper(
+                        resource_type
+                    )
+            else:
+                code += "# CrossGL resource placeholders\n"
+                for resource_type in sorted(resource_types):
+                    code += self.generate_resource_type(resource_type)
+                for buffer_type in sorted(self.required_buffer_resource_types):
+                    code += self.generate_buffer_resource_type(buffer_type)
+                for resource_type in sorted(self.required_resource_sample_types):
+                    code += self.generate_resource_sample_helper(resource_type)
+                for resource_type in sorted(
+                    self.required_resource_sample_sampler_types
+                ):
+                    code += self.generate_resource_sample_sampler_helper(resource_type)
+                for resource_type in sorted(self.required_resource_lod_types):
+                    code += self.generate_resource_lod_helper(resource_type)
+                for resource_type in sorted(self.required_resource_lod_sampler_types):
+                    code += self.generate_resource_lod_sampler_helper(resource_type)
+                for resource_type in sorted(self.required_resource_grad_types):
+                    code += self.generate_resource_grad_helper(resource_type)
+                for resource_type in sorted(self.required_resource_grad_sampler_types):
+                    code += self.generate_resource_grad_sampler_helper(resource_type)
+                if any(
+                    helper_name == "texture_size"
+                    for helper_name, _resource_type in (
+                        self.required_resource_size_helpers
+                    )
+                ):
+                    code += self.generate_mip_dimension_helper()
+                for helper_name, resource_type in sorted(
+                    self.required_resource_size_helpers
+                ):
+                    code += self.generate_resource_size_helper(
+                        helper_name, resource_type
+                    )
+                for resource_type in sorted(self.required_resource_query_level_types):
+                    code += self.generate_resource_query_levels_helper(resource_type)
+                for helper_name, resource_type in sorted(
+                    self.required_resource_sample_count_helpers
+                ):
+                    code += self.generate_resource_sample_count_helper(
+                        helper_name, resource_type
+                    )
+                for resource_type in sorted(self.required_resource_texel_fetch_types):
+                    code += self.generate_texel_fetch_helper(resource_type)
+                for resource_type in sorted(
+                    self.required_resource_texel_fetch_offset_types
+                ):
+                    code += self.generate_texel_fetch_offset_helper(resource_type)
+                for resource_type in sorted(self.required_image_load_types):
+                    code += self.generate_image_load_helper(resource_type)
+                for resource_type in sorted(self.required_image_store_types):
+                    code += self.generate_image_store_helper(resource_type)
+                for key in sorted(self.required_resource_builtin_helpers):
+                    code += self.generate_resource_builtin_helper(
+                        self.required_resource_builtin_helpers[key]
+                    )
+                for key in sorted(self.required_buffer_load_helpers):
+                    code += self.generate_buffer_load_helper(*key)
+                for key in sorted(self.required_buffer_store_helpers):
+                    code += self.generate_buffer_store_helper(*key)
+                for key in sorted(self.required_buffer_append_helpers):
+                    code += self.generate_buffer_append_helper(*key)
+                for key in sorted(self.required_buffer_consume_helpers):
+                    code += self.generate_buffer_consume_helper(*key)
+                for key in sorted(self.required_buffer_dimensions_helpers):
+                    code += self.generate_buffer_dimensions_helper(*key)
+                for key in sorted(self.required_byte_address_vector_load_helpers):
+                    code += self.generate_byte_address_vector_load_helper(*key)
+                for key in sorted(self.required_byte_address_vector_store_helpers):
+                    code += self.generate_byte_address_vector_store_helper(*key)
             code += "\n"
 
         if self.required_geometry_stream_helpers:
@@ -12698,19 +12744,136 @@ class MojoCodeGen:
             return self.zero_mojo_value(return_type)
         return "value"
 
+    def resource_requirements_use_concrete_bindings(self, resource_types):
+        if not set(resource_types).issubset(MOJO_CONCRETE_RESOURCE_TYPES):
+            return False
+        if not self.required_resource_sample_sampler_types.issubset(
+            MOJO_CONCRETE_SAMPLED_TEXTURE_TYPES
+        ):
+            return False
+        unsupported_resource_requirements = (
+            self.required_resource_sample_types
+            or self.required_resource_lod_types
+            or self.required_resource_lod_sampler_types
+            or self.required_resource_grad_types
+            or self.required_resource_grad_sampler_types
+            or self.required_resource_size_types
+            or self.required_resource_query_level_types
+            or self.required_resource_sample_count_helpers
+            or self.required_resource_texel_fetch_types
+            or self.required_resource_texel_fetch_offset_types
+            or self.required_image_load_types
+            or self.required_image_store_types
+            or self.required_resource_builtin_helpers
+            or self.required_buffer_resource_types
+            or self.required_buffer_load_helpers
+            or self.required_buffer_store_helpers
+            or self.required_buffer_append_helpers
+            or self.required_buffer_consume_helpers
+            or self.required_buffer_dimensions_helpers
+            or self.required_byte_address_vector_load_helpers
+            or self.required_byte_address_vector_store_helpers
+        )
+        return not unsupported_resource_requirements
+
+    def generate_concrete_resource_type(self, resource_type):
+        if resource_type == "Sampler":
+            return (
+                "@value\n"
+                "struct Sampler:\n"
+                "    var set: Int32\n"
+                "    var binding: Int32\n"
+                "    var linear_filter: Bool\n"
+                "    fn __init__(inout self, set: Int32 = 0, "
+                "binding: Int32 = 0, linear_filter: Bool = False):\n"
+                "        self.set = set\n"
+                "        self.binding = binding\n"
+                "        self.linear_filter = linear_filter\n\n"
+            )
+        if resource_type == "Texture2D":
+            return (
+                "fn _crossgl_texture_coord_index(coord: Float32, extent: Int32) "
+                "-> Int:\n"
+                "    if int(extent) <= 1:\n"
+                "        return 0\n"
+                "    var clamped = coord\n"
+                "    if clamped < 0.0:\n"
+                "        clamped = 0.0\n"
+                "    if clamped >= 1.0:\n"
+                "        clamped = 0.999999\n"
+                "    var index = int(Int32(floor(clamped * Float32(int(extent)))))\n"
+                "    if index < 0:\n"
+                "        return 0\n"
+                "    if index >= int(extent):\n"
+                "        return int(extent) - 1\n"
+                "    return index\n\n"
+                "@value\n"
+                "struct Texture2D:\n"
+                "    var set: Int32\n"
+                "    var binding: Int32\n"
+                "    var width: Int32\n"
+                "    var height: Int32\n"
+                "    var texels: List[SIMD[DType.float32, 4]]\n"
+                "    fn __init__(inout self, set: Int32 = 0, "
+                "binding: Int32 = 0, width: Int32 = 0, height: Int32 = 0, "
+                "owned texels: List[SIMD[DType.float32, 4]] = "
+                "List[SIMD[DType.float32, 4]]()):\n"
+                "        self.set = set\n"
+                "        self.binding = binding\n"
+                "        self.width = width\n"
+                "        self.height = height\n"
+                "        self.texels = texels\n\n"
+                "    fn sample(self, coord: SIMD[DType.float32, 2], "
+                "sampler: Sampler) -> SIMD[DType.float32, 4]:\n"
+                "        if int(self.width) <= 0 or int(self.height) <= 0 "
+                "or self.texels.size == 0:\n"
+                "            return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 1.0)\n"
+                "        var x = _crossgl_texture_coord_index(coord[0], self.width)\n"
+                "        var y = _crossgl_texture_coord_index(coord[1], self.height)\n"
+                "        var index = y * int(self.width) + x\n"
+                "        if index < 0 or index >= self.texels.size:\n"
+                "            return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 1.0)\n"
+                "        return self.texels[index]\n\n"
+            )
+        return self.generate_resource_type(resource_type)
+
+    def generate_concrete_resource_sample_sampler_helper(self, resource_type):
+        coord_type = self.resource_sample_coord_type(resource_type)
+        return_type = self.resource_sample_return_type(resource_type)
+        code = (
+            f"fn sample_sampler(tex: {resource_type}, sampler: Sampler, "
+            f"coord: {coord_type}) -> {return_type}:\n"
+        )
+        code += "    return tex.sample(coord, sampler)\n\n"
+        return code
+
     def generate_resource_type(self, resource_type):
         code = f"@value\nstruct {resource_type}:\n"
+        if resource_type == "Sampler":
+            code += "    var set: Int32\n"
+            code += "    var binding: Int32\n"
+            code += (
+                "    fn __init__(inout self, set: Int32 = 0, " "binding: Int32 = 0):\n"
+            )
+            code += "        self.set = set\n"
+            code += "        self.binding = binding\n\n"
+            return code
         if self.resource_size_return_type(resource_type) is not None:
+            code += "    var set: Int32\n"
+            code += "    var binding: Int32\n"
             code += "    var width: Int32\n"
             code += "    var height: Int32\n"
             code += "    var depth_or_layers: Int32\n"
             code += "    var levels: Int32\n"
             code += "    var samples: Int32\n"
             code += (
-                "    fn __init__(inout self, width: Int32 = 0, "
-                "height: Int32 = 0, depth_or_layers: Int32 = 0, "
-                "levels: Int32 = 1, samples: Int32 = 1):\n"
+                "    fn __init__(inout self, set: Int32 = 0, "
+                "binding: Int32 = 0, width: Int32 = 0, height: Int32 = 0, "
+                "depth_or_layers: Int32 = 0, levels: Int32 = 1, "
+                "samples: Int32 = 1):\n"
             )
+            code += "        self.set = set\n"
+            code += "        self.binding = binding\n"
             code += "        self.width = width\n"
             code += "        self.height = height\n"
             code += "        self.depth_or_layers = depth_or_layers\n"

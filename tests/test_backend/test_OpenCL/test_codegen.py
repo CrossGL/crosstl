@@ -1,3 +1,4 @@
+import crosstl
 from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import OpenCLToCrossGLConverter
 from crosstl.backend.OpenCL.OpenCLLexer import OpenCLLexer
 from crosstl.backend.OpenCL.OpenCLParser import OpenCLParser
@@ -27,6 +28,23 @@ def test_opencl_kernel_codegen_reparses_and_lowers_builtin_ids():
     assert "@group(0) @binding(0) var<storage, read_write> out: array<f32>" in crossgl
     assert "var gid: u32 = gl_GlobalInvocationID.x;" in crossgl
     assert "var lid: u32 = gl_LocalInvocationID.x;" in crossgl
+
+
+def test_opencl_saxpy_signed_global_id_lowers_to_wgsl_casted_local(tmp_path):
+    source = """
+        kernel void saxpy(global float *out, const global float *x, float a) {
+            const int gid = get_global_id(0);
+            out[gid] = a * x[gid];
+        }
+        """
+    crossgl = generate_crossgl(source)
+    opencl_path = tmp_path / "saxpy.cl"
+    opencl_path.write_text(source, encoding="utf-8")
+    wgsl = crosstl.translate(str(opencl_path), backend="wgsl", format_output=False)
+
+    assert "var gid: i32 = gl_GlobalInvocationID.x;" in crossgl
+    assert "var gid: i32 = i32(global_invocation_id.x);" in wgsl
+    assert "out[gid] = (_saxpy_Args.a * x[gid]);" in wgsl
 
 
 def test_hashcat_kernel_specifier_macros_codegen_reparse():

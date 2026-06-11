@@ -1154,7 +1154,9 @@ class WGSLCodeGen:
             mutable_keyword = "var" if stmt.is_mutable else "let"
             initializer = ""
             if stmt.initial_value is not None:
-                initializer = f" = {self.generate_expression(stmt.initial_value)}"
+                initializer = " = " + self.generate_expression_for_target(
+                    stmt.initial_value, stmt.var_type
+                )
             line = (
                 f"{pad}{mutable_keyword} {stmt.name}: "
                 f"{self.type_name_string(stmt.var_type)}{initializer};"
@@ -1246,7 +1248,9 @@ class WGSLCodeGen:
         if isinstance(init, VariableNode):
             initializer = ""
             if init.initial_value is not None:
-                initializer = f" = {self.generate_expression(init.initial_value)}"
+                initializer = " = " + self.generate_expression_for_target(
+                    init.initial_value, init.var_type
+                )
             line = (
                 f"var {init.name}: {self.type_name_string(init.var_type)}"
                 f"{initializer}"
@@ -1285,10 +1289,20 @@ class WGSLCodeGen:
 
     def generate_assignment(self, node):
         self.validate_storage_assignment_target(node.target)
+        target_type = self.expression_type(node.target)
         return (
             f"{self.generate_expression(node.target)} {node.operator} "
-            f"{self.generate_expression(node.value)}"
+            f"{self.generate_expression_for_target(node.value, target_type)}"
         )
+
+    def generate_expression_for_target(self, expr, target_type):
+        rendered = self.generate_expression(expr)
+        source_type = self.expression_type(expr)
+        target_scalar = self.integer_scalar_type(target_type)
+        source_scalar = self.integer_scalar_type(source_type)
+        if target_scalar == "i32" and source_scalar == "u32":
+            return f"i32({rendered})"
+        return rendered
 
     def generate_expression(self, expr):
         if expr is None:
@@ -2500,6 +2514,9 @@ class WGSLCodeGen:
 
     def expression_type(self, expr):
         if isinstance(expr, IdentifierNode):
+            mapped_builtin = self.BUILTIN_IDENTIFIER_ALIASES.get(expr.name)
+            if mapped_builtin:
+                return self.INPUT_BUILTIN_TYPE_MAP.get(mapped_builtin)
             return self.value_type(expr.name) or self._module_variable_types.get(
                 expr.name
             )
@@ -2507,16 +2524,53 @@ class WGSLCodeGen:
             object_type = self.array_element_type(
                 self.expression_type(expr.object_expr)
             )
+            component_type = self.vector_component_type(object_type)
+            if component_type is not None and self.is_vector_member(expr.member):
+                return component_type
             struct_name = self.struct_type_name(object_type)
             if not struct_name:
                 return None
             return self._struct_member_types.get((struct_name, expr.member))
+        if isinstance(expr, SwizzleNode):
+            vector_type = self.expression_type(expr.vector_expr)
+            component_type = self.vector_component_type(vector_type)
+            if component_type is None:
+                return None
+            if len(expr.components) == 1:
+                return component_type
+            return f"vec{len(expr.components)}<{component_type}>"
         if isinstance(expr, ArrayAccessNode):
             array_type = self.expression_type(expr.array_expr)
             if isinstance(array_type, ArrayType):
                 return array_type.element_type
+            storage_element = self.structured_buffer_element_type(array_type)
+            if storage_element is not None:
+                return storage_element
+            if isinstance(array_type, PointerType):
+                return array_type.pointee_type
             return self.array_element_type(array_type)
         return None
+
+    def integer_scalar_type(self, vtype):
+        try:
+            type_name = self.type_name_string(vtype) if vtype is not None else None
+        except ValueError:
+            return None
+        if type_name in {"i32", "u32"}:
+            return type_name
+        return None
+
+    def vector_component_type(self, vtype):
+        if isinstance(vtype, VectorType):
+            return self.type_name_string(vtype.element_type)
+        if isinstance(vtype, str):
+            match = re.fullmatch(r"vec[234]<([^>]+)>", self.map_type_name(vtype))
+            if match:
+                return match.group(1)
+        return None
+
+    def is_vector_member(self, member):
+        return bool(member) and all(component in "xyzwrgba" for component in member)
 
     def value_type(self, name):
         for scope in reversed(self._value_type_scopes):
