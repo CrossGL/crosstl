@@ -1564,6 +1564,10 @@ PLACEHOLDER_DIAGNOSTIC_MISSING_CODE = (
 )
 PLACEHOLDER_MISSING_CAPABILITY = "target.native-placeholder-lowering"
 PLACEHOLDER_DIAGNOSTIC_CAPABILITY = "project.placeholder-diagnostics"
+MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE = (
+    "project.translate.mojo-unresolved-host-construct"
+)
+MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY = "mojo.host-runtime-lowering"
 MOJO_RESOURCE_PLACEHOLDER_CAPABILITY = "mojo.resource-binding"
 MOJO_RESOURCE_PLACEHOLDER_KIND = "crossgl-resource-placeholders"
 PLACEHOLDER_MARKER_RULES = (
@@ -1667,6 +1671,67 @@ PLACEHOLDER_MARKER_RULES = (
             "relying on runtime behavior."
         ),
     ),
+)
+MOJO_UNRESOLVED_TARGET_CONSTRUCT_RULES = (
+    (
+        "mojo-dtype",
+        "Mojo DType expression",
+        re.compile(r"\bDType(?:\.\w+)?\b"),
+    ),
+    (
+        "mojo-none",
+        "Mojo None value/type",
+        re.compile(r"\bNone\b"),
+    ),
+    (
+        "mojo-has-accelerator",
+        "Mojo host accelerator query",
+        re.compile(r"\bhas_accelerator\s*\("),
+    ),
+    (
+        "mojo-print",
+        "Mojo host print call",
+        re.compile(r"\bprint\s*\("),
+    ),
+    (
+        "mojo-host-main",
+        "Mojo host main function",
+        re.compile(r"^\s*void\s+main\s*\("),
+    ),
+    (
+        "spirv-unresolved-warning",
+        "SPIR-V unresolved-lowering warning",
+        re.compile(
+            r";\s*WARNING:.*\b(?:Unknown|unknown|unresolved|Could not find)\b"
+        ),
+    ),
+)
+MOJO_SPIRV_BLOCK_ONLY_OPS = frozenset(
+    (
+        "OpAccessChain",
+        "OpBitcast",
+        "OpCompositeConstruct",
+        "OpCompositeExtract",
+        "OpConvertFToS",
+        "OpConvertFToU",
+        "OpConvertSToF",
+        "OpConvertUToF",
+        "OpFAdd",
+        "OpFDiv",
+        "OpFMul",
+        "OpFSub",
+        "OpFunctionCall",
+        "OpIAdd",
+        "OpIMul",
+        "OpISub",
+        "OpInBoundsAccessChain",
+        "OpLoad",
+        "OpLogicalNot",
+        "OpSConvert",
+        "OpSelect",
+        "OpStore",
+        "OpUConvert",
+    )
 )
 REPORT_RUNTIME_REFERENCE_KINDS = (
     "runtime-api",
@@ -12481,24 +12546,40 @@ def translate_project(
                     }
                     if translation_source_options:
                         translate_kwargs["source_options"] = translation_source_options
-                    translate(str(translation_input_path), **translate_kwargs)
-                    artifact["generatedHash"] = _source_hash(output_path)
-                    artifact["generatedSizeBytes"] = output_path.stat().st_size
-                    artifact["sourceMap"] = _artifact_source_map(
-                        config, unit, target, output_path
+                    generated_source = translate(
+                        str(translation_input_path), **translate_kwargs
                     )
-                    split_artifacts = _webgl_split_stage_artifacts(
-                        config, unit, artifact, output_path
-                    )
-                    if split_artifacts is not None:
-                        artifact_records = split_artifacts
-                    else:
-                        _attach_artifact_source_remap(
-                            config, target, artifact, output_path
+                    mojo_host_diagnostics = (
+                        _mojo_unresolved_target_construct_diagnostics(
+                            artifact, generated_source
                         )
-                    diagnostics.extend(
-                        _generated_placeholder_diagnostics(artifact_records, config)
                     )
+                    if mojo_host_diagnostics:
+                        artifact["status"] = "failed"
+                        artifact["error"] = mojo_host_diagnostics[0].message
+                        output_path.unlink(missing_ok=True)
+                        artifact_records = [artifact]
+                    else:
+                        artifact["generatedHash"] = _source_hash(output_path)
+                        artifact["generatedSizeBytes"] = output_path.stat().st_size
+                        artifact["sourceMap"] = _artifact_source_map(
+                            config, unit, target, output_path
+                        )
+                        split_artifacts = _webgl_split_stage_artifacts(
+                            config, unit, artifact, output_path
+                        )
+                        if split_artifacts is not None:
+                            artifact_records = split_artifacts
+                        else:
+                            _attach_artifact_source_remap(
+                                config, target, artifact, output_path
+                            )
+                        diagnostics.extend(
+                            _generated_placeholder_diagnostics(
+                                artifact_records, config
+                            )
+                        )
+                    diagnostics.extend(mojo_host_diagnostics)
                 except Exception as exc:  # noqa: BLE001
                     # Project translation reports per-artifact failures so one bad
                     # unit does not hide the rest of the repository's migration state.
@@ -13229,6 +13310,148 @@ def _artifact_diagnostic_context(artifact: Mapping[str, Any]) -> dict[str, Any]:
     if _is_non_empty_string(variant):
         context["variant"] = variant
     return context
+
+
+def _mojo_target_construct_rule_applies(rule_id: str, target: str) -> bool:
+    if target == "mojo":
+        return False
+    if rule_id == "mojo-none":
+        return target != "vulkan"
+    if rule_id == "spirv-unresolved-warning":
+        return target == "vulkan"
+    return True
+
+
+def _mojo_spirv_invalid_module_instruction(line_text: str) -> str | None:
+    stripped = line_text.strip()
+    if not stripped or stripped.startswith(";"):
+        return None
+    if "=" in stripped:
+        _result_id, instruction = stripped.split("=", 1)
+        opcode = instruction.strip().split(maxsplit=1)[0]
+    else:
+        opcode = stripped.split(maxsplit=1)[0]
+    return opcode if opcode in MOJO_SPIRV_BLOCK_ONLY_OPS else None
+
+
+def _mojo_unresolved_target_construct_findings(
+    target: str, generated_source: str
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    offset = 0
+    in_spirv_function = False
+    in_spirv_block = False
+
+    for line_number, line in enumerate(
+        generated_source.splitlines(keepends=True), start=1
+    ):
+        line_text = line.rstrip("\r\n")
+        if target == "vulkan":
+            stripped = line_text.strip()
+            if stripped.startswith("OpFunctionEnd"):
+                in_spirv_function = False
+                in_spirv_block = False
+            elif " OpFunction " in stripped or stripped.startswith("OpFunction "):
+                in_spirv_function = True
+                in_spirv_block = False
+            elif in_spirv_function and (
+                " OpLabel" in stripped or stripped.startswith("OpLabel")
+            ):
+                in_spirv_block = True
+            elif not in_spirv_block:
+                opcode = _mojo_spirv_invalid_module_instruction(line_text)
+                if opcode:
+                    findings.append(
+                        {
+                            "id": "spirv-block-only-instruction",
+                            "label": (
+                                f"SPIR-V block-only instruction outside a block "
+                                f"({opcode})"
+                            ),
+                            "line": line_number,
+                            "column": 1,
+                            "offset": offset,
+                            "length": max(len(line_text), 1),
+                        }
+                    )
+
+        for rule_id, label, pattern in MOJO_UNRESOLVED_TARGET_CONSTRUCT_RULES:
+            if not _mojo_target_construct_rule_applies(rule_id, target):
+                continue
+            match = pattern.search(line_text)
+            if match is None:
+                continue
+            findings.append(
+                {
+                    "id": rule_id,
+                    "label": label,
+                    "line": line_number,
+                    "column": match.start() + 1,
+                    "offset": offset + match.start(),
+                    "length": max(match.end() - match.start(), 1),
+                }
+            )
+        offset += len(line)
+    return findings
+
+
+def _mojo_unresolved_target_construct_message(
+    artifact: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]
+) -> str:
+    labels = []
+    seen = set()
+    for finding in findings:
+        label = finding.get("label")
+        if not _is_non_empty_string(label) or label in seen:
+            continue
+        labels.append(label)
+        seen.add(label)
+    label_text = ", ".join(labels)
+    return (
+        f"Generated {artifact.get('target')} artifact contains unresolved Mojo "
+        f"host/runtime constructs in {artifact.get('path')}: {label_text}. "
+        "Separate GPU kernel code from Mojo host/runtime setup before target "
+        "codegen, or mark the target artifact unsupported."
+    )
+
+
+def _mojo_unresolved_target_construct_diagnostics(
+    artifact: Mapping[str, Any],
+    generated_source: str,
+) -> list[ProjectDiagnostic]:
+    if artifact.get("sourceBackend") != "mojo":
+        return []
+    target = str(artifact.get("target", ""))
+    if target == "mojo":
+        return []
+    findings = _mojo_unresolved_target_construct_findings(target, generated_source)
+    if not findings:
+        return []
+
+    first_finding = findings[0]
+    return [
+        ProjectDiagnostic(
+            severity="error",
+            code=MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE,
+            message=_mojo_unresolved_target_construct_message(artifact, findings),
+            location=SourceLocation(
+                file=str(artifact.get("path", "")),
+                line=int(first_finding["line"]),
+                column=int(first_finding["column"]),
+                offset=int(first_finding["offset"]),
+                length=int(first_finding["length"]),
+                end_line=int(first_finding["line"]),
+                end_column=int(first_finding["column"])
+                + int(first_finding["length"]),
+                end_offset=int(first_finding["offset"])
+                + int(first_finding["length"]),
+            ),
+            original_location=SourceLocation(file=str(artifact.get("source", ""))),
+            **_artifact_diagnostic_context(artifact),
+            check_kind="artifact.validation",
+            missing_capabilities=[MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY],
+        )
+    ]
 
 
 def _generated_placeholder_diagnostic_message(

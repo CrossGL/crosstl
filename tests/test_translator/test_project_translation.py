@@ -39314,6 +39314,170 @@ def test_translate_project_opencl_local_pointer_helper_reports_contract(
     assert "Suggested action:" in diagnostic["message"]
 
 
+def test_translate_project_mojo_vector_add_launch_separates_host_runtime(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "vector_addition.mojo").write_text(
+        textwrap.dedent("""
+            from std.sys import has_accelerator
+            from std.gpu.host import DeviceContext
+            from std.gpu import block_dim, block_idx, thread_idx
+            from layout import TileTensor, row_major
+
+            comptime float_dtype = DType.float32
+            comptime vector_size = 4
+            comptime layout = row_major[vector_size]()
+            comptime block_size = 256
+            comptime num_blocks = 1
+
+            def vector_addition(
+                lhs_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+                rhs_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+                out_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+            ):
+                var tid = block_idx.x * block_dim.x + thread_idx.x
+                if tid < vector_size:
+                    out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid]
+
+            def main() raises:
+                if not has_accelerator():
+                    print("No compatible GPU found")
+                else:
+                    ctx = DeviceContext()
+                    lhs = TileTensor(
+                        ctx.enqueue_create_buffer[float_dtype](vector_size),
+                        layout,
+                    )
+                    rhs = TileTensor(
+                        ctx.enqueue_create_buffer[float_dtype](vector_size),
+                        layout,
+                    )
+                    out = TileTensor(
+                        ctx.enqueue_create_buffer[float_dtype](vector_size),
+                        layout,
+                    )
+                    ctx.enqueue_function[vector_addition](
+                        lhs,
+                        rhs,
+                        out,
+                        grid_dim=num_blocks,
+                        block_dim=block_size,
+                    )
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["cgl", "metal", "vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["diagnosticCounts"]["error"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("cgl", "translated"),
+        ("metal", "translated"),
+        ("vulkan", "translated"),
+    }
+
+    outputs = {
+        artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in payload["artifacts"]
+    }
+    for target in ("cgl", "metal", "vulkan"):
+        assert "DType" not in outputs[target]
+        assert "has_accelerator" not in outputs[target]
+        assert "print(" not in outputs[target]
+        assert "No compatible GPU found" not in outputs[target]
+
+    assert "compute {" in outputs["cgl"]
+    assert "kernel void vector_addition(" in outputs["metal"]
+    assert "void main()" not in outputs["metal"]
+    assert "OpEntryPoint GLCompute" in outputs["vulkan"]
+    assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
+    assert_metal_validates_if_available(outputs["metal"], tmp_path)
+
+
+def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "vector_addition.mojo").write_text(
+        textwrap.dedent("""
+            from std.sys import has_accelerator
+            from std.gpu import block_dim, block_idx, thread_idx
+
+            comptime float_dtype = DType.float32
+            comptime vector_size = 4
+
+            def vector_addition(
+                lhs_tensor: UnsafePointer[Float32],
+                rhs_tensor: UnsafePointer[Float32],
+                out_tensor: UnsafePointer[Float32],
+            ):
+                var tid = block_idx.x * block_dim.x + thread_idx.x
+                if tid < vector_size:
+                    out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid]
+
+            def main() raises:
+                if not has_accelerator():
+                    print("No compatible GPU found")
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["metal", "vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("metal", "failed"),
+        ("vulkan", "failed"),
+    }
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 2
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 2}
+    assert payload["summary"]["diagnosticsByCode"] == {
+        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE: 2,
+    }
+
+    for artifact in payload["artifacts"]:
+        assert not (repo / artifact["path"]).exists()
+        assert "unresolved Mojo host/runtime constructs" in artifact["error"]
+        assert "vector_addition" in artifact["path"]
+        assert "generatedHash" not in artifact
+        assert "generatedSizeBytes" not in artifact
+        assert "sourceMap" not in artifact
+        assert "sourceRemap" not in artifact
+
+    diagnostics_by_target = {
+        diagnostic["target"]: diagnostic for diagnostic in payload["diagnostics"]
+    }
+    assert set(diagnostics_by_target) == {"metal", "vulkan"}
+    for target, diagnostic in diagnostics_by_target.items():
+        assert (
+            diagnostic["code"]
+            == project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE
+        )
+        assert diagnostic["severity"] == "error"
+        assert diagnostic["sourceBackend"] == "mojo"
+        assert diagnostic["location"]["file"].startswith(f"out/{target}/")
+        assert diagnostic["originalLocation"]["file"] == "vector_addition.mojo"
+        assert diagnostic["checkKind"] == "artifact.validation"
+        assert diagnostic["missingCapabilities"] == [
+            project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY
+        ]
+
+
 def test_translate_project_opencl_to_opengl_casts_signed_global_id_local(
     tmp_path,
 ):
