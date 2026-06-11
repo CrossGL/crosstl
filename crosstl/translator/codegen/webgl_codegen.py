@@ -46,6 +46,14 @@ class WebGLCodeGen(GLSLCodeGen):
         "atomicCounter",
         "atomicCounterAdd",
     }
+    GLSL_ES_310_TEXTURE_INTRINSIC_NAMES = {
+        "textureGather",
+        "textureGatherOffset",
+        "textureGatherOffsets",
+        "textureGatherCompare",
+        "textureGatherCompareOffset",
+        "textureGatherCompareOffsets",
+    }
     UNSUPPORTED_SAMPLED_RESOURCE_TYPES = {
         "sampler1D",
         "sampler1DArray",
@@ -128,6 +136,11 @@ class WebGLCodeGen(GLSLCodeGen):
             raise ValueError(
                 "WebGL target does not support storage image intrinsic "
                 f"'{func_name}'"
+            )
+        if func_name in self.GLSL_ES_310_TEXTURE_INTRINSIC_NAMES:
+            raise ValueError(
+                "WebGL target requires GLSL ES 3.00 and does not support "
+                f"texture gather intrinsic '{func_name}'"
             )
         if func_name in self.ATOMIC_INTRINSIC_NAMES:
             raise ValueError(

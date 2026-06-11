@@ -8501,9 +8501,13 @@ class MetalCodeGen:
                     else "normalize"
                 )
                 return f"{call_name}({args})"
-            if func_name == "inverse" and len(expr.args) == 1:
+            if (
+                func_name == "inverse"
+                and len(expr.args) == 1
+                and func_name not in self.user_function_names
+            ):
                 arg_type = self.map_type(self.expression_result_type(expr.args[0]))
-                if arg_type in {"float3x3", "float4x4"}:
+                if arg_type in {"float2x2", "float3x3", "float4x4"}:
                     self.required_metal_inverse_helpers.add(arg_type)
                     arg = self.generate_expression(expr.args[0])
                     return f"__crossgl_inverse_{arg_type}({arg})"
@@ -9648,6 +9652,18 @@ class MetalCodeGen:
     def generate_metal_inverse_helpers(self):
         code = ""
         required = getattr(self, "required_metal_inverse_helpers", set())
+        if "float2x2" in required:
+            code += (
+                "static inline float2x2 __crossgl_inverse_float2x2(float2x2 m) {\n"
+                "    float det = m[0][0] * m[1][1] - m[1][0] * m[0][1];\n"
+                "    if (abs(det) <= 1.0e-8) {\n"
+                "        return float2x2(1.0);\n"
+                "    }\n"
+                "    return float2x2(\n"
+                "        float2(m[1][1], -m[0][1]),\n"
+                "        float2(-m[1][0], m[0][0])) / det;\n"
+                "}\n\n"
+            )
         if "float3x3" in required:
             code += (
                 "static inline float3x3 __crossgl_inverse_float3x3(float3x3 m) {\n"

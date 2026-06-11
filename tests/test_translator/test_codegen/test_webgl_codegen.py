@@ -690,6 +690,37 @@ def test_webgl_codegen_rejects_storage_image_intrinsics():
         WebGLCodeGen().generate(parse_shader(shader))
 
 
+@pytest.mark.parametrize(
+    "call",
+    (
+        "textureGather(colorTex, uv)",
+        "textureGatherOffset(colorTex, uv, ivec2(0, 0))",
+        "textureGatherCompare(colorTex, uv, 0.5)",
+    ),
+)
+def test_webgl_codegen_rejects_glsl_es_310_texture_gather_intrinsics(call):
+    shader = f"""
+    shader WebGLNoTextureGather {{
+        sampler2D colorTex;
+
+        fragment {{
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target requires GLSL ES 3.00 and does not support "
+            "texture gather intrinsic"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
 def test_webgl_codegen_rejects_atomics():
     shader = """
     shader WebGLNoAtomics {

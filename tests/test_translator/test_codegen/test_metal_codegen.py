@@ -3868,6 +3868,59 @@ def test_metal_matrix_vector_binary_operands_are_not_cast_to_vectors():
     assert "float3(normalMatrix)" not in generated_code
 
 
+def test_metal_inverse_mat2_lowers_to_compilable_helper_when_toolchain_is_available():
+    shader = """
+    shader MetalInverseMat2 {
+        compute {
+            void main() {
+                mat2 m = mat2(1.0, 2.0, 3.0, 4.0);
+                mat2 inv = inverse(m);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert (
+        "static inline float2x2 __crossgl_inverse_float2x2(float2x2 m)"
+        in generated_code
+    )
+    assert (
+        "__attribute__((unused)) float2x2 inv = __crossgl_inverse_float2x2(m);"
+        in generated_code
+    )
+    assert "inverse(m)" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_user_defined_inverse_function_is_preserved():
+    shader = """
+    shader MetalUserInverse {
+        compute {
+            mat2 inverse(mat2 value) {
+                return value;
+            }
+
+            void main() {
+                mat2 m = mat2(1.0);
+                mat2 inv = inverse(m);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float2x2 inverse(float2x2 value)" in generated_code
+    assert "__attribute__((unused)) float2x2 inv = inverse(m);" in generated_code
+    assert "__crossgl_inverse_float2x2" not in generated_code
+
+
 def test_metal_fixed_width_scalar_aliases_map_to_valid_metal_scalars():
     shader = """
     shader FixedWidthScalarAliasSmoke {

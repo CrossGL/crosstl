@@ -2727,18 +2727,22 @@ def test_scan_report_records_rust_wgpu_runtime_reference_evidence(tmp_path):
 
     payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
 
-    assert payload["migration"]["runtimeReferenceCount"] == 6
-    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 6}
-    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 6}
-    assert payload["migration"]["runtimeReferencesByPath"] == {"host.rs": 6}
+    assert payload["migration"]["runtimeReferenceCount"] == 10
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 10}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 10}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.rs": 10}
     assert [
         (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
         for ref in payload["migration"]["actions"][0]["runtimeReferences"]
     ] == [
         ("host.rs", "wgsl", "runtime-api", "wgpu::ShaderModuleDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "create_shader_module"),
         ("host.rs", "wgsl", "runtime-api", "wgpu::include_wgsl!"),
+        ("host.rs", "wgsl", "runtime-api", "create_bind_group_layout"),
         ("host.rs", "wgsl", "runtime-api", "wgpu::BindGroupLayoutDescriptor"),
         ("host.rs", "wgsl", "runtime-api", "wgpu::BindGroupDescriptor"),
+        ("host.rs", "wgsl", "runtime-api", "create_bind_group"),
+        ("host.rs", "wgsl", "runtime-api", "create_pipeline_layout"),
         ("host.rs", "wgsl", "runtime-api", "wgpu::PipelineLayoutDescriptor"),
         ("host.rs", "wgsl", "runtime-api", "set_bind_group"),
     ]

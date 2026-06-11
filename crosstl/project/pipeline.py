@@ -1675,8 +1675,9 @@ RUNTIME_REFERENCE_RULES = (
         re.compile(
             r"\b(?:device|command_encoder|pass_encoder|"
             r"render_pass|render_pass_encoder|compute_pass|compute_pass_encoder)\."
-            r"(create_(?:render_pipeline|compute_pipeline|"
-            r"command_encoder|buffer|texture)|begin_(?:render_pass|compute_pass)|"
+            r"(create_(?:render_pipeline|compute_pipeline|shader_module|"
+            r"bind_group(?:_layout)?|pipeline_layout|command_encoder|buffer|"
+            r"texture|sampler)|begin_(?:render_pass|compute_pass)|"
             r"set_(?:pipeline|vertex_buffer|index_buffer)|draw(?:_indexed)?|"
             r"dispatch_workgroups|finish|submit)(?=\s*\()"
         ),

@@ -93,6 +93,16 @@ class _DummyCodeGen:
     pass
 
 
+class _ProfileAwareCodeGen:
+    def __init__(self, target_profile=None):
+        self.target_profile = target_profile
+
+
+class _ProfileConstructorFailureCodeGen:
+    def __init__(self, target_profile=None):
+        raise TypeError("internal constructor failure")
+
+
 def _backend_root():
     return os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "..", "crosstl", "backend")
@@ -195,6 +205,42 @@ def test_backend_registry_resolves_target_aliases_and_profiles():
         "directx-11",
         "directx-12",
     )
+
+
+def test_backend_registry_passes_target_profile_only_to_supporting_codegen():
+    registry = BackendRegistry()
+    registry.register(
+        BackendSpec(
+            name="directx",
+            codegen_class=_ProfileAwareCodeGen,
+            target_aliases=("dx11",),
+            target_profiles=("directx-11",),
+        )
+    )
+    registry.register(
+        BackendSpec(
+            name="plain",
+            codegen_class=_DummyCodeGen,
+            target_aliases=("plain-profile",),
+        )
+    )
+
+    assert registry.get_codegen("dx11").target_profile == "dx11"
+    assert isinstance(registry.get_codegen("plain-profile"), _DummyCodeGen)
+
+
+def test_backend_registry_does_not_mask_profile_codegen_constructor_type_errors():
+    registry = BackendRegistry()
+    registry.register(
+        BackendSpec(
+            name="directx",
+            codegen_class=_ProfileConstructorFailureCodeGen,
+            target_aliases=("dx11",),
+        )
+    )
+
+    with pytest.raises(TypeError, match="internal constructor failure"):
+        registry.get_codegen("dx11")
 
 
 def test_backend_registry_can_map_target_to_differently_named_source_frontend():

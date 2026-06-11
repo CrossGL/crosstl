@@ -275,7 +275,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 22,
+        "unsupported_marker_count": 23,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
@@ -304,6 +304,10 @@
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "\"WebGL target does not support storage image intrinsic \""
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "\"WebGL target requires GLSL ES 3.00 and does not support \""
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
@@ -352,10 +356,6 @@
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "+ \", \".join(unsupported)"
-          },
-          {
-            "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "if stage_name in self.UNSUPPORTED_STAGE_NAMES:"
           }
         ]
       },
@@ -371,7 +371,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_webgl_codegen.py"
         ],
-        "test_count": 30
+        "test_count": 31
       },
       "translator_codegen": {
         "exists": true,
@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 41
+        "test_count": 42
       },
       "translator_codegen": {
         "exists": true,
@@ -615,7 +615,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 971
+        "test_count": 973
       },
       "translator_codegen": {
         "exists": true,

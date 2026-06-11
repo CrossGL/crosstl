@@ -901,6 +901,33 @@ def test_wgsl_codegen_lowers_prefix_increment_and_decrement_statements():
     assert "i -= 1;" in generated
 
 
+def test_wgsl_codegen_lowers_switch_default_case():
+    shader = """
+    shader WGSLSwitchDefault {
+        compute {
+            void main() {
+                uint mode = 1u;
+                switch (mode) {
+                    case 0u:
+                        mode = 2u;
+                        break;
+                    default:
+                        mode = 3u;
+                        break;
+                }
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "case 0:" in generated
+    assert "default: {" in generated
+    assert "case : {" not in generated
+
+
 def test_wgsl_codegen_rejects_barrier_outside_compute_stages():
     shader = """
     shader WGSLFragmentBarrier {

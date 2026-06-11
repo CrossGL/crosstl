@@ -993,7 +993,12 @@ class WGSLCodeGen:
         pad = "    " * indent
         lines = [f"{pad}switch ({self.generate_expression(node.expression)}) {{"]
         for case in node.cases:
-            lines.append(f"{pad}    case {self.generate_expression(case.value)}: {{")
+            label = (
+                "default"
+                if case.value is None
+                else f"case {self.generate_expression(case.value)}"
+            )
+            lines.append(f"{pad}    {label}: {{")
             for stmt in case.statements:
                 lines.append(self.generate_statement(stmt, indent + 2))
             lines.append(f"{pad}    }}")
