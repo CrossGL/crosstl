@@ -422,6 +422,34 @@ def test_metal_vertex_struct_return_preserves_view_dir_outputs(tmp_path):
     assert "cannot lower unknown function 'f16vec3'" not in spirv
 
 
+@pytest.mark.parametrize("backend", ["directx", "opengl", "vulkan"])
+def test_metal_numeric_heavy_generated_identifier_translates(tmp_path, backend):
+    source_path = _write_source(
+        tmp_path,
+        "numeric-generated-helper.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        float nvfp4_quantize_float_gs_16_b_4(float value) {
+            return value + 1.0;
+        }
+
+        kernel void k(device float* out [[buffer(0)]]) {
+            out[0] = nvfp4_quantize_float_gs_16_b_4(2.0);
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend=backend, format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    if backend != "vulkan":
+        assert "nvfp4_quantize_float_gs_16_b_4" in generated
+
+
 def test_metal_template_helper_specializes_to_concrete_opengl(tmp_path):
     source_path = _write_source(
         tmp_path,

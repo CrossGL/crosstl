@@ -259,6 +259,36 @@ def test_glsl_fragment_input_locations_lower_to_distinct_hlsl_semantics(tmp_path
     assert generated_code.count(": TEXCOORD1") == 1
 
 
+def test_glsl_vertex_output_locations_lower_to_distinct_hlsl_semantics(tmp_path):
+    shader = """
+    #version 450
+    layout(location = 0) out vec4 texcoord;
+    layout(location = 1) out vec3 frag_pos;
+
+    void main() {
+        texcoord = vec4(1.0);
+        frag_pos = vec3(0.0);
+        gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+    }
+    """
+    shader_path = tmp_path / "cube.vert"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "float4 texcoord: TEXCOORD0;" in generated_code
+    assert "float3 frag_pos: TEXCOORD1;" in generated_code
+    assert "float4 gl_Position: SV_POSITION;" in generated_code
+    assert ": location" not in generated_code
+    assert generated_code.count(": TEXCOORD0") == 1
+    assert generated_code.count(": TEXCOORD1") == 1
+
+
 def test_directx_user_defined_synchronization_names_are_not_lowered():
     shader = """
     shader SynchronizationShadowing {

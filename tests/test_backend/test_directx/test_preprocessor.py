@@ -13,6 +13,16 @@ def test_object_like_macro_expansion():
     assert "3.14" in output
 
 
+def test_object_like_token_paste_macro_expansion():
+    code = """
+    #define FLOAT_TYPE fl##oat
+    FLOAT_TYPE value = 1.0;
+    """
+    output = HLSLPreprocessor().preprocess(code)
+    assert "fl##oat" not in output
+    assert "float value = 1.0;" in output
+
+
 def test_self_referential_object_macro_member_access_does_not_recurse():
     code = """
     #define PERSISTENCE global.PERSISTENCE / 100

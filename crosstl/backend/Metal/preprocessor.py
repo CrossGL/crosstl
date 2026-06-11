@@ -1,5 +1,6 @@
 """Preprocessor support for Metal source imports."""
 
+import operator
 import os
 import re
 from dataclasses import dataclass, field
@@ -29,6 +30,11 @@ MSL_SOURCE_START_RE = re.compile(
     r")"
 )
 IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+METAL_ENTRY_FUNCTION_RE = re.compile(
+    r"\b(?:kernel|vertex|fragment|compute|mesh|object|amplification|"
+    r"intersection|anyhit|closesthit|miss|callable)\b|"
+    r"\[\[\s*kernel\s*\]\]"
+)
 MLX_INSTANTIATE_KERNEL_RE = re.compile(r"\binstantiate_kernel\s*\(")
 MLX_HOST_NAME_DECL_RE = re.compile(
     r"\btemplate\s+\[\[\s*host_name\s*\(\s*(?P<host>"
@@ -63,6 +69,14 @@ class _MLXKernelInstantiation:
     span: Tuple[int, int]
 
 
+@dataclass(frozen=True)
+class _MetalFunctionDefinition:
+    name: str
+    span: Tuple[int, int]
+    body_span: Tuple[int, int]
+    is_entry: bool
+
+
 class MetalPreprocessor(HLSLPreprocessor):
     """Small Metal preprocessor used before lexing imported source files."""
 
@@ -82,7 +96,21 @@ class MetalPreprocessor(HLSLPreprocessor):
             strict=strict,
             max_expansion_depth=max_expansion_depth,
         )
-        self.max_template_specializations = max_template_specializations
+        if isinstance(max_template_specializations, bool):
+            raise ValueError(
+                "Metal max_template_specializations must be a non-negative integer"
+            )
+        try:
+            specialization_limit = operator.index(max_template_specializations)
+        except TypeError as exc:
+            raise ValueError(
+                "Metal max_template_specializations must be a non-negative integer"
+            ) from exc
+        if specialization_limit < 0:
+            raise ValueError(
+                "Metal max_template_specializations must be a non-negative integer"
+            )
+        self.max_template_specializations = specialization_limit
         self.macros.setdefault(
             "TARGET_OS_SIMULATOR",
             Macro(name="TARGET_OS_SIMULATOR", replacement="0"),
@@ -163,6 +191,9 @@ class MetalPreprocessor(HLSLPreprocessor):
 
             templates_by_name = {template.name: template for template in templates}
             template_spans = self._find_template_declaration_spans(working)
+            reachable_function_spans = self._reachable_function_spans(
+                working, template_spans
+            )
             explicit_specialization_keys = (
                 self._find_explicit_template_specialization_keys(working)
             )
@@ -171,6 +202,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 templates_by_name,
                 template_spans,
                 explicit_specialization_keys,
+                reachable_function_spans,
             )
             if not calls:
                 return working
@@ -379,6 +411,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         templates_by_name: Dict[str, _MetalTemplateFunction],
         excluded_spans: List[Tuple[int, int]],
         explicit_specialization_keys: Set[Tuple[str, Tuple[str, ...]]],
+        included_spans: Optional[List[Tuple[int, int]]] = None,
     ) -> List[Tuple[str, List[str], Tuple[int, int]]]:
         calls: List[Tuple[str, List[str], Tuple[int, int]]] = []
         i = 0
@@ -402,6 +435,12 @@ class MetalPreprocessor(HLSLPreprocessor):
             span = self._containing_span(i, excluded_spans)
             if span is not None:
                 i = span[1]
+                continue
+            if (
+                included_spans is not None
+                and self._containing_span(i, included_spans) is None
+            ):
+                i += 1
                 continue
             if code[i].isalpha() or code[i] == "_":
                 ident, consumed = self._read_identifier(code, i)
@@ -437,6 +476,113 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             i += 1
         return calls
+
+    def _reachable_function_spans(
+        self,
+        code: str,
+        excluded_spans: List[Tuple[int, int]],
+    ) -> Optional[List[Tuple[int, int]]]:
+        functions = self._find_non_template_function_definitions(code, excluded_spans)
+        if not functions:
+            return None
+
+        roots = {function.name for function in functions if function.is_entry}
+        if not roots:
+            return None
+
+        by_name: Dict[str, List[_MetalFunctionDefinition]] = {}
+        for function in functions:
+            by_name.setdefault(function.name, []).append(function)
+
+        known_names = set(by_name)
+        reachable = set(roots)
+        pending = list(roots)
+        while pending:
+            name = pending.pop()
+            for function in by_name.get(name, ()):
+                body_start, body_end = function.body_span
+                for referenced in self._find_function_references(
+                    code[body_start:body_end],
+                    known_names,
+                ):
+                    if referenced not in reachable:
+                        reachable.add(referenced)
+                        pending.append(referenced)
+
+        return [function.span for function in functions if function.name in reachable]
+
+    def _find_non_template_function_definitions(
+        self,
+        code: str,
+        excluded_spans: List[Tuple[int, int]],
+    ) -> List[_MetalFunctionDefinition]:
+        functions: List[_MetalFunctionDefinition] = []
+        pos = 0
+        while True:
+            body_start = self._find_next_top_level_char(code, pos, "{")
+            if body_start is None:
+                break
+            excluded = self._containing_span(body_start, excluded_spans)
+            if excluded is not None:
+                pos = excluded[1]
+                continue
+            body_end = self._find_matching_brace(code, body_start)
+            if body_end is None:
+                break
+
+            declaration_start = self._function_declaration_start(code, body_start)
+            header = code[declaration_start:body_start]
+            function_name = self._function_name_from_header(header)
+            if function_name is not None:
+                functions.append(
+                    _MetalFunctionDefinition(
+                        name=function_name,
+                        span=(declaration_start, body_end),
+                        body_span=(body_start + 1, body_end - 1),
+                        is_entry=METAL_ENTRY_FUNCTION_RE.search(header) is not None,
+                    )
+                )
+            pos = body_end
+        return functions
+
+    def _function_declaration_start(self, code: str, body_start: int) -> int:
+        previous_semicolon = code.rfind(";", 0, body_start)
+        previous_block = code.rfind("}", 0, body_start)
+        return max(previous_semicolon, previous_block) + 1
+
+    def _find_function_references(
+        self, code: str, function_names: Set[str]
+    ) -> Set[str]:
+        references: Set[str] = set()
+        i = 0
+        while i < len(code):
+            if code[i] in "\"'":
+                _literal, consumed = self._read_string(code, i)
+                i += consumed
+                continue
+            if code.startswith("//", i):
+                end = code.find("\n", i)
+                if end == -1:
+                    break
+                i = end + 1
+                continue
+            if code.startswith("/*", i):
+                end = code.find("*/", i + 2)
+                if end == -1:
+                    break
+                i = end + 2
+                continue
+            if code[i].isalpha() or code[i] == "_":
+                ident, consumed = self._read_identifier(code, i)
+                j = i + consumed
+                while j < len(code) and code[j].isspace():
+                    j += 1
+                if ident in function_names and j < len(code) and code[j] == "(":
+                    references.add(ident)
+                i += consumed
+                continue
+            i += 1
+        return references
 
     def _find_template_declaration_spans(self, code: str) -> List[Tuple[int, int]]:
         spans: List[Tuple[int, int]] = []

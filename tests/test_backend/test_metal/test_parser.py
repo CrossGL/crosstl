@@ -6,6 +6,7 @@ from crosstl.backend.common_ast import (
     ArrayAccessNode,
     AssignmentNode,
     BinaryOpNode,
+    CallNode,
     CastNode,
     DiscardNode,
     DoWhileNode,
@@ -62,6 +63,41 @@ def iter_ast_nodes(node):
     yield node
     for value in getattr(node, "__dict__", {}).values():
         yield from iter_ast_nodes(value)
+
+
+def test_parse_numeric_heavy_generated_identifier_function_and_call():
+    code = """
+    float nvfp4_quantize_float_gs_16_b_4(float value) {
+        return value + 1.0;
+    }
+
+    kernel void k(device float* out [[buffer(0)]]) {
+        out[0] = nvfp4_quantize_float_gs_16_b_4(2.0);
+    }
+    """
+    ast = parse_ok(code)
+    helper, kernel = ast.functions
+    call = kernel.body[0].right
+
+    assert helper.name == "nvfp4_quantize_float_gs_16_b_4"
+    assert isinstance(call, FunctionCallNode)
+    assert call.name == "nvfp4_quantize_float_gs_16_b_4"
+
+
+def test_numeric_leading_generated_identifier_reports_specific_error():
+    code = """
+    float 16_b_4(float value) {
+        return value;
+    }
+    """
+
+    with pytest.raises(SyntaxError) as excinfo:
+        parse_code(code)
+
+    error = excinfo.value
+    assert "Invalid Metal identifier '16_b_4'" in str(error)
+    assert "must start with a letter or underscore" in str(error)
+    assert getattr(error, "raw_message", "").startswith("Invalid Metal identifier")
 
 
 def test_parse_vertex_fragment_program():
@@ -472,6 +508,35 @@ def test_parse_dependent_numeric_template_call_from_mlx_fp_quantized():
 
     assert isinstance(call, FunctionCallNode)
     assert call.name == "qdot<U,tn*pack_factor,bits>"
+
+
+def test_parse_numeric_template_call_without_prior_template_declaration():
+    code = """
+    void run(device float* out) {
+        project_helper<16, 4>(out);
+    }
+    """
+    ast = parse_ok(code)
+    call = ast.functions[0].body[0]
+
+    assert isinstance(call, FunctionCallNode)
+    assert call.name == "project_helper<16,4>"
+
+
+def test_parse_numeric_template_braced_functor_call_statement():
+    code = """
+    struct Quantize {};
+
+    void run(float value) {
+        Quantize<4>{}(value);
+    }
+    """
+    ast = parse_ok(code)
+    call = ast.functions[0].body[0]
+
+    assert isinstance(call, CallNode)
+    assert isinstance(call.callee, FunctionCallNode)
+    assert call.callee.name == "Quantize<4>"
 
 
 def test_numeric_template_parse_error_reports_context_and_position():

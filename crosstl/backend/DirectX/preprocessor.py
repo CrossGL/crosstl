@@ -274,6 +274,8 @@ class HLSLPreprocessor:
             )
         else:
             replacement = self._strip_macro_comments(after.lstrip())
+            if "##" in replacement:
+                replacement = self._replace_params(replacement, {})
             self.macros[name] = Macro(name=name, params=None, replacement=replacement)
 
     def _strip_macro_comments(self, text: str) -> str:
