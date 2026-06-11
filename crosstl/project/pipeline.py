@@ -9857,12 +9857,14 @@ def _read_metal_string_for_project(source: str, start: int) -> tuple[str, int]:
 def _metal_split_assignment(statement: str) -> tuple[str, str | None]:
     depth = 0
     for index, ch in enumerate(statement):
+        if ch == "=" and depth == 0:
+            return statement[:index], statement[index + 1 :]
+        if ch in "({" and depth == 0:
+            return statement[:index], statement[index:]
         if ch in "(<[{":
             depth += 1
         elif ch in ")>]}":
             depth = max(0, depth - 1)
-        elif ch == "=" and depth == 0:
-            return statement[:index], statement[index + 1 :]
     return statement, None
 
 
@@ -10454,8 +10456,8 @@ def _plain_template_helper_call_sites(
     templates_by_name: Mapping[str, Any],
     excluded_spans: Sequence[tuple[int, int]],
     included_spans: Sequence[tuple[int, int]],
-) -> list[tuple[str, list[str], tuple[int, int]]]:
-    calls: list[tuple[str, list[str], tuple[int, int]]] = []
+) -> list[tuple[str, list[str], tuple[int, int], list[str]]]:
+    calls: list[tuple[str, list[str], tuple[int, int], list[str]]] = []
     excluded = _SpanLookup(excluded_spans)
     for span_start, span_end in _SpanLookup(included_spans)._spans:
         i = span_start
@@ -10495,6 +10497,20 @@ def _plain_template_helper_call_sites(
                 j = i + consumed
                 while j < scan_end and source[j].isspace():
                     j += 1
+                explicit_template_arguments: list[str] = []
+                replacement_end = i + consumed
+                if j < scan_end and source[j] == "<":
+                    angle_end = preprocessor._find_matching_angle(source, j)
+                    if angle_end is None or angle_end >= scan_end:
+                        i += consumed
+                        continue
+                    explicit_template_arguments = preprocessor._split_top_level_commas(
+                        source[j + 1 : angle_end]
+                    )
+                    replacement_end = angle_end + 1
+                    j = angle_end + 1
+                    while j < scan_end and source[j].isspace():
+                        j += 1
                 if j >= scan_end or source[j] != "(":
                     i += consumed
                     continue
@@ -10511,8 +10527,9 @@ def _plain_template_helper_call_sites(
                         arguments,
                         (
                             preprocessor._scoped_identifier_start(source, i),
-                            i + consumed,
+                            replacement_end,
                         ),
+                        explicit_template_arguments,
                     )
                 )
                 i = paren_end + 1
@@ -10527,6 +10544,7 @@ def _infer_plain_template_helper_arguments(
     call_arguments: Sequence[str],
     type_environment: Mapping[str, str],
     return_types: Mapping[str, str],
+    explicit_template_arguments: Sequence[str] = (),
 ) -> list[str] | None:
     header = _metal_template_header(template)
     parameter_declarations = _metal_function_parameter_declarations(
@@ -10545,8 +10563,26 @@ def _infer_plain_template_helper_arguments(
     variadic_parameters = set(
         getattr(template, "variadic_template_parameters", set()) or set()
     )
-    bindings: dict[str, str] = {}
-    variadic_bindings: dict[str, list[str]] = {}
+    explicit_bindings, explicit_variadic_bindings = (
+        preprocessor._template_argument_bindings(
+            template,
+            list(explicit_template_arguments),
+        )
+        if explicit_template_arguments
+        else ({}, {})
+    )
+    bindings: dict[str, str] = {
+        parameter: _strip_metal_type_qualifiers(value)
+        for parameter, value in explicit_bindings.items()
+    }
+    variadic_bindings: dict[str, list[str]] = {
+        parameter: [
+            _strip_metal_type_qualifiers(str(value))
+            for value in values
+            if str(value).strip()
+        ]
+        for parameter, values in explicit_variadic_bindings.items()
+    }
     argument_index = 0
     for parameter_index, (expected_type, _name, variadic) in enumerate(
         parameter_declarations
@@ -10820,7 +10856,12 @@ def _materialize_plain_template_helper_calls(
                         materialized_template_spans,
                         [function.body_span],
                     )
-                    for child_name, child_arguments, child_span in child_calls:
+                    for (
+                        child_name,
+                        child_arguments,
+                        child_span,
+                        child_template_arguments,
+                    ) in child_calls:
                         inferred_matches: list[
                             tuple[Any, list[str], list[tuple[str, str, bool]]]
                         ] = []
@@ -10831,6 +10872,7 @@ def _materialize_plain_template_helper_calls(
                                 child_arguments,
                                 type_environment,
                                 materialized_return_types,
+                                child_template_arguments,
                             )
                             if (
                                 not inferred_arguments
@@ -10899,7 +10941,7 @@ def _materialize_plain_template_helper_calls(
                 template_spans,
                 [function.body_span],
             )
-            for function_name, call_arguments, span in calls:
+            for function_name, call_arguments, span, template_arguments in calls:
                 candidate_templates = templates_by_name.get(function_name, [])
                 inferred_matches: list[
                     tuple[Any, list[str], list[tuple[str, str, bool]]]
@@ -10911,6 +10953,7 @@ def _materialize_plain_template_helper_calls(
                         call_arguments,
                         type_environment,
                         return_types,
+                        template_arguments,
                     )
                     if (
                         not arguments
