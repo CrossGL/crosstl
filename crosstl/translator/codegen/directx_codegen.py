@@ -12781,7 +12781,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         used_semantics = set()
         for member in getattr(struct_node, "members", []) or []:
             semantic = self.hlsl_struct_member_declared_semantic(member)
-            if semantic is not None:
+            if semantic is not None and self.hlsl_location_attribute_index(
+                member
+            ) is None:
                 used_semantics.add(self.hlsl_semantic_key(semantic))
 
         defaults = {}
@@ -12808,13 +12810,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 continue
             if member_name in defaults:
                 continue
-            if self.hlsl_struct_member_declared_semantic(member) is not None:
-                continue
             if not self.hlsl_can_default_fragment_input_semantic(
                 self.hlsl_struct_member_type_name(member)
             ):
                 continue
 
+            declared_semantic = self.hlsl_struct_member_declared_semantic(member)
+            location_index = self.hlsl_location_attribute_index(member)
+            if declared_semantic is not None and location_index is None:
+                continue
+
+            if location_index is not None:
+                next_texcoord = location_index
             while self.hlsl_semantic_key(f"TEXCOORD{next_texcoord}") in used_semantics:
                 next_texcoord += 1
             semantic = f"TEXCOORD{next_texcoord}"
