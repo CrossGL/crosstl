@@ -7677,6 +7677,74 @@ def test_translate_project_lowers_glsl_vertex_index_to_metal_vertex_id(tmp_path)
     assert "gl_VertexIndex" not in metal
 
 
+def test_translate_project_glsl_fragment_output_named_fragment_escapes_metal_keyword(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "triangle.vert").write_text(
+        textwrap.dedent("""
+            #version 330
+            uniform mat4 MVP;
+            in vec3 vCol;
+            in vec2 vPos;
+            out vec3 color;
+            void main()
+            {
+                gl_Position = MVP * vec4(vPos, 0.0, 1.0);
+                color = vCol;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (shader_dir / "triangle.frag").write_text(
+        textwrap.dedent("""
+            #version 330
+            in vec3 color;
+            out vec4 fragment;
+            void main()
+            {
+                fragment = vec4(color, 1.0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu"]
+            targets = ["metal"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo), format_output=False)
+    payload = report.to_json()
+    fragment_metal = (
+        repo / "translated" / "metal" / "gpu" / "triangle.frag.metal"
+    ).read_text(encoding="utf-8")
+    fragment_artifact = next(
+        artifact
+        for artifact in payload["artifacts"]
+        if artifact["source"] == "gpu/triangle.frag"
+    )
+
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert fragment_artifact["sourceRemap"]["mappingCount"] >= 1
+    assert (
+        re.search(r"^\s*float4\s+fragment\b", fragment_metal, re.MULTILINE) is None
+    )
+    assert re.search(r"^\s*fragment\s*=", fragment_metal, re.MULTILINE) is None
+    assert re.search(r"\breturn\s+fragment\s*;", fragment_metal) is None
+    assert "float4 fragment_;" in fragment_metal
+    assert "fragment_ = float4(input.color, 1.0);" in fragment_metal
+    assert "return fragment_;" in fragment_metal
+    assert_metal_validates_if_available(fragment_metal, tmp_path)
+
+
 def test_scan_project_reports_unsupported_source_overrides(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
