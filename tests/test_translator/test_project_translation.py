@@ -19876,13 +19876,36 @@ def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
 
             typedef bfloat bfloat16_t;
 
+            struct os_log {
+            };
+
+            template <typename U>
+            struct Limits {
+                U max;
+            };
+
+            inline float read_limit(Limits<float> value) {
+                return value.max;
+            }
+
+            template <typename T, typename U>
+            inline T ceildiv(T n, U m) {
+                return (n + m - 1) / m;
+            }
+
             inline uint pack_bfloat16(bfloat16_t value) {
                 return asuint(value);
+            }
+
+            inline bfloat16_t unpack_bfloat16(uint bits) {
+                return as_type<bfloat16_t>(bits);
             }
 
             kernel void pack_kernel(device uint* out [[buffer(0)]]) {
                 bfloat16_t value = bfloat16_t(0.0);
                 out[0] = pack_bfloat16(value);
+                bfloat16_t restored = unpack_bfloat16(out[0]);
+                out[1] = pack_bfloat16(restored);
             }
         """).strip(),
         encoding="utf-8",
@@ -19910,11 +19933,18 @@ def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
     generated = (repo / metal_artifact["path"]).read_text(encoding="utf-8")
     assert "uint pack_bfloat16(float value)" in generated
     assert "return (floatBitsToUint(value) >> 16u);" in generated
+    assert "float unpack_bfloat16(uint bits)" in generated
+    assert "return uintBitsToFloat((bits << 16u));" in generated
+    assert "struct os_log {\n    int _crosstl_empty;\n};" in generated
+    assert "struct Limits {" not in generated
+    assert "U max;" not in generated
+    assert "T ceildiv" not in generated
     assert "#include <metal" not in generated
     assert "#include <Metal" not in generated
     assert "#pragma METAL" not in generated
     assert "bfloat16_t" not in generated
     assert "asuint(" not in generated
+    assert "as_type<" not in generated
 
 
 def test_project_cli_translate_project_writes_report(tmp_path):

@@ -24539,6 +24539,67 @@ def test_opengl_bfloat16_asuint_alias_lowers_to_uint_payload():
     assert "asuint(" not in generated_code
 
 
+def test_opengl_bfloat16_as_type_alias_lowers_from_uint_payload():
+    shader = """
+    shader BFloat16AsTypeAlias {
+        bfloat16_t unpackScalar(uint bits) {
+            return as_type<bfloat16_t>(bits);
+        }
+
+        bfloat unpackNamedAlias(uint bits) {
+            return as_type<bfloat>(bits);
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float unpackScalar(uint bits)" in generated_code
+    assert "float unpackNamedAlias(uint bits)" in generated_code
+    assert "return uintBitsToFloat((bits << 16u));" in generated_code
+    assert "bfloat16_t" not in generated_code
+    assert "bfloat " not in generated_code
+    assert "as_type<" not in generated_code
+
+
+def test_opengl_empty_struct_emits_placeholder_member():
+    shader = """
+    shader EmptyStruct {
+        struct Marker {
+        }
+
+        float pass_through(float value) {
+            return value;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct Marker {\n    int _crosstl_empty;\n};" in generated_code
+    assert "struct Marker {}" not in generated_code
+
+
+def test_opengl_skips_uncalled_helpers_with_unresolved_template_types():
+    shader = """
+    shader UncalledTemplateHelper {
+        T ceildiv(T n, U m) {
+            return (n + m - 1) / m;
+        }
+
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "T ceildiv" not in generated_code
+    assert " U " not in generated_code
+
+
 def test_opengl_hlsl_bitcast_alias_renames_local_target_shadow():
     shader = """
     shader BitcastAliasLocalShadow {
