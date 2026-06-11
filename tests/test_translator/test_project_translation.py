@@ -7840,8 +7840,13 @@ def test_translate_project_generates_metal_and_spirv_for_modular_mojo_vector_add
     assert artifacts_by_target["vulkan"]["status"] == "translated"
     assert metal_path.exists()
     assert spirv_path.exists()
-    assert "TileTensor<float_dtype, type_of(layout), MutAnyOrigin>" in metal
+    assert "kernel void vector_addition" in metal
+    assert "device float* lhs_tensor" in metal
+    assert "out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid];" in metal
+    assert "TileTensor" not in metal
     assert "; SPIR-V" in spirv
+    assert "OpEntryPoint GLCompute" in spirv
+    assert "WARNING" not in spirv
     assert "IdentifierNode(" not in metal
     assert "IdentifierNode(" not in spirv
 
@@ -10433,6 +10438,79 @@ def test_translate_project_metal_softmax_materialized_conversion_operator_fragme
     }
 
 
+def test_translate_project_materialized_metal_functor_header_empty_member_to_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "ops.h").write_text(
+        textwrap.dedent("""
+            struct Add {
+              template <typename T>
+              T operator()(T x, T y) {
+                return x + y;
+              }
+            };
+
+            struct LogAddExp {
+              template <typename T>
+              T operator()(T x, T y) {
+                return x + y;
+              };
+
+              float operator()(float x, float y) {
+                return x + y;
+              }
+            };
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "binary.metal").write_text(
+        textwrap.dedent("""
+            #include "ops.h"
+
+            #define instantiate_binary(name, itype, op) \\
+              instantiate_kernel("binary_" #name, binary_kernel, itype, op)
+
+            template <typename T, typename Op>
+            [[kernel]] void binary_kernel(
+                device const T* in [[buffer(0)]],
+                device T* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+              out[gid] = in[gid] + T(1);
+            }
+
+            instantiate_binary(float32, float, Add)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx", "vulkan"]
+            output_dir = "translated"
+            include_dirs = ["shaders"]
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["summary"]["diagnosticCounts"] == {
+        "note": 0,
+        "warning": 0,
+        "error": 0,
+    }
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("vulkan", "translated"),
+    }
+
+
 def test_translate_project_opengl_remaps_mlx_arange_materialized_entry_bindings(
     tmp_path,
 ):
@@ -11114,6 +11192,7 @@ def test_plain_metal_helper_call_scan_uses_indexed_excluded_spans(monkeypatch):
             "plain_helper",
             ["value"],
             (helper_start, helper_start + len("plain_helper")),
+            [],
         )
     ]
 
@@ -11155,9 +11234,43 @@ def test_plain_metal_helper_call_scan_starts_at_included_body_span():
             "plain_helper",
             ["value"],
             (helper_start, helper_start + len("plain_helper")),
+            [],
         )
     ]
     assert CountingSource.index_reads < len(function_source) * 4
+
+
+def test_plain_metal_helper_call_scan_reports_explicit_template_arguments():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    preprocessor = MetalPreprocessor()
+    source = textwrap.dedent("""
+        uint call_plain(uint value, uint gid) {
+            return plain_helper<float, uint, 7>(value, gid);
+        }
+        """)
+    function_start = source.find("uint call_plain")
+    body_start = source.find("{", function_start) + 1
+    body_end = source.find("}", body_start)
+
+    calls = project_pipeline._plain_template_helper_call_sites(
+        preprocessor,
+        source,
+        {"plain_helper": [object()]},
+        [],
+        [(body_start, body_end)],
+    )
+
+    helper_start = source.find("plain_helper")
+    helper_end = source.find("(", helper_start)
+    assert calls == [
+        (
+            "plain_helper",
+            ["value", "gid"],
+            (helper_start, helper_end),
+            ["float", "uint", "7"],
+        )
+    ]
 
 
 def test_plain_metal_template_replacement_scan_uses_indexed_included_spans(

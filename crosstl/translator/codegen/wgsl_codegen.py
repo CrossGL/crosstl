@@ -4668,7 +4668,17 @@ class WGSLCodeGen:
     def generate_vector_constructor_argument(self, arg, element_type):
         if self.vector_shape(self.expression_type(arg)) is not None:
             return self.generate_expression(arg)
+        if self.is_float_vector_abstract_int_argument(arg, element_type):
+            return self.generate_expression(arg)
         return self.generate_expression_for_target(arg, element_type)
+
+    def is_float_vector_abstract_int_argument(self, arg, element_type):
+        return (
+            self.scalar_type_name(element_type) == "f32"
+            and isinstance(arg, LiteralNode)
+            and isinstance(arg.value, int)
+            and not isinstance(arg.value, bool)
+        )
 
     def generate_type_constructor_call_arguments(self, function_name, arguments):
         vector_shape = self.vector_shape(function_name)

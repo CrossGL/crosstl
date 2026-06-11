@@ -10616,6 +10616,9 @@ class _SpanLookup:
         return None
 
 
+_PlainTemplateHelperCallSite = tuple[str, list[str], tuple[int, int], list[str]]
+
+
 def _metal_template_reference_names(
     preprocessor: Any,
     source: str,
@@ -10730,8 +10733,9 @@ def _plain_template_helper_call_sites(
     templates_by_name: Mapping[str, Any],
     excluded_spans: Sequence[tuple[int, int]],
     included_spans: Sequence[tuple[int, int]],
-) -> list[tuple[str, list[str], tuple[int, int], list[str]]]:
-    calls: list[tuple[str, list[str], tuple[int, int], list[str]]] = []
+) -> list[_PlainTemplateHelperCallSite]:
+    """Return helper name, call arguments, replacement span, and explicit type args."""
+    calls: list[_PlainTemplateHelperCallSite] = []
     excluded = _SpanLookup(excluded_spans)
     for span_start, span_end in _SpanLookup(included_spans)._spans:
         i = span_start
@@ -14218,6 +14222,8 @@ def _artifact_diagnostic_context(artifact: Mapping[str, Any]) -> dict[str, Any]:
 def _mojo_target_construct_rule_applies(rule_id: str, target: str) -> bool:
     if target == "mojo":
         return False
+    if rule_id == "mojo-host-main":
+        return target != "opengl"
     if rule_id == "mojo-none":
         return target != "vulkan"
     if rule_id == "spirv-unresolved-warning":

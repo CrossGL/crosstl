@@ -1197,7 +1197,9 @@ class VulkanSPIRVCodeGen:
         if target_type is None:
             return value_id
 
-        return self.convert_value_to_type(value_id, target_type)
+        return self.convert_value_to_type(
+            value_id, target_type, allow_vector_to_scalar=True
+        )
 
     def pointer_pointee_type(self, variable_id: SpirvId) -> Optional[SpirvId]:
         target_type = self.variable_value_types.get(variable_id.id)
@@ -1349,7 +1351,9 @@ class VulkanSPIRVCodeGen:
                 and variable_type.type.base_type != result_type.type.base_type
             ):
                 loaded = self.load_from_variable(variable_id, variable_type)
-                return self.convert_value_to_type(loaded, result_type)
+                return self.convert_value_to_type(
+                    loaded, result_type, allow_vector_resize=True
+                )
             return self.load_from_variable(variable_id, result_type)
 
         variable_type = self.pointer_pointee_type(variable_id)
@@ -1363,7 +1367,14 @@ class VulkanSPIRVCodeGen:
         scalar = self.composite_extract(loaded, element_type, 0)
         return self.convert_value_to_type(scalar, result_type)
 
-    def convert_value_to_type(self, value_id: SpirvId, target_type: SpirvId) -> SpirvId:
+    def convert_value_to_type(
+        self,
+        value_id: SpirvId,
+        target_type: SpirvId,
+        *,
+        allow_vector_to_scalar: bool = False,
+        allow_vector_resize: bool = False,
+    ) -> SpirvId:
         """Convert scalar values to a compatible scalar or vector target type."""
         target_type = self.ensure_registered_type(target_type)
         source_type = self.value_types.get(
@@ -1383,10 +1394,26 @@ class VulkanSPIRVCodeGen:
                 return aggregate_value
 
         target_vector = self.vector_component_type_and_count(target_type.type.base_type)
-        source_vector = self.vector_component_type_and_count(value_id.type.base_type)
+        source_base_type = (
+            source_type.type.base_type
+            if source_type is not None
+            else value_id.type.base_type
+        )
+        source_vector = self.vector_component_type_and_count(source_base_type)
         if target_vector is None:
             if source_vector is not None:
-                return value_id
+                if not allow_vector_to_scalar:
+                    return value_id
+                target_scalar_type = self.normalize_primitive_name(
+                    target_type.type.base_type
+                )
+                scalar_types = {"bool", "float", "double"} | self.INTEGER_TYPE_NAMES
+                if target_scalar_type not in scalar_types:
+                    return value_id
+
+                component_type = self.register_primitive_type(source_vector[0])
+                scalar_value = self.composite_extract(value_id, component_type, 0)
+                return self.convert_value_to_type(scalar_value, target_type)
             converted = self.convert_scalar_to_type(value_id, target_type)
             if self.normalize_primitive_name(
                 converted.type.base_type
@@ -1395,31 +1422,44 @@ class VulkanSPIRVCodeGen:
             return value_id
 
         if source_vector is not None:
-            if source_vector[1] != target_vector[1]:
+            if source_vector[1] != target_vector[1] and not allow_vector_resize:
                 return value_id
-            target_component_type = self.register_primitive_type(target_vector[0])
-            source_component_type = self.register_primitive_type(source_vector[0])
-            components = []
-            for index in range(source_vector[1]):
-                component = self.composite_extract(
-                    value_id, source_component_type, index
-                )
-                converted = self.convert_scalar_to_type(
-                    component, target_component_type
-                )
-                if (
-                    self.normalize_primitive_name(converted.type.base_type)
-                    != target_vector[0]
-                ):
-                    return value_id
-                components.append(converted)
-            return self.composite_construct(target_type, components)
+            converted = self.convert_vector_to_type(
+                value_id, source_vector, target_type, target_vector
+            )
+            return converted or value_id
 
         component_type = self.register_primitive_type(target_vector[0])
         converted = self.convert_scalar_to_type(value_id, component_type)
         if self.normalize_primitive_name(converted.type.base_type) != target_vector[0]:
             return value_id
         return self.splat_scalar_to_vector(converted, target_type)
+
+    def convert_vector_to_type(
+        self,
+        value_id: SpirvId,
+        source_vector: Tuple[str, int],
+        target_type: SpirvId,
+        target_vector: Tuple[str, int],
+    ) -> Optional[SpirvId]:
+        target_component_type = self.register_primitive_type(target_vector[0])
+        source_component_type = self.register_primitive_type(source_vector[0])
+        components = []
+        copied_components = min(source_vector[1], target_vector[1])
+        for index in range(copied_components):
+            component = self.composite_extract(value_id, source_component_type, index)
+            converted = self.convert_scalar_to_type(component, target_component_type)
+            if (
+                self.normalize_primitive_name(converted.type.base_type)
+                != target_vector[0]
+            ):
+                return None
+            components.append(converted)
+
+        while len(components) < target_vector[1]:
+            components.append(self.default_value_for_type(target_component_type))
+
+        return self.composite_construct(target_type, components)
 
     def value_has_type(self, value_id: SpirvId, target_type: SpirvId) -> bool:
         value_type = self.value_types.get(
@@ -1462,6 +1502,60 @@ class VulkanSPIRVCodeGen:
         return self.aggregate_canonical_key(
             source_type
         ) == self.aggregate_canonical_key(target_type)
+
+    def is_complex_struct_type(
+        self, type_id: SpirvId, members: Optional[List[Tuple[SpirvId, str]]] = None
+    ) -> bool:
+        if members is None:
+            members = self.current_struct_members.get(type_id.type.base_type)
+        if members is None or len(members) != 2:
+            return False
+
+        member_names = [name for _, name in members]
+        type_name = str(type_id.type.base_type)
+        if not (
+            type_name.startswith("complex")
+            or member_names == ["real", "imag"]
+        ):
+            return False
+
+        return all(
+            self.normalize_primitive_name(member_type.type.base_type)
+            in {"float", "double"}
+            for member_type, _ in members
+        )
+
+    def complex_struct_types_are_layout_compatible(
+        self,
+        source_type: SpirvId,
+        target_type: SpirvId,
+        source_members: List[Tuple[SpirvId, str]],
+        target_members: List[Tuple[SpirvId, str]],
+    ) -> bool:
+        if len(source_members) != len(target_members):
+            return False
+        if not (
+            self.is_complex_struct_type(source_type, source_members)
+            or self.is_complex_struct_type(target_type, target_members)
+        ):
+            return False
+
+        for source_member_type, target_member_type in zip(
+            (member_type for member_type, _ in source_members),
+            (member_type for member_type, _ in target_members),
+        ):
+            source_type_name = self.normalize_primitive_name(
+                source_member_type.type.base_type
+            )
+            target_type_name = self.normalize_primitive_name(
+                target_member_type.type.base_type
+            )
+            if source_type_name not in {"float", "double"}:
+                return False
+            if target_type_name not in {"float", "double"}:
+                return False
+
+        return True
 
     def convert_aggregate_value_to_type(
         self, value_id: SpirvId, source_type: SpirvId, target_type: SpirvId
@@ -1548,12 +1642,15 @@ class VulkanSPIRVCodeGen:
         if len(source_members) != len(target_members):
             return None
 
+        allow_layout_only_members = self.complex_struct_types_are_layout_compatible(
+            source_type, target_type, source_members, target_members
+        )
         values = []
         for index, (
             (source_member_type, source_name),
             (target_member_type, target_name),
         ) in enumerate(zip(source_members, target_members)):
-            if source_name != target_name:
+            if source_name != target_name and not allow_layout_only_members:
                 return None
             source_member = self.composite_extract(value_id, source_member_type, index)
             target_member = self.convert_value_to_type(
