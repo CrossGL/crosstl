@@ -199,6 +199,8 @@ def translate(
                 "vulkan",
             }:
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
+            if source_spec.name == "hip" and normalized_backend == "directx":
+                cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
             codegen = get_codegen(requested_backend)
             lower_default_arguments(cgl_ast)
             generated_code = codegen.generate(cgl_ast)

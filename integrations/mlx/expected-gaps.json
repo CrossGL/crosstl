@@ -18,7 +18,7 @@
     "artifacts": 1
   },
   "full_corpus_scout": {
-    "status": "blocked",
+    "status": "needs-refresh",
     "sources": 40,
     "targets": [
       "directx",
@@ -26,12 +26,7 @@
       "vulkan"
     ],
     "artifacts": 120,
-    "blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1205",
-      "https://github.com/CrossGL/crosstl/issues/1207",
-      "https://github.com/CrossGL/crosstl/issues/1218",
-      "https://github.com/CrossGL/crosstl/issues/1222"
-    ],
+    "blocked_by": [],
     "last_completed": {
       "translated_artifacts": 56,
       "failed_artifacts": 64,
@@ -42,32 +37,7 @@
       }
     }
   },
-  "tracked_issues": [
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1205",
-      "scope": "opengl-template-type-resolution",
-      "status": "open",
-      "summary": "Reject unresolved Metal template parameters before OpenGL codegen."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1207",
-      "scope": "opengl-simd-helper-placeholders",
-      "status": "open",
-      "summary": "Lower OpenGL SIMD helper placeholders to validator-safe code."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1218",
-      "scope": "metal-steel-attention-nax-diagnostics",
-      "status": "open",
-      "summary": "Report structured diagnostics for steel attention NAX project translation failures."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1222",
-      "scope": "opengl-steel-gemm-materialization-bound",
-      "status": "open",
-      "summary": "Bound OpenGL template materialization for MLX steel GEMM kernels."
-    }
-  ],
+  "tracked_issues": [],
   "resolved_issues": [
     "https://github.com/CrossGL/crosstl/issues/939",
     "https://github.com/CrossGL/crosstl/issues/940",
@@ -124,6 +94,10 @@
     "https://github.com/CrossGL/crosstl/issues/1184",
     "https://github.com/CrossGL/crosstl/issues/1203",
     "https://github.com/CrossGL/crosstl/issues/1204",
-    "https://github.com/CrossGL/crosstl/issues/1206"
+    "https://github.com/CrossGL/crosstl/issues/1206",
+    "https://github.com/CrossGL/crosstl/issues/1205",
+    "https://github.com/CrossGL/crosstl/issues/1207",
+    "https://github.com/CrossGL/crosstl/issues/1218",
+    "https://github.com/CrossGL/crosstl/issues/1222"
   ]
 }

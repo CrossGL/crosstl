@@ -684,6 +684,7 @@ class MetalCodeGen:
         self.function_parameter_names = {}
         self.function_parameter_infos = {}
         self.function_parameter_nodes = {}
+        self.functions_by_name = {}
         self.metal_skipped_function_parameter_indices = {}
         self.function_return_types = {}
         self.function_image_access_requirements = {}
@@ -1288,6 +1289,9 @@ class MetalCodeGen:
         self.validate_metal_mesh_payload_parameter_placement(ast, all_functions)
         self.user_function_names = {
             func.name for func in all_functions if getattr(func, "name", None)
+        }
+        self.functions_by_name = {
+            func.name: func for func in all_functions if getattr(func, "name", None)
         }
         self.function_parameter_infos = self.collect_function_parameter_infos(
             all_functions
@@ -5047,24 +5051,45 @@ class MetalCodeGen:
     def validate_metal_fragment_invocation_density(self, func, shader_type):
         if shader_type != "fragment":
             return
+        for reachable_func in self.metal_reachable_functions(func):
+            if self.function_uses_metal_fragment_invocation_density(reachable_func):
+                raise UnsupportedMetalFeatureError(
+                    "gl_FragSizeEXT",
+                    (
+                        "Metal target does not expose a fragment invocation density "
+                        "or fragment-size input equivalent for "
+                        "GL_EXT_fragment_invocation_density / gl_FragSizeEXT; keep "
+                        "this shader on a target with fragment density builtins or "
+                        "specialize the density path before Metal generation."
+                    ),
+                    missing_capabilities=FRAGMENT_INVOCATION_DENSITY_CAPABILITIES,
+                )
+
+    def metal_reachable_functions(self, root_func):
+        reachable = []
+        pending = [root_func]
+        visited = set()
+        while pending:
+            func = pending.pop(0)
+            if func is None or id(func) in visited:
+                continue
+            visited.add(id(func))
+            reachable.append(func)
+            for called_name in sorted(self.called_user_function_names(func)):
+                called_func = (self.functions_by_name or {}).get(called_name)
+                if called_func is not None and id(called_func) not in visited:
+                    pending.append(called_func)
+        return reachable
+
+    def function_uses_metal_fragment_invocation_density(self, func):
         for node in self.iter_ast_nodes(getattr(func, "body", []) or []):
             class_name = node.__class__.__name__
             if "Identifier" not in class_name and class_name != "VariableNode":
                 continue
             name = getattr(node, "name", "")
-            if name.split(".", 1)[0] != "gl_FragSizeEXT":
-                continue
-            raise UnsupportedMetalFeatureError(
-                "gl_FragSizeEXT",
-                (
-                    "Metal target does not expose a fragment invocation density "
-                    "or fragment-size input equivalent for "
-                    "GL_EXT_fragment_invocation_density / gl_FragSizeEXT; keep "
-                    "this shader on a target with fragment density builtins or "
-                    "specialize the density path before Metal generation."
-                ),
-                missing_capabilities=FRAGMENT_INVOCATION_DENSITY_CAPABILITIES,
-            )
+            if name.split(".", 1)[0] == "gl_FragSizeEXT":
+                return True
+        return False
 
     def validate_graphics_builtin_parameter_types(self, parameters, stage_name):
         expected_types = {

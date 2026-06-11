@@ -757,6 +757,33 @@ class GLSLCodeGen:
         "QuadReadLaneAt": "subgroupQuadBroadcast",
     }
     GLSL_METAL_SIMD_GROUP_HELPER_PREFIX = "__metal_simd"
+    GLSL_METAL_SIMD_GROUP_PLAIN_HELPER_OPERATIONS = {
+        "simd_sum": "WaveActiveSum",
+        "simd_product": "WaveActiveProduct",
+        "simd_min": "WaveActiveMin",
+        "simd_max": "WaveActiveMax",
+        "simd_and": "WaveActiveBitAnd",
+        "simd_or": "WaveActiveBitOr",
+        "simd_xor": "WaveActiveBitXor",
+        "simd_any": "WaveActiveAnyTrue",
+        "simd_all": "WaveActiveAllTrue",
+        "simd_broadcast": "WaveReadLaneAt",
+        "simd_broadcast_first": "WaveReadLaneFirst",
+        "simd_prefix_exclusive_sum": "WavePrefixSum",
+        "simd_prefix_inclusive_sum": "WavePrefixInclusiveSum",
+        "simd_prefix_exclusive_product": "WavePrefixProduct",
+        "simd_prefix_inclusive_product": "WavePrefixInclusiveProduct",
+        "simd_prefix_exclusive_min": "WavePrefixExclusiveMin",
+        "simd_prefix_inclusive_min": "WavePrefixInclusiveMin",
+        "simd_prefix_exclusive_max": "WavePrefixExclusiveMax",
+        "simd_prefix_inclusive_max": "WavePrefixInclusiveMax",
+        "simd_prefix_exclusive_and": "WavePrefixExclusiveBitAnd",
+        "simd_prefix_inclusive_and": "WavePrefixInclusiveBitAnd",
+        "simd_prefix_exclusive_or": "WavePrefixExclusiveBitOr",
+        "simd_prefix_inclusive_or": "WavePrefixInclusiveBitOr",
+        "simd_prefix_exclusive_xor": "WavePrefixExclusiveBitXor",
+        "simd_prefix_inclusive_xor": "WavePrefixInclusiveBitXor",
+    }
     GLSL_METAL_SIMD_GROUP_HELPER_OPERATIONS = {
         "__metal_simd_sum": "WaveActiveSum",
         "__metal_simd_product": "WaveActiveProduct",
@@ -783,6 +810,7 @@ class GLSLCodeGen:
         "__metal_simd_prefix_inclusive_or": "WavePrefixInclusiveBitOr",
         "__metal_simd_prefix_exclusive_xor": "WavePrefixExclusiveBitXor",
         "__metal_simd_prefix_inclusive_xor": "WavePrefixInclusiveBitXor",
+        **GLSL_METAL_SIMD_GROUP_PLAIN_HELPER_OPERATIONS,
     }
     GLSL_VECTOR_RELATIONAL_FUNCTIONS = {
         "<": "lessThan",
@@ -1007,6 +1035,7 @@ class GLSLCodeGen:
         self.function_image_access_requirements = {}
         self.function_structured_buffer_access_requirements = {}
         self.function_definitions = {}
+        self.glsl_metal_simd_group_placeholder_functions = set()
         self.glsl_resource_function_specializations = {}
         self.glsl_resource_function_call_names = {}
         self.glsl_resource_specialized_source_names = set()
@@ -2476,6 +2505,9 @@ class GLSLCodeGen:
             self.collect_function_sampler_parameter_indices(ast)
         )
         functions = self.collect_functions(ast)
+        self.glsl_metal_simd_group_placeholder_functions = (
+            self.collect_metal_simd_group_placeholder_functions(functions)
+        )
         self.preserved_sampler_variables = set()
         self.preserved_sampler_parameters = {}
         self.function_return_types = {
@@ -3338,6 +3370,8 @@ class GLSLCodeGen:
         }
         called_function_names = self.collect_called_function_names(ast)
         for func in functions:
+            if self.should_elide_metal_simd_group_placeholder_function(func):
+                continue
             if id(func) in deferred_top_level_helper_ids:
                 continue
             if self.should_skip_unresolved_top_level_helper(
@@ -3444,6 +3478,8 @@ class GLSLCodeGen:
                     self.function_call_name,
                     FunctionCallNode,
                 ):
+                    if self.should_elide_metal_simd_group_placeholder_function(func):
+                        continue
                     resource_specializations = (
                         self.glsl_resource_function_emission_list(
                             getattr(func, "name", None)
@@ -6546,7 +6582,12 @@ class GLSLCodeGen:
         ):
             code += f"    {declaration}\n"
         body = getattr(func, "body", [])
-        if unsupported_buffer_array_info:
+        simd_placeholder_body = (
+            self.glsl_unsupported_metal_simd_placeholder_function_body(func, 1)
+        )
+        if simd_placeholder_body is not None:
+            code += simd_placeholder_body
+        elif unsupported_buffer_array_info:
             code += self.unsupported_structured_buffer_array_function_body(
                 func, unsupported_buffer_array_info, 1
             )
@@ -11338,12 +11379,95 @@ class GLSLCodeGen:
             return "barrier()"
         return None
 
+    def collect_metal_simd_group_placeholder_functions(self, functions):
+        return {
+            func.name
+            for func in functions or []
+            if self.is_metal_simd_group_placeholder_function(func)
+            and self.is_plain_metal_simd_group_helper_name(func.name)
+            and func.name in self.GLSL_METAL_SIMD_GROUP_PLAIN_HELPER_OPERATIONS
+        }
+
+    def is_metal_simd_group_placeholder_function(self, func):
+        func_name = getattr(func, "name", None)
+        if not self.is_plain_metal_simd_group_helper_name(func_name):
+            return False
+        return self.is_empty_function_body(getattr(func, "body", []))
+
+    def should_elide_metal_simd_group_placeholder_function(self, func):
+        return (
+            getattr(func, "name", None)
+            in self.glsl_metal_simd_group_placeholder_functions
+        )
+
+    def is_empty_function_body(self, body):
+        if body is None:
+            return False
+        if hasattr(body, "statements"):
+            return len(body.statements) == 0
+        if isinstance(body, list):
+            return len(body) == 0
+        return False
+
+    def glsl_unsupported_metal_simd_placeholder_function_body(self, func, indent):
+        if self.should_elide_metal_simd_group_placeholder_function(func):
+            return None
+        if not self.is_metal_simd_group_placeholder_function(func):
+            return None
+
+        return_type = (
+            self.type_name_string(getattr(func, "return_type", None)) or "void"
+        )
+        mapped_return_type = self.map_type(return_type)
+        if mapped_return_type == "void":
+            return None
+
+        indent_str = "    " * indent
+        fallback = self.zero_value_expression(return_type)
+        return (
+            f"{indent_str}return /* GLSL wave intrinsic diagnostic: {func.name} "
+            f"has no OpenGL subgroup equivalent */ {fallback};\n"
+        )
+
     def glsl_wave_operation_name(self, operation):
-        return self.GLSL_METAL_SIMD_GROUP_HELPER_OPERATIONS.get(operation, operation)
+        if not isinstance(operation, str):
+            return operation
+        mapped = self.GLSL_METAL_SIMD_GROUP_HELPER_OPERATIONS.get(operation)
+        if mapped is None:
+            return operation
+        if not self.is_plain_metal_simd_group_helper_name(operation):
+            return mapped
+        if operation in self.glsl_metal_simd_group_placeholder_functions:
+            return mapped
+        if operation not in self.function_return_types:
+            return mapped
+        return operation
+
+    def is_plain_metal_simd_group_helper_name(self, func_name):
+        if not isinstance(func_name, str):
+            return False
+        if func_name in self.GLSL_METAL_SIMD_GROUP_PLAIN_HELPER_OPERATIONS:
+            return True
+        return func_name.startswith(
+            (
+                "simd_prefix_",
+                "simd_broadcast",
+                "simd_shuffle",
+                "simd_vote",
+                "simd_is_",
+            )
+        )
 
     def is_metal_simd_group_helper_name(self, func_name):
-        return isinstance(func_name, str) and func_name.startswith(
-            self.GLSL_METAL_SIMD_GROUP_HELPER_PREFIX
+        if not isinstance(func_name, str):
+            return False
+        if func_name.startswith(self.GLSL_METAL_SIMD_GROUP_HELPER_PREFIX):
+            return True
+        if not self.is_plain_metal_simd_group_helper_name(func_name):
+            return False
+        return (
+            func_name in self.glsl_metal_simd_group_placeholder_functions
+            or func_name not in self.function_return_types
         )
 
     def generate_glsl_wave_op_expression(self, node):

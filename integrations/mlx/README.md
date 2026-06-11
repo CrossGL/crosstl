@@ -20,14 +20,13 @@ The current harness verifies:
 The last completed full-corpus scout against the same pinned MLX revision
 translated 56 of 120 target artifacts across DirectX, OpenGL, and Vulkan:
 DirectX translated 20 of 40 artifacts, OpenGL translated 17 of 40 artifacts,
-and Vulkan translated 19 of 40 artifacts. After the latest mainline
-helper-template and parser fixes, the scout advances farther through the steel
-kernels but remains
-blocked by CrossGL/crosstl#1205, CrossGL/crosstl#1207, CrossGL/crosstl#1218,
-and CrossGL/crosstl#1222. The current materialization pass rejects
-template-hostile targets when concrete variants are missing instead of emitting
-generic artifacts, so full-corpus counts should not be treated as
-runtime-complete coverage.
+and Vulkan translated 19 of 40 artifacts. The latest mainline fixes closed the
+previous OpenGL template, OpenGL SIMD, steel attention diagnostic, and steel GEMM
+materialization blockers. A fresh full-corpus scout is still required before
+updating the 56/120 count or claiming complete shader artifact coverage. The
+current materialization pass rejects template-hostile targets when concrete
+variants are missing instead of emitting generic artifacts, so full-corpus counts
+should not be treated as runtime-complete coverage.
 
 This is shader/kernel artifact coverage. It does not claim that the MLX host
 runtime has been ported to Direct3D, OpenGL, or Vulkan. Running the upstream MLX
@@ -64,19 +63,11 @@ The harness writes reports, generated artifacts, and command logs under
 
 ## Current Translator Gaps
 
-- CrossGL/crosstl#1205 tracks unresolved Metal template parameters reaching
-  OpenGL codegen for attention kernels.
-- CrossGL/crosstl#1207 tracks OpenGL SIMD helper placeholders that emit
-  non-void functions without return values and fail `glslangValidator`.
-- CrossGL/crosstl#1218 tracks raw `list index out of range` project
-  translation failures for
-  `mlx/backend/metal/kernels/steel/attn/kernels/steel_attention_nax.metal`.
-- CrossGL/crosstl#1222 tracks bounded OpenGL materialization/reporting for
-  `steel_gemm_gather.metal` and `steel_gemm_segmented.metal`.
-
-These gaps are translator work. Host runtime integration gaps should be handled
-in MLX-specific integration code or downstream runtime adapters, not hidden as
-shader translation successes.
+No active MLX full-corpus translator issue is listed here after the latest
+mainline merge. The next full-corpus scout should either update the translated
+artifact counts or add new issue-backed blockers with concrete repros. Host
+runtime integration gaps should be handled in MLX-specific integration code or
+downstream runtime adapters, not hidden as shader translation successes.
 
 ## Resolved Frontier Issues
 
@@ -112,4 +103,7 @@ work. CrossGL/crosstl#1155 and CrossGL/crosstl#1160 are covered by the current
 frontier after the SPIR-V project-artifact and multi-entry binding fixes.
 CrossGL/crosstl#1203, CrossGL/crosstl#1204, and CrossGL/crosstl#1206 were
 closed by the latest mainline helper-template, softmax parser, and SPIR-V
-pointer-overload fixes.
+pointer-overload fixes. CrossGL/crosstl#1205, CrossGL/crosstl#1207,
+CrossGL/crosstl#1218, and CrossGL/crosstl#1222 are also closed by the current
+mainline OpenGL template, SIMD helper, steel attention diagnostic, and steel GEMM
+materialization fixes.

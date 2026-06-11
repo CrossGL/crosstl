@@ -40,6 +40,9 @@ from crosstl.project import (
     validate_project_report,
 )
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
+from tests.test_backend.test_SPIRV.test_codegen import (
+    SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -324,6 +327,26 @@ GLSL_FRAGMENT_INVOCATION_DENSITY_SOURCE = textwrap.dedent("""
             clamp(1.0 - 1.0 / invocationArea, 0.0, 1.0)
         ) / 1.35;
         fragColor = vec4(h);
+    }
+    """).strip()
+
+GLSL_FRAGMENT_INVOCATION_DENSITY_HELPER_SOURCE = textwrap.dedent("""
+    #version 450 core
+    #extension GL_EXT_fragment_invocation_density : require
+    layout(location = 0) out vec4 fragColor;
+
+    vec4 FragmentDensityToColor() {
+        float invocationArea = float(
+            gl_FragSizeEXT.x * gl_FragSizeEXT.y
+        );
+        float h = (
+            clamp(1.0 - 1.0 / invocationArea, 0.0, 1.0)
+        ) / 1.35;
+        return vec4(h, h, h, 1.0);
+    }
+
+    void main() {
+        fragColor = FragmentDensityToColor();
     }
     """).strip()
 
@@ -7568,6 +7591,42 @@ def test_translate_project_spirv_assembly_vertex_position_lowers_to_wgsl(tmp_pat
         assert payload["validation"]["toolchainRuns"][0]["status"] == "ok"
 
 
+def test_translate_project_spirv_pervertex_position_lowers_to_directx(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "basic_src.spvasm").write_text(
+        SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    hlsl = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    assert "struct VertexInput" in hlsl
+    assert "float4 ua_position: TEXCOORD0;" in hlsl
+    assert "struct VertexOutput" in hlsl
+    assert "float4 position: SV_POSITION;" in hlsl
+    assert "VertexOutput VSMain(VertexInput input)" in hlsl
+    assert "output.position = input.ua_position;" in hlsl
+    assert "return output;" in hlsl
+    assert "gl_Position" not in hlsl
+    assert "_ua_position" not in hlsl
+    assert_directx_vertex_validates_if_available(hlsl, tmp_path)
+
+
 def test_translate_project_glsl_usampler_texel_fetch_lowers_to_cuda_hip_slang(
     tmp_path,
 ):
@@ -12481,6 +12540,125 @@ def test_translate_project_opengl_reports_unresolved_metal_template_kernel(
     assert "raw_template missing T" in diagnostic["message"]
 
 
+@pytest.mark.parametrize(
+    (
+        "file_name",
+        "source",
+        "expected_name",
+        "expected_parameters",
+        "expected_missing",
+        "expected_signature",
+    ),
+    [
+        (
+            "steel_gemm.metal",
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, typename Epilogue>
+            struct BlockMMA {
+                T value;
+            };
+
+            kernel void steel(
+                device BlockMMA<float, Epilogue>* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid].value = 1.0;
+            }
+            """,
+            "BlockMMA",
+            ["T", "Epilogue"],
+            ["Epilogue"],
+            "BlockMMA<float, Epilogue>",
+        ),
+        (
+            "tile.metal",
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <int N>
+            struct Tile {
+                float value[N];
+            };
+
+            kernel void write_tile(
+                device Tile<N>* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid].value[0] = 1.0;
+            }
+            """,
+            "Tile",
+            ["N"],
+            ["N"],
+            "Tile<N>",
+        ),
+    ],
+)
+def test_translate_project_opengl_rejects_unresolved_metal_template_type_before_codegen(
+    tmp_path,
+    file_name,
+    source,
+    expected_name,
+    expected_parameters,
+    expected_missing,
+    expected_signature,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / file_name).write_text(
+        textwrap.dedent(source).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["opengl"], output_dir="out").to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    diagnostic_codes = {diagnostic["code"] for diagnostic in payload["diagnostics"]}
+    assert diagnostic_codes == {
+        "project.translate.template-materialization-unsupported"
+    }
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    assert "Target artifact" not in artifact["error"]
+    assert "requires concrete template arguments" in artifact["error"]
+
+    materialization = artifact["templateMaterialization"]
+    assert materialization["status"] == "unsupported"
+    assert materialization["specializations"] == []
+    assert materialization["unsupported"] == [
+        {
+            "name": expected_name,
+            "parameters": expected_parameters,
+            "missingParameters": expected_missing,
+            "reason": "missing-template-arguments",
+            "sourceDeclaration": {
+                "file": file_name,
+                "line": 4,
+                "column": 1,
+                "name": expected_name,
+            },
+            "target": "opengl",
+            "requiredSignature": expected_signature,
+        }
+    ]
+
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert (
+        f"{expected_name} missing {', '.join(expected_missing)}"
+        in diagnostic["message"]
+    )
+
+
 def test_translate_project_opengl_materializes_reachable_metal_template_from_call_site(
     tmp_path,
 ):
@@ -13716,6 +13894,143 @@ def test_translate_project_rust_option_helpers_lower_to_opengl_compute(tmp_path)
     assert "== None" not in opengl_output
     assert "auto value" not in opengl_output
     assert_compute_glsl_validates_if_available(opengl_output, tmp_path)
+
+
+def test_translate_project_rust_gpu_storage_buffer_declares_opengl_ssbo(tmp_path):
+    repo = tmp_path / "repo"
+    source_dir = repo / "src"
+    source_dir.mkdir(parents=True)
+    (source_dir / "lib.rs").write_text(
+        textwrap.dedent("""
+            use glam::UVec3;
+            use spirv_std::{glam, spirv};
+
+            pub fn collatz(mut n: u32) -> Option<u32> {
+                let mut i = 0;
+                if n == 0 {
+                    return None;
+                }
+                while n != 1 {
+                    n = if n.is_multiple_of(2) {
+                        n / 2
+                    } else {
+                        if n >= 0x5555_5555 {
+                            return None;
+                        }
+                        3 * n + 1
+                    };
+                    i += 1;
+                }
+                Some(i)
+            }
+
+            #[spirv(compute(threads(64)))]
+            pub fn main_cs(
+                #[spirv(global_invocation_id)] id: UVec3,
+                #[spirv(storage_buffer, descriptor_set = 0, binding = 0)]
+                prime_indices: &mut [u32],
+            ) {
+                let index = id.x as usize;
+                prime_indices[index] =
+                    collatz(prime_indices[index]).unwrap_or(u32::MAX);
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["src"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    opengl_output = (repo / "translated" / "opengl" / "src" / "lib.glsl").read_text(
+        encoding="utf-8"
+    )
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert (
+        "layout(std430, binding = 0) buffer prime_indicesBuffer "
+        "{ uint prime_indices[]; };" in opengl_output
+    )
+    assert "void main()" in opengl_output
+    assert (
+        "prime_indices[index] = "
+        "collatz_unwrap_or(prime_indices[index], 4294967295u);"
+    ) in opengl_output
+    assert "prime_indices[" in opengl_output
+    assert "uint prime_indices[]" not in opengl_output.split("void main()", 1)[1]
+    assert_compute_glsl_validates_if_available(opengl_output, tmp_path)
+
+
+def test_translate_project_rust_option_helpers_lower_to_directx_compute(tmp_path):
+    repo = tmp_path / "repo"
+    source_dir = repo / "src"
+    source_dir.mkdir(parents=True)
+    (source_dir / "collatz.rs").write_text(
+        textwrap.dedent("""
+            fn collatz(n: u32) -> Option<u32> {
+                if n == 0u32 {
+                    return None;
+                }
+                return Some(n);
+            }
+
+            fn read_option(item: Option<u32>) -> u32 {
+                match item {
+                    Some(value) => { return value; },
+                    None => { return 0u32; }
+                }
+            }
+
+            #[spirv(compute(threads(1, 1, 1)))]
+            pub fn main() {
+                let value = read_option(collatz(7u32));
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["src"]
+            targets = ["directx"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    directx_output = (
+        repo / "translated" / "directx" / "src" / "collatz.hlsl"
+    ).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["diagnostics"] == []
+    assert "struct Option_u32" in directx_output
+    assert "Option_u32 Option_u32_Some_make(uint payload0)" in directx_output
+    assert "Option_u32 Option_u32_Absent_make()" in directx_output
+    assert "bool is_Some_u32(Option_u32 item)" in directx_output
+    assert "uint unwrap_Some_u32(Option_u32 item)" in directx_output
+    assert "Option_u32 collatz(uint n)" in directx_output
+    assert "uint read_option(Option_u32 item)" in directx_output
+    assert "return Option_u32_Absent_make();" in directx_output
+    assert "return Option_u32_Some_make(n);" in directx_output
+    assert "uint value = unwrap_Some_u32(item);" in directx_output
+    assert "(item.variant == Option_Absent)" in directx_output
+    assert "Option<" not in directx_output
+    assert "Option::" not in directx_output
+    assert re.search(r"\bSome\s*\(", directx_output) is None
+    assert "None" not in directx_output
+    assert "auto value" not in directx_output
+    assert_directx_compute_validates_if_available(directx_output, tmp_path)
 
 
 def test_translate_project_rust_option_helpers_lower_to_wgsl_compute(tmp_path):
@@ -27096,6 +27411,56 @@ def test_translate_project_models_glsl_fragment_invocation_density_by_target(
     assert "gl_FragSizeEXT" in opengl_code
 
 
+def test_translate_project_lowers_fragment_invocation_density_helpers_by_target(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "CubeFDM_fs.glsl").write_text(
+        GLSL_FRAGMENT_INVOCATION_DENSITY_HELPER_SOURCE, encoding="utf-8"
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx", "metal"],
+        output_dir="out",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["artifactCount"] == 2
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.unsupported-feature": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "glsl.builtin.gl_FragSizeEXT": 1,
+        "glsl.extension.GL_EXT_fragment_invocation_density": 1,
+    }
+
+    artifacts_by_target = {
+        artifact["target"]: artifact for artifact in payload["artifacts"]
+    }
+    directx_artifact = artifacts_by_target["directx"]
+    metal_artifact = artifacts_by_target["metal"]
+
+    assert directx_artifact["status"] == "translated"
+    directx_code = (repo / directx_artifact["path"]).read_text(encoding="utf-8")
+    assert "SV_ShadingRate" in directx_code
+    assert "CrossGLFragmentSizeFromShadingRate" in directx_code
+    assert "float4 FragmentDensityToColor(uint2 _crossglFragSize)" in directx_code
+    assert "FragmentDensityToColor(_crossglFragSize)" in directx_code
+    assert "gl_FragSizeEXT" not in directx_code
+    assert_directx_fragment_validates_if_available(directx_code, tmp_path)
+
+    assert metal_artifact["status"] == "failed"
+    assert "GL_EXT_fragment_invocation_density" in metal_artifact["error"]
+    assert "gl_FragSizeEXT" in metal_artifact["error"]
+    assert "generatedHash" not in metal_artifact
+    assert "generatedSizeBytes" not in metal_artifact
+    assert not (repo / metal_artifact["path"]).exists()
+
+
 def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -37538,6 +37903,113 @@ def test_translate_project_hip_pointer_parameters_lower_to_opengl_buffers(
     assert_compute_glsl_validates_if_available(output, tmp_path)
 
 
+def test_translate_project_hip_pointer_parameters_lower_to_directx_resources(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "add_kernel.hip").write_text(
+        textwrap.dedent("""
+            #include <hip/hip_runtime.h>
+
+            __global__ void addKernel(float *A,
+                                      const float *B) {
+                int i = hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x;
+                A[i] += B[i];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    artifact = payload["artifacts"][0]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+
+    assert "RWStructuredBuffer<float> A : register(u0);" in output
+    assert "StructuredBuffer<float> B : register(t1);" in output
+    assert (
+        "void CSMain(uint3 groupThreadID : SV_GroupThreadID, "
+        "uint3 groupID : SV_GroupID)"
+    ) in output
+    assert "int i = ((uint3(1, 1, 1).x * groupID.x) + groupThreadID.x);" in output
+    assert "A[i] += B[i];" in output
+    assert "float A[] : group" not in output
+    assert "float B[] : group" not in output
+    assert "gl_LocalInvocationID" not in output
+    assert "gl_WorkGroupID" not in output
+    assert "gl_WorkGroupSize" not in output
+
+    assert_directx_compute_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_hip_bridge_cgl_storage_arrays_lower_to_directx_resources(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.cgl").write_text(
+        textwrap.dedent("""
+            // HIP to CrossGL conversion
+            // Kernel: AddKernel
+            @compute
+            @stage_entry
+            @workgroup_size(1, 1, 1)
+            fn AddKernel(
+                @group(0) @binding(0) var<storage, read_write> a: array<f32>,
+                @group(0) @binding(1) var<storage, read> b: array<f32>
+            ) {
+                var global_idx: i32 = (
+                    gl_LocalInvocationID.x + (gl_WorkGroupID.x * gl_WorkGroupSize.x)
+                );
+                a[global_idx] += b[global_idx];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        validate=True,
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+    assert payload["diagnosticCounts"]["error"] == 0
+
+    artifact = payload["artifacts"][0]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+
+    assert "RWStructuredBuffer<float> a : register(u0);" in output
+    assert "StructuredBuffer<float> b : register(t1);" in output
+    assert (
+        "void CSMain(uint3 groupThreadID : SV_GroupThreadID, "
+        "uint3 groupID : SV_GroupID)"
+    ) in output
+    assert "a[global_idx] += b[global_idx];" in output
+    assert ": group" not in output
+    assert "float a[]" not in output
+    assert "float b[]" not in output
+    assert re.search(r"void CSMain\([^)]*StructuredBuffer", output) is None
+    assert re.search(r"void CSMain\([^)]*float\s+[ab]\[\]", output) is None
+    assert "gl_LocalInvocationID" not in output
+    assert "gl_WorkGroupID" not in output
+    assert "gl_WorkGroupSize" not in output
+
+    assert_directx_compute_validates_if_available(output, tmp_path)
+
+
 def test_translate_project_opencl_directx_allocates_generated_parameter_bindings(
     tmp_path,
 ):
@@ -38861,6 +39333,87 @@ def test_translate_project_metal_call_site_template_limit_blocks_opengl_material
         "limit 1 from project.source_options.metal.max_template_specializations"
         in diagnostic["message"]
     )
+
+
+def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_materialization(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "out"
+
+            [project.source_options.metal]
+            max_template_specializations = 4
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "bounded_source_instantiations.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            T adjust_value(T value) {
+                return value + T(1);
+            }
+
+            template <typename T>
+            [[kernel]] void launch(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = adjust_value(T(gid));
+            }
+
+            instantiate_kernel("launch_f32_a", launch, float)
+            instantiate_kernel("launch_f32_b", launch, float)
+            instantiate_kernel("launch_f32_c", launch, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["templateMaterialization"] == {
+        "status": "not-required",
+        "specializationCount": 0,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "configuredParameterSources": {},
+        "specializations": [],
+        "unsupported": [],
+    }
+    assert not (repo / artifact["path"]).exists()
+    assert "work limit exceeded before GLSL codegen" in artifact["error"]
+    assert "6 source-instantiation/template work items requested" in artifact["error"]
+    assert (
+        "limit 4 from project.source_options.metal.max_template_specializations"
+        in artifact["error"]
+    )
+    assert "First source declaration: bounded_source_instantiations.metal:9:1" in (
+        artifact["error"]
+    )
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-template-specialization": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.metal-template-specialization"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert diagnostic["location"]["file"] == "bounded_source_instantiations.metal"
+    assert diagnostic["location"]["line"] == 9
+    assert diagnostic["location"]["column"] == 1
+    assert "work limit exceeded before GLSL codegen" in diagnostic["message"]
 
 
 def test_translate_project_metal_variant_template_materializes_for_opengl(
@@ -40221,6 +40774,98 @@ def test_translate_project_groups_unresolved_template_bindings_by_signature(
     assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
         {"project.validate.invalid-report"}
     )
+
+
+def test_translate_project_metal_void_cast_before_unresolved_helper_is_diagnostic(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "steel_attention_nax_min.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename U>
+            U convert_value(uint value) {
+                return U(value);
+            }
+
+            template <typename T>
+            kernel void launch(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                (void)gid;
+                out[0] = convert_value(gid);
+            }
+
+            instantiate_kernel("launch_f32", launch, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl", "vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    expected_targets = {"directx", "opengl", "vulkan"}
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 3
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.template-materialization-unsupported": 3
+    }
+    assert "project.translate.failed" not in payload["summary"]["diagnosticsByCode"]
+    assert len(payload["diagnostics"]) == 3
+
+    for artifact in payload["artifacts"]:
+        assert artifact["target"] in expected_targets
+        assert artifact["status"] == "failed"
+        assert "list index out of range" not in artifact["error"]
+        assert "convert_value missing U" in artifact["error"]
+        materialization = artifact["templateMaterialization"]
+        assert materialization["status"] == "unsupported"
+        assert materialization["specializations"] == [
+            {
+                "name": "launch",
+                "materializedName": "launch_f32",
+                "parameters": {"T": "float"},
+                "parameterSources": {"T": "source-instantiation"},
+                "source": "source-instantiation",
+                "hostName": "launch_f32",
+            }
+        ]
+        assert materialization["unsupported"] == [
+            {
+                "name": "convert_value",
+                "parameters": ["U"],
+                "missingParameters": ["U"],
+                "reason": "missing-template-arguments",
+                "sourceDeclaration": {
+                    "file": "steel_attention_nax_min.metal",
+                    "line": 4,
+                    "column": 1,
+                    "name": "convert_value",
+                },
+                "target": artifact["target"],
+                "requiredSignature": "convert_value<U>",
+            }
+        ]
+
+    for diagnostic in payload["diagnostics"]:
+        assert diagnostic["code"] == (
+            "project.translate.template-materialization-unsupported"
+        )
+        assert diagnostic["target"] in expected_targets
+        assert diagnostic["sourceBackend"] == "metal"
+        assert diagnostic["location"]["file"] == "steel_attention_nax_min.metal"
+        assert diagnostic["location"]["line"] == 4
+        assert diagnostic["location"]["column"] == 1
+        assert diagnostic["missingCapabilities"] == ["template.specialization"]
+        assert "convert_value missing U" in diagnostic["message"]
+        assert "list index out of range" not in diagnostic["message"]
 
 
 def test_translate_project_variadic_template_helper_materializes_for_opengl(

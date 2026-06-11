@@ -24,12 +24,7 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/ternary.metal",
 )
 EXPECTED_METAL_KERNEL_COUNT = 40
-FULL_CORPUS_TRACKED_ISSUES = (
-    "https://github.com/CrossGL/crosstl/issues/1205",
-    "https://github.com/CrossGL/crosstl/issues/1207",
-    "https://github.com/CrossGL/crosstl/issues/1218",
-    "https://github.com/CrossGL/crosstl/issues/1222",
-)
+FULL_CORPUS_TRACKED_ISSUES = ()
 RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/939",
     "https://github.com/CrossGL/crosstl/issues/940",
@@ -87,6 +82,10 @@ RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1203",
     "https://github.com/CrossGL/crosstl/issues/1204",
     "https://github.com/CrossGL/crosstl/issues/1206",
+    "https://github.com/CrossGL/crosstl/issues/1205",
+    "https://github.com/CrossGL/crosstl/issues/1207",
+    "https://github.com/CrossGL/crosstl/issues/1218",
+    "https://github.com/CrossGL/crosstl/issues/1222",
 )
 
 

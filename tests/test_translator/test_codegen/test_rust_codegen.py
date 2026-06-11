@@ -26871,7 +26871,7 @@ def test_rust_backend_import_preserves_spirv_std_parameter_metadata():
     assert "uint subgroup @ gl_SubgroupID" in crossgl
     assert "uint subgroup_count @ gl_NumSubgroups" in crossgl
     assert "uint scratch[64] @ groupshared" in crossgl
-    assert "uint data[] @ set(0) @ binding(1)" in crossgl
+    assert "RWStructuredBuffer<uint> data @ set(0) @ binding(1)" in crossgl
     assert "void main(" in crossgl
     assert ") @numthreads(64, 1, 1) {" in crossgl
 

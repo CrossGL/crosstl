@@ -132,6 +132,27 @@ void main() {
 }
 """
 
+GLSL_FRAGMENT_INVOCATION_DENSITY_HELPER_SOURCE = """
+#version 450 core
+#extension GL_EXT_fragment_invocation_density : require
+layout(location = 0) out vec4 fragColor;
+
+vec4 FragmentDensityToColor() {
+    float h = (
+        clamp(
+            1.0 - 1.0 / float(gl_FragSizeEXT.x * gl_FragSizeEXT.y),
+            0.0,
+            1.0
+        )
+    ) / 1.35;
+    return vec4(h, h, h, 1.0);
+}
+
+void main() {
+    fragColor = FragmentDensityToColor();
+}
+"""
+
 SPIRV_VERTEX_POSITION_OUTPUT_SOURCE = """
 ; SPIR-V
 ; Version: 1.0
@@ -1417,6 +1438,48 @@ def test_glsl_fragment_invocation_density_reports_metal_target_diagnostic(tmp_pa
         tmp_path, "CubeFDM_fs.glsl", GLSL_FRAGMENT_INVOCATION_DENSITY_SOURCE
     )
     output_path = tmp_path / "CubeFDM_fs.metal.out"
+
+    with pytest.raises(ValueError, match="GL_EXT_fragment_invocation_density"):
+        crosstl.translate(
+            str(source_path),
+            backend="metal",
+            save_shader=str(output_path),
+            format_output=False,
+        )
+
+    assert not output_path.exists()
+
+
+def test_glsl_fragment_invocation_density_helper_lowers_to_directx(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "CubeFDM_fs.glsl",
+        GLSL_FRAGMENT_INVOCATION_DENSITY_HELPER_SOURCE,
+    )
+    output_path = tmp_path / "CubeFDM_fs.hlsl"
+
+    generated = crosstl.translate(
+        str(source_path),
+        backend="directx",
+        save_shader=str(output_path),
+        format_output=False,
+    )
+
+    assert output_path.exists()
+    assert "SV_ShadingRate" in generated
+    assert "CrossGLFragmentSizeFromShadingRate" in generated
+    assert "float4 FragmentDensityToColor(uint2 _crossglFragSize)" in generated
+    assert "FragmentDensityToColor(_crossglFragSize)" in generated
+    assert "gl_FragSizeEXT" not in generated
+
+
+def test_glsl_fragment_invocation_density_helper_reports_metal_diagnostic(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "CubeFDM_fs.glsl",
+        GLSL_FRAGMENT_INVOCATION_DENSITY_HELPER_SOURCE,
+    )
+    output_path = tmp_path / "CubeFDM_fs.metal"
 
     with pytest.raises(ValueError, match="GL_EXT_fragment_invocation_density"):
         crosstl.translate(

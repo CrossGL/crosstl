@@ -1799,15 +1799,14 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert mlx_commit in mlx_porting
     assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
     assert re.search(r"translate-project\b[\s\S]*--run-toolchains", harness)
-    for issue_number in (1205, 1207, 1218, 1222):
-        assert f"https://github.com/CrossGL/crosstl/issues/{issue_number}" in (
-            mlx_porting
-        )
-        assert f"https://github.com/CrossGL/crosstl/issues/{issue_number}" in harness
-    for resolved_issue_number in (1184, 1203, 1204, 1206):
+    for resolved_issue_number in (1184, 1203, 1204, 1206, 1205, 1207, 1218, 1222):
         assert (
             f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
             not in mlx_porting
+        )
+        assert (
+            f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
+            in harness
         )
     assert "MLX_DIRECTX_VULKAN_FRONTIER_SOURCES" in harness
     assert "mlx/backend/metal/kernels/binary_two.metal" in harness
