@@ -2200,6 +2200,7 @@ class HLSLParser:
 
         input_semantics = set()
         output_semantics = set()
+        has_struct_input = False
         has_struct_output = False
 
         for param in getattr(function, "params", []) or []:
@@ -2216,9 +2217,10 @@ class HLSLParser:
                 has_struct_output = True
                 output_semantics.update(param_semantics)
             if not qualifiers or "in" in qualifiers or "inout" in qualifiers:
+                has_struct_input = True
                 input_semantics.update(param_semantics)
 
-        if not has_struct_output:
+        if not has_struct_input or not has_struct_output:
             return None
         if any(self.is_fragment_output_semantic(name) for name in output_semantics):
             return "fragment"

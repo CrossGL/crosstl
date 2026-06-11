@@ -272,6 +272,27 @@ def test_parse_main_struct_inout_parameters_infer_stage_qualifiers():
     assert fragment_main.qualifiers == ["fragment"]
 
 
+def test_parse_main_scalar_input_output_struct_keeps_helper_signature():
+    ast = parse_code(textwrap.dedent("""
+            struct VertexOut {
+                float4 position : SV_POSITION;
+                float clip : SV_CLIPDISTANCE;
+                float cull : SV_CULLDISTANCE1;
+            };
+
+            void main(float4 position : POSITION, out VertexOut outputVertex) {
+                outputVertex.position = position;
+                outputVertex.clip = position.y;
+                outputVertex.cull = position.x;
+            }
+            """))
+
+    main = ast.functions[0]
+
+    assert main.qualifier is None
+    assert main.qualifiers == []
+
+
 def test_parse_brace_initializer_declarations():
     ast = parse_code(textwrap.dedent("""
             struct MyPayload {
