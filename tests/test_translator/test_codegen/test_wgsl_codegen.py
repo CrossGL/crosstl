@@ -710,6 +710,40 @@ def test_wgsl_codegen_infers_image2d_read_access_from_image_load():
     assert "imageLoad" not in generated
 
 
+def test_wgsl_codegen_lowers_imagecube_to_storage_texture_array():
+    shader = """
+    shader WGSLStorageCubeImage {
+        compute {
+            layout(local_size_x = 1) in;
+            uniform layout(rgba16f) imageCube irradianceMap;
+            uniform int faceIndex;
+            void main() {
+                ivec2 coord = ivec2(1, 2);
+                ivec2 size = imageSize(irradianceMap);
+                imageStore(irradianceMap, ivec3(coord, faceIndex), vec4(1.0));
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "@group(0) @binding(0)\n"
+        "var irradianceMap: texture_storage_2d_array<rgba16float, write>;"
+    ) in generated
+    assert (
+        "var size: vec2<i32> = vec2<i32>(textureDimensions(irradianceMap));"
+        in generated
+    )
+    assert (
+        "textureStore(irradianceMap, (vec3<i32>(coord, faceIndex)).xy, "
+        "(vec3<i32>(coord, faceIndex)).z, vec4<f32>(1.0));"
+    ) in generated
+    assert "imageSize" not in generated
+    assert "imageStore" not in generated
+
+
 def test_wgsl_codegen_rejects_storage_image_without_representable_format():
     shader = """
     shader WGSLStorageImageMissingFormat {
@@ -2093,6 +2127,22 @@ def test_wgsl_codegen_covers_universal_pbr_fragment_shadow_map_array():
     assert (
         "shadow = calculateShadow_shadow_maps(i32(i), input.shadow_coords[i], "
         "settings.shadow_bias);"
+    ) in generated
+
+
+def test_wgsl_codegen_covers_universal_pbr_full_translation():
+    shader_path = project_root() / "examples/cross_platform/UniversalPBRShader.cgl"
+    ast = parse_shader(shader_path.read_text(encoding="utf-8"))
+
+    generated = WGSLCodeGen().generate(ast)
+
+    assert "var shadow_maps_0: texture_2d<f32>;" in generated
+    assert "fn calculateShadow_shadow_maps(" in generated
+    assert "var irradiance_map: texture_storage_2d_array<rgba16float, write>;" in generated
+    assert "vec2<i32>(textureDimensions(irradiance_map))" in generated
+    assert (
+        "textureStore(irradiance_map, (vec3<i32>(coord, face_index)).xy, "
+        "(vec3<i32>(coord, face_index)).z, vec4<f32>(irradiance, 1.0));"
     ) in generated
 
 

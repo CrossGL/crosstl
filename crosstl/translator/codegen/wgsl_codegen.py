@@ -333,14 +333,20 @@ class WGSLCodeGen:
         "image2d": "2d",
         "image2darray": "2d_array",
         "image3d": "3d",
+        "imagecube": "2d_array",
+        "imagecubearray": "2d_array",
         "iimage1d": "1d",
         "iimage2d": "2d",
         "iimage2darray": "2d_array",
         "iimage3d": "3d",
+        "iimagecube": "2d_array",
+        "iimagecubearray": "2d_array",
         "uimage1d": "1d",
         "uimage2d": "2d",
         "uimage2darray": "2d_array",
         "uimage3d": "3d",
+        "uimagecube": "2d_array",
+        "uimagecubearray": "2d_array",
     }
     STORAGE_TEXTURE_FORMAT_MAP = {
         "r32f": "r32float",
@@ -398,6 +404,7 @@ class WGSLCodeGen:
         "texturequerylod",
         "texturesize",
         "texelfetch",
+        "imagesize",
     }
     BARRIER_FUNCTION_NAMES = {
         "barrier",
@@ -3088,6 +3095,8 @@ class WGSLCodeGen:
             )
         if normalized_name == "texturesize":
             return self.generate_texture_dimensions_call(args)
+        if normalized_name == "imagesize":
+            return self.generate_image_dimensions_call(args)
         if normalized_name == "texelfetch":
             return self.generate_texel_fetch_call(function_name, args)
         raise ValueError(
@@ -3291,6 +3300,19 @@ class WGSLCodeGen:
             + ")"
         )
 
+    def generate_image_dimensions_call(self, args):
+        if len(args) != 1:
+            raise ValueError(
+                "WGSL target supports imageSize() calls with exactly 1 "
+                f"argument; got {len(args)}"
+            )
+        image = args[0]
+        if self.storage_texture_dimension_for_expression(image) is None:
+            raise ValueError(
+                "WGSL target requires imageSize() to use a storage image resource"
+            )
+        return f"vec2<i32>(textureDimensions({self.generate_expression(image)}))"
+
     def generate_texel_fetch_call(self, function_name, args):
         if len(args) != 3:
             raise ValueError(
@@ -3312,9 +3334,10 @@ class WGSLCodeGen:
             )
         image, coords = node.arguments
         self.require_readable_storage_texture_resource(image, function_name)
+        call_args = self.storage_texture_coordinate_args(image, coords)
         return (
             f"textureLoad({self.generate_expression(image)}, "
-            f"{self.generate_expression(coords)})"
+            f"{', '.join(call_args)})"
         )
 
     def generate_image_store_call(self, node, function_name):
@@ -3325,9 +3348,10 @@ class WGSLCodeGen:
             )
         image, coords, value = node.arguments
         self.require_writable_storage_texture_resource(image, function_name)
+        call_args = self.storage_texture_coordinate_args(image, coords)
         return (
             f"textureStore({self.generate_expression(image)}, "
-            f"{self.generate_expression(coords)}, "
+            f"{', '.join(call_args)}, "
             f"{self.generate_expression(value)})"
         )
 
@@ -4494,6 +4518,18 @@ class WGSLCodeGen:
         if path:
             return None
         return self._module_storage_texture_access_modes.get(root_name)
+
+    def storage_texture_dimension_for_expression(self, expr):
+        resource_type = self.expression_type(expr)
+        return self.STORAGE_TEXTURE_DIMENSION_MAP.get(
+            self.resource_type_name(resource_type) or ""
+        )
+
+    def storage_texture_coordinate_args(self, image, coords):
+        coord_expr = self.generate_expression(coords)
+        if self.storage_texture_dimension_for_expression(image) != "2d_array":
+            return [coord_expr]
+        return [f"({coord_expr}).xy", f"({coord_expr}).z"]
 
     def is_depth_texture_type(self, vtype):
         type_name = self.resource_type_name(vtype)
