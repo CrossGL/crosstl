@@ -31861,7 +31861,9 @@ def _vulkan_assembled_smoke_path(artifact_path: Path) -> Path:
     return artifact_path.with_suffix(f"{artifact_path.suffix}.spv")
 
 
-def _toolchain_smoke_cleanup_paths(target: str, artifact_path: Path) -> tuple[Path, ...]:
+def _toolchain_smoke_cleanup_paths(
+    target: str, artifact_path: Path
+) -> tuple[Path, ...]:
     if target == "vulkan" and artifact_path.suffix.lower() == ".spvasm":
         return (_vulkan_assembled_smoke_path(artifact_path),)
     return ()
