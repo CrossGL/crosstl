@@ -3627,6 +3627,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 promoted_entry_resource_parameter_ids,
                 func,
             )
+        default_vertex_parameter_semantics = {}
+        if effective_shader_type == "vertex":
+            default_vertex_parameter_semantics = (
+                self.hlsl_default_vertex_parameter_semantics(param_list, func)
+            )
         for p in param_list:
             if id(p) in promoted_entry_resource_parameter_ids:
                 continue
@@ -3671,6 +3676,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     )
 
             semantic = self.semantic_from_node(p)
+            if semantic is None:
+                semantic = default_vertex_parameter_semantics.get(id(p))
             dispatch_thread_id_bridge = None
             if effective_shader_type == "compute":
                 dispatch_thread_id_bridge = (
@@ -13213,6 +13220,29 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "translating stage input/output semantics to DirectX."
         )
 
+    def hlsl_parameter_semantic_slot_count(self, parameter, semantic):
+        size_expr = self.hlsl_parameter_array_size_expression(parameter)
+        if size_expr is None:
+            return 1
+
+        count = self.literal_int_value(size_expr, self.literal_int_constants)
+        if count is not None and count > 0:
+            return count
+
+        parameter_name = getattr(parameter, "name", "<anonymous>")
+        semantic_name = self.hlsl_semantic_name(semantic)
+        size_label = (
+            self.expression_to_string(size_expr) if size_expr is not None else ""
+        )
+        size_suffix = f" from '{size_label}'" if size_label else ""
+        raise DirectXSemanticArraySizeError(
+            f"DirectX entry parameter '{parameter_name}' uses array-valued "
+            f"semantic '{semantic_name}' but its array size{size_suffix} "
+            "cannot be resolved to a positive integer. Use a literal or "
+            "compile-time integer constant array size before translating "
+            "stage input/output semantics to DirectX."
+        )
+
     def hlsl_reserve_semantic_range(
         self, used_ranges, struct_name, member_name, semantic, count
     ):
@@ -13369,6 +13399,53 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 used_ranges,
                 struct_node.name,
                 member_name,
+                semantic,
+                count,
+            )
+            next_texcoord += count
+        return defaults
+
+    def hlsl_default_vertex_parameter_semantics(self, parameters, func):
+        used_ranges = {}
+        for parameter in parameters or []:
+            semantic = self.semantic_from_node(parameter)
+            if semantic is None:
+                continue
+            count = self.hlsl_parameter_semantic_slot_count(parameter, semantic)
+            self.hlsl_reserve_semantic_range(
+                used_ranges,
+                getattr(func, "name", "<entry>"),
+                getattr(parameter, "name", "<anonymous>"),
+                semantic,
+                count,
+            )
+
+        defaults = {}
+        next_texcoord = 0
+        for parameter in parameters or []:
+            if self.semantic_from_node(parameter) is not None:
+                continue
+            if self.hlsl_entry_resource_parameter_global_type(parameter, func):
+                continue
+            if self.hlsl_parameter_user_struct_type(parameter) is not None:
+                continue
+            if not self.hlsl_can_default_fragment_input_semantic(
+                self.hlsl_parameter_raw_type(parameter)
+            ):
+                continue
+
+            count = self.hlsl_parameter_semantic_slot_count(
+                parameter, f"TEXCOORD{next_texcoord}"
+            )
+            next_texcoord = self.hlsl_next_available_semantic_index(
+                used_ranges, "TEXCOORD", next_texcoord, count
+            )
+            semantic = f"TEXCOORD{next_texcoord}"
+            defaults[id(parameter)] = semantic
+            self.hlsl_reserve_semantic_range(
+                used_ranges,
+                getattr(func, "name", "<entry>"),
+                getattr(parameter, "name", "<anonymous>"),
                 semantic,
                 count,
             )
