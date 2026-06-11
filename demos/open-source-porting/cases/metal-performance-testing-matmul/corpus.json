@@ -9,6 +9,7 @@
       "sourceBackend": "metal",
       "targets": [
         "cgl",
+        "opengl",
         "metal",
         "vulkan"
       ],
@@ -22,6 +23,7 @@
       "sourceBackend": "metal",
       "targets": [
         "cgl",
+        "opengl",
         "metal",
         "vulkan"
       ],

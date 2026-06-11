@@ -50,9 +50,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 16,
-        "endOffset": 364,
+        "endOffset": 440,
         "file": "crosstl-out/cgl/mat_mul_simple1.cgl",
-        "length": 146,
+        "length": 222,
         "line": 15,
         "offset": 218
       },
@@ -72,11 +72,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 17,
-        "endOffset": 417,
+        "endOffset": 493,
         "file": "crosstl-out/cgl/mat_mul_simple1.cgl",
         "length": 53,
         "line": 16,
-        "offset": 364
+        "offset": 440
       },
       "original": {
         "column": 1,
@@ -94,11 +94,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 18,
-        "endOffset": 470,
+        "endOffset": 546,
         "file": "crosstl-out/cgl/mat_mul_simple1.cgl",
         "length": 53,
         "line": 17,
-        "offset": 417
+        "offset": 493
       },
       "original": {
         "column": 1,
@@ -116,11 +116,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 19,
-        "endOffset": 523,
+        "endOffset": 599,
         "file": "crosstl-out/cgl/mat_mul_simple1.cgl",
         "length": 53,
         "line": 18,
-        "offset": 470
+        "offset": 546
       },
       "original": {
         "column": 1,
@@ -138,11 +138,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 20,
-        "endOffset": 579,
+        "endOffset": 655,
         "file": "crosstl-out/cgl/mat_mul_simple1.cgl",
         "length": 56,
         "line": 19,
-        "offset": 523
+        "offset": 599
       },
       "original": {
         "column": 1,
@@ -160,11 +160,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 21,
-        "endOffset": 639,
+        "endOffset": 715,
         "file": "crosstl-out/cgl/mat_mul_simple1.cgl",
         "length": 60,
         "line": 20,
-        "offset": 579
+        "offset": 655
       },
       "original": {
         "column": 1,
@@ -182,11 +182,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 22,
-        "endOffset": 670,
+        "endOffset": 746,
         "file": "crosstl-out/cgl/mat_mul_simple1.cgl",
         "length": 31,
         "line": 21,
-        "offset": 639
+        "offset": 715
       },
       "original": {
         "column": 1,
@@ -204,11 +204,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 23,
-        "endOffset": 727,
+        "endOffset": 803,
         "file": "crosstl-out/cgl/mat_mul_simple1.cgl",
         "length": 57,
         "line": 22,
-        "offset": 670
+        "offset": 746
       },
       "original": {
         "column": 1,
@@ -226,11 +226,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 24,
-        "endOffset": 790,
+        "endOffset": 866,
         "file": "crosstl-out/cgl/mat_mul_simple1.cgl",
         "length": 63,
         "line": 23,
-        "offset": 727
+        "offset": 803
       },
       "original": {
         "column": 1,
@@ -248,11 +248,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 25,
-        "endOffset": 853,
+        "endOffset": 929,
         "file": "crosstl-out/cgl/mat_mul_simple1.cgl",
         "length": 63,
         "line": 24,
-        "offset": 790
+        "offset": 866
       },
       "original": {
         "column": 1,
@@ -270,11 +270,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 26,
-        "endOffset": 905,
+        "endOffset": 1007,
         "file": "crosstl-out/cgl/mat_mul_simple1.cgl",
-        "length": 52,
+        "length": 78,
         "line": 25,
-        "offset": 853
+        "offset": 929
       },
       "original": {
         "column": 1,
@@ -292,11 +292,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 28,
-        "endOffset": 955,
+        "endOffset": 1070,
         "file": "crosstl-out/cgl/mat_mul_simple1.cgl",
-        "length": 32,
+        "length": 45,
         "line": 27,
-        "offset": 923
+        "offset": 1025
       },
       "original": {
         "column": 1,

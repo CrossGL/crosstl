@@ -11,6 +11,7 @@
         "cgl",
         "opengl",
         "metal",
+        "directx",
         "vulkan"
       ],
       "repository": "https://github.com/KhronosGroup/glslang",

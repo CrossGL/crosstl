@@ -12,7 +12,7 @@ shader main {
     // Compute Shader
     compute {
         @ stage_entry
-        void mat_mul_simple1(device float* A, device float* B, device float* X, constant MatMulParams& params, uvec2 id @gl_GlobalInvocationID) {
+        void mat_mul_simple1(StructuredBuffer<float> A @buffer(0), StructuredBuffer<float> B @buffer(1), RWStructuredBuffer<float> X @buffer(2), constant MatMulParams& params @buffer(3), uvec2 id @gl_GlobalInvocationID) {
             const uint row_dim_x = params.row_dim_x;
             const uint col_dim_x = params.col_dim_x;
             const uint inner_dim = params.inner_dim;
@@ -22,9 +22,9 @@ shader main {
                 for (uint k = 0; k < inner_dim; (++k)) {
                     const uint index_A = id.y * inner_dim + k;
                     const uint index_B = k * col_dim_x + id.x;
-                    sum += A[index_A] * B[index_B];
+                    sum += buffer_load(A, index_A) * buffer_load(B, index_B);
                 }
-                X[index] = sum;
+                buffer_store(X, index, sum);
             }
     }
 

@@ -8,7 +8,7 @@ struct MatMulParams {
     uint inner_dim;
 };
 // Compute Shader
-kernel void mat_mul_simple1(device float* A, device float* B, device float* X, constant MatMulParams& params, uint2 id [[thread_position_in_grid]]) {
+kernel void mat_mul_simple1(const device float* A [[buffer(0)]], const device float* B [[buffer(1)]], device float* X [[buffer(2)]], constant MatMulParams& params [[buffer(3)]], uint2 id [[thread_position_in_grid]]) {
     const uint row_dim_x = params.row_dim_x;
     const uint col_dim_x = params.col_dim_x;
     const uint inner_dim = params.inner_dim;

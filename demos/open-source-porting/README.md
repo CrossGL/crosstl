@@ -49,7 +49,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `diligent-samples-tutorial02-cube` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Tutorial02 cube vertex and pixel shader pair with repository whitespace normalization. |
 | `diligent-samples-vrs-cube-vertex` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream VRS cube vertex shader unchanged. The paired fragment-density stage remains outside the checked set because the translator now diagnoses it as unsupported. |
 | `glslang-push-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream push-constant vertex shader unchanged. |
-| `glslang-spec-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream specialization-constant vertex shader unchanged. Source-target output records fallback literals where native specialization IDs cannot be preserved. DirectX output is tracked in issue #1154. |
+| `glslang-spec-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream specialization-constant vertex shader unchanged. Source-target output records fallback literals where native specialization IDs cannot be preserved. |
 | `godot-betsy-alpha-stitch` | `godotengine/godot` at `3df26a02c446710c979daa541b74f87edeca81b0` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Removes the Godot shader-section marker so the compute shader is standalone GLSL. |
 | `libgdx-batch-shader` | `libgdx/libgdx` at `846d63a746e4604a7699133f803ff844fdc8c9fe` | Apache-2.0 | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream batch shader pair unchanged apart from line-ending and trailing-whitespace normalization. |
 | `lonelydevil-vulkan-tutorial-triangle` | `lonelydevil/vulkan-tutorial-C-implementation` at `780ff146a6eccd7064a10e86363f3c2f7323825d` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream triangle shader pair unchanged. |
@@ -59,8 +59,8 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `angle-simple-texture-2d` | `google/angle` at `52232eaf409a28d77947df5622af274e1ef770c6` | BSD-style | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses extracted upstream SimpleTexture2D shader strings. |
 | `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. |
 | `arm-opengl-es-sdk-cube` | `ARM-software/opengl-es-sdk-for-android` at `c3caf759bb2e71fa9a118b3e3abd996cf00e660a` | MIT | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream cube shader pair unchanged. |
-| `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. OpenGL resource lowering is tracked in issue #1158, and DirectX buffer-resource lowering is tracked in issue #1156. |
-| `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, Metal, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. Host launch and memory-management integration remain outside the demo scope. |
+| `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. DirectX buffer-resource lowering is tracked in issue #1168. |
+| `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, Metal, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. Host launch and memory-management integration remain outside the demo scope. DirectX output is tracked in issue #1173. |
 | `nvpro-vk-mini-samples-rectangle` | `nvpro-samples/vk_mini_samples` at `994ac9f446ef44962c563b9600c8e9f117a3725d` | Apache-2.0 | GLSL | CrossGL, Metal, OpenGL, Vulkan | Uses the upstream rectangle shader pair unchanged. |
 | `ogl-samples-flat-color` | `g-truc/ogl-samples` at `38cada7a9458864265e25415ae61586d500ff5fc` | MIT | GLSL | CrossGL, Metal, OpenGL, Vulkan | Uses the upstream GLSL 330 flat-color shader pair unchanged. |
 | `openframeworks-noise-shader` | `openframeworks/openFrameworks` at `63eb03828c40de713b85db7810f1c519d8b9b0cc` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream noise shader pair with whitespace normalization. |
@@ -142,9 +142,8 @@ Metal output alongside OpenGL and Vulkan. The specialization-constant vertex
 shader was retested after issue #780 closed and is now checked for CrossGL,
 OpenGL, Metal, and Vulkan output. Generated source targets use the source
 defaults for specialization constants when native specialization IDs cannot be
-represented directly. DirectX output currently assigns overlapping semantics to
-array-valued vertex inputs; that HLSL lowering defect is tracked in issue
-#1154.
+represented directly. DirectX output was retested after issue #1154 closed and
+is now checked with the other generated targets.
 
 The `KhronosGroup/Vulkan-Samples` dynamic line grid fragment shader was
 retested after issue #922 closed and is now checked for CrossGL, OpenGL,
@@ -214,16 +213,17 @@ expansion.
 The `microsoft/DirectXShaderCompiler` scalar-splat compute test was tested as
 a candidate and exposed target semantic gaps for HLSL scalar swizzles and
 `groupshared` storage. Retesting after issue #767 closed shows scalar splats
-are preserved in SPIR-V, but Metal still uses placeholder output for
-program-scope `groupshared` storage. That remaining gap is tracked in issue
-#1149, and the case is intentionally not checked in until target output
-preserves the compute semantics or reports unsupported lowering explicitly.
+are preserved in SPIR-V. Retesting after issue #1149 closed shows generated
+Metal now lowers the program-scope `groupshared` value to kernel-local
+`threadgroup` storage and validates directly, so the source remains a candidate
+for a future demo expansion.
 
 The `NVIDIA/cuda-samples` vector-add NVRTC kernel was retested after issue #772
 closed and is now checked for Metal and Vulkan output. The upstream host
 launcher is intentionally not included; rewriting launch configuration, memory
 allocation, and data-transfer code is a runtime porting task outside this demo
-scope.
+scope. DirectX remains excluded because generated HLSL still needs CUDA buffer
+and builtin lowering, tracked in issue #1173.
 
 The `Rust-GPU/VulkanShaderExamples` conservative raster triangle-overlay shader
 was retested after issue #776 closed and is now checked for Metal and Vulkan
@@ -244,19 +244,20 @@ expansion.
 
 The `modular/modular` Mojo GPU vector-add example was tested as a candidate.
 It now generates Metal and SPIR-V artifacts after issue #798 closed, but those
-artifacts still contain unresolved Mojo host/runtime constructs and fail direct
-target validation. The current follow-up is tracked in issue #1148. The
-candidate is intentionally not checked in until platform target artifacts can be
-generated and validated.
+artifacts previously contained unresolved Mojo host/runtime constructs and
+failed direct target validation. Retesting after issue #1148 closed shows the
+project pipeline now rejects that unresolved host/runtime surface with
+structured diagnostics. The candidate is intentionally not checked in until a
+shader-only kernel slice can be translated and validated as platform target
+source.
 
 The `KhronosGroup/OpenCL-SDK` SAXPY kernel was retested after issue #751 and
 issue #768 closed and is now checked for OpenGL, Metal, and Vulkan output.
 
 The `bkvogel/metal_performance_testing` matmul kernel is checked for CrossGL,
-Metal, and Vulkan output. OpenGL remains excluded because generated compute
-input parameters still lack valid GLSL resource declarations, tracked in issue
-#1158. DirectX remains excluded because Metal buffer parameters still lower to
-raw HLSL pointer parameters, tracked in issue #1168.
+OpenGL, Metal, and Vulkan output after issue #1158 restored OpenGL buffer
+resource declarations. DirectX remains excluded because Metal buffer parameters
+still lower to raw HLSL pointer parameters, tracked in issue #1168.
 
 The `SaschaWillems/Vulkan` headless compute shader was retested after issue
 #780 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan output.

@@ -101,6 +101,7 @@ jobs:
             --case libgdx-batch-shader \
             --case lonelydevil-vulkan-tutorial-triangle \
             --case monogame-sprite-effect \
+            --case metal-performance-testing-matmul \
             --case nvpro-vk-mini-samples-rectangle \
             --case ogl-samples-flat-color \
             --case opencl-sdk-saxpy \
@@ -124,7 +125,6 @@ jobs:
             --check \
             --run-toolchains \
             --require-toolchain-runs \
-            --case metal-performance-testing-matmul \
             --case nvidia-cuda-samples-vector-add \
             --case rocm-examples-add-kernel \
             --case rust-gpu-compute-collatz \
@@ -244,6 +244,7 @@ jobs:
             --case directx-sdk-samples-tutorial02 \
             --case diligent-samples-tutorial02-cube \
             --case glslang-push-constant-vertex \
+            --case glslang-spec-constant-vertex \
             --case godot-betsy-alpha-stitch \
             --case libgdx-batch-shader \
             --case lonelydevil-vulkan-tutorial-triangle \
@@ -283,6 +284,7 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/directx-sdk-samples-tutorial02/crosstl-out/directx/Tutorial02.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/diligent-samples-tutorial02-cube/crosstl-out/directx/cube.vsh.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/diligent-samples-tutorial02-cube/crosstl-out/directx/cube.psh.hlsl PSMain ps_6_0
+          compile_hlsl demos/open-source-porting/cases/glslang-spec-constant-vertex/crosstl-out/directx/spv.specConstant.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/godot-betsy-alpha-stitch/crosstl-out/directx/alpha_stitch.hlsl CSMain cs_6_0
           compile_hlsl demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.vert.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.frag.hlsl PSMain ps_6_0
