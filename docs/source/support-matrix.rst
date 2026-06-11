@@ -40,7 +40,7 @@ implicitly supported.
    "DirectX / HLSL", "66", "0", "2", "0", "0", "0"
    "OpenGL / GLSL", "66", "0", "2", "0", "0", "0"
    "WebGL / GLSL ES", "37", "0", "22", "9", "0", "0"
-   "WebGPU / WGSL", "52", "0", "9", "7", "0", "0"
+   "WebGPU / WGSL", "52", "2", "7", "7", "0", "0"
    "Metal", "65", "0", "3", "0", "0", "0"
    "Vulkan SPIR-V", "66", "0", "2", "0", "0", "0"
    "CUDA", "61", "0", "7", "0", "0", "0"
@@ -132,7 +132,7 @@ Each category below uses the status codes from the legend.
    "Explicit and automatic resource bindings", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Constant/uniform buffers", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Structured/storage buffers", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Resource arrays", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Resource arrays", "Y", "Y", "D", "P", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Texture and sampler object model", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "GLSL buffer block lowering", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Resource memory qualifiers", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
@@ -161,7 +161,7 @@ Each category below uses the status codes from the legend.
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "WebGPU / WGSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
    "Struct declarations and construction", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Array declarations and access", "Y", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Array declarations and access", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Function declarations and calls", "Y", "Y", "Y", "Y", "Y", "D", "D", "D", "D", "Y", "D"
    "Control flow", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Synchronization and memory barriers", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
@@ -217,6 +217,8 @@ implementation work can be scoped accurately.
 .. csv-table:: Actionable backlog rows
    :header: "Backend", "Category", "Feature", "Status", "Current gap", "Next scope", "Notes"
 
+   "WebGPU / WGSL", "resources", "Resource arrays", "partial", "WGSL partially supports resource arrays by expanding fixed sampled texture arrays into individual module-scope texture/sampler bindings, including dynamic-index switch helpers and selected function-call dispatch. Other resource-array forms remain diagnostic: sampler-only arrays, storage-image arrays, StructuredBuffer/RWStructuredBuffer arrays, unsized sampled texture arrays, multisampled array texture resources, and resource-array parameters.", "", "WGSL partially supports resource arrays by expanding fixed sampled texture arrays into individual module-scope texture/sampler bindings, including dynamic-index switch helpers and selected function-call dispatch. Other resource-array forms remain diagnostic: sampler-only arrays, storage-image arrays, StructuredBuffer/RWStructuredBuffer arrays, unsized sampled texture arrays, multisampled array texture resources, and resource-array parameters."
+   "WebGPU / WGSL", "language", "Array declarations and access", "partial", "WGSL lowers fixed arrays in storage/workgroup resources, uniform/cbuffer structs with scalar-array padding, stage-interface array members via scalarized locations, and runtime-sized arrays in storage-buffer blocks. Uniform runtime arrays and unsupported buffer-block array shapes emit deterministic diagnostics. Ordinary value-array parameters and array-return behavior still need focused WGSL evidence before marking fully supported.", "", "WGSL lowers fixed arrays in storage/workgroup resources, uniform/cbuffer structs with scalar-array padding, stage-interface array members via scalarized locations, and runtime-sized arrays in storage-buffer blocks. Uniform runtime arrays and unsupported buffer-block array shapes emit deterministic diagnostics. Ordinary value-array parameters and array-return behavior still need focused WGSL evidence before marking fully supported."
 
 Documentation Sources
 ---------------------

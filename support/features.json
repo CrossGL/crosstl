@@ -2023,14 +2023,16 @@
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "Core WebGPU/WGSL does not expose descriptor/resource binding arrays. The WGSL backend now rejects fixed and unsized texture, sampler, image, and StructuredBuffer resource arrays, including resource-array function parameters, with deterministic diagnostics that direct callers to individual module-scope bindings. Ordinary sampled texture resources, texture_2d_array resource types, struct-held texture handles lowered to module bindings, and storage buffers remain covered by their separate rows.",
+          "status": "partial",
+          "notes": "WGSL partially supports resource arrays by expanding fixed sampled texture arrays into individual module-scope texture/sampler bindings, including dynamic-index switch helpers and selected function-call dispatch. Other resource-array forms remain diagnostic: sampler-only arrays, storage-image arrays, StructuredBuffer/RWStructuredBuffer arrays, unsized sampled texture arrays, multisampled array texture resources, and resource-array parameters.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_sampled_texture_resources_and_calls",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_explicit_sampler_texture_calls",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_sampled_texture_arrays_to_element_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_dynamic_sampled_texture_array_sampling",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_dispatches_dynamic_sampled_texture_array_function_arguments",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_covers_universal_pbr_fragment_shadow_map_array",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_resource_array_declarations",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_resource_array_parameters"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_resource_array_parameters",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_multisampled_array_texture_resources"
           ]
         }
       }
@@ -4009,10 +4011,15 @@
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "partial",
+          "notes": "WGSL lowers fixed arrays in storage/workgroup resources, uniform/cbuffer structs with scalar-array padding, stage-interface array members via scalarized locations, and runtime-sized arrays in storage-buffer blocks. Uniform runtime arrays and unsupported buffer-block array shapes emit deterministic diagnostics. Ordinary value-array parameters and array-return behavior still need focused WGSL evidence before marking fully supported.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_stage_interface_array_members",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_emits_resource_address_spaces_and_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_pads_uniform_struct_scalar_arrays",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_glsl_buffer_blocks_to_storage_struct_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsized_array_members_in_uniform_buffers"
           ]
         }
       }
