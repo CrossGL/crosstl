@@ -1031,6 +1031,7 @@ REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
     ("path", "resolvedPath", "status", "frontendVisible")
 )
 SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
+TEMPLATE_VARIANTS_SOURCE_OPTION = "template_variants"
 METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION = "max_template_specializations"
 METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION = (
     "template_specialization_limit_source"
@@ -1283,7 +1284,18 @@ REPORT_ARTIFACT_TEMPLATE_SPECIALIZATION_FIELDS = frozenset(
     ("name", "materializedName", "parameters", "source")
 )
 REPORT_ARTIFACT_TEMPLATE_UNSUPPORTED_FIELDS = frozenset(
-    ("name", "parameters", "missingParameters", "reason")
+    (
+        "name",
+        "parameters",
+        "missingParameters",
+        "reason",
+        "sourceDeclaration",
+        "target",
+        "requiredSignature",
+    )
+)
+REPORT_ARTIFACT_TEMPLATE_DECLARATION_FIELDS = frozenset(
+    ("file", "line", "column", "name")
 )
 REPORT_UNIT_FIELDS = frozenset(
     (
@@ -2465,6 +2477,12 @@ def _as_source_options(value: Any, *, field_name: str) -> dict[str, dict[str, An
                     )
                 normalized_options[name] = pattern_options
                 continue
+            if name == TEMPLATE_VARIANTS_SOURCE_OPTION:
+                normalized_options[name] = _as_template_variant_options(
+                    option_value,
+                    field_name=_mapping_key_path(option_path, name),
+                )
+                continue
             if isinstance(option_value, bool):
                 normalized_options[name] = option_value
             elif isinstance(option_value, int):
@@ -2482,6 +2500,45 @@ def _as_source_options(value: Any, *, field_name: str) -> dict[str, dict[str, An
             option_path=option_path,
         )
         result[backend_key] = normalized_options
+    return result
+
+
+def _as_template_variant_options(
+    value: Any, *, field_name: str
+) -> dict[str, dict[str, dict[str, dict[str, str]]]]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a table")
+
+    result: dict[str, dict[str, dict[str, dict[str, str]]]] = {}
+    for target, source_patterns in value.items():
+        if not isinstance(target, str) or not target.strip():
+            raise ValueError(f"{field_name} keys must be non-empty strings")
+        target_key = normalize_backend_name(target) or target.strip().lower()
+        target_path = _mapping_key_path(field_name, target)
+        if not isinstance(source_patterns, Mapping):
+            raise ValueError(f"{target_path} must be a table")
+        normalized_sources: dict[str, dict[str, dict[str, str]]] = {}
+        for pattern, declarations in source_patterns.items():
+            if not isinstance(pattern, str) or not pattern.strip():
+                raise ValueError(f"{target_path} keys must be non-empty strings")
+            pattern_path = _mapping_key_path(target_path, pattern)
+            if not isinstance(declarations, Mapping):
+                raise ValueError(f"{pattern_path} must be a table")
+            normalized_declarations: dict[str, dict[str, str]] = {}
+            for declaration, bindings in declarations.items():
+                if not isinstance(declaration, str) or not declaration.strip():
+                    raise ValueError(f"{pattern_path} keys must be non-empty strings")
+                declaration_path = _mapping_key_path(pattern_path, declaration)
+                normalized_declarations[declaration] = _as_str_mapping(
+                    bindings,
+                    field_name=declaration_path,
+                )
+            normalized_sources[_normalize_project_relative_path(pattern)] = (
+                normalized_declarations
+            )
+        result[target_key] = normalized_sources
     return result
 
 
@@ -4632,6 +4689,14 @@ def _source_options_for_unit(
             limit_source
         )
     return source_options
+
+
+def _frontend_source_options(source_options: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        name: value
+        for name, value in source_options.items()
+        if name != TEMPLATE_VARIANTS_SOURCE_OPTION
+    }
 
 
 def _strip_include_line_comment(value: str) -> str:
@@ -8101,6 +8166,9 @@ def _unsupported_template_record(
     name: str,
     parameters: Sequence[str],
     configured_parameters: Mapping[str, str],
+    source_declaration: Mapping[str, Any],
+    target: str,
+    required_signature: str,
 ) -> dict[str, Any]:
     missing = [
         parameter for parameter in parameters if parameter not in configured_parameters
@@ -8110,7 +8178,113 @@ def _unsupported_template_record(
         "parameters": list(parameters),
         "missingParameters": missing,
         "reason": "missing-template-arguments",
+        "sourceDeclaration": dict(source_declaration),
+        "target": target,
+        "requiredSignature": required_signature,
     }
+
+
+def _template_source_declaration_record(
+    unit: ProjectTranslationUnit,
+    source: str,
+    template: Any,
+) -> dict[str, Any]:
+    location = _source_location_at_offset(
+        unit,
+        source,
+        int(template.span[0]),
+        max(int(template.span[1]) - int(template.span[0]), 0),
+    )
+    return {
+        "file": location.file,
+        "line": location.line,
+        "column": location.column,
+        "name": str(template.name),
+    }
+
+
+def _template_parameter_values_from_arguments(
+    preprocessor: Any,
+    template: Any,
+    arguments: Sequence[str],
+) -> dict[str, str]:
+    substitutions, variadic_bindings = preprocessor._template_argument_bindings(
+        template,
+        list(arguments),
+    )
+    parameters = {name: str(value) for name, value in substitutions.items()}
+    for name, values in variadic_bindings.items():
+        parameters[name] = ", ".join(str(value) for value in values)
+    return parameters
+
+
+def _template_argument_values_from_parameters(
+    preprocessor: Any,
+    template: Any,
+    parameters: Mapping[str, str],
+) -> list[str]:
+    arguments: list[str] = []
+    variadic = getattr(template, "variadic_template_parameters", set())
+    for parameter in template.template_parameters:
+        value = parameters[parameter]
+        if parameter in variadic:
+            arguments.extend(preprocessor._split_top_level_commas(value))
+        else:
+            arguments.append(value)
+    return arguments
+
+
+def _template_required_signature(
+    preprocessor: Any,
+    template: Any,
+    parameters: Mapping[str, str],
+) -> str:
+    arguments: list[str] = []
+    variadic = getattr(template, "variadic_template_parameters", set())
+    for parameter in template.template_parameters:
+        value = parameters.get(parameter, parameter)
+        if parameter in variadic and parameter in parameters:
+            arguments.extend(preprocessor._split_top_level_commas(value))
+        else:
+            arguments.append(value)
+    return preprocessor._template_specialization_signature(template.name, arguments)
+
+
+def _template_variant_parameter_bindings(
+    *,
+    source_options: Mapping[str, Any],
+    target: str,
+    relative_path: str,
+    template_name: str,
+    required_signature: str,
+) -> dict[str, str]:
+    manifests = source_options.get(TEMPLATE_VARIANTS_SOURCE_OPTION)
+    if not isinstance(manifests, Mapping):
+        return {}
+    target_keys = ("*", target)
+    declaration_keys = ("*", template_name, required_signature)
+    normalized_path = _normalize_project_relative_path(relative_path)
+    bindings: dict[str, str] = {}
+    for target_key in target_keys:
+        source_patterns = manifests.get(target_key)
+        if not isinstance(source_patterns, Mapping):
+            continue
+        for pattern, declarations in source_patterns.items():
+            if not isinstance(pattern, str) or not isinstance(declarations, Mapping):
+                continue
+            normalized_pattern = _normalize_project_relative_path(pattern)
+            if not fnmatch.fnmatch(normalized_path, normalized_pattern):
+                continue
+            for declaration_key in declaration_keys:
+                declaration_bindings = declarations.get(declaration_key)
+                if _valid_string_mapping(declaration_bindings):
+                    bindings.update(
+                        {
+                            str(name): str(value)
+                            for name, value in declaration_bindings.items()
+                        }
+                    )
+    return bindings
 
 
 def _metal_template_parameter_defaults(
@@ -8213,7 +8387,25 @@ def _template_materialization_unsupported_message(
         name = record.get("name", "<unknown>")
         missing = record.get("missingParameters", [])
         missing_text = ", ".join(str(parameter) for parameter in missing) or "<none>"
-        details.append(f"{name} missing {missing_text}")
+        declaration = record.get("sourceDeclaration", {})
+        declaration_text = str(unit.relative_path)
+        if isinstance(declaration, Mapping):
+            file_name = declaration.get("file")
+            line = declaration.get("line")
+            column = declaration.get("column")
+            if (
+                isinstance(file_name, str)
+                and file_name
+                and isinstance(line, int)
+                and isinstance(column, int)
+            ):
+                declaration_text = f"{file_name}:{line}:{column}"
+        signature = record.get("requiredSignature", name)
+        details.append(
+            f"{name} missing {missing_text} "
+            f"(declaration {declaration_text}, target {target}, "
+            f"required {signature})"
+        )
     return (
         f"Template-hostile target '{target}' requires concrete template arguments "
         f"before translating '{unit.relative_path}': " + "; ".join(details)
@@ -8287,18 +8479,17 @@ def _project_template_materialization_for_artifact(
 
     specializations: list[dict[str, Any]] = []
     template_lookup = {template.name: template for template in templates}
-    find_source_instantiations = getattr(
-        preprocessor, "_find_" + "m" + "lx_kernel_instantiations"
+    source_instantiations = preprocessor._find_project_template_instantiations(
+        preprocessed
     )
-    materialize_source_instantiations = getattr(
-        preprocessor, "_materialize_" + "m" + "lx_instantiate_kernels"
-    )
-    source_instantiations = find_source_instantiations(preprocessed)
     seen_source_instantiations: set[tuple[str, tuple[str, ...], str]] = set()
     for instantiation in source_instantiations:
         template = template_lookup.get(instantiation.function_name)
         arguments = list(instantiation.template_arguments)
-        if template is None or len(arguments) < len(template.template_parameters):
+        if template is None or not preprocessor._template_arguments_satisfy_parameters(
+            template,
+            arguments,
+        ):
             continue
         normalized_arguments = list(
             preprocessor._template_specialization_key(
@@ -8318,10 +8509,11 @@ def _project_template_materialization_for_artifact(
             instantiation.host_name,
             template.name,
         )
-        parameters = {
-            parameter: str(normalized_arguments[index])
-            for index, parameter in enumerate(template.template_parameters)
-        }
+        parameters = _template_parameter_values_from_arguments(
+            preprocessor,
+            template,
+            normalized_arguments,
+        )
         specializations.append(
             _materialized_template_specialization_record(
                 name=template.name,
@@ -8330,7 +8522,9 @@ def _project_template_materialization_for_artifact(
                 source="source-instantiation",
             )
         )
-    preprocessed = materialize_source_instantiations(preprocessed)
+    preprocessed = preprocessor._materialize_project_template_instantiations(
+        preprocessed
+    )
 
     templates = preprocessor._find_template_functions(preprocessed)
     templates_by_name = {template.name: template for template in templates}
@@ -8353,7 +8547,10 @@ def _project_template_materialization_for_artifact(
     seen_call_specializations: set[tuple[str, tuple[str, ...]]] = set()
     for function_name, arguments, _span in calls:
         template = templates_by_name.get(function_name)
-        if template is None or len(arguments) < len(template.template_parameters):
+        if template is None or not preprocessor._template_arguments_satisfy_parameters(
+            template,
+            list(arguments),
+        ):
             continue
         key = preprocessor._template_specialization_key(function_name, arguments)
         if key in seen_call_specializations:
@@ -8365,10 +8562,11 @@ def _project_template_materialization_for_artifact(
             function_name,
             normalized_arguments,
         )
-        parameters = {
-            parameter: str(normalized_arguments[index])
-            for index, parameter in enumerate(template.template_parameters)
-        }
+        parameters = _template_parameter_values_from_arguments(
+            preprocessor,
+            template,
+            normalized_arguments,
+        )
         specializations.append(
             _materialized_template_specialization_record(
                 name=function_name,
@@ -8407,22 +8605,46 @@ def _project_template_materialization_for_artifact(
             materialized,
             template,
         )
-        available_parameters = {**default_parameters, **configured_parameters}
+        base_parameters = {
+            **default_parameters,
+            **configured_parameters,
+        }
+        required_signature = _template_required_signature(
+            preprocessor,
+            template,
+            base_parameters,
+        )
+        manifest_parameters = _template_variant_parameter_bindings(
+            source_options=source_options,
+            target=target,
+            relative_path=unit.relative_path,
+            template_name=template.name,
+            required_signature=required_signature,
+        )
+        available_parameters = {
+            **base_parameters,
+            **manifest_parameters,
+        }
         if all(
             parameter in available_parameters
             for parameter in template.template_parameters
         ):
-            arguments = [
-                available_parameters[parameter]
-                for parameter in template.template_parameters
-            ]
+            arguments = _template_argument_values_from_parameters(
+                preprocessor,
+                template,
+                available_parameters,
+            )
             has_configured_parameters = any(
                 parameter in configured_parameters
                 for parameter in template.template_parameters
             )
-            if has_configured_parameters:
+            has_manifest_parameters = any(
+                parameter in manifest_parameters
+                for parameter in template.template_parameters
+            )
+            if has_configured_parameters or has_manifest_parameters:
                 materialized_name = template.name
-                source_kind = "config"
+                source_kind = "variant-manifest" if has_manifest_parameters else "config"
             else:
                 materialized_name = preprocessor._template_specialization_identifier(
                     template.name,
@@ -8448,6 +8670,13 @@ def _project_template_materialization_for_artifact(
                     if parameter in configured_parameters
                 }
             )
+            used_configured_parameters.update(
+                {
+                    parameter: manifest_parameters[parameter]
+                    for parameter in template.template_parameters
+                    if parameter in manifest_parameters
+                }
+            )
             specializations.append(
                 _materialized_template_specialization_record(
                     name=template.name,
@@ -8461,7 +8690,18 @@ def _project_template_materialization_for_artifact(
             _unsupported_template_record(
                 name=template.name,
                 parameters=template.template_parameters,
-                configured_parameters=configured_parameters,
+                configured_parameters=available_parameters,
+                source_declaration=_template_source_declaration_record(
+                    unit,
+                    materialized,
+                    template,
+                ),
+                target=target,
+                required_signature=_template_required_signature(
+                    preprocessor,
+                    template,
+                    available_parameters,
+                ),
             )
         )
 
@@ -8481,7 +8721,7 @@ def _project_template_materialization_for_artifact(
         materialized += "\n"
 
     configured_payload = {
-        name: configured_parameters[name]
+        name: used_configured_parameters[name]
         for name in sorted(used_configured_parameters)
     }
     metadata = _template_materialization_metadata(
@@ -8512,7 +8752,7 @@ def _project_template_materialization_for_artifact(
             text=materialized,
             metadata=metadata,
             defines=parser_defines,
-            source_options={**dict(source_options), "preprocess": False},
+            source_options={**_frontend_source_options(source_options), "preprocess": False},
             diagnostics=diagnostics,
             blocked=True,
             error=message,
@@ -8522,7 +8762,7 @@ def _project_template_materialization_for_artifact(
         text=materialized,
         metadata=metadata,
         defines=parser_defines,
-        source_options={**dict(source_options), "preprocess": False},
+        source_options={**_frontend_source_options(source_options), "preprocess": False},
     )
 
 
@@ -22596,10 +22836,56 @@ def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[st
                             "integers, or booleans"
                         )
                 continue
+            if name == TEMPLATE_VARIANTS_SOURCE_OPTION:
+                reasons.extend(
+                    _template_variant_options_contract_reasons(
+                        name_prefix,
+                        option_value,
+                    )
+                )
+                continue
             if not isinstance(option_value, (str, int, bool)):
                 reasons.append(
                     f"{option_prefix} values must be strings, integers, "
-                    "booleans, or source_patterns objects"
+                    "booleans, source_patterns objects, or template_variants "
+                    "objects"
+                )
+    return reasons
+
+
+def _template_variant_options_contract_reasons(
+    prefix: str,
+    value: Any,
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons: list[str] = []
+    for target, source_patterns in value.items():
+        if not _is_non_empty_string(target):
+            reasons.append(f"{prefix} keys must be non-empty strings")
+            target_prefix = prefix
+        else:
+            target_prefix = _mapping_key_path(prefix, target)
+        if not isinstance(source_patterns, Mapping):
+            reasons.append(f"{target_prefix} must be an object")
+            continue
+        for pattern, declarations in source_patterns.items():
+            if not _is_non_empty_string(pattern):
+                reasons.append(f"{target_prefix} keys must be non-empty strings")
+                pattern_prefix = target_prefix
+            else:
+                pattern_prefix = _mapping_key_path(target_prefix, pattern)
+            if not isinstance(declarations, Mapping):
+                reasons.append(f"{pattern_prefix} must be an object")
+                continue
+            for declaration, bindings in declarations.items():
+                if not _is_non_empty_string(declaration):
+                    reasons.append(f"{pattern_prefix} keys must be non-empty strings")
+                    declaration_prefix = pattern_prefix
+                else:
+                    declaration_prefix = _mapping_key_path(pattern_prefix, declaration)
+                reasons.extend(
+                    _string_mapping_contract_reasons(declaration_prefix, bindings)
                 )
     return reasons
 
@@ -25726,11 +26012,43 @@ def _template_specialization_contract_reasons(
         _string_mapping_contract_reasons(f"{prefix}.parameters", value.get("parameters"))
     )
     source = value.get("source")
-    if source not in {"call-site", "config", "source-default", "source-instantiation"}:
+    if source not in {
+        "call-site",
+        "config",
+        "source-default",
+        "source-instantiation",
+        "variant-manifest",
+    }:
         reasons.append(
             f"{prefix}.source must be call-site, config, source-default, "
-            "or source-instantiation"
+            "source-instantiation, or variant-manifest"
         )
+    return reasons
+
+
+def _template_source_declaration_contract_reasons(
+    prefix: str,
+    value: Any,
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons = _unsupported_mapping_field_reasons(
+        prefix,
+        value,
+        REPORT_ARTIFACT_TEMPLATE_DECLARATION_FIELDS,
+    )
+    if not _is_non_empty_string(value.get("file")):
+        reasons.append(f"{prefix}.file must be a string")
+    if not _is_non_empty_string(value.get("name")):
+        reasons.append(f"{prefix}.name must be a string")
+    for field_name in ("line", "column"):
+        field_value = value.get(field_name)
+        if (
+            not isinstance(field_value, int)
+            or isinstance(field_value, bool)
+            or field_value <= 0
+        ):
+            reasons.append(f"{prefix}.{field_name} must be a positive integer")
     return reasons
 
 
@@ -25753,6 +26071,16 @@ def _unsupported_template_contract_reasons(prefix: str, value: Any) -> list[str]
     )
     if value.get("reason") != "missing-template-arguments":
         reasons.append(f"{prefix}.reason must be missing-template-arguments")
+    reasons.extend(
+        _template_source_declaration_contract_reasons(
+            f"{prefix}.sourceDeclaration",
+            value.get("sourceDeclaration"),
+        )
+    )
+    if not _is_non_empty_string(value.get("target")):
+        reasons.append(f"{prefix}.target must be a string")
+    if not _is_non_empty_string(value.get("requiredSignature")):
+        reasons.append(f"{prefix}.requiredSignature must be a string")
     return reasons
 
 
