@@ -1678,10 +1678,16 @@
           ]
         },
         "wgsl": {
-          "status": "partial",
-          "notes": "StructuredBuffer and RWStructuredBuffer declarations lower to WGSL storage-buffer arrays with read/read_write access modes and deterministic binding allocation. Append/consume buffers, byte-address buffers, helper methods, and richer storage-resource layouts remain future work or deterministic diagnostics.",
+          "status": "supported",
+          "notes": "CrossGL cbuffers and uniform blocks lower to WGSL uniform structs with deterministic @group/@binding allocation, explicit @set/@group/@space/@binding and HLSL register/space preservation, bare member-reference rewriting through the generated uniform binding, duplicate binding diagnostics, and deterministic diagnostics for resource members, StructuredBuffer members, and runtime-sized array members inside uniform buffers.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_structured_buffers_to_storage_bindings"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_uniform_blocks_to_uniform_struct_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_duplicate_hlsl_register_space_resource_bindings_raise",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_does_not_rewrite_shadowed_cbuffer_member_identifiers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_resource_members_in_uniform_buffers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_storage_buffer_members_in_uniform_buffers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsized_array_members_in_uniform_buffers"
           ]
         }
       }

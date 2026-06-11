@@ -762,6 +762,7 @@ class WGSLCodeGen:
     def generate_cbuffer(self, node):
         lines = [f"struct {node.name} {{"]
         for member in getattr(node, "members", []) or []:
+            self.validate_cbuffer_member(node, member)
             lines.append(
                 f"    {member.name}: {self.type_name_string(member.member_type)},"
             )
@@ -1572,6 +1573,45 @@ class WGSLCodeGen:
 
     def buffer_pointer_parameter_type(self, vtype):
         return f"ptr<storage, {self.buffer_pointer_storage_type(vtype)}, read_write>"
+
+    def validate_cbuffer_member(self, cbuffer, member):
+        member_type = getattr(member, "member_type", None)
+        element_type = self.array_element_type(member_type)
+        resource_type_name = self.resource_type_name(element_type)
+        if resource_type_name is not None and not self.is_resource_type_name(
+            resource_type_name
+        ):
+            resource_type_name = None
+        if resource_type_name:
+            display_type_name = (
+                str(element_type.name)
+                if isinstance(element_type, NamedType)
+                else str(element_type)
+            )
+            raise ValueError(
+                "WGSL target does not support resource member "
+                f"{cbuffer.name}.{member.name} of type {display_type_name} "
+                "inside uniform buffers; declare resources as module-scope "
+                "bindings instead"
+            )
+        if self.structured_buffer_element_type(element_type) is not None:
+            raise ValueError(
+                "WGSL target does not support storage-buffer resource member "
+                f"{cbuffer.name}.{member.name} inside uniform buffers; "
+                "declare StructuredBuffer resources as module-scope bindings"
+            )
+        if self.unsized_array_type(member_type) is not None:
+            raise ValueError(
+                "WGSL target does not support runtime-sized array member "
+                f"{cbuffer.name}.{member.name} inside uniform buffers"
+            )
+
+    def unsized_array_type(self, vtype):
+        while isinstance(vtype, ArrayType):
+            if vtype.size is None:
+                return vtype
+            vtype = vtype.element_type
+        return None
 
     def sampled_texture_type(self, vtype):
         type_name = self.resource_type_name(vtype)
