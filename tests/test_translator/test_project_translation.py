@@ -149,6 +149,22 @@ def assert_guarded_glsl_validates_if_available(glsl_code, tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
 
 
+def assert_compute_glsl_validates_if_available(glsl_code, tmp_path):
+    glslang = shutil.which("glslangValidator")
+    if not glslang:
+        return
+
+    shader_path = tmp_path / "shader.comp"
+    shader_path.write_text(glsl_code, encoding="utf-8")
+    result = subprocess.run(
+        [glslang, "-S", "comp", str(shader_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 SIMPLE_CROSSL = textwrap.dedent("""
     shader RepoShader {
         struct VertexInput {
@@ -32702,6 +32718,85 @@ def test_translate_project_metal_matmul_buffers_lower_to_opengl_resources(
     assert "float* B" not in output
     assert "float* X" not in output
     assert "thread_position_in_grid" not in output
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_metal_matmul_opengl_buffers_before_params_validate(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "matmul.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct MatMulParams {
+                uint row_dim_x;
+                uint col_dim_x;
+                uint inner_dim;
+            };
+
+            kernel void mat_mul_simple1(
+                device const float* A [[buffer(0)]],
+                device const float* B [[buffer(1)]],
+                device float* X [[buffer(2)]],
+                constant MatMulParams& params [[buffer(3)]],
+                uint2 id [[thread_position_in_grid]]
+            ) {
+                const uint row_dim_x = params.row_dim_x;
+                const uint col_dim_x = params.col_dim_x;
+                const uint inner_dim = params.inner_dim;
+                uint row = id.y;
+                uint col = id.x;
+                float sum = 0.0;
+
+                if (row < row_dim_x && col < col_dim_x) {
+                    for (uint inner = 0; inner < inner_dim; inner++) {
+                        uint index_A = (row * inner_dim) + inner;
+                        uint index_B = (inner * col_dim_x) + col;
+                        sum += A[index_A] * B[index_B];
+                    }
+
+                    uint index = (row * col_dim_x) + col;
+                    X[index] = sum;
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("opengl", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert (
+        "layout(std140, binding = 3) uniform MatMulParams {\n"
+        "    uint row_dim_x;\n"
+        "    uint col_dim_x;\n"
+        "    uint inner_dim;\n"
+        "} params;"
+    ) in output
+    assert "layout(std430, binding = 0) readonly buffer ABuffer { float A[]; };" in output
+    assert "layout(std430, binding = 1) readonly buffer BBuffer { float B[]; };" in output
+    assert "layout(std430, binding = 2) buffer XBuffer { float X[]; };" in output
+    assert "const uint row_dim_x = params.row_dim_x;" in output
+    assert "const uint col_dim_x = params.col_dim_x;" in output
+    assert "const uint inner_dim = params.inner_dim;" in output
+    assert "A[index_A]" in output
+    assert "B[index_B]" in output
+    assert "X[index] = sum;" in output
+    assert "void mat_mul_simple1(" not in output
+    assert "thread_position_in_grid" not in output
+    assert_compute_glsl_validates_if_available(output, tmp_path)
 
 
 def test_translate_project_metal_matmul_constant_pointer_params_lower_to_resources(
