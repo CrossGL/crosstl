@@ -130,8 +130,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             )
         self.max_template_specializations = specialization_limit
         self.template_specialization_limit_source = (
-            template_specialization_limit_source
-            or "max_template_specializations"
+            template_specialization_limit_source or "max_template_specializations"
         )
         self.macros.setdefault(
             "TARGET_OS_SIMULATOR",

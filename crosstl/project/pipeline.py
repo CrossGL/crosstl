@@ -2422,9 +2422,7 @@ def _as_source_options(value: Any, *, field_name: str) -> dict[str, dict[str, An
                     if not isinstance(per_source_options, Mapping):
                         raise ValueError(f"{source_path} must be a table")
                     normalized_pattern_options: dict[str, Any] = {}
-                    for per_source_name, per_source_value in (
-                        per_source_options.items()
-                    ):
+                    for per_source_name, per_source_value in per_source_options.items():
                         if (
                             not isinstance(per_source_name, str)
                             or not per_source_name.strip()
@@ -4559,9 +4557,7 @@ def _source_options_for_unit(
     if isinstance(source_patterns, Mapping):
         normalized_path = _normalize_project_relative_path(relative_path)
         for pattern, pattern_options in source_patterns.items():
-            if not isinstance(pattern, str) or not isinstance(
-                pattern_options, Mapping
-            ):
+            if not isinstance(pattern, str) or not isinstance(pattern_options, Mapping):
                 continue
             normalized_pattern = _normalize_project_relative_path(pattern)
             if not fnmatch.fnmatch(normalized_path, normalized_pattern):
@@ -4573,8 +4569,7 @@ def _source_options_for_unit(
                     normalized_pattern,
                 )
                 limit_source = (
-                    f"{pattern_path}."
-                    f"{METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION}"
+                    f"{pattern_path}." f"{METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION}"
                 )
 
     source_options.pop(SOURCE_OPTION_PATTERNS_KEY, None)
@@ -4583,9 +4578,7 @@ def _source_options_for_unit(
         and METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in source_options
         and limit_source is not None
     ):
-        source_options[METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION] = (
-            limit_source
-        )
+        source_options[METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION] = limit_source
     return source_options
 
 
@@ -13998,9 +13991,7 @@ def _runtime_loader_webgl_program_groups(
         if _is_non_empty_string(binding_id):
             binding_source_path = str(binding_id).split("|", 1)[0]
         source_group_path = (
-            binding_source_path
-            or adapter.get("sourcePath")
-            or package_path
+            binding_source_path or adapter.get("sourcePath") or package_path
         )
         defines = (
             dict(adapter.get("defines"))
@@ -14066,9 +14057,9 @@ def _runtime_loader_webgl_program_groups(
         for adapter in group_adapters:
             package_path = adapter.get("packagePath")
             if _is_non_empty_string(package_path):
-                groups_by_package_path[
-                    _runtime_loader_package_path(package_path)
-                ] = group_payload
+                groups_by_package_path[_runtime_loader_package_path(package_path)] = (
+                    group_payload
+                )
     return groups_by_package_path
 
 
@@ -22347,9 +22338,7 @@ def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[st
                     continue
                 for pattern, pattern_options in option_value.items():
                     if not _is_non_empty_string(pattern):
-                        reasons.append(
-                            f"{name_prefix} keys must be non-empty strings"
-                        )
+                        reasons.append(f"{name_prefix} keys must be non-empty strings")
                         continue
                     pattern_prefix = _mapping_key_path(name_prefix, pattern)
                     if not isinstance(pattern_options, Mapping):

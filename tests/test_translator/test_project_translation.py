@@ -9079,21 +9079,15 @@ def test_translate_project_applies_metal_template_limit_source_patterns(tmp_path
         "metal": {
             "max_template_specializations": 1,
             "source_patterns": {
-                "shaders/pattern_budget.metal": {
-                    "max_template_specializations": 2
-                }
+                "shaders/pattern_budget.metal": {"max_template_specializations": 2}
             },
         }
     }
     assert payload["project"]["sourceOptionCount"] == 1
     assert artifacts["shaders/pattern_budget.metal"]["status"] == "translated"
-    assert (
-        repo / "translated" / "cgl" / "shaders" / "pattern_budget.cgl"
-    ).exists()
+    assert (repo / "translated" / "cgl" / "shaders" / "pattern_budget.cgl").exists()
     assert artifacts["shaders/project_budget.metal"]["status"] == "failed"
-    assert not (
-        repo / "translated" / "cgl" / "shaders" / "project_budget.cgl"
-    ).exists()
+    assert not (repo / "translated" / "cgl" / "shaders" / "project_budget.cgl").exists()
     diagnostic = next(
         diagnostic
         for diagnostic in payload["diagnostics"]

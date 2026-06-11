@@ -1093,9 +1093,7 @@ def test_wgsl_codegen_lowers_explicit_sampler_texture_calls():
         ("RWStructuredBuffer<float> values[];", "RWStructuredBuffer"),
     ),
 )
-def test_wgsl_codegen_rejects_resource_array_declarations(
-    declaration, resource_type
-):
+def test_wgsl_codegen_rejects_resource_array_declarations(declaration, resource_type):
     shader = f"""
     shader WGSLResourceArray {{
         {declaration}
@@ -1214,20 +1212,13 @@ def test_wgsl_codegen_lowers_split_sampler_lod_grad_and_offset_calls():
 
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
-    assert (
-        "textureSampleLevel(colorTex, linearSampler, uv, 1.0, offset)"
-        in generated
-    )
+    assert "textureSampleLevel(colorTex, linearSampler, uv, 1.0, offset)" in generated
     assert "textureSampleGrad(colorTex, linearSampler, uv, ddx, ddy)" in generated
     assert (
-        "textureSampleGrad(colorTex, linearSampler, uv, ddx, ddy, offset)"
-        in generated
+        "textureSampleGrad(colorTex, linearSampler, uv, ddx, ddy, offset)" in generated
     )
     assert "textureSample(colorTex, linearSampler, uv, offset)" in generated
-    assert (
-        "textureSampleBias(colorTex, linearSampler, uv, 0.25, offset)"
-        in generated
-    )
+    assert "textureSampleBias(colorTex, linearSampler, uv, 0.25, offset)" in generated
     assert "textureSampleBias(colorTex, colorTex_sampler, uv, 0.5, offset)" in generated
 
 
@@ -1255,8 +1246,7 @@ def test_wgsl_codegen_lowers_shadow_textures_and_comparison_samplers():
 
     assert "@group(0) @binding(0)\nvar shadowMap: texture_depth_2d;" in generated
     assert (
-        "@group(0) @binding(1)\nvar shadowMap_sampler: sampler_comparison;"
-        in generated
+        "@group(0) @binding(1)\nvar shadowMap_sampler: sampler_comparison;" in generated
     )
     assert "@group(0) @binding(2)\nvar compareSampler: sampler_comparison;" in generated
     assert (
@@ -1264,18 +1254,11 @@ def test_wgsl_codegen_lowers_shadow_textures_and_comparison_samplers():
         "uv: vec2<f32>, depth: f32) -> f32"
     ) in generated
     assert "return textureSampleCompare(tex, tex_sampler, uv, depth);" in generated
+    assert "textureSampleCompare(shadowMap, compareSampler, uv, 0.5)" in generated
     assert (
-        "textureSampleCompare(shadowMap, compareSampler, uv, 0.5)"
-        in generated
-    )
-    assert (
-        "textureSampleCompare(shadowMap, compareSampler, uv, 0.25, "
-        "vec2<i32>(1, 0))"
+        "textureSampleCompare(shadowMap, compareSampler, uv, 0.25, " "vec2<i32>(1, 0))"
     ) in generated
-    assert (
-        "textureSampleCompareLevel(shadowMap, compareSampler, uv, 0.75)"
-        in generated
-    )
+    assert "textureSampleCompareLevel(shadowMap, compareSampler, uv, 0.75)" in generated
     assert (
         "textureSampleCompareLevel(shadowMap, compareSampler, uv, 0.875, "
         "vec2<i32>(0, 1))"
