@@ -399,7 +399,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 54,
+        "unsupported_marker_count": 57,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 48
+        "test_count": 52
       },
       "translator_codegen": {
         "exists": true,
@@ -1331,15 +1331,6 @@
     }
   ],
   "backlog": [
-    {
-      "backend": "WebGPU / WGSL",
-      "backend_id": "wgsl",
-      "category": "resources",
-      "feature": "Constant/uniform buffers",
-      "feature_id": "resources.constant_buffers",
-      "notes": "StructuredBuffer and RWStructuredBuffer declarations lower to WGSL storage-buffer arrays with read/read_write access modes and deterministic binding allocation. Append/consume buffers, byte-address buffers, helper methods, and richer storage-resource layouts remain future work or deterministic diagnostics.",
-      "status": "partial"
-    },
     {
       "backend": "WebGPU / WGSL",
       "backend_id": "wgsl",
@@ -3105,10 +3096,16 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_structured_buffers_to_storage_bindings"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_uniform_blocks_to_uniform_struct_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_duplicate_hlsl_register_space_resource_bindings_raise",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_does_not_rewrite_shadowed_cbuffer_member_identifiers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_resource_members_in_uniform_buffers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_storage_buffer_members_in_uniform_buffers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsized_array_members_in_uniform_buffers"
           ],
-          "notes": "StructuredBuffer and RWStructuredBuffer declarations lower to WGSL storage-buffer arrays with read/read_write access modes and deterministic binding allocation. Append/consume buffers, byte-address buffers, helper methods, and richer storage-resource layouts remain future work or deterministic diagnostics.",
-          "status": "partial"
+          "notes": "CrossGL cbuffers and uniform blocks lower to WGSL uniform structs with deterministic @group/@binding allocation, explicit @set/@group/@space/@binding and HLSL register/space preservation, bare member-reference rewriting through the generated uniform binding, duplicate binding diagnostics, and deterministic diagnostics for resource members, StructuredBuffer members, and runtime-sized array members inside uniform buffers.",
+          "status": "supported"
         }
       }
     },
@@ -15118,7 +15115,7 @@
   },
   "summary": {
     "backend_count": 11,
-    "backlog_count": 4,
+    "backlog_count": 3,
     "feature_count": 66,
     "status_counts": {
       "cuda": {
@@ -15203,8 +15200,8 @@
       },
       "wgsl": {
         "diagnostic": 19,
-        "partial": 4,
-        "supported": 36,
+        "partial": 3,
+        "supported": 37,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 7
