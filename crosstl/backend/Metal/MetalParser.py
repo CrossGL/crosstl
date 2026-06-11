@@ -2097,7 +2097,21 @@ class MetalParser:
                     )
                 name += f"::{self.current_token[1]}"
                 self.eat(self.current_token[0])
+        if not name and self.current_token[0] == "NUMBER":
+            raise self.invalid_numeric_identifier_error(self.current_token)
         return name, self.parse_declarator_array_sizes(), type_suffix, grouped_suffix
+
+    def invalid_numeric_identifier_error(self, token):
+        fragment = str(token[1])
+        if self.peek(1)[0] == "IDENTIFIER":
+            fragment += str(self.peek(1)[1])
+        return self.syntax_error(
+            "Invalid Metal identifier "
+            f"'{fragment}': generated helper names must start with a letter "
+            "or underscore; underscore-separated numeric segments are only "
+            "valid after the first character",
+            token=token,
+        )
 
     def declarator_pointer_token_suffix(self, token_type):
         return "*" if token_type == "MULTIPLY" else "&"

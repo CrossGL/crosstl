@@ -65,6 +65,41 @@ def iter_ast_nodes(node):
         yield from iter_ast_nodes(value)
 
 
+def test_parse_numeric_heavy_generated_identifier_function_and_call():
+    code = """
+    float nvfp4_quantize_float_gs_16_b_4(float value) {
+        return value + 1.0;
+    }
+
+    kernel void k(device float* out [[buffer(0)]]) {
+        out[0] = nvfp4_quantize_float_gs_16_b_4(2.0);
+    }
+    """
+    ast = parse_ok(code)
+    helper, kernel = ast.functions
+    call = kernel.body[0].right
+
+    assert helper.name == "nvfp4_quantize_float_gs_16_b_4"
+    assert isinstance(call, FunctionCallNode)
+    assert call.name == "nvfp4_quantize_float_gs_16_b_4"
+
+
+def test_numeric_leading_generated_identifier_reports_specific_error():
+    code = """
+    float 16_b_4(float value) {
+        return value;
+    }
+    """
+
+    with pytest.raises(SyntaxError) as excinfo:
+        parse_code(code)
+
+    error = excinfo.value
+    assert "Invalid Metal identifier '16_b_4'" in str(error)
+    assert "must start with a letter or underscore" in str(error)
+    assert getattr(error, "raw_message", "").startswith("Invalid Metal identifier")
+
+
 def test_parse_vertex_fragment_program():
     code = """
     #include <metal_stdlib>
