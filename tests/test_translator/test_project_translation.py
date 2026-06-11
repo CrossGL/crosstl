@@ -12899,6 +12899,128 @@ def test_translate_project_opengl_rejects_unresolved_metal_template_type_before_
     )
 
 
+def test_translate_project_opengl_rejects_post_materialization_template_type_leak(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "steel_attention_epilogue.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_attention(name, type) \\
+                instantiate_kernel("attention_" #name, attention, type)
+
+            template <typename T, typename Epilogue>
+            struct BlockMMA {
+                T value;
+            };
+
+            template <typename T>
+            [[kernel]] void attention(
+                device BlockMMA<T, Epilogue>* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                out[gid].value = T(1);
+            }
+
+            instantiate_attention(float32, float)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.template-materialization-unsupported": 1
+    }
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["path"] == "out/opengl/steel_attention_epilogue.glsl"
+    assert not (repo / artifact["path"]).exists()
+    assert (
+        "OpenGL codegen cannot emit unresolved template type" not in artifact["error"]
+    )
+    assert artifact["templateMaterialization"] == {
+        "status": "unsupported",
+        "specializationCount": 1,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "configuredParameterSources": {},
+        "specializations": [
+            {
+                "name": "attention",
+                "materializedName": "attention_float32",
+                "parameters": {"T": "float"},
+                "parameterSources": {"T": "source-instantiation"},
+                "source": "source-instantiation",
+                "hostName": "attention_float32",
+            }
+        ],
+        "unsupported": [
+            {
+                "name": "BlockMMA",
+                "parameters": ["T", "Epilogue"],
+                "missingParameters": ["Epilogue"],
+                "reason": "missing-template-arguments",
+                "sourceDeclaration": {
+                    "file": "steel_attention_epilogue.metal",
+                    "line": 5,
+                    "column": 1,
+                    "name": "BlockMMA",
+                },
+                "target": "opengl",
+                "requiredSignature": "BlockMMA<float, Epilogue>",
+            }
+        ],
+    }
+
+    diagnostic = payload["diagnostics"][0]
+    assert (
+        diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    )
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert "BlockMMA missing Epilogue" in diagnostic["message"]
+    assert "Target artifact" not in diagnostic["message"]
+    assert diagnostic["details"] == {
+        "sourcePath": "steel_attention_epilogue.metal",
+        "targetBackend": "opengl",
+        "missingTemplateParameters": ["Epilogue"],
+        "sourceDeclarations": [
+            {
+                "name": "BlockMMA",
+                "missingTemplateParameters": ["Epilogue"],
+                "requiredSignature": "BlockMMA<float, Epilogue>",
+                "reason": "missing-template-arguments",
+                "targetBackend": "opengl",
+                "declarationLocation": {
+                    "file": "steel_attention_epilogue.metal",
+                    "line": 5,
+                    "column": 1,
+                },
+            }
+        ],
+        "suggestedRemediation": (
+            "add a concrete Metal template instantiation, supply explicit "
+            "template arguments, or configure "
+            "project.source_options.metal.template_variants for the opengl target"
+        ),
+        "targetArtifact": "out/opengl/steel_attention_epilogue.glsl",
+        "unresolvedParameterName": "Epilogue",
+    }
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
+
+
 def test_translate_project_forwards_metal_template_specialization_limit(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
