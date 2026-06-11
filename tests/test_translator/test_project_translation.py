@@ -39906,6 +39906,82 @@ def test_translate_project_metal_call_site_template_materializes_for_opengl(
     assert validation["success"] is True
 
 
+def test_translate_project_metal_implicit_template_helper_materializes_to_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "implicit_helper.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            T add_one(T value) {
+                return value + T(1);
+            }
+
+            kernel void launch(
+                device float* out [[buffer(0)]],
+                device const float* src [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                float value = src[gid];
+                out[gid] = add_one(value);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx", "opengl", "vulkan"],
+        output_dir="out",
+    )
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+    for artifact in payload["artifacts"]:
+        assert artifact["templateMaterialization"] == {
+            "status": "materialized",
+            "specializationCount": 1,
+            "configuredParameterCount": 0,
+            "configuredParameters": {},
+            "configuredParameterSources": {},
+            "specializations": [
+                {
+                    "name": "add_one",
+                    "materializedName": "add_one_float",
+                    "parameters": {"T": "float"},
+                    "parameterSources": {"T": "call-site"},
+                    "source": "call-site",
+                }
+            ],
+            "unsupported": [],
+        }
+        output_path = repo / artifact["path"]
+        assert output_path.exists()
+        output = output_path.read_text(encoding="utf-8")
+        assert "add_one<" not in output
+        assert not re.search(r"\bT\b", output)
+        if artifact["target"] in {"directx", "opengl"}:
+            assert "add_one_float" in output
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+
+
 def test_translate_project_metal_source_instantiation_propagates_plain_helper_bindings_for_opengl(
     tmp_path,
 ):
@@ -42116,6 +42192,32 @@ def test_translate_project_metal_void_cast_before_unresolved_helper_is_diagnosti
         assert diagnostic["missingCapabilities"] == ["template.specialization"]
         assert "convert_value missing U" in diagnostic["message"]
         assert "list index out of range" not in diagnostic["message"]
+        assert "Suggested action:" in diagnostic["message"]
+        assert diagnostic["details"] == {
+            "sourcePath": "steel_attention_nax_min.metal",
+            "targetBackend": diagnostic["target"],
+            "missingTemplateParameters": ["U"],
+            "sourceDeclarations": [
+                {
+                    "name": "convert_value",
+                    "missingTemplateParameters": ["U"],
+                    "requiredSignature": "convert_value<U>",
+                    "reason": "missing-template-arguments",
+                    "targetBackend": diagnostic["target"],
+                    "declarationLocation": {
+                        "file": "steel_attention_nax_min.metal",
+                        "line": 4,
+                        "column": 1,
+                    },
+                }
+            ],
+            "suggestedRemediation": (
+                "add a concrete Metal template instantiation, supply explicit "
+                "template arguments, or configure "
+                "project.source_options.metal.template_variants for the "
+                f"{diagnostic['target']} target"
+            ),
+        }
 
 
 def test_translate_project_variadic_template_helper_materializes_for_opengl(
