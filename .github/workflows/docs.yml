@@ -28,7 +28,19 @@ jobs:
           python-version: "3.12"
 
       - name: Install Doxygen
-        run: sudo apt-get update && sudo apt-get install -y doxygen
+        run: |
+          mapfile -t runner_apt_sources < <(
+            grep -rl "packages.microsoft.com" /etc/apt/sources.list.d 2>/dev/null || true
+          )
+
+          if ((${#runner_apt_sources[@]})); then
+            printf 'Removing optional hosted-runner apt sources before apt update:\n'
+            printf '  %s\n' "${runner_apt_sources[@]}"
+            sudo rm -f "${runner_apt_sources[@]}"
+          fi
+
+          sudo apt-get update
+          sudo apt-get install -y doxygen
 
       - name: Install documentation dependencies
         run: |
