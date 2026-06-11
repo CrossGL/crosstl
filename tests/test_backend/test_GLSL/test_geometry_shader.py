@@ -5,7 +5,9 @@ from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
 from crosstl.translator.ast import ShaderStage
+from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -34,6 +36,19 @@ layout(lines_adjacency, invocations = 2) in;
 layout(triangle_strip, max_vertices = 6) out;
 
 void main() {
+    EmitVertex();
+    EndPrimitive();
+}
+"""
+
+
+GEOMETRY_POINTS_MAX_VERTICES_GLSL = """
+#version 450 core
+layout(points) in;
+layout(points, max_vertices = 1) out;
+
+void main() {
+    gl_Position = gl_in[0].gl_Position;
     EmitVertex();
     EndPrimitive();
 }
@@ -122,6 +137,30 @@ def test_codegen_geometry_layout_roundtrip_preserves_adjacency_and_invocations()
     assert "layout(lines_adjacency, invocations = 2) in;" in glsl
     assert "layout(triangle_strip, max_vertices = 6) out;" in glsl
     assert "return output;" not in glsl
+
+
+def test_codegen_geometry_layout_max_vertices_feeds_directx_attribute():
+    crossgl = generate_crossgl(GEOMETRY_POINTS_MAX_VERTICES_GLSL, "geometry")
+
+    assert "layout(points, max_vertices = 1) out;" in crossgl
+
+    generated = HLSLCodeGen().generate_stage(parse_crossgl(crossgl), "geometry")
+
+    assert "[maxvertexcount(1)]" in generated
+    assert "requires HLSL attribute(s): maxvertexcount" not in generated
+
+
+def test_codegen_geometry_layout_max_vertices_reaches_metal_validation():
+    crossgl = generate_crossgl(GEOMETRY_POINTS_MAX_VERTICES_GLSL, "geometry")
+
+    assert "layout(points, max_vertices = 1) out;" in crossgl
+
+    with pytest.raises(ValueError) as excinfo:
+        MetalCodeGen().generate_stage(parse_crossgl(crossgl), "geometry")
+
+    message = str(excinfo.value)
+    assert "maxvertexcount" not in message
+    assert "PointStream" in message
 
 
 def test_codegen_geometry_repeated_stream_layouts_from_glslang_roundtrip():
