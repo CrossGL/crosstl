@@ -1840,6 +1840,32 @@ def test_codegen_device_buffer_parameters_use_structured_buffer_contract():
     assert "data[tid.x] = value * 2.0;" in metal
 
 
+def test_directx_codegen_lowers_native_metal_entry_buffer_parameters_to_resources():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void matmul(device float* A [[buffer(0)]],
+                       constant float* B [[buffer(1)]],
+                       device float* X [[buffer(2)]],
+                       uint3 id [[thread_position_in_grid]]) {
+        X[id.x] = A[id.x] + B[id.x];
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+
+    assert "RWStructuredBuffer<float> A : register(u0);" in hlsl
+    assert "StructuredBuffer<float> B : register(t1);" in hlsl
+    assert "RWStructuredBuffer<float> X : register(u2);" in hlsl
+    assert "void CSMain(uint3 id : SV_DispatchThreadID)" in hlsl
+    assert "float* A" not in hlsl
+    assert "float* B" not in hlsl
+    assert "float* X" not in hlsl
+    assert "thread_position_in_grid" not in hlsl
+
+
 def test_codegen_mlx_multi_entry_opengl_resource_bindings_do_not_overlap():
     # Reduced from MLX-generated multi-entry Metal kernels where unrelated entry
     # parameters reuse names and Metal buffer indices across kernels.
@@ -3245,6 +3271,22 @@ def test_codegen_sanitizes_crossgl_keyword_generic_type_argument_from_tinygrad()
 
     assert "rt_base<T,layout_>& src" in crossgl
     assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_preserves_template_helper_generics_for_crossgl_specialization():
+    code = """
+    template <typename T, typename U>
+    METAL_FUNC T ceildiv(T N, U M) {
+        return (N + M - 1) / M;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "generic<T, U> T ceildiv(T N, U M)" in normalize(crossgl)
+    ast = parse_crossgl(crossgl)
+    function = ast.functions[0]
+    assert function.name == "ceildiv"
+    assert [param.name for param in function.generic_params] == ["T", "U"]
 
 
 def test_codegen_omits_global_constexpr_sampler_argument_for_roundtrip():

@@ -94,8 +94,10 @@ from .enum_utils import (
     generate_generic_enum_structs,
     generic_enum_specialized_fields,
     generic_enum_specialized_type_name,
+    generic_type_parts,
     infer_enum_constructor_type,
     sanitize_type_name,
+    substitute_generic_type_name,
 )
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
@@ -289,6 +291,13 @@ from .stage_utils import (
     should_emit_qualified_function,
     stage_matches,
 )
+
+
+class OpenGLTemplateTypeError(ValueError):
+    """Raised when OpenGL generation would emit an unresolved template type."""
+
+    project_diagnostic_code = "project.translate.opengl-template-type-unresolved"
+    missing_capabilities = ("template.specialization",)
 
 
 class GLSLCodeGen:
@@ -680,6 +689,18 @@ class GLSLCodeGen:
         "WaveReadLaneFirst": 1,
         "WavePrefixSum": 1,
         "WavePrefixProduct": 1,
+        "WavePrefixInclusiveSum": 1,
+        "WavePrefixInclusiveProduct": 1,
+        "WavePrefixExclusiveMin": 1,
+        "WavePrefixInclusiveMin": 1,
+        "WavePrefixExclusiveMax": 1,
+        "WavePrefixInclusiveMax": 1,
+        "WavePrefixExclusiveBitAnd": 1,
+        "WavePrefixInclusiveBitAnd": 1,
+        "WavePrefixExclusiveBitOr": 1,
+        "WavePrefixInclusiveBitOr": 1,
+        "WavePrefixExclusiveBitXor": 1,
+        "WavePrefixInclusiveBitXor": 1,
         "WavePrefixCountBits": 1,
         "QuadReadAcrossX": 1,
         "QuadReadAcrossY": 1,
@@ -709,10 +730,50 @@ class GLSLCodeGen:
         "WaveReadLaneFirst": "subgroupBroadcastFirst",
         "WavePrefixSum": "subgroupExclusiveAdd",
         "WavePrefixProduct": "subgroupExclusiveMul",
+        "WavePrefixInclusiveSum": "subgroupInclusiveAdd",
+        "WavePrefixInclusiveProduct": "subgroupInclusiveMul",
+        "WavePrefixExclusiveMin": "subgroupExclusiveMin",
+        "WavePrefixInclusiveMin": "subgroupInclusiveMin",
+        "WavePrefixExclusiveMax": "subgroupExclusiveMax",
+        "WavePrefixInclusiveMax": "subgroupInclusiveMax",
+        "WavePrefixExclusiveBitAnd": "subgroupExclusiveAnd",
+        "WavePrefixInclusiveBitAnd": "subgroupInclusiveAnd",
+        "WavePrefixExclusiveBitOr": "subgroupExclusiveOr",
+        "WavePrefixInclusiveBitOr": "subgroupInclusiveOr",
+        "WavePrefixExclusiveBitXor": "subgroupExclusiveXor",
+        "WavePrefixInclusiveBitXor": "subgroupInclusiveXor",
         "QuadReadAcrossX": "subgroupQuadSwapHorizontal",
         "QuadReadAcrossY": "subgroupQuadSwapVertical",
         "QuadReadAcrossDiagonal": "subgroupQuadSwapDiagonal",
         "QuadReadLaneAt": "subgroupQuadBroadcast",
+    }
+    GLSL_METAL_SIMD_GROUP_HELPER_PREFIX = "__metal_simd"
+    GLSL_METAL_SIMD_GROUP_HELPER_OPERATIONS = {
+        "__metal_simd_sum": "WaveActiveSum",
+        "__metal_simd_product": "WaveActiveProduct",
+        "__metal_simd_min": "WaveActiveMin",
+        "__metal_simd_max": "WaveActiveMax",
+        "__metal_simd_and": "WaveActiveBitAnd",
+        "__metal_simd_or": "WaveActiveBitOr",
+        "__metal_simd_xor": "WaveActiveBitXor",
+        "__metal_simd_any": "WaveActiveAnyTrue",
+        "__metal_simd_all": "WaveActiveAllTrue",
+        "__metal_simd_broadcast": "WaveReadLaneAt",
+        "__metal_simd_broadcast_first": "WaveReadLaneFirst",
+        "__metal_simd_prefix_exclusive_sum": "WavePrefixSum",
+        "__metal_simd_prefix_inclusive_sum": "WavePrefixInclusiveSum",
+        "__metal_simd_prefix_exclusive_product": "WavePrefixProduct",
+        "__metal_simd_prefix_inclusive_product": "WavePrefixInclusiveProduct",
+        "__metal_simd_prefix_exclusive_min": "WavePrefixExclusiveMin",
+        "__metal_simd_prefix_inclusive_min": "WavePrefixInclusiveMin",
+        "__metal_simd_prefix_exclusive_max": "WavePrefixExclusiveMax",
+        "__metal_simd_prefix_inclusive_max": "WavePrefixInclusiveMax",
+        "__metal_simd_prefix_exclusive_and": "WavePrefixExclusiveBitAnd",
+        "__metal_simd_prefix_inclusive_and": "WavePrefixInclusiveBitAnd",
+        "__metal_simd_prefix_exclusive_or": "WavePrefixExclusiveBitOr",
+        "__metal_simd_prefix_inclusive_or": "WavePrefixInclusiveBitOr",
+        "__metal_simd_prefix_exclusive_xor": "WavePrefixExclusiveBitXor",
+        "__metal_simd_prefix_inclusive_xor": "WavePrefixInclusiveBitXor",
     }
     GLSL_VECTOR_RELATIONAL_FUNCTIONS = {
         "<": "lessThan",
@@ -736,6 +797,42 @@ class GLSLCodeGen:
         "WaveActiveMax": "#extension GL_KHR_shader_subgroup_arithmetic : require",
         "WavePrefixSum": "#extension GL_KHR_shader_subgroup_arithmetic : require",
         "WavePrefixProduct": "#extension GL_KHR_shader_subgroup_arithmetic : require",
+        "WavePrefixInclusiveSum": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixInclusiveProduct": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixExclusiveMin": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixInclusiveMin": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixExclusiveMax": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixInclusiveMax": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixExclusiveBitAnd": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixInclusiveBitAnd": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixExclusiveBitOr": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixInclusiveBitOr": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixExclusiveBitXor": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixInclusiveBitXor": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
         "WaveActiveBallot": "#extension GL_KHR_shader_subgroup_ballot : require",
         "WaveActiveCountBits": "#extension GL_KHR_shader_subgroup_ballot : require",
         "WavePrefixCountBits": "#extension GL_KHR_shader_subgroup_ballot : require",
@@ -815,11 +912,23 @@ class GLSLCodeGen:
         "WaveActiveMax",
         "WavePrefixSum",
         "WavePrefixProduct",
+        "WavePrefixInclusiveSum",
+        "WavePrefixInclusiveProduct",
+        "WavePrefixExclusiveMin",
+        "WavePrefixInclusiveMin",
+        "WavePrefixExclusiveMax",
+        "WavePrefixInclusiveMax",
     }
     GLSL_WAVE_INTEGER_OR_BOOLEAN_OPERATIONS = {
         "WaveActiveBitAnd",
         "WaveActiveBitOr",
         "WaveActiveBitXor",
+        "WavePrefixExclusiveBitAnd",
+        "WavePrefixInclusiveBitAnd",
+        "WavePrefixExclusiveBitOr",
+        "WavePrefixInclusiveBitOr",
+        "WavePrefixExclusiveBitXor",
+        "WavePrefixInclusiveBitXor",
     }
     GLSL_WAVE_BOOLEAN_OPERATIONS = {
         "WaveActiveAllTrue",
@@ -954,6 +1063,8 @@ class GLSLCodeGen:
         self.generic_function_specializations = {}
         self.generic_function_specialized_names = {}
         self.current_generic_function_substitutions = {}
+        self.enforce_concrete_glsl_types = False
+        self.generic_type_parameter_names = set()
         self.structured_buffer_instance_members = {}
         self.structured_buffer_counter_members = {}
         self.structured_buffer_counter_instances = {}
@@ -1689,7 +1800,9 @@ class GLSLCodeGen:
                 if isinstance(node, WaveOpNode):
                     operations.add(node.operation)
                 elif isinstance(node, FunctionCallNode):
-                    operation = self.function_call_name(node)
+                    operation = self.glsl_wave_operation_name(
+                        self.function_call_name(node)
+                    )
                     if operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
                         operations.add(operation)
         return operations
@@ -2367,6 +2480,10 @@ class GLSLCodeGen:
         self.structured_buffer_counter_members = {}
         self.structured_buffer_counter_instances = {}
         self.glsl_buffer_block_struct_names = set()
+        self.enforce_concrete_glsl_types = False
+        self.generic_type_parameter_names = self.collect_generic_type_parameter_names(
+            ast
+        )
         structs = deduplicate_named_declarations(
             list(getattr(ast, "structs", []) or [])
             + collect_stage_local_structs(ast, target_stage),
@@ -2517,6 +2634,7 @@ class GLSLCodeGen:
             )
         )
         self.validate_global_resource_shadows(ast)
+        self.enforce_concrete_glsl_types = True
         code = ""
         preprocessors = getattr(ast, "preprocessors", []) or []
         version_line = None
@@ -2615,6 +2733,9 @@ class GLSLCodeGen:
         self.glsl_buffer_block_struct_names = (
             self.collect_glsl_buffer_block_struct_names(resource_declaration_nodes)
         )
+        self.layout_bound_struct_uniform_names = (
+            self.collect_layout_bound_struct_uniform_names(resource_declaration_nodes)
+        )
         self.vertex_input_struct_names = self.stage_parameter_struct_names(
             ast, "vertex"
         )
@@ -2681,6 +2802,8 @@ class GLSLCodeGen:
                     code += self.generate_glsl_interface_block_declaration(node)
                     continue
                 if node.name in self.glsl_buffer_block_struct_names:
+                    continue
+                if node.name in self.layout_bound_struct_uniform_names:
                     continue
                 elif (
                     node.name == "VSInput"
@@ -3064,7 +3187,12 @@ class GLSLCodeGen:
             code += self.generate_cbuffers(ast, target_stage)
 
         combined_stage_entry_names = self.combined_stage_entry_names(ast, target_stage)
-        self.prepare_glsl_resource_function_specializations(ast)
+        previous_enforce_concrete_glsl_types = self.enforce_concrete_glsl_types
+        self.enforce_concrete_glsl_types = False
+        try:
+            self.prepare_glsl_resource_function_specializations(ast)
+        finally:
+            self.enforce_concrete_glsl_types = previous_enforce_concrete_glsl_types
 
         functions = getattr(ast, "functions", [])
         deferred_top_level_helpers_by_stage = (
@@ -3617,6 +3745,8 @@ class GLSLCodeGen:
     def glsl_dynamic_resource_call_info(self, func_name, args, aliases):
         callee = self.function_definitions.get(func_name)
         if callee is None:
+            return None
+        if generic_function_parameters(callee):
             return None
 
         params = list(getattr(callee, "parameters", getattr(callee, "params", [])))
@@ -6321,6 +6451,17 @@ class GLSLCodeGen:
         return parameters
 
     def glsl_stage_entry_resource_parameter_declaration(self, parameter):
+        constant_struct_type = self.stage_entry_constant_struct_parameter_type(
+            parameter
+        )
+        if constant_struct_type is not None:
+            return VariableNode(
+                name=getattr(parameter, "name", None),
+                var_type=constant_struct_type,
+                attributes=list(getattr(parameter, "attributes", []) or []),
+                qualifiers=["uniform"],
+            )
+
         node = VariableNode(
             name=getattr(parameter, "name", None),
             var_type=self.resource_node_type(parameter),
@@ -6490,10 +6631,32 @@ class GLSLCodeGen:
 
         return declarations
 
+    def stage_entry_constant_struct_parameter_type(self, param):
+        qualifiers = {str(q).lower() for q in getattr(param, "qualifiers", []) or []}
+        if "constant" not in qualifiers:
+            return None
+        if self.explicit_resource_binding_index(param) is None:
+            return None
+
+        raw_type = self.resource_node_type(param)
+        if isinstance(raw_type, ReferenceType):
+            referenced_type = raw_type.referenced_type
+            type_name = self.type_name_string(referenced_type)
+        else:
+            type_name = self.type_name_string(raw_type)
+            if type_name and type_name.endswith("&"):
+                type_name = type_name[:-1].strip()
+
+        if type_name in self.structs_by_name:
+            return type_name
+        return None
+
     def is_stage_entry_resource_parameter(self, param):
         raw_type = self.resource_node_type(param)
         if self.is_sampler_type(raw_type):
             return False
+        if self.stage_entry_constant_struct_parameter_type(param) is not None:
+            return True
         if self.is_glsl_buffer_block_variable(param, raw_type):
             return True
         if self.is_structured_buffer_type(raw_type):
@@ -9167,8 +9330,9 @@ class GLSLCodeGen:
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
-            if func_name in self.GLSL_WAVE_INTRINSIC_ARITIES:
-                return self.glsl_wave_result_type(func_name, args)
+            wave_operation = self.glsl_wave_operation_name(func_name)
+            if wave_operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
+                return self.glsl_wave_result_type(wave_operation, args)
             if is_resource_size_query_operation(func_name) and args:
                 return self.texture_size_result_type(args[0])
             numeric_result_type = numeric_trait_method_result_type(self, expr)
@@ -10318,8 +10482,15 @@ class GLSLCodeGen:
             if synchronization_call is not None:
                 return synchronization_call
 
-            if original_func_name in self.GLSL_WAVE_INTRINSIC_ARITIES:
-                return self.generate_glsl_wave_operation(original_func_name, expr.args)
+            wave_operation = self.glsl_wave_operation_name(original_func_name)
+            if wave_operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
+                return self.generate_glsl_wave_operation(
+                    wave_operation, expr.args, original_func_name
+                )
+            if self.is_metal_simd_group_helper_name(original_func_name):
+                return self.glsl_wave_diagnostic_expression(
+                    original_func_name, "has no OpenGL subgroup equivalent"
+                )
 
             glsl_memory_atomic_call = self.generate_glsl_memory_atomic_call(
                 original_func_name, expr.args
@@ -10390,6 +10561,16 @@ class GLSLCodeGen:
             if specialized_func_name is not None:
                 func_name = specialized_func_name
                 callee = specialized_func_name
+            elif (
+                original_func_name
+                in getattr(self, "generic_function_definitions", {})
+                and getattr(self, "enforce_concrete_glsl_types", False)
+            ):
+                raise OpenGLTemplateTypeError(
+                    "OpenGL codegen cannot infer concrete template arguments "
+                    f"for generic function '{original_func_name}'; provide a "
+                    "concrete instantiation before GLSL generation"
+                )
 
             constructor = self.glsl_constructor_type(func_name)
             if constructor:
@@ -10452,6 +10633,14 @@ class GLSLCodeGen:
         if func_name == "workgroupBarrier":
             return "barrier()"
         return None
+
+    def glsl_wave_operation_name(self, operation):
+        return self.GLSL_METAL_SIMD_GROUP_HELPER_OPERATIONS.get(operation, operation)
+
+    def is_metal_simd_group_helper_name(self, func_name):
+        return isinstance(func_name, str) and func_name.startswith(
+            self.GLSL_METAL_SIMD_GROUP_HELPER_PREFIX
+        )
 
     def generate_glsl_wave_op_expression(self, node):
         return self.generate_glsl_wave_operation(node.operation, node.arguments)
@@ -10643,20 +10832,26 @@ class GLSLCodeGen:
             return "0", "1"
         return "0.0", "1.0"
 
-    def generate_glsl_wave_operation(self, operation, arguments):
+    def generate_glsl_wave_operation(
+        self, operation, arguments, diagnostic_operation=None
+    ):
+        diagnostic_operation = diagnostic_operation or operation
         expected_arity = self.GLSL_WAVE_INTRINSIC_ARITIES.get(operation)
         if expected_arity is None:
             return self.glsl_wave_diagnostic_expression(
-                operation, "is not recognized by the OpenGL backend"
+                diagnostic_operation, "is not recognized by the OpenGL backend"
             )
 
         actual_arity = len(arguments)
         if actual_arity != expected_arity:
             return self.glsl_wave_diagnostic_expression(
-                operation, f"expects {expected_arity} arguments, got {actual_arity}"
+                diagnostic_operation,
+                f"expects {expected_arity} arguments, got {actual_arity}",
             )
 
-        type_diagnostic = self.glsl_wave_type_diagnostic(operation, arguments)
+        type_diagnostic = self.glsl_wave_type_diagnostic(
+            operation, arguments, diagnostic_operation
+        )
         if type_diagnostic is not None:
             return type_diagnostic
 
@@ -10685,7 +10880,7 @@ class GLSLCodeGen:
         mapped = self.GLSL_WAVE_DIRECT_MAPPINGS.get(operation)
         if mapped is None:
             return self.glsl_wave_diagnostic_expression(
-                operation, "is not recognized by the OpenGL backend"
+                diagnostic_operation, "is not recognized by the OpenGL backend"
             )
 
         args = ", ".join(self.generate_expression(arg) for arg in arguments)
@@ -10713,10 +10908,11 @@ class GLSLCodeGen:
             return self.expression_result_type(arguments[0])
         return None
 
-    def glsl_wave_type_diagnostic(self, operation, args):
+    def glsl_wave_type_diagnostic(self, operation, args, diagnostic_operation=None):
+        diagnostic_operation = diagnostic_operation or operation
         if operation in self.GLSL_WAVE_NUMERIC_OPERATIONS:
             return self.glsl_wave_validate_argument_kind(
-                operation,
+                diagnostic_operation,
                 args[0],
                 "a numeric scalar or vector",
                 "value",
@@ -10724,7 +10920,7 @@ class GLSLCodeGen:
             )
         if operation in self.GLSL_WAVE_INTEGER_OR_BOOLEAN_OPERATIONS:
             return self.glsl_wave_validate_argument_kind(
-                operation,
+                diagnostic_operation,
                 args[0],
                 "an integer or boolean scalar or vector",
                 "value",
@@ -10732,7 +10928,7 @@ class GLSLCodeGen:
             )
         if operation in self.GLSL_WAVE_BOOLEAN_OPERATIONS:
             return self.glsl_wave_validate_argument_type(
-                operation,
+                diagnostic_operation,
                 args[0],
                 "a boolean scalar",
                 "value",
@@ -10741,7 +10937,7 @@ class GLSLCodeGen:
             )
         if operation in self.GLSL_WAVE_SCALAR_OR_VECTOR_OPERATIONS:
             return self.glsl_wave_validate_argument_type(
-                operation,
+                diagnostic_operation,
                 args[0],
                 "a scalar or vector",
                 "value",
@@ -10750,7 +10946,7 @@ class GLSLCodeGen:
             )
         if operation == "WaveMatch":
             return self.glsl_wave_validate_argument_type(
-                operation,
+                diagnostic_operation,
                 args[0],
                 "a scalar or vector",
                 "value",
@@ -10759,7 +10955,7 @@ class GLSLCodeGen:
             )
         if operation == "WaveMultiPrefixCountBits":
             diagnostic = self.glsl_wave_validate_argument_type(
-                operation,
+                diagnostic_operation,
                 args[0],
                 "a boolean scalar",
                 "value",
@@ -10768,10 +10964,10 @@ class GLSLCodeGen:
             )
             if diagnostic is not None:
                 return diagnostic
-            return self.glsl_wave_validate_mask_argument(operation, args[1])
+            return self.glsl_wave_validate_mask_argument(diagnostic_operation, args[1])
         if operation in self.GLSL_WAVE_MULTI_PREFIX_NUMERIC_OPERATIONS:
             diagnostic = self.glsl_wave_validate_argument_kind(
-                operation,
+                diagnostic_operation,
                 args[0],
                 "a numeric scalar or vector",
                 "value",
@@ -10779,10 +10975,10 @@ class GLSLCodeGen:
             )
             if diagnostic is not None:
                 return diagnostic
-            return self.glsl_wave_validate_mask_argument(operation, args[1])
+            return self.glsl_wave_validate_mask_argument(diagnostic_operation, args[1])
         if operation in self.GLSL_WAVE_MULTI_PREFIX_INTEGER_OPERATIONS:
             diagnostic = self.glsl_wave_validate_argument_kind(
-                operation,
+                diagnostic_operation,
                 args[0],
                 "an integer scalar or vector",
                 "value",
@@ -10790,11 +10986,11 @@ class GLSLCodeGen:
             )
             if diagnostic is not None:
                 return diagnostic
-            return self.glsl_wave_validate_mask_argument(operation, args[1])
+            return self.glsl_wave_validate_mask_argument(diagnostic_operation, args[1])
         index_argument = self.GLSL_WAVE_LANE_INDEX_ARGUMENTS.get(operation)
         if index_argument is not None:
             return self.glsl_wave_validate_argument_type(
-                operation,
+                diagnostic_operation,
                 args[index_argument],
                 "a scalar integer",
                 "lane",
@@ -14947,6 +15143,15 @@ class GLSLCodeGen:
                 functions.append(node)
         return functions
 
+    def collect_generic_type_parameter_names(self, root):
+        names = set()
+        for node in self.walk_ast(root):
+            for param in getattr(node, "generic_params", []) or []:
+                name = getattr(param, "name", None)
+                if name:
+                    names.add(str(name))
+        return names
+
     def walk_ast(self, root):
         visited = set()
 
@@ -15326,6 +15531,15 @@ class GLSLCodeGen:
             names.add(str(type_name))
         return names
 
+    def collect_layout_bound_struct_uniform_names(self, global_vars):
+        names = set()
+        for node in global_vars:
+            node_type = self.resource_node_type(node)
+            if not self.is_layout_bound_struct_uniform(node, node_type):
+                continue
+            names.add(str(self.resource_base_type(node_type)))
+        return names
+
     def glsl_buffer_block_declaration(
         self, node, vtype, name, binding, array_suffix=""
     ):
@@ -15461,14 +15675,14 @@ class GLSLCodeGen:
     def glsl_struct_uniform_block_declaration(
         self, vtype, var_name, binding, array_suffix=""
     ):
-        block_name = str(self.resource_base_type(vtype))
-        struct = self.structs_by_name[block_name]
+        struct_name = str(self.resource_base_type(vtype))
+        struct = self.structs_by_name[struct_name]
         layout = self.glsl_resource_layout_prefix("std140", binding=binding)
-        code = f"{layout} uniform {block_name} {{\n"
+        code = f"{layout} uniform {struct_name} {{\n"
         for member in getattr(struct, "members", []) or []:
             code += self.generate_struct_member_declaration(
                 member,
-                struct_name=block_name,
+                struct_name=struct_name,
                 preserve_unsized_arrays=True,
             )
         code += f"}} {var_name}{array_suffix};\n"
@@ -15847,6 +16061,12 @@ class GLSLCodeGen:
         else:
             vtype_str = str(vtype)
 
+        substitutions = getattr(self, "current_generic_function_substitutions", {}) or {}
+        if substitutions:
+            substituted_type = substitute_generic_type_name(vtype_str, substitutions)
+            if substituted_type != vtype_str:
+                return self.map_type(substituted_type)
+
         if self.is_ray_query_type_name(vtype_str):
             return "rayQueryEXT"
 
@@ -15873,7 +16093,81 @@ class GLSLCodeGen:
         if vtype_str in getattr(self, "enum_struct_type_names", set()):
             return vtype_str
 
+        unresolved_template_type = self.unresolved_template_placeholder_type(vtype_str)
+        if unresolved_template_type is not None:
+            raise OpenGLTemplateTypeError(
+                "OpenGL codegen cannot emit unresolved template type "
+                f"'{unresolved_template_type}' from '{vtype_str}'; "
+                "provide a concrete instantiation before GLSL generation"
+            )
+
         return self.type_mapping.get(vtype_str, vtype_str)
+
+    def unresolved_template_placeholder_type(self, type_name):
+        if not getattr(self, "enforce_concrete_glsl_types", False):
+            return None
+
+        type_text = str(type_name or "").strip()
+        if not type_text:
+            return None
+        base_type, _array_suffix = split_array_type_suffix(type_text)
+        base_type = base_type.strip().rstrip("*&").strip()
+        base_name, generic_args = generic_type_parts(base_type)
+        if generic_args:
+            for generic_arg in generic_args:
+                unresolved = self.unresolved_template_placeholder_type(generic_arg)
+                if unresolved is not None:
+                    return unresolved
+            return None
+
+        if self.is_known_glsl_type_name(base_name):
+            return None
+        if base_name in getattr(self, "generic_type_parameter_names", set()):
+            return base_name
+        if self.looks_like_template_placeholder_type(base_name):
+            return base_name
+        return None
+
+    def is_known_glsl_type_name(self, type_name):
+        if not type_name:
+            return True
+        if type_name in self.type_mapping or type_name in self.type_mapping.values():
+            return True
+        if self.canonical_resource_type(type_name) is not None:
+            return True
+        if type_name in getattr(self, "structs_by_name", {}):
+            return True
+        if type_name in getattr(self, "enum_type_names", set()):
+            return True
+        if type_name in getattr(self, "enum_struct_type_names", set()):
+            return True
+        if type_name in {
+            "void",
+            "bool",
+            "int",
+            "uint",
+            "float",
+            "double",
+            "sampler",
+            "atomic_uint",
+            "atomic_int",
+            "rayQueryEXT",
+        }:
+            return True
+        return False
+
+    def looks_like_template_placeholder_type(self, type_name):
+        if not isinstance(type_name, str) or not type_name:
+            return False
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", type_name):
+            return False
+        if re.fullmatch(r"[A-Z][A-Za-z0-9_]{0,2}", type_name):
+            return True
+        if re.fullmatch(r"[A-Z][A-Za-z0-9_]*T", type_name):
+            return True
+        if re.fullmatch(r"[A-Z][A-Z0-9_]*_T", type_name):
+            return True
+        return False
 
     def is_ray_query_type(self, vtype):
         if vtype is None:

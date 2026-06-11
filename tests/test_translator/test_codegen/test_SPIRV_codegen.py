@@ -14134,6 +14134,117 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "WARNING" not in spv_code
 
+    def test_structured_buffer_overloaded_helpers_resolve_by_arity(self, tmp_path):
+        source_code = """
+        shader StorageBufferOverloadArity {
+            RWStructuredBuffer<float> values @binding(0);
+            StructuredBuffer<float> weights @binding(1);
+
+            float readValue(StructuredBuffer<float> data, uint index) {
+                return data.Load(index);
+            }
+
+            float readValue(
+                StructuredBuffer<float> data,
+                uint slot,
+                uint index
+            ) {
+                return data.Load(slot + index);
+            }
+
+            void writeValue(RWStructuredBuffer<float> data, uint index, float value) {
+                data.Store(index, value);
+            }
+
+            compute {
+                void main() {
+                    float weight = readValue(weights, 1u, 0u);
+                    writeValue(values, 0u, weight);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        weights_var = spirv_named_variable(spv_code, "weights", storage_class="Uniform")
+        values_var = spirv_named_variable(spv_code, "values", storage_class="Uniform")
+
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(weights_var)} %\d+ %\d+", spv_code
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(values_var)} %\d+ %\d+", spv_code
+        )
+        assert "readValue" not in spv_code
+        assert "writeValue" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_structured_buffer_overloaded_helpers_resolve_by_buffer_type(
+        self, tmp_path
+    ):
+        source_code = """
+        shader StorageBufferOverloadType {
+            RWStructuredBuffer<float> outValues @binding(0);
+            StructuredBuffer<float> weights @binding(1);
+            StructuredBuffer<uint> counters @binding(2);
+
+            float readValue(StructuredBuffer<float> data, uint index) {
+                return data.Load(index);
+            }
+
+            float readValue(StructuredBuffer<uint> data, uint index) {
+                return float(data.Load(index));
+            }
+
+            void writeValue(RWStructuredBuffer<float> data, uint index, float value) {
+                data.Store(index, value);
+            }
+
+            compute {
+                void main() {
+                    float weight = readValue(weights, 0u);
+                    float counter = readValue(counters, 1u);
+                    writeValue(outValues, 0u, weight + counter);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        weights_var = spirv_named_variable(spv_code, "weights", storage_class="Uniform")
+        counters_var = spirv_named_variable(
+            spv_code, "counters", storage_class="Uniform"
+        )
+        out_values_var = spirv_named_variable(
+            spv_code, "outValues", storage_class="Uniform"
+        )
+
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(weights_var)} %\d+ %\d+", spv_code
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(counters_var)} %\d+ %\d+", spv_code
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(out_values_var)} %\d+ %\d+", spv_code
+        )
+        assert "OpConvertUToF" in spv_code
+        assert "readValue" not in spv_code
+        assert "writeValue" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_structured_buffer_array_parameters_inline_with_accesses(self, tmp_path):
         source_code = """
         shader StorageBufferArrayParameters {

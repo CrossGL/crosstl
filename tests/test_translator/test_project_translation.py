@@ -238,16 +238,31 @@ def test_project_package_exposes_public_api_surface():
         "ProjectPortabilityReport",
         "ProjectScan",
         "ProjectTranslationUnit",
+        "RuntimeArtifactSelector",
+        "RuntimeExecutionError",
+        "RuntimeExecutionRequest",
+        "RuntimeExecutor",
+        "RuntimeExecutorAvailability",
+        "RuntimeExecutorResult",
+        "RuntimeExecutorSkipped",
+        "RuntimeExecutorUnavailable",
+        "RuntimeFixture",
+        "RuntimeTolerance",
+        "RuntimeValue",
+        "RuntimeVerificationError",
         "build_runtime_artifact_manifest",
         "build_runtime_host_loader_scaffolds",
         "build_runtime_host_integration_handoff",
         "build_runtime_loader_manifest",
         "build_runtime_package",
+        "compare_runtime_outputs",
         "inspect_runtime_host_integration_handoff",
         "inspect_runtime_host_loader_scaffolds",
         "inspect_runtime_package",
         "inspect_project_report",
+        "load_runtime_verification_fixtures",
         "load_project_config",
+        "parse_runtime_verification_fixtures",
         "plan_runtime_adapters",
         "plan_runtime_host_bindings",
         "plan_runtime_host_loader_consumption",
@@ -255,6 +270,8 @@ def test_project_package_exposes_public_api_surface():
         "scan_project",
         "translate_project",
         "validate_project_report",
+        "verify_runtime_fixtures",
+        "write_runtime_verification_report",
     }
     for name in project_api.__all__:
         assert hasattr(project_api, name)
@@ -8226,6 +8243,50 @@ def test_translate_project_materializes_mlx_metal_instantiate_kernel_entries(
     assert "void arangefloat16(" in output
     assert "buffer_store(out_, gid, float16(gid + 3));" in output
     assert "void arange(" not in output
+
+
+def test_translate_project_opengl_reports_unresolved_metal_template_kernel(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "raw_template.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            [[kernel]] void raw_template(device T* out [[buffer(0)]]) {
+                out[0] = T(0);
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "opengl"
+    assert "unresolved template type 'T'" in artifact["error"]
+    assert not (repo / artifact["path"]).exists()
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.opengl-template-type-unresolved"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
 
 
 def test_translate_project_named_variants_apply_native_slang_preprocessor(
@@ -22316,22 +22377,38 @@ def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
     assert "asuint(" not in generated
 
 
-def test_translate_project_reports_mlx_sort_vulkan_storage_buffer_recursion(
+def test_translate_project_resolves_mlx_sort_vulkan_storage_buffer_overload(
     tmp_path,
 ):
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "sort_reduced.cgl").write_text(
+    source_path = repo / "sort_reduced.cgl"
+    source_path.write_text(
         textwrap.dedent("""
-            shader ReducedSortRecursion {
+            shader ReducedSortOverload {
+                StructuredBuffer<int> inp @binding(0);
+                RWStructuredBuffer<int> out_ @binding(1);
+
+                void block_sort(
+                    StructuredBuffer<int> source,
+                    RWStructuredBuffer<int> target,
+                    uint index
+                ) {
+                    target.Store(index, source.Load(index));
+                }
+
+                void block_sort(
+                    StructuredBuffer<int> source,
+                    RWStructuredBuffer<int> target,
+                    uint base,
+                    uint index
+                ) {
+                    target.Store(base + index, source.Load(index));
+                }
+
                 compute {
-                    @ stage_entry
-                    void block_sort(
-                        StructuredBuffer<int> inp @buffer(0),
-                        RWStructuredBuffer<int> out_ @buffer(1),
-                        uvec3 tid @gl_WorkGroupID
-                    ) {
-                        block_sort(inp, out_, tid, tid);
+                    void main() {
+                        block_sort(inp, out_, 1u, 0u);
                     }
                 }
             }
@@ -22342,35 +22419,22 @@ def test_translate_project_reports_mlx_sort_vulkan_storage_buffer_recursion(
     payload = translate_project(repo, targets=["vulkan"], output_dir="out").to_json()
 
     assert payload["summary"]["artifactCount"] == 1
-    assert payload["summary"]["translatedCount"] == 0
-    assert payload["summary"]["failedCount"] == 1
-    assert payload["summary"]["diagnosticsByCode"] == {
-        "project.translate.unsupported-feature": 1
-    }
-    assert payload["summary"]["missingCapabilityCounts"] == {
-        "spirv.storage_buffer_function_overload": 1
-    }
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+    assert payload["diagnosticCounts"]["error"] == 0
 
     artifact = payload["artifacts"][0]
-    assert artifact["status"] == "failed"
+    assert artifact["status"] == "translated"
     assert artifact["target"] == "vulkan"
     assert artifact["source"] == "sort_reduced.cgl"
-    assert "storage-buffer function inlining" in artifact["error"]
-    assert (
-        "overloaded storage-buffer helper calls are not supported" in artifact["error"]
-    )
-    assert "maximum recursion depth exceeded" not in artifact["error"]
-    assert "generatedHash" not in artifact
-    assert not (repo / artifact["path"]).exists()
-
-    diagnostic = payload["diagnostics"][0]
-    assert diagnostic["code"] == "project.translate.unsupported-feature"
-    assert diagnostic["target"] == "vulkan"
-    assert diagnostic["location"]["file"] == "sort_reduced.cgl"
-    assert diagnostic["missingCapabilities"] == [
-        "spirv.storage_buffer_function_overload"
-    ]
-    assert "maximum recursion depth exceeded" not in diagnostic["message"]
+    assert "generatedHash" in artifact
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "block_sort" not in generated
+    assert "OpFunctionCall" not in generated
+    assert "WARNING" not in generated
+    assert payload["diagnostics"] == []
 
 
 def test_translate_project_drops_mlx_metal_system_includes_for_opengl(tmp_path):
@@ -25892,6 +25956,8 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
     assert payload["project"]["targets"] == ["cgl"]
     assert payload["summary"] == {
         "targetCount": 1,
+        "sourceCount": 1,
+        "variantCount": 0,
         "artifactCount": 1,
         "translatedArtifactCount": 1,
         "failedArtifactCount": 0,
@@ -25899,6 +25965,23 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
         "sourceRemapCount": 1,
         "runtimeReferenceCount": 1,
         "compilerRequestCount": 1,
+        "entryPointCount": 1,
+        "resourceBindingCount": 0,
+        "parameterBlockCount": 0,
+        "dispatchMetadataCount": 0,
+        "artifactsBySource": {"simple.cgl": 1},
+        "artifactsByTarget": {"cgl": 1},
+        "artifactsByVariant": {},
+        "validationStatusCounts": {"ok": 1},
+        "toolchainStatusCounts": {"not-configured": 1},
+        "runtimeDataStatusCounts": {
+            "dispatch": {"not-applicable": 1},
+            "entryPoints": {"available": 1},
+            "hostInterface": {"ready": 1},
+            "parameterBlocks": {"not-applicable": 1},
+            "resourceBindings": {"not-applicable": 1},
+        },
+        "runtimeDiagnosticCount": 0,
     }
     assert len(payload["targets"]) == 1
     assert set(payload["targets"][0]) == (
@@ -25907,7 +25990,45 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
     assert payload["targets"][0]["target"] == "cgl"
     assert payload["targets"][0]["translatedArtifactCount"] == 1
     assert payload["targets"][0]["runtimeReferenceCount"] == 1
+    assert payload["targets"][0]["sourceCount"] == 1
+    assert payload["targets"][0]["entryPointCount"] == 1
+    assert payload["targets"][0]["resourceBindingCount"] == 0
+    assert payload["targets"][0]["parameterBlockCount"] == 0
+    assert payload["targets"][0]["dispatchMetadataCount"] == 0
     assert len(payload["targets"][0]["artifacts"]) == 1
+    assert payload["artifactGroups"] == {
+        "bySource": [
+            {
+                "source": "simple.cgl",
+                "artifactCount": 1,
+                "targets": ["cgl"],
+                "sources": ["simple.cgl"],
+                "variants": [],
+                "artifacts": payload["targets"][0]["artifacts"],
+            }
+        ],
+        "byTarget": [
+            {
+                "target": "cgl",
+                "artifactCount": 1,
+                "targets": ["cgl"],
+                "sources": ["simple.cgl"],
+                "variants": [],
+                "artifacts": payload["targets"][0]["artifacts"],
+            }
+        ],
+        "byVariant": [
+            {
+                "variant": None,
+                "artifactCount": 1,
+                "targets": ["cgl"],
+                "sources": ["simple.cgl"],
+                "variants": [],
+                "artifacts": payload["targets"][0]["artifacts"],
+                "variantLabel": "default",
+            }
+        ],
+    }
     assert len(payload["artifacts"]) == 1
 
     report_artifact = report_payload["artifacts"][0]
@@ -25937,6 +26058,33 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
         "resources": [],
         "diagnostics": [],
     }
+    assert artifact["entryPoints"] == [
+        {"name": "main", "stage": "vertex", "executionConfig": {}}
+    ]
+    assert artifact["resourceBindings"] == []
+    assert artifact["parameterBlocks"] == []
+    assert artifact["dispatch"] == {
+        "status": "not-applicable",
+        "workgroupCount": 0,
+        "workgroups": [],
+        "diagnostics": [],
+    }
+    assert artifact["validation"]["status"] == "ok"
+    assert artifact["validation"]["sourceHashStatus"] == "ok"
+    assert artifact["validation"]["sourceMapStatus"] == "ok"
+    assert artifact["toolchain"]["target"] == "cgl"
+    assert artifact["toolchain"]["status"] == "not-configured"
+    assert artifact["toolchainRuns"] == []
+    assert artifact["runtimeDataStatus"] == {
+        "hostInterface": "ready",
+        "entryPoints": "available",
+        "resourceBindings": "not-applicable",
+        "parameterBlocks": "not-applicable",
+        "dispatch": "not-applicable",
+    }
+    assert artifact["diagnostics"] == []
+    assert payload["runtimeDiagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["runtimeDiagnostics"] == []
 
     assert set(payload["runtimePlan"]) == (
         project_pipeline.RUNTIME_ARTIFACT_MANIFEST_RUNTIME_PLAN_FIELDS
@@ -25950,6 +26098,154 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
     assert payload["runtimePlan"]["runtimeReferencesByPath"] == {"host.cpp": 1}
     assert payload["runtimePlan"]["compilerRequests"][0]["target"] == "cgl"
     assert payload["runtimePlan"]["actionCount"] == 2
+
+
+def test_runtime_artifact_manifest_records_runtime_integration_metadata(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "runtime.cgl").write_text(
+        textwrap.dedent("""
+            shader RuntimeMetadata {
+                layout(set = 1, binding = 2) uniform sampler2D sourceTexture;
+
+                cbuffer Camera {
+                    mat4 viewProj;
+                }
+
+                compute {
+                    layout(local_size_x = 4, local_size_y = 2, local_size_z = 1) in;
+
+                    [numthreads(4, 2, 1)]
+                    void main() {
+                    }
+                }
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            output_dir = "out"
+
+            [project.variants.debug]
+            MODE = "1"
+        """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo))
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    payload = build_runtime_artifact_manifest(report_path)
+
+    assert payload["success"] is True
+    assert payload["summary"]["sourceCount"] == 1
+    assert payload["summary"]["variantCount"] == 1
+    assert payload["summary"]["entryPointCount"] == 1
+    assert payload["summary"]["resourceBindingCount"] == 2
+    assert payload["summary"]["parameterBlockCount"] == 1
+    assert payload["summary"]["dispatchMetadataCount"] == 1
+    assert payload["summary"]["artifactsByVariant"] == {"debug": 1}
+    assert payload["summary"]["runtimeDiagnosticCount"] == 1
+    assert payload["runtimeDiagnosticCounts"] == {"note": 1, "warning": 0, "error": 0}
+    assert payload["runtimeDiagnostics"][0]["code"] == (
+        "project.runtime-manifest.resource-binding-layout-incomplete"
+    )
+    assert payload["artifactGroups"]["byVariant"][0]["variant"] == "debug"
+    assert payload["artifactGroups"]["byVariant"][0]["variantLabel"] == "debug"
+
+    target = payload["targets"][0]
+    assert target["variantCount"] == 1
+    assert target["entryPointCount"] == 1
+    assert target["resourceBindingCount"] == 2
+    assert target["parameterBlockCount"] == 1
+    assert target["dispatchMetadataCount"] == 1
+
+    artifact = payload["artifacts"][0]
+    assert artifact["variant"] == "debug"
+    assert artifact["entryPoints"] == [
+        {
+            "name": "main",
+            "stage": "compute",
+            "executionConfig": {
+                "local_size_x": "4",
+                "local_size_y": "2",
+                "local_size_z": "1",
+                "numthreads": ["4", "2", "1"],
+            },
+        }
+    ]
+    assert artifact["resourceBindings"] == [
+        {
+            "id": "constant-buffer|default|default|Camera|0",
+            "name": "Camera",
+            "kind": "constant-buffer",
+            "type": "Camera",
+            "set": None,
+            "binding": None,
+            "access": "read",
+            "status": "layout-missing",
+            "source": "hostInterface.resources",
+        },
+        {
+            "id": "texture|1|2|sourceTexture|1",
+            "name": "sourceTexture",
+            "kind": "texture",
+            "type": "sampler2D",
+            "set": 1,
+            "binding": 2,
+            "access": None,
+            "status": "bound",
+            "source": "hostInterface.resources",
+        },
+    ]
+    assert artifact["parameterBlocks"] == [
+        {
+            "name": "Camera",
+            "kind": "constant-buffer",
+            "type": "Camera",
+            "set": None,
+            "binding": None,
+            "access": "read",
+            "resourceBinding": "constant-buffer|default|default|Camera|0",
+            "status": "layout-incomplete",
+            "fields": [],
+            "fieldLayoutStatus": "unavailable",
+        }
+    ]
+    assert artifact["dispatch"] == {
+        "status": "available",
+        "workgroupCount": 1,
+        "workgroups": [
+            {
+                "entryPoint": "main",
+                "stage": "compute",
+                "workgroupSize": [4, 2, 1],
+                "source": "entryPoint.executionConfig.numthreads",
+                "executionConfig": {
+                    "local_size_x": "4",
+                    "local_size_y": "2",
+                    "local_size_z": "1",
+                    "numthreads": ["4", "2", "1"],
+                },
+            }
+        ],
+        "diagnostics": [],
+    }
+    assert artifact["runtimeDataStatus"] == {
+        "hostInterface": "ready",
+        "entryPoints": "available",
+        "resourceBindings": "partial",
+        "parameterBlocks": "partial",
+        "dispatch": "available",
+    }
+    assert [diagnostic["code"] for diagnostic in artifact["diagnostics"]] == [
+        "project.runtime-manifest.resource-binding-layout-incomplete"
+    ]
+    assert artifact["validation"]["status"] == "ok"
+    assert artifact["toolchain"]["status"] == "not-configured"
 
 
 def test_runtime_artifact_manifest_invalid_report_is_diagnostic_only(tmp_path):
