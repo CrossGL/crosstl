@@ -6453,6 +6453,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "samplerCubeArrayShadow": "cudaTextureObject_t",
             "sampler2DMS": "cudaTextureObject_t",
             "sampler2DMSArray": "cudaTextureObject_t",
+            "isampler1D": "cudaTextureObject_t",
+            "isampler1DArray": "cudaTextureObject_t",
+            "isampler2D": "cudaTextureObject_t",
+            "isampler3D": "cudaTextureObject_t",
+            "isamplerCube": "cudaTextureObject_t",
+            "isampler2DArray": "cudaTextureObject_t",
+            "isamplerCubeArray": "cudaTextureObject_t",
+            "isampler2DMS": "cudaTextureObject_t",
+            "isampler2DMSArray": "cudaTextureObject_t",
+            "usampler1D": "cudaTextureObject_t",
+            "usampler1DArray": "cudaTextureObject_t",
+            "usampler2D": "cudaTextureObject_t",
+            "usampler3D": "cudaTextureObject_t",
+            "usamplerCube": "cudaTextureObject_t",
+            "usampler2DArray": "cudaTextureObject_t",
+            "usamplerCubeArray": "cudaTextureObject_t",
+            "usampler2DMS": "cudaTextureObject_t",
+            "usampler2DMSArray": "cudaTextureObject_t",
             "image1D": "cudaSurfaceObject_t",
             "image1DArray": "cudaSurfaceObject_t",
             "image2D": "cudaSurfaceObject_t",
@@ -7254,6 +7272,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def resource_call_result_type(self, func_name, raw_args):
         """Infer CUDA-specific resource diagnostic result types."""
+        if func_name in {"texelFetch", "texelFetchOffset"} and raw_args:
+            resource_type = self.resource_base_type(
+                self.resource_expression_type(raw_args[0])
+            )
+            if self.is_shadow_resource_type(resource_type):
+                return "float"
+            if self.is_sampled_texture_family_type(resource_type):
+                return self.sampled_texture_value_type(resource_type)
+
         result_type = super().resource_call_result_type(func_name, raw_args)
         if result_type is not None:
             return result_type
@@ -11008,7 +11035,35 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             coord_type = self.expression_result_type(raw_coord)
         return self.vector_component_count_for_type(coord_type)
 
+    def sampled_texture_shape_type(self, texture_type):
+        """Return the float sampler shape spelling for typed sampled textures."""
+        texture_type = self.resource_base_type(texture_type)
+        if not isinstance(texture_type, str):
+            return None
+        for prefix in ("isampler", "usampler"):
+            if texture_type.startswith(prefix):
+                return f"sampler{texture_type[len(prefix):]}"
+        return texture_type
+
+    def sampled_texture_value_type(self, texture_type):
+        """Return the CUDA vector type read from a sampled texture."""
+        texture_type = self.resource_base_type(texture_type)
+        if isinstance(texture_type, str) and texture_type.startswith("isampler"):
+            return "int4"
+        if isinstance(texture_type, str) and texture_type.startswith("usampler"):
+            return "uint4"
+        return "float4"
+
+    def is_sampled_texture_family_type(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            isinstance(texture_type, str)
+            and texture_type != "sampler"
+            and texture_type.startswith(("sampler", "isampler", "usampler"))
+        )
+
     def expected_texel_fetch_coordinate_count(self, texture_type):
+        texture_type = self.sampled_texture_shape_type(texture_type)
         return {
             "sampler1D": 1,
             "sampler1DArray": 2,
@@ -11018,6 +11073,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         }.get(texture_type)
 
     def expected_texture_coordinate_count(self, texture_type):
+        texture_type = self.sampled_texture_shape_type(texture_type)
         return {
             "sampler1D": 1,
             "sampler1DArray": 2,
@@ -11055,6 +11111,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         }.get(func_name)
 
     def expected_texture_offset_coordinate_count(self, texture_type):
+        texture_type = self.sampled_texture_shape_type(texture_type)
         return {
             "sampler1D": 1,
             "sampler1DArray": 1,
@@ -11081,6 +11138,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return None
 
     def expected_texture_gradient_coordinate_counts(self, texture_type):
+        texture_type = self.sampled_texture_shape_type(texture_type)
         return {
             "sampler1D": {1},
             "sampler1DArray": {1},
@@ -11117,6 +11175,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return 0
 
     def cuda_texture_gradient_argument(self, texture_type, raw_gradient, gradient):
+        texture_type = self.sampled_texture_shape_type(texture_type)
         if texture_type not in {"sampler3D", "samplerCube", "samplerCubeArray"}:
             return gradient
 
@@ -11131,6 +11190,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def cuda_texture_coord_components(self, texture_type, coord):
         """Return CUDA texture coordinate components for a sampled resource."""
+        texture_type = self.sampled_texture_shape_type(texture_type)
         if texture_type == "sampler1D":
             return [coord]
         if texture_type == "sampler1DArray":
@@ -11182,6 +11242,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def cuda_projected_texture_coord_components(self, texture_type, raw_coord, coord):
         """Return projected CUDA texture coordinate components."""
+        texture_type = self.sampled_texture_shape_type(texture_type)
         coord_count = self.texel_fetch_coordinate_count(raw_coord)
 
         if texture_type == "sampler1D" and coord_count in {2, 4}:
@@ -11332,23 +11393,28 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self, texture_type, texture_name, components
     ):
         """Return a CUDA texel-fetch expression from precomputed components."""
+        value_type = self.sampled_texture_value_type(texture_type)
+        texture_type = self.sampled_texture_shape_type(texture_type)
         if texture_type == "sampler1D" and len(components) >= 1:
-            return f"tex1Dfetch<float4>({texture_name}, {components[0]})"
+            return f"tex1Dfetch<{value_type}>({texture_name}, {components[0]})"
         if texture_type == "sampler1DArray" and len(components) >= 2:
             return (
-                f"tex1DLayered<float4>"
+                f"tex1DLayered<{value_type}>"
                 f"({texture_name}, {components[0]}, {components[1]})"
             )
         if texture_type == "sampler2D" and len(components) >= 2:
-            return f"tex2D<float4>({texture_name}, {components[0]}, {components[1]})"
+            return (
+                f"tex2D<{value_type}>"
+                f"({texture_name}, {components[0]}, {components[1]})"
+            )
         if texture_type == "sampler2DArray" and len(components) >= 3:
             return (
-                f"tex2DLayered<float4>"
+                f"tex2DLayered<{value_type}>"
                 f"({texture_name}, {components[0]}, {components[1]}, {components[2]})"
             )
         if texture_type == "sampler3D" and len(components) >= 3:
             return (
-                f"tex3D<float4>"
+                f"tex3D<{value_type}>"
                 f"({texture_name}, {components[0]}, {components[1]}, {components[2]})"
             )
         return None
@@ -11608,7 +11674,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         )
         if texture_type is None:
             return None
-        if texture_type is not None and not self.is_sampled_resource_type(texture_type):
+        if texture_type is not None and not self.is_sampled_texture_family_type(
+            texture_type
+        ):
             return self.unsupported_sampled_resource_call(
                 "texelFetchOffset", texture_type, args
             )
@@ -11620,7 +11688,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return self.unsupported_multisample_resource_call(
                 "texelFetchOffset", texture_type, args
             )
-        if texture_type in {"samplerCube", "samplerCubeArray"}:
+        texture_shape = self.sampled_texture_shape_type(texture_type)
+        if texture_shape in {"samplerCube", "samplerCubeArray"}:
             return self.unsupported_sampled_resource_call(
                 "texelFetchOffset", texture_type, args
             )
@@ -11651,7 +11720,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return offset_diagnostic
 
         components = self.cuda_texture_offset_components(
-            texture_type, args[coord_index], args[offset_index]
+            texture_shape, args[coord_index], args[offset_index]
         )
         if components is None:
             return self.unsupported_sampled_resource_call(
@@ -12200,7 +12269,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             texture_type = self.resource_base_type(
                 self.resource_expression_type(raw_args[0])
             )
-            if texture_type is not None and not self.is_sampled_resource_type(
+            if texture_type is not None and not self.is_sampled_texture_family_type(
                 texture_type
             ):
                 return self.unsupported_sampled_resource_call(
@@ -12214,7 +12283,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return self.unsupported_multisample_resource_call(
                     func_name, texture_type, args
                 )
-            if texture_type in {"samplerCube", "samplerCubeArray"}:
+            texture_shape = self.sampled_texture_shape_type(texture_type)
+            if texture_shape in {"samplerCube", "samplerCubeArray"}:
                 return self.unsupported_sampled_resource_call(
                     func_name, texture_type, args
                 )
@@ -12227,7 +12297,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             texture_name = args[0]
             coord = args[coord_index]
             expected_coord_count = self.expected_texel_fetch_coordinate_count(
-                texture_type
+                texture_shape
             )
             actual_coord_count = self.texel_fetch_coordinate_count(
                 raw_args[coord_index]
@@ -12242,7 +12312,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     texture_type,
                     args,
                 )
-            components = self.cuda_texture_coord_components(texture_type, coord)
+            components = self.cuda_texture_coord_components(texture_shape, coord)
             if components is not None:
                 return self.cuda_texel_fetch_call_from_components(
                     texture_type, texture_name, components

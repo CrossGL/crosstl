@@ -12,15 +12,15 @@ The current harness verifies:
 - discovery of the MLX Metal kernel project surface under
   `mlx/backend/metal/kernels`;
 - DirectX and Vulkan artifact generation for the current reduced frontier:
-  `arange.metal`, `binary.metal`, `binary_two.metal`, `copy.metal`,
-  `fence.metal`, `random.metal`, `ternary.metal`, and `unary.metal`;
+  `arange.metal`, `binary_two.metal`, `fence.metal`, `random.metal`, and
+  `ternary.metal`;
 - Vulkan assembly validation when SPIR-V tools are available;
 - OpenGL artifact generation for `arange.metal`.
 
 A separate full-corpus scout against the same pinned MLX revision currently
-translates 79 of 120 target artifacts across DirectX, OpenGL, and Vulkan:
-DirectX translates 35 of 40 artifacts, OpenGL translates 13 of 40 artifacts,
-and Vulkan translates 31 of 40 artifacts. The current materialization pass rejects
+translates 47 of 120 target artifacts across DirectX, OpenGL, and Vulkan:
+DirectX translates 19 of 40 artifacts, OpenGL translates 12 of 40 artifacts,
+and Vulkan translates 16 of 40 artifacts. The current materialization pass rejects
 template-hostile targets when concrete variants are missing instead of emitting
 generic artifacts, so the full-corpus count reflects stricter diagnostics rather
 than a claim that previously translated artifacts were runtime-complete.
@@ -60,29 +60,21 @@ The harness writes reports, generated artifacts, and command logs under
 
 ## Current Translator Gaps
 
-- CrossGL/crosstl#1032, CrossGL/crosstl#1106, and CrossGL/crosstl#1107 cover
-  the remaining Metal template materialization work for rotary embedding
-  kernels, convolution helper templates, and shared reduction/normalization
-  helper-template graphs.
-- CrossGL/crosstl#1068, CrossGL/crosstl#1105, CrossGL/crosstl#1110, and
-  CrossGL/crosstl#1111 cover OpenGL template binding propagation for
-  quantized/FFT/masked-GEMV kernels, elemental/copy-style kernels,
-  reduction/ordering kernels, and nested Steel kernels.
-- CrossGL/crosstl#1104 covers OpenGL uniform block and cbuffer member
-  disambiguation during project translation.
-- CrossGL/crosstl#1036 and CrossGL/crosstl#1037 cover the remaining SPIR-V
-  storage-buffer helper provenance and inlining failures.
+- CrossGL/crosstl#1106, CrossGL/crosstl#1107, CrossGL/crosstl#1122, and
+  CrossGL/crosstl#1124 cover the remaining Metal template materialization work
+  for convolution helpers, shared reduction/normalization helper graphs, common
+  utility helpers, and Steel attention helpers.
+- CrossGL/crosstl#1110 and CrossGL/crosstl#1111 cover latent OpenGL template
+  binding propagation for reduction/ordering kernels and nested Steel kernels
+  once earlier materialization blockers are cleared.
+- CrossGL/crosstl#1127 covers the remaining OpenGL uniform block and cbuffer
+  member disambiguation failures.
+- CrossGL/crosstl#1126 covers the remaining SPIR-V storage-buffer overload
+  resolution failures.
 
 These gaps are translator work. Host runtime integration gaps should be handled
 in MLX-specific integration code or downstream runtime adapters, not hidden as
 shader translation successes.
-
-## Runtime Integration Gaps
-
-- CrossGL/crosstl#1038: emit backend-agnostic runtime binding manifests for
-  translated project artifacts.
-- CrossGL/crosstl#1039: add project runtime parity executors for translated GPU
-  artifacts.
 
 ## Resolved Frontier Issues
 
@@ -100,7 +92,10 @@ CrossGL/crosstl#1028, CrossGL/crosstl#1029, CrossGL/crosstl#1030,
 CrossGL/crosstl#1031, CrossGL/crosstl#1033, CrossGL/crosstl#1034,
 CrossGL/crosstl#1035, and CrossGL/crosstl#1036 are closed by mainline fixes or
 superseded by the current issue set and are no longer listed as active MLX
-blockers. CrossGL/crosstl#1027 is no longer reported by the latest full-corpus
+blockers. CrossGL/crosstl#1032, CrossGL/crosstl#1037, CrossGL/crosstl#1038,
+CrossGL/crosstl#1039, CrossGL/crosstl#1068, CrossGL/crosstl#1104, and
+CrossGL/crosstl#1105 are also closed or superseded by the current scout and
+issue set. CrossGL/crosstl#1027 is no longer reported by the latest full-corpus
 scout because the generated Metal quantization declarator now parses far enough
 to reach target codegen. The current full-corpus scout no longer reports
 runtime-adapter contracts, boolean SPIR-V interface lowering, or the previous

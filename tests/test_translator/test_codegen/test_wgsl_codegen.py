@@ -104,6 +104,33 @@ def test_wgsl_codegen_preserves_explicit_io_attributes():
     )
 
 
+def test_wgsl_codegen_maps_derivative_intrinsics():
+    shader = """
+    shader WGSLDerivatives {
+        fragment {
+            vec4 main(vec3 frag_pos @ TEXCOORD0) @ gl_FragColor {
+                vec3 dx = dFdx(frag_pos);
+                vec3 dy = ddy(frag_pos);
+                vec3 fine = ddx_fine(frag_pos);
+                vec3 coarse = dFdyCoarse(frag_pos);
+                return vec4(dx + dy + fine + coarse, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "dpdx(frag_pos)" in generated
+    assert "dpdy(frag_pos)" in generated
+    assert "dpdxFine(frag_pos)" in generated
+    assert "dpdyCoarse(frag_pos)" in generated
+    assert "dFdx(" not in generated
+    assert "ddy(" not in generated
+    assert "ddx_fine(" not in generated
+    assert "dFdyCoarse(" not in generated
+
+
 def test_wgsl_codegen_emits_compute_workgroup_size():
     generated = WGSLCodeGen().generate(parse_shader(WGSL_COMPUTE_SHADER))
 
@@ -776,6 +803,80 @@ def test_wgsl_codegen_lowers_structured_buffer_access_helpers():
     assert "buffer_store" not in generated
     assert ".Load" not in generated
     assert ".Store" not in generated
+
+
+def test_wgsl_codegen_lowers_stage_resource_parameters_to_module_bindings():
+    shader = """
+    shader WGSLStageResourceParameters {
+        struct MatMulParams {
+            uint row_dim_x;
+            uint col_dim_x;
+            uint inner_dim;
+        };
+        compute {
+            void main(
+                constant MatMulParams& params @buffer(0),
+                StructuredBuffer<float> A @buffer(1),
+                StructuredBuffer<float> B @buffer(2),
+                RWStructuredBuffer<float> X @buffer(3),
+                uint3 gid @ gl_GlobalInvocationID
+            ) {
+                uint index = gid.x;
+                buffer_store(
+                    X,
+                    index,
+                    buffer_load(A, index) + buffer_load(B, index) + float(params.inner_dim)
+                );
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(0)\nvar<uniform> params: MatMulParams;" in generated
+    assert "@group(0) @binding(1)\nvar<storage, read> A: array<f32>;" in generated
+    assert "@group(0) @binding(2)\nvar<storage, read> B: array<f32>;" in generated
+    assert "@group(0) @binding(3)\nvar<storage, read_write> X: array<f32>;" in generated
+    assert "fn compute_main(@builtin(global_invocation_id) gid: vec3<u32>)" in generated
+    assert "StructuredBuffer<float> A" not in generated
+    assert "RWStructuredBuffer<float> X" not in generated
+    assert "constant MatMulParams" not in generated
+    assert "var index: u32 = gid.x;" in generated
+    assert "X[index] = ((A[index] + B[index]) + f32(params.inner_dim));" in generated
+
+
+def test_wgsl_codegen_lowers_constant_buffer_stage_parameters_to_uniform_bindings():
+    shader = """
+    shader WGSLConstantBufferStageParameter {
+        struct Params {
+            uint count;
+        };
+        compute {
+            void main(
+                ConstantBuffer<Params> params @buffer(2),
+                RWStructuredBuffer<float> values @buffer(3),
+                uint3 gid @ gl_GlobalInvocationID
+            ) {
+                if (gid.x < params.count) {
+                    buffer_store(values, gid.x, 1.0);
+                }
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(2)\nvar<uniform> params: Params;" in generated
+    assert (
+        "@group(0) @binding(3)\nvar<storage, read_write> values: array<f32>;"
+        in generated
+    )
+    assert "ConstantBuffer<Params> params" not in generated
+    assert "params.count" in generated
 
 
 def test_wgsl_codegen_rejects_readonly_structured_buffer_stores():

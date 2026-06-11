@@ -581,6 +581,10 @@ class HLSLCodeGen:
         "nonuniform",
         "nonuniformEXT",
     }
+    # Matches glslang's default resource limit for this built-in constant.
+    HLSL_GLSL_BUILTIN_INT_CONSTANTS = {
+        "gl_MaxImageUnits": 8,
+    }
 
     def __init__(self, target_profile=None):
         """Initialize DirectX type maps and per-generation resource state."""
@@ -1085,6 +1089,9 @@ class HLSLCodeGen:
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
         )
+        self.literal_int_constants.update(
+            self.referenced_hlsl_glsl_builtin_int_constants(ast)
+        )
         self.literal_bool_constants = self.collect_hlsl_literal_bool_constants(
             getattr(ast, "constants", [])
         )
@@ -1363,6 +1370,7 @@ class HLSLCodeGen:
             )
         )
         code += self.generate_constants(ast, leading_constants)
+        code += self.generate_hlsl_glsl_builtin_constant_declarations(ast)
         code += self.generate_hlsl_ordered_struct_declarations(structs)
         code += self.generate_constants(ast, struct_dependent_constants)
         code += generate_enum_constructor_functions(self, self.struct_payload_enums)
@@ -3036,6 +3044,33 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             code += f"static const {declaration} = {value_code};\n"
 
         return f"{code}\n" if code else ""
+
+    def referenced_hlsl_glsl_builtin_int_constants(self, ast):
+        declared_names = {
+            getattr(node, "name", None) for node in getattr(ast, "constants", []) or []
+        }
+        declared_names.update(
+            getattr(node, "name", getattr(node, "variable_name", None))
+            for node in getattr(ast, "global_variables", []) or []
+        )
+        used_names = {
+            getattr(node, "name", None)
+            for node in self.walk_ast(ast)
+            if hasattr(node, "__class__") and "Identifier" in str(node.__class__)
+        }
+        return {
+            name: value
+            for name, value in self.HLSL_GLSL_BUILTIN_INT_CONSTANTS.items()
+            if name in used_names and name not in declared_names
+        }
+
+    def generate_hlsl_glsl_builtin_constant_declarations(self, ast):
+        declarations = []
+        for name, value in sorted(
+            self.referenced_hlsl_glsl_builtin_int_constants(ast).items()
+        ):
+            declarations.append(f"static const int {name} = {value};")
+        return "\n".join(declarations) + "\n\n" if declarations else ""
 
     def generate_constant_expression(self, expr):
         value_code = self.generate_expression(expr)
@@ -12729,7 +12764,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         used_semantics = set()
         for member in getattr(struct_node, "members", []) or []:
             semantic = self.hlsl_struct_member_declared_semantic(member)
-            if semantic is not None:
+            if (
+                semantic is not None
+                and self.hlsl_location_attribute_index(member) is None
+            ):
                 used_semantics.add(self.hlsl_semantic_key(semantic))
 
         defaults = {}
@@ -12756,13 +12794,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             member_name = getattr(member, "name", None)
             if not member_name or member_name in defaults:
                 continue
-            if self.hlsl_struct_member_declared_semantic(member) is not None:
+
+            declared_semantic = self.hlsl_struct_member_declared_semantic(member)
+            location_index = self.hlsl_location_attribute_index(member)
+            if declared_semantic is not None and location_index is None:
                 continue
             if not self.hlsl_can_default_fragment_input_semantic(
                 self.hlsl_struct_member_type_name(member)
             ):
                 continue
 
+            if location_index is not None:
+                next_texcoord = location_index
             while self.hlsl_semantic_key(f"TEXCOORD{next_texcoord}") in used_semantics:
                 next_texcoord += 1
             semantic = f"TEXCOORD{next_texcoord}"
@@ -13616,6 +13659,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 if getattr(parameter, "name", None)
             }
+            stage_parameters.update(
+                self.collect_hlsl_stage_entry_local_dependencies(entry_point)
+            )
             parameter_nodes.update(stage_parameters)
 
             stage_functions = list(getattr(stage, "local_functions", []) or [])
@@ -13655,6 +13701,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if dependency_names
         }
 
+    def collect_hlsl_stage_entry_local_dependencies(self, entry_point):
+        dependencies = {}
+        if entry_point is None:
+            return dependencies
+
+        for node in self.hlsl_statement_body_items(getattr(entry_point, "body", [])):
+            if not isinstance(node, VariableNode):
+                continue
+            name = getattr(node, "name", None)
+            if name:
+                dependencies[name] = node
+        return dependencies
+
     def required_hlsl_stage_parameters(self, func_name):
         return self.function_stage_parameter_dependencies.get(func_name, [])
 
@@ -13670,6 +13729,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         param_type = self.directx_resource_declaration_type(param_type)
         param_type = self.apply_hlsl_parameter_qualifiers(param_type, parameter)
+        if isinstance(parameter, VariableNode) and "const" not in getattr(
+            parameter, "qualifiers", []
+        ):
+            param_type = f"inout {param_type}"
         return format_c_style_array_declaration(
             param_type, self.hlsl_declaration_identifier_name(parameter.name)
         )

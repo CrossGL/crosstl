@@ -18,27 +18,21 @@ MLX_METAL_KERNEL_ROOT = "mlx/backend/metal/kernels"
 MLX_ARANGE_SOURCE = "mlx/backend/metal/kernels/arange.metal"
 MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/arange.metal",
-    "mlx/backend/metal/kernels/binary.metal",
     "mlx/backend/metal/kernels/binary_two.metal",
-    "mlx/backend/metal/kernels/copy.metal",
     "mlx/backend/metal/kernels/fence.metal",
     "mlx/backend/metal/kernels/random.metal",
     "mlx/backend/metal/kernels/ternary.metal",
-    "mlx/backend/metal/kernels/unary.metal",
 )
 EXPECTED_METAL_KERNEL_COUNT = 40
 FULL_CORPUS_TRACKED_ISSUES = (
-    "https://github.com/CrossGL/crosstl/issues/1032",
-    "https://github.com/CrossGL/crosstl/issues/1037",
-    "https://github.com/CrossGL/crosstl/issues/1038",
-    "https://github.com/CrossGL/crosstl/issues/1039",
-    "https://github.com/CrossGL/crosstl/issues/1068",
-    "https://github.com/CrossGL/crosstl/issues/1104",
-    "https://github.com/CrossGL/crosstl/issues/1105",
     "https://github.com/CrossGL/crosstl/issues/1106",
     "https://github.com/CrossGL/crosstl/issues/1107",
     "https://github.com/CrossGL/crosstl/issues/1110",
     "https://github.com/CrossGL/crosstl/issues/1111",
+    "https://github.com/CrossGL/crosstl/issues/1122",
+    "https://github.com/CrossGL/crosstl/issues/1124",
+    "https://github.com/CrossGL/crosstl/issues/1126",
+    "https://github.com/CrossGL/crosstl/issues/1127",
 )
 RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/939",
@@ -74,6 +68,13 @@ RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1034",
     "https://github.com/CrossGL/crosstl/issues/1035",
     "https://github.com/CrossGL/crosstl/issues/1036",
+    "https://github.com/CrossGL/crosstl/issues/1032",
+    "https://github.com/CrossGL/crosstl/issues/1037",
+    "https://github.com/CrossGL/crosstl/issues/1038",
+    "https://github.com/CrossGL/crosstl/issues/1039",
+    "https://github.com/CrossGL/crosstl/issues/1068",
+    "https://github.com/CrossGL/crosstl/issues/1104",
+    "https://github.com/CrossGL/crosstl/issues/1105",
 )
 
 

@@ -2,7 +2,13 @@
 
 from copy import copy
 
-from ..ast import BinaryOpNode, FunctionCallNode, StageMap, TernaryOpNode
+from ..ast import (
+    AssignmentNode,
+    BinaryOpNode,
+    FunctionCallNode,
+    StageMap,
+    TernaryOpNode,
+)
 from .array_utils import format_c_style_array_declaration
 from .GLSL_codegen import GLSLCodeGen
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
@@ -11,6 +17,8 @@ from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 class WebGLCodeGen(GLSLCodeGen):
     """Generate WebGL 2.0 compatible GLSL ES output from CrossGL ASTs."""
 
+    BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
+    UNSUPPORTED_VERTEX_OUTPUT_BUILTINS = {"gl_ClipDistance", "gl_CullDistance"}
     UNSUPPORTED_STAGE_NAMES = (
         {
             "compute",
@@ -146,6 +154,18 @@ class WebGLCodeGen(GLSLCodeGen):
             raise ValueError(
                 f"WebGL target does not support atomic operation '{func_name}'"
             )
+
+    def generate_glsl_interface_block_declaration(self, node):
+        if self.is_webgl_builtin_interface_block(node):
+            return ""
+        return super().generate_glsl_interface_block_declaration(node)
+
+    def is_webgl_builtin_interface_block(self, node):
+        if not self.is_glsl_interface_block_struct(node):
+            return False
+        return (
+            self.glsl_interface_block_name(node) in self.BUILTIN_INTERFACE_BLOCK_NAMES
+        )
 
     def glsl_dynamic_resource_call_dispatch_info(self, expr):
         dispatch = super().glsl_dynamic_resource_call_dispatch_info(expr)
@@ -507,6 +527,7 @@ class WebGLCodeGen(GLSLCodeGen):
         target_stage = normalize_stage_name(target_stage)
         self.validate_webgl_stage_support(ast, target_stage)
         supported_ast = self.webgl_supported_stage_ast(ast, target_stage)
+        self.validate_webgl_builtin_support(supported_ast)
         self.validate_webgl_resource_support(supported_ast)
         codegen_ast = ast if target_stage is not None else supported_ast
         code = super().generate_program(
@@ -522,6 +543,56 @@ class WebGLCodeGen(GLSLCodeGen):
     def validate_webgl_resource_support(self, ast):
         for node in self.walk_ast(ast):
             self.validate_webgl_node_resource_support(node)
+
+    def validate_webgl_builtin_support(self, ast):
+        builtin_names = self.webgl_unsupported_builtin_output_names(ast)
+        for node in self.walk_ast(ast):
+            if not isinstance(node, AssignmentNode):
+                continue
+            target = getattr(node, "target", getattr(node, "left", None))
+            unsupported_builtin = self.webgl_referenced_unsupported_builtin(
+                target, builtin_names
+            )
+            if unsupported_builtin is None:
+                continue
+            raise ValueError(
+                "WebGL target does not support vertex built-in output "
+                f"'{unsupported_builtin}'"
+            )
+
+    def webgl_unsupported_builtin_output_names(self, ast):
+        names = {
+            builtin: builtin for builtin in self.UNSUPPORTED_VERTEX_OUTPUT_BUILTINS
+        }
+        for node in self.walk_ast(ast):
+            node_name = getattr(node, "name", None)
+            if not node_name:
+                continue
+            builtin_name = self.webgl_unsupported_builtin_attribute_name(node)
+            if builtin_name is not None:
+                names[str(node_name)] = builtin_name
+        return names
+
+    def webgl_unsupported_builtin_attribute_name(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name in self.UNSUPPORTED_VERTEX_OUTPUT_BUILTINS:
+                return attr_name
+        semantic = getattr(node, "semantic", None)
+        if semantic in self.UNSUPPORTED_VERTEX_OUTPUT_BUILTINS:
+            return semantic
+        return None
+
+    def webgl_referenced_unsupported_builtin(self, node, builtin_names):
+        if node is None:
+            return None
+        for child in self.walk_ast(node):
+            name = getattr(child, "name", None)
+            if name in self.UNSUPPORTED_VERTEX_OUTPUT_BUILTINS:
+                return name
+            if name in builtin_names:
+                return builtin_names[name]
+        return None
 
     def validate_webgl_node_resource_support(self, node):
         if isinstance(node, FunctionCallNode):

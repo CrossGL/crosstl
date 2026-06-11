@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +10,9 @@ from crosstl.formatter import format_shader_code
 from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from tests.test_backend.test_SPIRV.test_codegen import (
+    SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
+)
 
 WEBGL_SHADER = """
 shader WebGLSmoke {
@@ -884,6 +889,77 @@ def test_webgl_codegen_rejects_atomics():
     with pytest.raises(
         ValueError,
         match="WebGL target does not support atomic operation 'atomicAdd'",
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+def test_webgl_translate_spirv_builtin_position_omits_gl_pervertex(tmp_path):
+    shader_path = tmp_path / "glpervertex.vert.spvasm"
+    shader_path.write_text(
+        SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY, encoding="utf-8"
+    )
+
+    generated = crosstl.translate(
+        str(shader_path), backend="webgl", format_output=False
+    )
+
+    assert generated.startswith("#version 300 es\n")
+    assert "gl_PerVertex" not in generated
+    assert "gl_ClipDistance" not in generated
+    assert "gl_CullDistance" not in generated
+    assert "layout(location = 0) in vec4 _ua_position;" in generated
+    assert "gl_Position = _ua_position;" in generated
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator not available")
+
+    output_path = tmp_path / "glpervertex.vert.webgl.glsl"
+    output_path.write_text(generated, encoding="utf-8")
+    result = subprocess.run(
+        [glslang, "-S", "vert", str(output_path)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout
+
+
+@pytest.mark.parametrize(
+    ("declaration", "assignment", "builtin"),
+    (
+        (
+            "float clipDistance[1] @output @gl_ClipDistance;",
+            "clipDistance[0] = 1.0;",
+            "gl_ClipDistance",
+        ),
+        (
+            "float cullDistance[1] @output @gl_CullDistance;",
+            "cullDistance[0] = 1.0;",
+            "gl_CullDistance",
+        ),
+    ),
+)
+def test_webgl_codegen_rejects_clip_and_cull_distance_writes(
+    declaration, assignment, builtin
+):
+    shader = f"""
+    shader WebGLUnsupportedDistances {{
+        vertex {{
+            {declaration}
+
+            void main() {{
+                gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+                {assignment}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=rf"WebGL target does not support vertex built-in output '{builtin}'",
     ):
         WebGLCodeGen().generate(parse_shader(shader))
 

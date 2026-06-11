@@ -205,6 +205,7 @@ class VulkanSPIRVCodeGen:
         self.resource_type_metadata = {}
         self.structured_buffer_metadata = {}
         self.storage_buffer_access_metadata = {}
+        self.storage_buffer_pointer_offset_aliases = {}
         self.source_variable_type_names = {}
         self.uniform_block_wrapped_variables = {}
         self.precise_global_variables = set()
@@ -14887,18 +14888,27 @@ class VulkanSPIRVCodeGen:
             return False
 
         source_metadata = self.resource_metadata_for_pointer(source_pointer)
-        if source_metadata is None:
+        source_storage_buffer_metadata = (
+            self.storage_buffer_access_metadata_for_pointer(source_pointer)
+        )
+        if source_metadata is None and source_storage_buffer_metadata is None:
             return False
 
+        alias_type_name = self.storage_buffer_resource_type_name(
+            var_type_name
+        ) or self.storage_buffer_expression_type_name(initial_value)
         if var_type_source is not None:
             base_type_name = self.array_base_type_name(var_type_name)
             if not (
                 self.is_resource_type_name(base_type_name)
                 or self.is_acceleration_structure_type_name(base_type_name)
+                or alias_type_name is not None
             ):
                 return False
 
         self.local_variables[node.name] = source_pointer
+        if alias_type_name is not None:
+            self.local_variable_types[node.name] = alias_type_name
         self.resource_alias_variables.add(node.name)
         return True
 
@@ -16346,6 +16356,7 @@ class VulkanSPIRVCodeGen:
                 storage_buffer_type_name
             ) == self.normalize_signature_type_name(actual_type_name):
                 score += 1
+            score += self.storage_buffer_argument_name_match_score(param, arg)
             return score
 
         declared_type_name = self.function_parameter_type_name(param)
@@ -16364,7 +16375,27 @@ class VulkanSPIRVCodeGen:
                 declared_type_name
             ) == self.normalize_signature_type_name(actual_type_name):
                 score += 1
+        score += self.storage_buffer_argument_name_match_score(param, arg)
         return score
+
+    def storage_buffer_argument_name_match_score(self, param, arg) -> int:
+        param_name = getattr(param, "name", None)
+        arg_name = self.expression_name(arg)
+        if not param_name or not arg_name or param_name != arg_name:
+            return 0
+
+        if self.function_parameter_is_reference_like(param):
+            return 4
+        return 2
+
+    def function_parameter_is_reference_like(self, param) -> bool:
+        param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+        type_name = self.type_name_from_value(param_type)
+        if type_name is None:
+            return False
+
+        type_name = str(type_name).strip()
+        return type_name.startswith("&") or type_name.endswith("&")
 
     def storage_buffer_argument_rejection_reason(
         self, param, arg, arg_index, substitutions=None
@@ -18612,6 +18643,44 @@ class VulkanSPIRVCodeGen:
         self.structured_buffer_metadata[target_pointer.id] = access_metadata
         self.storage_buffer_access_metadata[target_pointer.id] = access_metadata
 
+    def storage_buffer_pointer_alias_index(self, base_index: SpirvId, index: SpirvId):
+        index_type = self.value_types.get(base_index.id) or self.ensure_registered_type(
+            base_index.type
+        )
+        converted_index = self.convert_value_to_type(index, index_type)
+        return self.binary_operation("+", index_type, base_index, converted_index)
+
+    def is_storage_buffer_pointer_arithmetic_base(self, pointer: SpirvId) -> bool:
+        if pointer.id in self.storage_buffer_pointer_offset_aliases:
+            return True
+
+        metadata = self.structured_buffer_metadata_for_pointer(pointer)
+        if metadata is None:
+            return False
+        if metadata.get("_access_path") in {"element", "member"}:
+            return False
+
+        type_info = self.storage_buffer_resource_type_info(
+            metadata.get("declared_type_name")
+        )
+        return (
+            type_info is not None and type_info.get("kind") == "storage_buffer_pointer"
+        )
+
+    def record_storage_buffer_pointer_offset_alias(
+        self, source_pointer: SpirvId, alias_pointer: SpirvId, index: SpirvId
+    ):
+        root_pointer, root_index = self.storage_buffer_pointer_offset_aliases.get(
+            source_pointer.id,
+            (source_pointer, index),
+        )
+        if root_pointer.id != source_pointer.id:
+            root_index = self.storage_buffer_pointer_alias_index(root_index, index)
+        self.storage_buffer_pointer_offset_aliases[alias_pointer.id] = (
+            root_pointer,
+            root_index,
+        )
+
     def structured_buffer_element_pointer(
         self, buffer_pointer: SpirvId, index_id: SpirvId
     ) -> Optional[SpirvId]:
@@ -19736,6 +19805,41 @@ class VulkanSPIRVCodeGen:
                 return None
 
             return self.create_member_access_pointer(base_pointer, expr.member)
+        elif isinstance(expr, BinaryOpNode) and expr.op == "+":
+            left_pointer = self.variable_pointer_from_expression(expr.left)
+            if (
+                left_pointer is not None
+                and self.is_storage_buffer_pointer_arithmetic_base(left_pointer)
+            ):
+                index = self.process_expression(expr.right)
+                if index is None:
+                    return None
+                access, _ = self.create_array_element_access(
+                    expr.left, index, expr.right
+                )
+                if access is not None:
+                    self.record_storage_buffer_pointer_offset_alias(
+                        left_pointer, access, index
+                    )
+                return access
+
+            right_pointer = self.variable_pointer_from_expression(expr.right)
+            if (
+                right_pointer is not None
+                and self.is_storage_buffer_pointer_arithmetic_base(right_pointer)
+            ):
+                index = self.process_expression(expr.left)
+                if index is None:
+                    return None
+                access, _ = self.create_array_element_access(
+                    expr.right, index, expr.left
+                )
+                if access is not None:
+                    self.record_storage_buffer_pointer_offset_alias(
+                        right_pointer, access, index
+                    )
+                return access
+            return None
         else:
             return None
 
@@ -20291,6 +20395,22 @@ class VulkanSPIRVCodeGen:
             )
             if block_alias is not None:
                 return block_alias, self.variable_value_types.get(block_alias.id)
+
+            offset_alias = self.storage_buffer_pointer_offset_aliases.get(
+                array_variable.id
+            )
+            if offset_alias is not None:
+                root_pointer, base_index = offset_alias
+                combined_index = self.storage_buffer_pointer_alias_index(
+                    base_index, index
+                )
+                structured_access = self.structured_buffer_element_pointer(
+                    root_pointer, combined_index
+                )
+                if structured_access is not None:
+                    return structured_access, self.variable_value_types.get(
+                        structured_access.id
+                    )
 
             structured_access = self.structured_buffer_element_pointer(
                 array_variable, index
