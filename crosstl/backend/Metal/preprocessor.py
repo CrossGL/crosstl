@@ -75,6 +75,7 @@ class _MetalTemplateFunction:
     span: Tuple[int, int]
     body_start: int
     source: str
+    variadic_template_parameters: Set[str] = field(default_factory=set)
     materializations: List[str] = field(default_factory=list)
 
 
@@ -142,7 +143,7 @@ class MetalPreprocessor(HLSLPreprocessor):
     def preprocess(self, code: str, file_path: Optional[str] = None) -> str:
         code = self._strip_leading_compiler_diagnostics(code)
         processed = super().preprocess(code, file_path=file_path)
-        processed = self._materialize_mlx_instantiate_kernels(processed)
+        processed = self._materialize_project_template_instantiations(processed)
         processed = self._materialize_explicit_template_function_calls(processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
@@ -170,8 +171,8 @@ class MetalPreprocessor(HLSLPreprocessor):
 
         return code
 
-    def _materialize_mlx_instantiate_kernels(self, code: str) -> str:
-        instantiations = self._find_mlx_kernel_instantiations(code)
+    def _materialize_project_template_instantiations(self, code: str) -> str:
+        instantiations = self._find_project_template_instantiations(code)
         if not instantiations:
             return code
 
@@ -185,11 +186,23 @@ class MetalPreprocessor(HLSLPreprocessor):
         replacements: List[Tuple[int, int, str]] = [
             (inst.span[0], inst.span[1], "") for inst in instantiations
         ]
+        seen: Set[Tuple[str, Tuple[str, ...], str]] = set()
 
         for instantiation in instantiations:
             template = templates_by_name.get(instantiation.function_name)
             if template is None:
                 continue
+            key = (
+                instantiation.function_name,
+                tuple(
+                    self._normalize_template_argument_text(argument)
+                    for argument in instantiation.template_arguments
+                ),
+                instantiation.host_name,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
             materialized = self._materialize_template_function(template, instantiation)
             if materialized:
                 template.materializations.append(materialized)
@@ -230,16 +243,25 @@ class MetalPreprocessor(HLSLPreprocessor):
 
             replacements: List[Tuple[int, int, str]] = []
             new_materializations: List[str] = []
-            for function_name, template_arguments, span in calls:
+            for (
+                function_name,
+                template_arguments,
+                spans,
+            ) in self._dedupe_explicit_template_function_calls(calls):
                 key = self._template_specialization_key(
                     function_name, template_arguments
                 )
                 template = templates_by_name[function_name]
-                if len(template_arguments) < len(template.template_parameters):
+                if not self._template_arguments_satisfy_parameters(
+                    template,
+                    template_arguments,
+                ):
                     continue
                 specialized_name = materialized_names.get(key)
                 if specialized_name is not None:
-                    replacements.append((span[0], span[1], specialized_name))
+                    replacements.extend(
+                        (span[0], span[1], specialized_name) for span in spans
+                    )
                     continue
                 unique_count = len(materialized_names) + 1
                 if len(materialized_names) >= self.max_template_specializations:
@@ -274,7 +296,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                     host_name=None,
                 )
                 if materialized:
-                    replacements.append((span[0], span[1], specialized_name))
+                    replacements.extend(
+                        (span[0], span[1], specialized_name) for span in spans
+                    )
                     materialized_names[key] = specialized_name
                     new_materializations.append(materialized)
 
@@ -290,9 +314,15 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _find_mlx_kernel_instantiations(
         self, code: str
     ) -> List[_MLXKernelInstantiation]:
+        return self._find_project_template_instantiations(code)
+
+    def _find_project_template_instantiations(
+        self, code: str
+    ) -> List[_MLXKernelInstantiation]:
         instantiations: List[_MLXKernelInstantiation] = []
         instantiations.extend(self._find_raw_mlx_kernel_instantiations(code))
         instantiations.extend(self._find_declared_mlx_kernel_instantiations(code))
+        instantiations.extend(self._find_declared_template_instantiations(code))
         return sorted(instantiations, key=lambda item: item.span[0])
 
     def _find_raw_mlx_kernel_instantiations(
@@ -322,6 +352,40 @@ class MetalPreprocessor(HLSLPreprocessor):
                     span=(match.start(), end),
                 )
             )
+        return instantiations
+
+    def _find_declared_template_instantiations(
+        self, code: str
+    ) -> List[_MLXKernelInstantiation]:
+        instantiations: List[_MLXKernelInstantiation] = []
+        for match in re.finditer(
+            r"(?:^|[;\n])\s*(?:(?:template\s+)?\[\[|template\s+(?!<))",
+            code,
+        ):
+            start = match.start()
+            declaration_end = self._statement_end(code, start)
+            if declaration_end is None:
+                continue
+            declaration = code[start:declaration_end]
+            if self._find_next_top_level_char(declaration, 0, "{") is not None:
+                continue
+            if "decltype" not in declaration and not re.search(
+                r"\b[A-Za-z_][A-Za-z0-9_:]*\s*<", declaration
+            ):
+                continue
+            host_name = self._host_name_from_attributes(declaration)
+            for function_name, arguments in self._template_id_candidates(declaration):
+                if not arguments:
+                    continue
+                instantiations.append(
+                    _MLXKernelInstantiation(
+                        host_name=host_name or function_name.split("::")[-1],
+                        function_name=function_name.split("::")[-1],
+                        template_arguments=arguments,
+                        span=(start, declaration_end),
+                    )
+                )
+                break
         return instantiations
 
     def _find_declared_mlx_kernel_instantiations(
@@ -382,9 +446,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                 pos = body_end
                 continue
 
-            parameters = self._template_parameter_names(
-                code[angle_start + 1 : angle_end]
-            )
+            parameter_text = code[angle_start + 1 : angle_end]
+            parameters = self._template_parameter_names(parameter_text)
             if not parameters:
                 pos = body_end
                 continue
@@ -395,6 +458,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                     span=(start, body_end),
                     body_start=body_start,
                     source=code[declaration_start:body_end],
+                    variadic_template_parameters=(
+                        self._variadic_template_parameter_names(parameter_text)
+                    ),
                 )
             )
             pos = body_end
@@ -422,16 +488,26 @@ class MetalPreprocessor(HLSLPreprocessor):
         function_identifier: str,
         host_name: Optional[str],
     ) -> str:
-        if len(template_arguments) < len(template.template_parameters):
+        if not self._template_arguments_satisfy_parameters(
+            template,
+            template_arguments,
+        ):
             return ""
-        substitutions = {
-            name: template_arguments[index]
-            for index, name in enumerate(template.template_parameters)
-        }
+        substitutions, variadic_bindings = self._template_argument_bindings(
+            template,
+            template_arguments,
+        )
         if not substitutions:
             return ""
 
-        materialized = self._replace_identifiers(template.source, substitutions)
+        if variadic_bindings:
+            materialized_source = self._expand_variadic_function_parameters(
+                template.source,
+                variadic_bindings,
+            )
+        else:
+            materialized_source = template.source
+        materialized = self._replace_identifiers(materialized_source, substitutions)
         materialized = self._rename_function_definition(
             materialized,
             template.name,
@@ -516,6 +592,76 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             i += 1
         return calls
+
+    def _dedupe_explicit_template_function_calls(
+        self,
+        calls: List[Tuple[str, List[str], Tuple[int, int]]],
+    ) -> List[Tuple[str, List[str], List[Tuple[int, int]]]]:
+        grouped: Dict[
+            Tuple[str, Tuple[str, ...]],
+            Tuple[str, List[str], List[Tuple[int, int]]],
+        ] = {}
+        for function_name, template_arguments, span in calls:
+            key = self._template_specialization_key(function_name, template_arguments)
+            grouped_call = grouped.get(key)
+            if grouped_call is None:
+                grouped[key] = (function_name, template_arguments, [span])
+            else:
+                grouped_call[2].append(span)
+        return list(grouped.values())
+
+    def _host_name_from_attributes(self, declaration: str) -> str:
+        match = re.search(
+            r"\[\[\s*host_name\s*\(\s*(?P<host>"
+            r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')\s*\)\s*\]\]",
+            declaration,
+            re.DOTALL,
+        )
+        if match is None:
+            return ""
+        return self._evaluate_metal_string_expression(match.group("host"))
+
+    def _template_id_candidates(self, declaration: str) -> List[Tuple[str, List[str]]]:
+        candidates: List[Tuple[str, List[str]]] = []
+        i = 0
+        while i < len(declaration):
+            if declaration[i] in "\"'":
+                _literal, consumed = self._read_string(declaration, i)
+                i += consumed
+                continue
+            if declaration.startswith("//", i):
+                end = declaration.find("\n", i)
+                if end == -1:
+                    break
+                i = end + 1
+                continue
+            if declaration.startswith("/*", i):
+                end = declaration.find("*/", i + 2)
+                if end == -1:
+                    break
+                i = end + 2
+                continue
+            if declaration[i].isalpha() or declaration[i] == "_":
+                ident, consumed = self._read_identifier(declaration, i)
+                scoped_start = self._scoped_identifier_start(declaration, i)
+                name = declaration[scoped_start : i + consumed]
+                j = i + consumed
+                while j < len(declaration) and declaration[j].isspace():
+                    j += 1
+                if j < len(declaration) and declaration[j] == "<":
+                    angle_end = self._find_matching_angle(declaration, j)
+                    if angle_end is not None:
+                        arguments = self._split_top_level_commas(
+                            declaration[j + 1 : angle_end]
+                        )
+                        if ident not in {"decltype", "static_cast", "as_type"}:
+                            candidates.append((name, arguments))
+                        i = angle_end + 1
+                        continue
+                i += consumed
+                continue
+            i += 1
+        return candidates
 
     def _reachable_function_spans(
         self,
@@ -806,6 +952,128 @@ class MetalPreprocessor(HLSLPreprocessor):
                 names.append(tokens[-1])
         return names
 
+    def _variadic_template_parameter_names(self, template_parameters: str) -> Set[str]:
+        names: Set[str] = set()
+        for parameter in self._split_top_level_commas(template_parameters):
+            parameter = parameter.split("=", 1)[0].strip()
+            if "..." not in parameter:
+                continue
+            tokens = IDENTIFIER_RE.findall(parameter)
+            if len(tokens) >= 2 and tokens[0] in {"typename", "class"}:
+                names.add(tokens[-1])
+        return names
+
+    def _template_argument_bindings(
+        self,
+        template: _MetalTemplateFunction,
+        template_arguments: List[str],
+    ) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
+        substitutions: Dict[str, str] = {}
+        variadic_bindings: Dict[str, List[str]] = {}
+        argument_index = 0
+        for parameter_index, name in enumerate(template.template_parameters):
+            if name in template.variadic_template_parameters:
+                remaining_fixed = (
+                    len(template.template_parameters) - parameter_index - 1
+                )
+                variadic_count = max(
+                    0,
+                    len(template_arguments) - argument_index - remaining_fixed,
+                )
+                values = template_arguments[
+                    argument_index : argument_index + variadic_count
+                ]
+                variadic_bindings[name] = values
+                substitutions[name] = values[0] if values else "void"
+                argument_index += variadic_count
+                continue
+            if argument_index >= len(template_arguments):
+                break
+            substitutions[name] = template_arguments[argument_index]
+            argument_index += 1
+        return substitutions, variadic_bindings
+
+    def _template_arguments_satisfy_parameters(
+        self,
+        template: _MetalTemplateFunction,
+        template_arguments: List[str],
+    ) -> bool:
+        fixed_parameter_count = len(
+            [
+                name
+                for name in template.template_parameters
+                if name not in template.variadic_template_parameters
+            ]
+        )
+        if template.variadic_template_parameters:
+            return len(template_arguments) >= fixed_parameter_count
+        return len(template_arguments) >= len(template.template_parameters)
+
+    def _expand_variadic_function_parameters(
+        self, source: str, variadic_bindings: Dict[str, List[str]]
+    ) -> str:
+        header_end = source.find("{")
+        if header_end == -1:
+            return source
+        header = source[:header_end]
+        open_paren = header.find("(")
+        if open_paren == -1:
+            return source
+        close_paren = self._find_matching_delimiter(header, open_paren, "(", ")")
+        if close_paren is None:
+            return source
+
+        parameters = self._split_top_level_commas(header[open_paren + 1 : close_paren])
+        expanded_parameters: List[str] = []
+        renames: Dict[str, str] = {}
+        for parameter in parameters:
+            pack = self._variadic_function_parameter_name(parameter)
+            if pack is None:
+                expanded_parameters.append(parameter)
+                continue
+            type_name, value_name = pack
+            bound_types = variadic_bindings.get(type_name, [])
+            if not bound_types:
+                continue
+            for index, bound_type in enumerate(bound_types):
+                generated_name = f"{value_name}_{index}"
+                expanded = parameter.replace("...", "")
+                expanded = re.sub(
+                    rf"\b{re.escape(type_name)}\b",
+                    bound_type,
+                    expanded,
+                    count=1,
+                )
+                expanded = re.sub(
+                    rf"\b{re.escape(value_name)}\b",
+                    generated_name,
+                    expanded,
+                    count=1,
+                )
+                expanded_parameters.append(expanded.strip())
+            renames[value_name] = f"{value_name}_0"
+
+        rebuilt_header = (
+            header[: open_paren + 1]
+            + ", ".join(expanded_parameters)
+            + header[close_paren:]
+        )
+        body = source[header_end:]
+        if renames:
+            body = self._replace_identifiers(body, renames)
+        return rebuilt_header + body
+
+    def _variadic_function_parameter_name(
+        self, parameter: str
+    ) -> Optional[Tuple[str, str]]:
+        if "..." not in parameter:
+            return None
+        cleaned = parameter.replace("...", " ")
+        tokens = IDENTIFIER_RE.findall(cleaned)
+        if len(tokens) < 2:
+            return None
+        return tokens[-2], tokens[-1]
+
     def _function_name_from_header(self, header: str) -> Optional[str]:
         paren_index = header.find("(")
         if paren_index == -1:
@@ -1037,6 +1305,57 @@ class MetalPreprocessor(HLSLPreprocessor):
                 angle_depth += 1
             elif ch == ">":
                 angle_depth = max(0, angle_depth - 1)
+            i += 1
+        return None
+
+    def _statement_end(self, code: str, start: int) -> Optional[int]:
+        paren_depth = 0
+        bracket_depth = 0
+        angle_depth = 0
+        brace_depth = 0
+        i = start
+        while i < len(code):
+            if code[i] in "\"'":
+                _literal, consumed = self._read_string(code, i)
+                i += consumed
+                continue
+            if code.startswith("//", i):
+                end = code.find("\n", i)
+                if end == -1:
+                    return len(code)
+                i = end + 1
+                continue
+            if code.startswith("/*", i):
+                end = code.find("*/", i + 2)
+                if end == -1:
+                    return None
+                i = end + 2
+                continue
+            ch = code[i]
+            if (
+                ch == ";"
+                and paren_depth == 0
+                and bracket_depth == 0
+                and angle_depth == 0
+                and brace_depth == 0
+            ):
+                return i + 1
+            if ch == "(":
+                paren_depth += 1
+            elif ch == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif ch == "[":
+                bracket_depth += 1
+            elif ch == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif ch == "<":
+                angle_depth += 1
+            elif ch == ">":
+                angle_depth = max(0, angle_depth - 1)
+            elif ch == "{":
+                brace_depth += 1
+            elif ch == "}":
+                brace_depth = max(0, brace_depth - 1)
             i += 1
         return None
 

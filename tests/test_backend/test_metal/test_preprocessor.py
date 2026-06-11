@@ -319,6 +319,31 @@ def test_preprocessor_dedupes_equivalent_explicit_template_helper_signatures():
     assert "load_value<" not in output
 
 
+def test_preprocessor_dedupes_scan_style_repeated_helper_calls_before_budget():
+    calls = "\n".join(
+        f"        acc = scan_step<float, int, 4, true>(acc, {index});"
+        for index in range(24)
+    )
+    code = f"""
+    template <typename T, typename OffsetT, int Width, bool Inclusive>
+    T scan_step(T value, OffsetT offset) {{
+        return value + T(offset) + T(Width);
+    }}
+
+    kernel void scan(device float* dst [[buffer(0)]]) {{
+        float acc = 0.0;
+{calls}
+        dst[0] = acc;
+    }}
+    """
+
+    output = MetalPreprocessor(max_template_specializations=1).preprocess(code)
+
+    assert output.count("float scan_step_float_int_4_true(") == 1
+    assert output.count("scan_step_float_int_4_true(acc,") == 24
+    assert "scan_step<" not in output
+
+
 def test_preprocessor_reports_template_specialization_limit_details():
     code = """
     template <typename T>
