@@ -429,7 +429,7 @@ def test_codegen_ssbo_single_array_blocks_use_structured_buffer_contract():
     assert "StructuredBuffer<float> inputBlock : register(t0);" in hlsl
     assert "RWStructuredBuffer<float> outputBlock : register(u1);" in hlsl
     assert "float value = inputBlock.Load(0);" in hlsl
-    assert "outputBlock.Store(0, (value * 2.0));" in hlsl
+    assert "outputBlock[0] = (value * 2.0);" in hlsl
 
     metal = MetalCodeGen().generate(shader_ast)
     assert "const device float* inputBlock [[buffer(0)]]" in metal
