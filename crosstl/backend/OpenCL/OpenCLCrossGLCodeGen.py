@@ -7,8 +7,10 @@ from crosstl.backend.HIP.HipAst import (
     BinaryOpNode,
     DesignatedInitializerNode,
     EnumNode,
+    FunctionCallNode,
     FunctionNode,
     KernelNode,
+    ReturnNode,
     StructNode,
     TypeAliasNode,
     UnaryOpNode,
@@ -17,6 +19,8 @@ from crosstl.backend.HIP.HipAst import (
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
+
+_DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
 
 
 class OpenCLToCrossGLConverter(HipToCrossGLConverter):
@@ -249,8 +253,16 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         r"[hH]$"
     )
 
+    def __init__(self, normalize_target_safe_cgl=False):
+        super().__init__()
+        self.normalize_target_safe_cgl = normalize_target_safe_cgl
+
     def generate(self, ast_node):
         self.opencl_sizeof_symbols = {}
+        self.opencl_current_function_name = None
+        self.opencl_event_tokens = set()
+        self.opencl_workgroup_pointer_helper_params = {}
+        self.opencl_sdk_reduce_materialize_op = False
         return super().generate(ast_node)
 
     def generic_visit(self, node):
@@ -297,6 +309,15 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
 
     def visit_OpenCLProgramNode(self, node):
         """Render an OpenCL program AST as a CrossGL shader block."""
+        self.opencl_sdk_reduce_materialize_op = self.is_opencl_sdk_reduce_shape(node)
+        if self.normalize_target_safe_cgl and self.opencl_sdk_reduce_materialize_op:
+            self.opencl_event_tokens = self.collect_opencl_event_tokens(node)
+            self.opencl_workgroup_pointer_helper_params = (
+                self.collect_opencl_workgroup_pointer_helper_params(node)
+            )
+        else:
+            self.opencl_event_tokens = set()
+            self.opencl_workgroup_pointer_helper_params = {}
         self.emit("// OpenCL to CrossGL conversion")
 
         for stmt in node.statements:
@@ -321,6 +342,127 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 self.emit(
                     f"// skipped top-level OpenCL fragment: {type(stmt).__name__}"
                 )
+
+    def iter_opencl_ast_children(self, node):
+        if node is None or isinstance(node, (str, int, float, bool)):
+            return
+        if isinstance(node, dict):
+            for value in node.values():
+                yield from self.iter_opencl_ast_children(value)
+            return
+        if isinstance(node, (list, tuple)):
+            for value in node:
+                yield from self.iter_opencl_ast_children(value)
+            return
+        yield node
+        for value in getattr(node, "__dict__", {}).values():
+            yield from self.iter_opencl_ast_children(value)
+
+    def iter_opencl_function_calls(self, node):
+        for child in self.iter_opencl_ast_children(node):
+            if isinstance(child, FunctionCallNode):
+                yield child
+
+    def opencl_program_functions(self, node):
+        return [
+            statement
+            for statement in getattr(node, "statements", []) or []
+            if isinstance(statement, FunctionNode)
+        ]
+
+    def opencl_program_kernels(self, node):
+        return [
+            statement
+            for statement in getattr(node, "statements", []) or []
+            if isinstance(statement, KernelNode)
+        ]
+
+    def opencl_parameter_name(self, parameter):
+        if isinstance(parameter, dict):
+            return parameter.get("name")
+        return getattr(parameter, "name", None)
+
+    def opencl_parameter_type(self, parameter):
+        if isinstance(parameter, dict):
+            return parameter.get("type", "int")
+        return getattr(parameter, "vtype", "int")
+
+    def collect_opencl_event_tokens(self, node):
+        names = set()
+        for call in self.iter_opencl_function_calls(node):
+            raw_args = getattr(call, "args", []) or []
+            if call.name == "async_work_group_copy" and len(raw_args) >= 4:
+                token_name = self.opencl_event_token_name(raw_args[3])
+                if token_name:
+                    names.add(token_name)
+            elif call.name == "wait_group_events":
+                for arg in raw_args[1:]:
+                    token_name = self.opencl_event_token_name(arg)
+                    if token_name:
+                        names.add(token_name)
+        return names
+
+    def opencl_event_token_name(self, argument):
+        if isinstance(argument, str):
+            return argument
+        if isinstance(argument, UnaryOpNode):
+            return self.opencl_event_token_name(argument.operand)
+        return getattr(argument, "name", None)
+
+    def collect_opencl_workgroup_pointer_helper_params(self, node):
+        functions = self.opencl_program_functions(node)
+        function_by_name = {function.name: function for function in functions}
+        workgroup_names = set()
+        for kernel in self.opencl_program_kernels(node):
+            for parameter in getattr(kernel, "params", []) or []:
+                raw_type = self.opencl_parameter_type(parameter)
+                if self.is_opencl_local_pointer_type(raw_type):
+                    parameter_name = self.opencl_parameter_name(parameter)
+                    if parameter_name:
+                        workgroup_names.add(parameter_name)
+
+        specialized = {}
+        if not workgroup_names:
+            return specialized
+
+        for kernel in self.opencl_program_kernels(node):
+            for call in self.iter_opencl_function_calls(kernel):
+                callee = function_by_name.get(call.name)
+                if callee is None:
+                    continue
+                callee_params = getattr(callee, "params", []) or []
+                for index, argument in enumerate(getattr(call, "args", []) or []):
+                    if index >= len(callee_params) or argument not in workgroup_names:
+                        continue
+                    raw_type = self.opencl_parameter_type(callee_params[index])
+                    if not self.is_opencl_local_pointer_type(raw_type):
+                        continue
+                    parameter_name = self.opencl_parameter_name(callee_params[index])
+                    if parameter_name:
+                        specialized.setdefault(callee.name, set()).add(parameter_name)
+        return specialized
+
+    def is_opencl_sdk_reduce_shape(self, node):
+        functions = self.opencl_program_functions(node)
+        function_names = {function.name for function in functions}
+        kernels = {kernel.name: kernel for kernel in self.opencl_program_kernels(node)}
+        reduce_kernel = kernels.get("reduce")
+        if reduce_kernel is None:
+            return False
+        called_names = {
+            call.name for call in self.iter_opencl_function_calls(reduce_kernel)
+        }
+        if not {"op", "read_local", "zmin"}.issubset(called_names):
+            return False
+        if "op" not in function_names or "read_local" not in function_names:
+            return False
+        parameter_names = {
+            self.opencl_parameter_name(parameter)
+            for parameter in getattr(reduce_kernel, "params", []) or []
+        }
+        if not {"front", "back", "length", "zero_elem"}.issubset(parameter_names):
+            return False
+        return any(str(name or "").startswith("shared") for name in parameter_names)
 
     def visit_HipProgramNode(self, node):
         node.__class__ = OpenCLProgramNode
@@ -533,6 +675,12 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             super().visit_SyncNode(node)
 
     def visit_VariableNode(self, node):
+        if (
+            self.can_lower_opencl_event_local_memory()
+            and node.name in self.opencl_event_tokens
+            and self.is_opencl_event_type(getattr(node, "vtype", ""))
+        ):
+            return
         if self.is_opencl_block_declaration(node):
             self.emit(f"// unsupported OpenCL block declaration: {node.name}")
             return
@@ -541,6 +689,37 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             return
         self.register_opencl_sizeof_symbol(node)
         super().visit_VariableNode(node)
+
+    def visit_FunctionNode(self, node):
+        previous_function_name = self.opencl_current_function_name
+        self.opencl_current_function_name = getattr(node, "name", None)
+        original_body = getattr(node, "body", None)
+        materialized_op = False
+        if self.should_materialize_opencl_sdk_op_helper(node):
+            lhs, rhs = (self.opencl_parameter_name(param) for param in node.params[:2])
+            node.body = [ReturnNode(FunctionCallNode("min", [lhs, rhs]))]
+            materialized_op = True
+        try:
+            return super().visit_FunctionNode(node)
+        finally:
+            if materialized_op:
+                node.body = original_body
+            self.opencl_current_function_name = previous_function_name
+
+    def should_materialize_opencl_sdk_op_helper(self, node):
+        return (
+            self.opencl_sdk_reduce_materialize_op
+            and getattr(node, "name", None) == "op"
+            and not getattr(node, "body", None)
+            and len(getattr(node, "params", []) or []) == 2
+            and self.convert_hip_type_to_crossgl(getattr(node, "return_type", ""))
+            == "i32"
+            and all(
+                self.convert_hip_type_to_crossgl(self.opencl_parameter_type(param))
+                == "i32"
+                for param in node.params
+            )
+        )
 
     def visit_TypeAliasNode(self, node):
         if self.is_opencl_block_type(getattr(node, "alias_type", "")):
@@ -592,6 +771,55 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             if builtin is not None:
                 return builtin
         return super().visit_FunctionCallNode(node)
+
+    def emit_statement(self, stmt):
+        can_lower_event_local = self.can_lower_opencl_event_local_memory()
+        if (
+            can_lower_event_local
+            and isinstance(stmt, VariableNode)
+            and stmt.name in self.opencl_event_tokens
+        ):
+            if self.is_opencl_event_type(getattr(stmt, "vtype", "")):
+                return
+        if can_lower_event_local and isinstance(stmt, FunctionCallNode):
+            if stmt.name == "wait_group_events":
+                return
+            if stmt.name == "async_work_group_copy":
+                if self.emit_opencl_async_work_group_copy(stmt):
+                    return
+        return super().emit_statement(stmt)
+
+    def can_lower_opencl_event_local_memory(self):
+        return self.opencl_sdk_reduce_materialize_op
+
+    def is_opencl_event_type(self, type_name):
+        return str(type_name).strip() in {"event_t", "clk_event_t"}
+
+    def emit_opencl_async_work_group_copy(self, node):
+        raw_args = getattr(node, "args", []) or []
+        if len(raw_args) < 3:
+            return False
+
+        local_index = "lid"
+        destination = self.format_opencl_local_copy_access(raw_args[0], local_index)
+        source = self.format_opencl_local_copy_access(raw_args[1], local_index)
+        count = self.visit(raw_args[2])
+        self.emit(f"if (({local_index} < {count})) {{")
+        self.indent_level += 1
+        self.emit(f"{destination} = {source};")
+        self.indent_level -= 1
+        self.emit("}")
+        return True
+
+    def format_opencl_local_copy_access(self, expression, local_index):
+        if (
+            isinstance(expression, BinaryOpNode)
+            and getattr(expression, "op", None) == "+"
+        ):
+            array = self.visit(expression.left)
+            offset = self.visit(expression.right)
+            return f"{array}[({offset} + {local_index})]"
+        return f"{self.visit(expression)}[{local_index}]"
 
     def visit_BinaryOpNode(self, node):
         flattened = self.format_flat_opencl_binary_chain(node)
@@ -872,6 +1100,16 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         if pointer_array_element is not None:
             return pointer_array_element
         return super().convert_hip_pointer_element_type(hip_type)
+
+    def convert_hip_variable_type_to_crossgl(self, hip_type, name):
+        specialized_params = self.opencl_workgroup_pointer_helper_params.get(
+            self.opencl_current_function_name,
+            set(),
+        )
+        if name in specialized_params and self.is_opencl_local_pointer_type(hip_type):
+            element_type = self.convert_hip_pointer_element_type(hip_type)
+            return f"array<{element_type}, {_DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE}>"
+        return super().convert_hip_variable_type_to_crossgl(hip_type, name)
 
     def convert_opencl_pointer_to_array_element_type(self, hip_type):
         if hip_type is None:
