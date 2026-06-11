@@ -1,0 +1,122 @@
+{
+  "kind": "crosstl-project-runtime-fixture-metadata",
+  "metadata": {
+    "repository": "mlx",
+    "fixtureSet": "reduced-metal-kernels"
+  },
+  "fixtures": [
+    {
+      "id": "mlx-reduced-binary-add-f32",
+      "selector": {
+        "source": "mlx/backend/metal/kernels/binary.metal",
+        "target": "metal",
+        "path": "tests/fixtures/runtime_verification/mlx/reduced_binary_add.metal",
+        "variant": "reduced-add"
+      },
+      "inputs": [
+        {
+          "name": "lhs",
+          "kind": "buffer",
+          "dtype": "float32",
+          "shape": [
+            4
+          ],
+          "values": [
+            1.0,
+            2.0,
+            3.5,
+            -4.0
+          ]
+        },
+        {
+          "name": "rhs",
+          "kind": "buffer",
+          "dtype": "float32",
+          "shape": [
+            4
+          ],
+          "values": [
+            10.0,
+            -2.0,
+            0.5,
+            12.0
+          ]
+        }
+      ],
+      "expectedOutputs": [
+        {
+          "name": "out",
+          "kind": "buffer",
+          "dtype": "float32",
+          "shape": [
+            4
+          ],
+          "values": [
+            11.0,
+            0.0,
+            4.0,
+            8.0
+          ],
+          "tolerance": {
+            "absolute": 0.000001,
+            "relative": 0.000001
+          }
+        }
+      ],
+      "runtimeAdapter": {
+        "id": "mlx-reduced-binary-add-contract-v1",
+        "entryPoints": [
+          {
+            "name": "mlx_binary_add_f32",
+            "stage": "compute",
+            "workgroupSize": [
+              4,
+              1,
+              1
+            ]
+          }
+        ],
+        "resourceBindings": [
+          {
+            "name": "lhs",
+            "kind": "buffer",
+            "binding": 0,
+            "access": "read",
+            "value": "lhs"
+          },
+          {
+            "name": "rhs",
+            "kind": "buffer",
+            "binding": 1,
+            "access": "read",
+            "value": "rhs"
+          },
+          {
+            "name": "out",
+            "kind": "buffer",
+            "binding": 2,
+            "access": "write",
+            "value": "out"
+          }
+        ],
+        "functionConstants": [
+          {
+            "name": "element_count",
+            "id": 0,
+            "dtype": "uint32",
+            "value": 4,
+            "required": true
+          }
+        ],
+        "dispatch": {
+          "entryPoint": "mlx_binary_add_f32",
+          "globalSize": [
+            4,
+            1,
+            1
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -974,16 +974,23 @@ def test_project_runtime_test_manifest_is_first_class_support_feature():
     for backend_support in feature["support"].values():
         assert backend_support["status"] == "supported"
         assert "crosstl-project-runtime-test-manifest" in backend_support["notes"]
+        assert "crosstl-project-runtime-fixture-metadata" in (backend_support["notes"])
         assert "crosstl-project-runtime-test-plan" in backend_support["notes"]
         assert "crosstl-project-runtime-test-report" in backend_support["notes"]
+        assert "generate manifests" in backend_support["notes"]
         assert "maps artifact selectors to runtime adapters" in (
             backend_support["notes"]
         )
         assert "inputs" in backend_support["notes"]
         assert "expected outputs" in backend_support["notes"]
         assert "tolerances" in backend_support["notes"]
+        assert "resource bindings" in backend_support["notes"]
+        assert "function or specialization constants" in backend_support["notes"]
+        assert "dispatch geometry" in backend_support["notes"]
         assert "platform requirements" in backend_support["notes"]
         assert "structured skip diagnostics" in backend_support["notes"]
+        assert "incomplete fixture data" in backend_support["notes"]
+        assert "ambiguous selectors" in backend_support["notes"]
         assert "toolchain/toolchainRuns logs" in backend_support["notes"]
         assert "native graphics and native compute" in backend_support["notes"]
         assert "does not rewrite host application code" in backend_support["notes"]
@@ -991,6 +998,22 @@ def test_project_runtime_test_manifest_is_first_class_support_feature():
         assert (
             "tests/test_translator/test_runtime_verification.py::def "
             "test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_runtime_verification.py::def "
+            "test_build_runtime_test_manifest_from_mlx_fixture_metadata"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_runtime_verification.py::def "
+            "test_build_runtime_test_manifest_reports_ambiguous_fixture_selector"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_runtime_verification.py::def "
+            "test_build_runtime_test_manifest_reports_incomplete_fixture_data"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_runtime_verification.py::def "
+            "test_project_cli_runtime_test_manifest_text_outputs_generated_tests"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_runtime_verification.py::def "
