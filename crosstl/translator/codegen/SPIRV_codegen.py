@@ -134,7 +134,6 @@ class VulkanSPIRVCodeGen:
     UNSIGNED_INTEGER_TYPES = {"uint", "u64"}
     INTEGER_TYPE_NAMES = SIGNED_INTEGER_TYPES | UNSIGNED_INTEGER_TYPES
 
-
     def __init__(self, *, include_resource_interface_variables: bool = False):
         """Initialize an empty SPIR-V module-generation state."""
         self.include_resource_interface_variables = include_resource_interface_variables
@@ -2579,9 +2578,11 @@ class VulkanSPIRVCodeGen:
                             if left_vector is not None
                             else left_type.type.base_type
                         ),
-                        right_vector[0]
-                        if right_vector is not None
-                        else right_type.type.base_type,
+                        (
+                            right_vector[0]
+                            if right_vector is not None
+                            else right_type.type.base_type
+                        ),
                     ]
                 )
                 if component_type is None:
@@ -9651,10 +9652,7 @@ class VulkanSPIRVCodeGen:
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         primitive_name = self.normalize_primitive_name(function_name)
-        if (
-            primitive_name
-            not in {"bool", "float", "double"} | self.INTEGER_TYPE_NAMES
-        ):
+        if primitive_name not in {"bool", "float", "double"} | self.INTEGER_TYPE_NAMES:
             return None
 
         target_type = self.register_primitive_type(primitive_name)
