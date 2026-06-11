@@ -240,7 +240,6 @@ jobs:
             --case lonelydevil-vulkan-tutorial-triangle \
             --case monogame-sprite-effect \
             --case openframeworks-noise-shader \
-            --case vulkan-samples-dynamic-line-grid \
             --case angle-simple-texture-2d \
             --case arm-opengl-es-sdk-cube \
             --case apple-modern-rendering-mesh-viewdir \

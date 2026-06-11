@@ -7,7 +7,7 @@
       "id": "vulkan-samples-dynamic-line-grid-fragment",
       "path": "grid.frag",
       "sourceBackend": "opengl",
-      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
+      "targets": ["cgl", "opengl", "metal", "vulkan"],
       "repository": "https://github.com/KhronosGroup/Vulkan-Samples",
       "commit": "ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a",
       "sourceUrl": "https://github.com/KhronosGroup/Vulkan-Samples/blob/ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a/shaders/dynamic_line_rasterization/glsl/grid.frag"

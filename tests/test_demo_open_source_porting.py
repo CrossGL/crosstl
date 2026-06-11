@@ -239,7 +239,6 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "monogame-sprite-effect",
         "openframeworks-noise-shader",
         "sascha-willems-vulkan-headless-compute",
-        "vulkan-samples-dynamic-line-grid",
         "vulkan-tools-cube",
     }
 
