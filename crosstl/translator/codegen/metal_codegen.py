@@ -6971,7 +6971,12 @@ class MetalCodeGen:
                 return f"{const_prefix}{address_space} "
         if "threadgroup_imageblock" in qualifiers | attributes:
             return "threadgroup_imageblock "
-        if (qualifiers | attributes) & {"shared", "groupshared", "threadgroup"}:
+        if (qualifiers | attributes) & {
+            "shared",
+            "groupshared",
+            "threadgroup",
+            "workgroup",
+        }:
             return "threadgroup "
         if self.is_metal_atomic_value_type(self.local_variable_declared_type(node)):
             return "threadgroup "

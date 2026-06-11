@@ -40101,14 +40101,17 @@ def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(
     } == {(target, "failed") for target in expected_targets}
     assert payload["summary"]["translatedCount"] == 0
     assert payload["summary"]["failedCount"] == 4
-    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 24}
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 7}
     assert payload["summary"]["diagnosticsByCode"] == {
-        "opencl.target.pointer-helper-parameter": 4,
-        "opencl.target.unresolved-helper": 12,
-        "opencl.target.unsupported-builtin": 8,
+        "opencl.target.pointer-helper-parameter": 1,
+        "opencl.target.unresolved-helper": 4,
+        "opencl.target.unsupported-builtin": 2,
     }
     assert payload["summary"]["diagnosticsByTarget"] == {
-        target: 6 for target in expected_targets
+        "cgl": 4,
+        "opengl": 1,
+        "metal": 1,
+        "vulkan": 1,
     }
 
     for artifact in payload["artifacts"]:
@@ -40116,44 +40119,29 @@ def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(
         assert "opencl.target.unsupported" in artifact["error"]
         assert (
             "unresolved non-void helper declarations without bodies: "
-            "op, sub_group_reduce_op, work_group_reduce_op"
+            "op"
         ) in artifact["error"]
-        assert "read_local(shared_: ptr<i32>)" in artifact["error"]
+        if artifact["target"] == "cgl":
+            assert "read_local(shared_: ptr<i32>)" in artifact["error"]
+            assert "async_work_group_copy, wait_group_events" in artifact["error"]
 
-    assert len(payload["diagnostics"]) == 24
+    assert len(payload["diagnostics"]) == 7
     for target in expected_targets:
         target_diagnostics = [
             diagnostic
             for diagnostic in payload["diagnostics"]
             if diagnostic["target"] == target
         ]
-        assert len(target_diagnostics) == 6
-        assert {diagnostic["code"] for diagnostic in target_diagnostics} == {
-            "opencl.target.unresolved-helper",
-            "opencl.target.pointer-helper-parameter",
-            "opencl.target.unsupported-builtin",
-        }
-        assert (
-            sum(
-                diagnostic["code"] == "opencl.target.unresolved-helper"
-                for diagnostic in target_diagnostics
-            )
-            == 3
-        )
-        assert (
-            sum(
-                diagnostic["code"] == "opencl.target.pointer-helper-parameter"
-                for diagnostic in target_diagnostics
-            )
-            == 1
-        )
-        assert (
-            sum(
-                diagnostic["code"] == "opencl.target.unsupported-builtin"
-                for diagnostic in target_diagnostics
-            )
-            == 2
-        )
+        if target == "cgl":
+            assert len(target_diagnostics) == 4
+            assert {diagnostic["code"] for diagnostic in target_diagnostics} == {
+                "opencl.target.unresolved-helper",
+                "opencl.target.pointer-helper-parameter",
+                "opencl.target.unsupported-builtin",
+            }
+        else:
+            assert len(target_diagnostics) == 1
+            assert target_diagnostics[0]["code"] == "opencl.target.unresolved-helper"
 
     for diagnostic in payload["diagnostics"]:
         assert diagnostic["sourceBackend"] == "opencl"
@@ -40163,31 +40151,127 @@ def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(
 
     messages = [diagnostic["message"] for diagnostic in payload["diagnostics"]]
     assert any("op(lhs: i32, rhs: i32) -> i32" in message for message in messages)
-    assert any(
-        "work_group_reduce_op(val: i32) -> i32" in message for message in messages
-    )
-    assert any(
-        "sub_group_reduce_op(val: i32) -> i32" in message for message in messages
-    )
     assert any("read_local(shared_: ptr<i32>)" in message for message in messages)
     assert any("async_work_group_copy(...)" in message for message in messages)
     assert any("wait_group_events(...)" in message for message in messages)
 
 
-def test_translate_project_opencl_local_pointer_helper_reports_contract(
+def test_translate_project_khronos_opencl_reduce_lowers_supported_target_artifacts(
     tmp_path,
 ):
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "local_helper.cl").write_text(
+    (repo / "reduce.cl").write_text(
         textwrap.dedent("""
-            int read_local(local int* shared, size_t i) {
-                return shared[i];
+            int op(int lhs, int rhs) {
+                return lhs + rhs;
             }
 
-            kernel void copy(global int* out, local int* shared) {
+            int work_group_reduce_op(int val);
+            int sub_group_reduce_op(int val);
+
+            int read_local(local int* shared, size_t count, int zero, size_t i) {
+                return i < count ? shared[i] : zero;
+            }
+
+            size_t zmin(size_t a, size_t b) {
+                return a < b ? a : b;
+            }
+
+            kernel void reduce(
+                global int* front,
+                global int* back,
+                local int* shared,
+                unsigned long length,
+                int zero_elem
+            ) {
+                const size_t lid = get_local_id(0),
+                             lsi = get_local_size(0),
+                             wid = get_group_id(0),
+                             wsi = get_num_groups(0);
+                const size_t wg_stride = lsi * 2,
+                             valid_count = zmin(
+                                 wg_stride,
+                                 (size_t)(length) - wid * wg_stride
+                             );
+
+                event_t read;
+                async_work_group_copy(
+                    shared,
+                    front + wid * wg_stride,
+                    valid_count,
+                    read
+                );
+                wait_group_events(1, &read);
+                barrier(CLK_LOCAL_MEM_FENCE);
+
+                for (int i = lsi; i != 0; i /= 2) {
+                    if (lid < i) {
+                        shared[lid] = op(
+                            read_local(shared, valid_count, zero_elem, lid),
+                            read_local(shared, valid_count, zero_elem, lid + i)
+                        );
+                    }
+                    barrier(CLK_LOCAL_MEM_FENCE);
+                }
+                if (lid == 0) back[wid] = shared[0];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl", "metal", "vulkan"],
+        output_dir="out",
+        validate=True,
+    ).to_json()
+
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"opengl", "metal", "vulkan"}
+    assert all(artifact["status"] == "translated" for artifact in artifacts.values())
+
+    opengl_source = (repo / artifacts["opengl"]["path"]).read_text(encoding="utf-8")
+    assert "shared int shared_[1024];" in opengl_source
+    assert (
+        "int read_local(int shared_[1024], uint count, int zero, uint i)"
+        in opengl_source
+    )
+    assert "shared_[lid] = front[((wid * wg_stride) + lid)];" in opengl_source
+    assert "async_work_group_copy" not in opengl_source
+    assert "wait_group_events" not in opengl_source
+    assert "ptr<i32>" not in opengl_source
+
+    metal_source = (repo / artifacts["metal"]["path"]).read_text(encoding="utf-8")
+    assert "threadgroup int shared_[1024];" in metal_source
+    assert "int read_local(threadgroup int shared_[1024]" in metal_source
+    assert "uint64_t length;" in metal_source
+    assert "async_work_group_copy" not in metal_source
+    assert "wait_group_events" not in metal_source
+
+    vulkan_source = (repo / artifacts["vulkan"]["path"]).read_text(encoding="utf-8")
+    assert "async_work_group_copy" not in vulkan_source
+    assert "wait_group_events" not in vulkan_source
+
+
+def test_translate_project_opencl_global_pointer_helper_reports_contract(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "global_helper.cl").write_text(
+        textwrap.dedent("""
+            int read_global(global int* values, size_t i) {
+                return values[i];
+            }
+
+            kernel void copy(global int* out, global int* values) {
                 size_t lid = get_local_id(0);
-                out[lid] = read_local(shared, lid);
+                out[lid] = read_global(values, lid);
             }
             """).strip(),
         encoding="utf-8",
@@ -40197,7 +40281,7 @@ def test_translate_project_opencl_local_pointer_helper_reports_contract(
 
     assert payload["artifacts"][0]["status"] == "failed"
     assert not (repo / payload["artifacts"][0]["path"]).exists()
-    assert "read_local(shared_: ptr<i32>)" in payload["artifacts"][0]["error"]
+    assert "read_global(values: ptr<i32>)" in payload["artifacts"][0]["error"]
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
     assert payload["summary"]["diagnosticsByCode"] == {
         "opencl.target.pointer-helper-parameter": 1
@@ -40207,9 +40291,9 @@ def test_translate_project_opencl_local_pointer_helper_reports_contract(
     assert diagnostic["code"] == "opencl.target.pointer-helper-parameter"
     assert diagnostic["sourceBackend"] == "opencl"
     assert diagnostic["target"] == "opengl"
-    assert diagnostic["location"]["file"] == "local_helper.cl"
+    assert diagnostic["location"]["file"] == "global_helper.cl"
     assert diagnostic["missingCapabilities"] == ["opencl.local-pointer-helper"]
-    assert "read_local(shared_: ptr<i32>)" in diagnostic["message"]
+    assert "read_global(values: ptr<i32>)" in diagnostic["message"]
     assert "Suggested action:" in diagnostic["message"]
 
 
