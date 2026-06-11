@@ -3177,6 +3177,9 @@ def _format_project_diagnostics_sarif(
         missing_capabilities = diagnostic.get("missingCapabilities")
         if isinstance(missing_capabilities, list) and missing_capabilities:
             properties["missingCapabilities"] = list(missing_capabilities)
+        details = diagnostic.get("details")
+        if isinstance(details, Mapping) and details:
+            properties["details"] = dict(details)
         if original_location:
             diagnostic_location = _sarif_location_property(diagnostic.get("location"))
             if diagnostic_location is not None:

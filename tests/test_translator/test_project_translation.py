@@ -7972,6 +7972,72 @@ def test_translate_project_specializes_generic_helper_for_spirv(tmp_path):
     assert "unspecialized generic helper" not in spirv
 
 
+def test_translate_project_opengl_rejects_unresolved_generic_struct_type(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "unresolved_box.cgl").write_text(
+        textwrap.dedent("""
+            shader OpenGLTemplateLeak {
+                generic<T> struct Box {
+                    T value;
+                };
+
+                struct Payload {
+                    Box<T> unresolved;
+                };
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["path"] == "translated/opengl/shaders/unresolved_box.glsl"
+    assert not (repo / artifact["path"]).exists()
+    assert "Box_T" not in artifact["error"]
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.opengl-template-type-unresolved": 1
+    }
+
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.opengl-template-type-unresolved"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert diagnostic["details"] == {
+        "enclosingGeneratedType": "Box<T>",
+        "sourcePath": "shaders/unresolved_box.cgl",
+        "targetArtifact": "translated/opengl/shaders/unresolved_box.glsl",
+        "unresolvedParameter": "T",
+    }
+    assert "unresolved template type 'T' from 'Box<T>'" in diagnostic["message"]
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
 def test_translate_project_lowers_glsl_vertex_index_for_graphics_targets(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
