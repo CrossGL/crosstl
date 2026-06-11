@@ -241,10 +241,16 @@ def test_project_package_exposes_public_api_surface():
         "RuntimeAdapter",
         "RuntimeAdapterContract",
         "RuntimeArtifactSelector",
+        "RuntimeBoundConstant",
+        "RuntimeBoundResource",
         "RuntimeDispatchGeometry",
         "RuntimeEntryPoint",
+        "RuntimeExecutionAdapter",
         "RuntimeExecutionError",
+        "RuntimeExecutionPlan",
         "RuntimeExecutionRequest",
+        "RuntimeExecutionState",
+        "RuntimeExecutionStep",
         "RuntimeExecutor",
         "RuntimeExecutorAvailability",
         "RuntimeExecutorResult",
@@ -270,6 +276,7 @@ def test_project_package_exposes_public_api_surface():
         "load_runtime_verification_fixtures",
         "load_project_config",
         "parse_runtime_verification_fixtures",
+        "prepare_runtime_execution",
         "plan_runtime_adapters",
         "plan_runtime_host_bindings",
         "plan_runtime_host_loader_consumption",
@@ -4275,20 +4282,23 @@ def test_scan_project_accepts_supported_native_macro_forms_across_source_fronten
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
     shader_dir.mkdir(parents=True)
-    source_names = [
-        name
-        for name in sorted(SOURCE_REGISTRY.names())
-        if SOURCE_REGISTRY.get(name).supports_lexer_keyword("defines")
-    ]
+    source_names = sorted(project_pipeline.SOURCE_FRONTENDS_WITH_NATIVE_MACRO_EXPANSION)
     assert source_names
     source_overrides = []
     for source_name in source_names:
+        assert SOURCE_REGISTRY.get(source_name).supports_lexer_keyword("defines")
         shader_path = shader_dir / f"{source_name}.shader"
         shader_path.write_text(
             textwrap.dedent("""
-                #define OBJECT_MACRO 1
-                #define FUNCTION_MACRO(value) ((value) + OBJECT_MACRO)
+                #if defined(ENABLE_NATIVE_MACROS)
+                #define SCALE_VALUE 2
+                #define SCALE(x) ((x) * SCALE_VALUE)
+                #define LOG(fmt, ...) log(fmt, __VA_ARGS__)
+                #define STRINGIFY(x) #x
+                #define JOIN(a, b) a##b
+                #define VALUE_NAME(name) JOIN(name, _value)
                 #pragma once
+                #endif
                 void main() {}
                 """).strip(),
             encoding="utf-8",
@@ -4299,6 +4309,9 @@ def test_scan_project_accepts_supported_native_macro_forms_across_source_fronten
         textwrap.dedent(f"""
             [project]
             source_roots = ["shaders"]
+
+            [project.defines]
+            ENABLE_NATIVE_MACROS = "1"
 
             [project.sources]
             {source_override_text}
@@ -4392,6 +4405,51 @@ def test_scan_project_reports_unsupported_macro_forms_across_source_frontends(
             assert "__VA_OPT__ variadic expansion" in diagnostic["message"]
         else:
             assert "does not accept project define forwarding" in diagnostic["message"]
+
+
+def test_scan_project_rejects_crossgl_function_like_native_macro_form(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "main.cgl").write_text(
+        textwrap.dedent("""
+            #define LOCAL_VALUE 1
+            #define SCALE(x) ((x) * LOCAL_VALUE)
+            shader RepoShader {
+                vertex {
+                    void main() {}
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+    diagnostic = payload["diagnostics"][0]
+
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.scan.unsupported-macro-form": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {"macro.native": 1}
+    assert diagnostic["code"] == "project.scan.unsupported-macro-form"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["missingCapabilities"] == ["macro.native"]
+    assert diagnostic["location"]["file"] == "shaders/main.cgl"
+    assert diagnostic["location"]["line"] == 2
+    assert "function-like define requires native macro expansion" in (
+        diagnostic["message"]
+    )
+    assert "LOCAL_VALUE" not in diagnostic["message"]
 
 
 def test_scan_project_scopes_define_shadowing_to_selected_variants(tmp_path):
@@ -8626,6 +8684,55 @@ def test_translate_project_opengl_materializes_mlx_explicit_template_helpers(
     assert not re.search(r"\b(?:T|IdxT|Offset|AccT|Wtype)\b", output)
 
 
+def test_translate_project_opengl_uses_metal_default_template_helper_type(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "indexing.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename IndexT = int>
+            inline IndexT linear_index(uint3 tid) {
+                IndexT idx = IndexT(tid.z);
+                return idx;
+            }
+
+            [[kernel]] void write_index(
+                device uint* out [[buffer(0)]],
+                uint3 tid [[thread_position_in_grid]]) {
+                auto idx = linear_index(tid);
+                out[0] = uint(idx);
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    output = (repo / "translated" / "opengl" / "shaders" / "indexing.glsl").read_text(
+        encoding="utf-8"
+    )
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert "int linear_index_int(uvec3 tid)" in output
+    assert "linear_index_int(gl_GlobalInvocationID)" in output
+    assert not re.search(r"\bIndexT\b", output)
+
+
 def test_translate_project_opengl_reports_unresolved_metal_template_kernel(
     tmp_path,
 ):
@@ -8668,6 +8775,19 @@ def test_translate_project_opengl_reports_unresolved_metal_template_kernel(
     assert diagnostic["target"] == "opengl"
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert diagnostic["location"]["file"] == "shaders/raw_template.metal"
+    assert diagnostic["location"]["line"] == 4
+    assert diagnostic["location"]["column"] == 1
+    assert "Missing template binding: T." in diagnostic["message"]
+    assert (
+        "Source declaration: raw_template at shaders/raw_template.metal:4:1."
+        in diagnostic["message"]
+    )
+    assert (
+        "Target artifact: translated/opengl/shaders/raw_template.glsl."
+        in diagnostic["message"]
+    )
+    assert "Suggested action:" in diagnostic["message"]
 
 
 def test_translate_project_named_variants_apply_native_slang_preprocessor(
@@ -23053,6 +23173,96 @@ def test_translate_project_resolves_mlx_sort_vulkan_storage_buffer_overload(
     assert payload["diagnostics"] == []
 
 
+def test_translate_project_resolves_generic_vulkan_storage_buffer_helper_family(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "generic_helpers.cgl"
+    source_path.write_text(
+        textwrap.dedent("""
+            shader GenericStorageBufferProjectHelpers {
+                StructuredBuffer<float> weights @binding(0);
+                StructuredBuffer<uint> counters @binding(1);
+                RWStructuredBuffer<float> values @binding(2);
+
+                generic<T> fn elem_to_loc(
+                    StructuredBuffer<T> source,
+                    RWStructuredBuffer<float> target,
+                    uint index,
+                    uvec3 tid
+                ) -> void {
+                    target.Store(index + tid.x, float(source.Load(index)));
+                }
+
+                generic<T> fn elem_to_loc(
+                    StructuredBuffer<T> source,
+                    RWStructuredBuffer<float> target,
+                    uint base,
+                    uint index,
+                    uvec3 tid
+                ) -> void {
+                    target.Store(base + index + tid.x, float(source.Load(index)));
+                }
+
+                generic<T> fn elem_to_loc_broadcast(
+                    StructuredBuffer<T> source,
+                    RWStructuredBuffer<float> target,
+                    uint index,
+                    uvec3 lane
+                ) -> void {
+                    target.Store(index + lane.x, float(source.Load(index)));
+                }
+
+                compute {
+                    void main() {
+                        uint staticScratch = 7u;
+                        uint dynamicScratch = 5u;
+                        elem_to_loc(
+                            weights,
+                            values,
+                            1u,
+                            0u,
+                            staticScratch,
+                            dynamicScratch,
+                            uvec3(0u, 0u, 0u)
+                        );
+                        elem_to_loc(
+                            counters,
+                            values,
+                            2u,
+                            1u,
+                            staticScratch,
+                            dynamicScratch,
+                            uvec3(1u, 0u, 0u)
+                        );
+                        elem_to_loc_broadcast(weights, values, 3u, 2u);
+                    }
+                }
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["vulkan"], output_dir="out").to_json()
+
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["diagnosticCounts"]["error"] == 0
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "elem_to_loc" not in generated
+    assert "elem_to_loc_broadcast" not in generated
+    assert "OpFunctionCall" not in generated
+    assert "OpConvertUToF" in generated
+    assert "WARNING" not in generated
+    assert payload["diagnostics"] == []
+
+
 def test_translate_project_drops_mlx_metal_system_includes_for_opengl(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -32802,6 +33012,52 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     assert "WorkgroupId" in spirv_output
     assert "LocalInvocationId" in spirv_output
     assert_spirv_asm_validates_if_available(spirv_output, tmp_path)
+
+
+def test_translate_project_vulkan_compute_bool_parameter_uses_uint_interface(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "flip.cgl").write_text(
+        textwrap.dedent("""
+            shader FlipParam {
+                compute {
+                    void main(bool flip) {
+                        if (flip) {
+                        }
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("vulkan", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    bool_type = re.search(r"(%\d+) = OpTypeBool\b", output)
+    uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", output)
+    assert bool_type is not None
+    assert uint_type is not None
+    assert re.search(rf"OpTypePointer Input {re.escape(uint_type.group(1))}\b", output)
+    assert not re.search(
+        rf"OpTypePointer Input {re.escape(bool_type.group(1))}\b", output
+    )
+    assert re.search(
+        rf"%\d+ = OpINotEqual {re.escape(bool_type.group(1))} %\d+ %\d+",
+        output,
+    )
+    assert_spirv_asm_validates_if_available(output, tmp_path)
 
 
 def test_translate_project_rust_gpu_graphics_entry_io_lowers_for_targets(

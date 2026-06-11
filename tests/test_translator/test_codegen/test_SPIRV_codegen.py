@@ -29,7 +29,6 @@ from crosstl.translator.ast import (
 from crosstl.translator.codegen.SPIRV_codegen import (
     SpirvId,
     SpirvType,
-    UnsupportedSPIRVFeatureError,
     VulkanSPIRVCodeGen,
 )
 from crosstl.translator.lexer import Lexer
@@ -436,34 +435,98 @@ class TestVulkanSPIRVCodeGen:
         assert re.search(r"%\d+ = OpVectorShuffle %\d+ %\d+ %\d+ 0 1 2", spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_compute_bool_input_reports_structured_lowering_diagnostic(self):
+    def test_compute_bool_input_lowers_to_uint_interface(self, tmp_path):
         source_code = """
-        shader BoolInputDiagnostic {
+        shader BoolInputLowering {
             compute {
-                void main(bool do_flip) {}
+                void main(bool flip) {
+                    if (flip) {
+                    }
+                }
             }
         }
         """
         ast = Parser(Lexer(source_code).tokens).parse()
-        stage = next(iter(ast.stages.values()))
-        stage.entry_point.parameters[0].source_location = {
-            "line": 4,
-            "column": 27,
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        bool_type = re.search(r"(%\d+) = OpTypeBool\b", spv_code)
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        assert bool_type is not None
+        assert uint_type is not None
+
+        interface_id = spirv_named_variable(
+            spv_code, "CrossGL_glcompute_input_flip", storage_class="Input"
+        )
+        interface_variable = re.search(
+            rf"{re.escape(interface_id)} = OpVariable (%\d+) Input\b", spv_code
+        )
+        assert interface_variable is not None
+        assert (
+            f"{interface_variable.group(1)} = OpTypePointer Input {uint_type.group(1)}"
+            in spv_code
+        )
+        assert not re.search(
+            rf"OpTypePointer Input {re.escape(bool_type.group(1))}\b", spv_code
+        )
+        assert re.search(
+            rf"%\d+ = OpINotEqual {re.escape(bool_type.group(1))} %\d+ %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_compute_bool_vector_input_lowers_to_uint_vector_interface(self, tmp_path):
+        source_code = """
+        shader BoolVectorInputLowering {
+            compute {
+                void main(bvec2 flags) {
+                    bool flip = flags.x;
+                    if (flip) {
+                    }
+                }
+            }
         }
+        """
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
 
-        with pytest.raises(
-            UnsupportedSPIRVFeatureError,
-            match=(
-                r"source declaration 'bool do_flip'.*Lower boolean "
-                r"input-like values as int or uint uniforms or specialization "
-                r"constants"
-            ),
-        ) as exc_info:
-            VulkanSPIRVCodeGen().generate(ast)
+        bool_type = re.search(r"(%\d+) = OpTypeBool\b", spv_code)
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        assert bool_type is not None
+        assert uint_type is not None
 
-        assert exc_info.value.feature == "spirv.bool_interface"
-        assert exc_info.value.missing_capabilities == ("spirv.bool_interface_lowering",)
-        assert exc_info.value.source_location == {"line": 4, "column": 27}
+        bool_vec2 = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(bool_type.group(1))} 2\b",
+            spv_code,
+        )
+        uint_vec2 = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(uint_type.group(1))} 2\b",
+            spv_code,
+        )
+        assert bool_vec2 is not None
+        assert uint_vec2 is not None
+
+        interface_id = spirv_named_variable(
+            spv_code, "CrossGL_glcompute_input_flags", storage_class="Input"
+        )
+        interface_variable = re.search(
+            rf"{re.escape(interface_id)} = OpVariable (%\d+) Input\b", spv_code
+        )
+        assert interface_variable is not None
+        assert (
+            f"{interface_variable.group(1)} = OpTypePointer Input "
+            f"{uint_vec2.group(1)}"
+        ) in spv_code
+        assert not re.search(
+            rf"OpTypePointer Input {re.escape(bool_vec2.group(1))}\b", spv_code
+        )
+        assert re.search(
+            rf"%\d+ = OpCompositeConstruct {re.escape(bool_vec2.group(1))} ",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_initialization(self):
         gen = VulkanSPIRVCodeGen()
@@ -14599,6 +14662,86 @@ class TestVulkanSPIRVCodeGen:
         assert "storage-buffer-function-overload" not in spv_code
         assert "block_sort" not in spv_code
         assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_generic_structured_buffer_overloads_resolve_project_helper_family(
+        self, tmp_path
+    ):
+        source_code = """
+        shader GenericStorageBufferProjectHelpers {
+            StructuredBuffer<float> weights @binding(0);
+            StructuredBuffer<uint> counters @binding(1);
+            RWStructuredBuffer<float> values @binding(2);
+
+            generic<T> fn elem_to_loc(
+                StructuredBuffer<T> source,
+                RWStructuredBuffer<float> target,
+                uint index,
+                uvec3 tid
+            ) -> void {
+                target.Store(index + tid.x, float(source.Load(index)));
+            }
+
+            generic<T> fn elem_to_loc(
+                StructuredBuffer<T> source,
+                RWStructuredBuffer<float> target,
+                uint base,
+                uint index,
+                uvec3 tid
+            ) -> void {
+                target.Store(base + index + tid.x, float(source.Load(index)));
+            }
+
+            generic<T> fn elem_to_loc_broadcast(
+                StructuredBuffer<T> source,
+                RWStructuredBuffer<float> target,
+                uint index,
+                uvec3 lane
+            ) -> void {
+                target.Store(index + lane.x, float(source.Load(index)));
+            }
+
+            compute {
+                void main() {
+                    uint staticScratch = 7u;
+                    uint dynamicScratch = 5u;
+                    elem_to_loc(
+                        weights,
+                        values,
+                        1u,
+                        0u,
+                        staticScratch,
+                        dynamicScratch,
+                        uvec3(0u, 0u, 0u)
+                    );
+                    elem_to_loc(
+                        counters,
+                        values,
+                        2u,
+                        1u,
+                        staticScratch,
+                        dynamicScratch,
+                        uvec3(1u, 0u, 0u)
+                    );
+                    elem_to_loc_broadcast(weights, values, 3u, 2u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "elem_to_loc" not in spv_code
+        assert "elem_to_loc_broadcast" not in spv_code
+        assert "storage-buffer-function-overload" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "OpConvertUToF" in spv_code
+        assert "OpCompositeConstruct" in spv_code
+        assert "Unknown type" not in spv_code
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)

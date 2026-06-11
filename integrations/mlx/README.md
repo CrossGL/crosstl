@@ -19,8 +19,8 @@ The current harness verifies:
 - OpenGL artifact generation for `arange.metal`.
 
 A separate full-corpus scout against the same pinned MLX revision currently
-translates 74 of 120 target artifacts across DirectX, OpenGL, and Vulkan:
-DirectX translates 38 of 40 artifacts, OpenGL translates 2 of 40 artifacts, and
+translates 75 of 120 target artifacts across DirectX, OpenGL, and Vulkan:
+DirectX translates 38 of 40 artifacts, OpenGL translates 3 of 40 artifacts, and
 Vulkan translates 34 of 40 artifacts. OpenGL rejects unresolved template
 placeholders instead of emitting generic artifacts, so its full-corpus count
 reflects concrete specialization work that still needs to be completed.
@@ -60,16 +60,16 @@ The harness writes reports, generated artifacts, and command logs under
 
 ## Current Translator Gaps
 
-- CrossGL/crosstl#979: scale Metal template instantiation for GLSL project
-  translation.
-- CrossGL/crosstl#980: parse numeric-heavy Metal template specializations in
-  project kernels.
-- CrossGL/crosstl#981: resolve project-scale SPIR-V storage-buffer helper
-  overloads.
-- CrossGL/crosstl#984: scale explicit Metal helper specialization for large
-  project kernels.
-- CrossGL/crosstl#985: classify and expand native macro forms during project
-  preprocessing.
+- CrossGL/crosstl#1001: expand project macro planning for backend-native
+  shader directives.
+- CrossGL/crosstl#1002: parse numeric-heavy generated Metal specialization
+  identifiers.
+- CrossGL/crosstl#1003: materialize concrete project template variants before
+  template-hostile targets.
+- CrossGL/crosstl#1004: scale project template specialization without hard
+  translation limits.
+- CrossGL/crosstl#1006: preserve resource pointer provenance through project
+  helper calls.
 
 These gaps are translator work. Host runtime integration gaps should be handled
 in MLX-specific integration code or downstream runtime adapters, not hidden as
@@ -77,14 +77,17 @@ shader translation successes.
 
 ## Runtime Integration Gaps
 
-- CrossGL/crosstl#982: add backend-agnostic runtime execution adapters for
-  translated project artifacts.
+- CrossGL/crosstl#1007: run repository test suites against translated project
+  backends.
 
 ## Resolved Frontier Issues
 
 The current reduced frontier no longer depends on the previously tracked issues:
 CrossGL/crosstl#939, CrossGL/crosstl#940, CrossGL/crosstl#941,
 CrossGL/crosstl#943, CrossGL/crosstl#944, CrossGL/crosstl#945, and
-CrossGL/crosstl#946. CrossGL/crosstl#983 is also covered by this branch; the
-current full-corpus scout no longer reports boolean SPIR-V interface lowering as
-a missing capability.
+CrossGL/crosstl#946. CrossGL/crosstl#979, CrossGL/crosstl#980,
+CrossGL/crosstl#981, CrossGL/crosstl#982, CrossGL/crosstl#983,
+CrossGL/crosstl#984, and CrossGL/crosstl#985 are also covered by mainline
+fixes. The current full-corpus scout no longer reports runtime-adapter
+contracts, boolean SPIR-V interface lowering, or the previous closed issue set
+as active missing capabilities.

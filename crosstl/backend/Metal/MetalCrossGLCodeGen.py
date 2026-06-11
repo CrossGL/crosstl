@@ -1313,13 +1313,18 @@ class MetalToCrossGLConverter:
         return mapped_names
 
     def format_generic_prefix(self, node):
-        template_parameters = getattr(node, "template_parameters", []) or []
+        defaults = getattr(node, "template_parameter_defaults", {}) or {}
+        template_parameters = getattr(node, "template_parameters", None)
         if template_parameters:
-            generics = [
-                self.sanitize_identifier(name)
-                for kind, name in template_parameters
-                if str(kind).startswith(("typename", "class")) and name
-            ]
+            generics = []
+            for kind, name in template_parameters:
+                if not name:
+                    continue
+                rendered = self.sanitize_identifier(name)
+                default_type = defaults.get(name)
+                if default_type and kind in {"typename", "class"}:
+                    rendered = f"{rendered} = {self.map_type(default_type)}"
+                generics.append(rendered)
         else:
             generics = [
                 self.sanitize_identifier(name)

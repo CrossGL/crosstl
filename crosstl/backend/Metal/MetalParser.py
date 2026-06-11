@@ -769,6 +769,9 @@ class MetalParser:
 
     def parse_template_declaration(self):
         template_parameters = self.parse_template_prefix()
+        template_parameter_defaults = dict(
+            getattr(self, "last_template_parameter_defaults", {}) or {}
+        )
         template_type_names = {
             name
             for kind, name in template_parameters
@@ -795,6 +798,7 @@ class MetalParser:
                         name for _kind, name in template_parameters if name
                     ]
                     struct.template_parameters = template_parameters
+                    struct.template_parameter_defaults = template_parameter_defaults
                 return struct
 
             if not self.is_function_definition():
@@ -818,6 +822,7 @@ class MetalParser:
                     name for _kind, name in template_parameters if name
                 ]
                 function.template_parameters = template_parameters
+                function.template_parameter_defaults = template_parameter_defaults
             return function
         finally:
             if sys.exc_info()[0] is None:
@@ -827,10 +832,12 @@ class MetalParser:
 
     def parse_template_prefix(self):
         self.eat("IDENTIFIER")
+        self.last_template_parameter_defaults = {}
         if self.current_token[0] != "LESS_THAN":
             return []
 
         parameters = []
+        defaults = {}
         parameter_tokens = []
         depth = 1
         grouped_depth = 0
@@ -870,6 +877,9 @@ class MetalParser:
                 parsed = self.parse_template_parameter_tokens(parameter_tokens)
                 if parsed is not None:
                     parameters.append(parsed)
+                    default_type = self.template_parameter_default(parameter_tokens)
+                    if default_type:
+                        defaults[parsed[1]] = default_type
                 parameter_tokens = []
                 self.eat("COMMA")
             else:
@@ -879,6 +889,10 @@ class MetalParser:
         parsed = self.parse_template_parameter_tokens(parameter_tokens)
         if parsed is not None:
             parameters.append(parsed)
+            default_type = self.template_parameter_default(parameter_tokens)
+            if default_type:
+                defaults[parsed[1]] = default_type
+        self.last_template_parameter_defaults = defaults
         return parameters
 
     def parse_template_parameter_tokens(self, tokens):
@@ -894,6 +908,15 @@ class MetalParser:
                     return (kind, tokens[name_idx][1])
         if len(tokens) >= 2 and tokens[-1][0] == "IDENTIFIER":
             return ("value", tokens[-1][1])
+        return None
+
+    def template_parameter_default(self, tokens):
+        for idx, (token_type, _value) in enumerate(tokens):
+            if token_type != "EQUALS":
+                continue
+            default_tokens = [token[1] for token in tokens[idx + 1 :]]
+            default_text = self.format_generic_type_tokens(default_tokens).strip()
+            return default_text or None
         return None
 
     def template_variable_declaration_name_at(self, idx):

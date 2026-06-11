@@ -13,50 +13,50 @@
     "sources": 40,
     "targets": ["directx", "opengl", "vulkan"],
     "artifacts": 120,
-    "translated_artifacts": 74,
-    "failed_artifacts": 46,
+    "translated_artifacts": 75,
+    "failed_artifacts": 45,
     "translated_by_target": {
       "directx": 38,
-      "opengl": 2,
+      "opengl": 3,
       "vulkan": 34
     }
   },
   "tracked_issues": [
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/979",
-      "scope": "metal-template-instantiation-glsl",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1001",
+      "scope": "project-native-directive-planning",
       "status": "open",
-      "summary": "Scale Metal template instantiation for GLSL project translation."
+      "summary": "Expand project macro planning for backend-native shader directives."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/980",
-      "scope": "metal-numeric-template-specializations",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1002",
+      "scope": "metal-generated-specialization-identifiers",
       "status": "open",
-      "summary": "Parse numeric-heavy Metal template specializations in project kernels."
+      "summary": "Parse numeric-heavy generated Metal specialization identifiers."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/981",
-      "scope": "spirv-storage-buffer-overloads",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1003",
+      "scope": "project-template-variant-materialization",
       "status": "open",
-      "summary": "Resolve project-scale SPIR-V storage-buffer helper overloads."
+      "summary": "Materialize concrete project template variants before template-hostile targets."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/982",
-      "scope": "runtime-execution-adapters",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1004",
+      "scope": "project-template-specialization-scale",
       "status": "open",
-      "summary": "Add backend-agnostic runtime execution adapters for translated project artifacts."
+      "summary": "Scale project template specialization without hard translation limits."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/984",
-      "scope": "metal-helper-specialization-scale",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1006",
+      "scope": "resource-pointer-provenance",
       "status": "open",
-      "summary": "Scale explicit Metal helper specialization for large project kernels."
+      "summary": "Preserve resource pointer provenance through project helper calls."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/985",
-      "scope": "project-native-macro-forms",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1007",
+      "scope": "project-runtime-test-execution",
       "status": "open",
-      "summary": "Classify and expand native macro forms during project preprocessing."
+      "summary": "Run repository test suites against translated project backends."
     }
   ],
   "resolved_issues": [
@@ -67,6 +67,12 @@
     "https://github.com/CrossGL/crosstl/issues/944",
     "https://github.com/CrossGL/crosstl/issues/945",
     "https://github.com/CrossGL/crosstl/issues/946",
-    "https://github.com/CrossGL/crosstl/issues/983"
+    "https://github.com/CrossGL/crosstl/issues/979",
+    "https://github.com/CrossGL/crosstl/issues/980",
+    "https://github.com/CrossGL/crosstl/issues/981",
+    "https://github.com/CrossGL/crosstl/issues/982",
+    "https://github.com/CrossGL/crosstl/issues/983",
+    "https://github.com/CrossGL/crosstl/issues/984",
+    "https://github.com/CrossGL/crosstl/issues/985"
   ]
 }

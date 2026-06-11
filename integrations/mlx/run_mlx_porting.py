@@ -30,12 +30,12 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
 )
 EXPECTED_METAL_KERNEL_COUNT = 40
 FULL_CORPUS_TRACKED_ISSUES = (
-    "https://github.com/CrossGL/crosstl/issues/979",
-    "https://github.com/CrossGL/crosstl/issues/980",
-    "https://github.com/CrossGL/crosstl/issues/981",
-    "https://github.com/CrossGL/crosstl/issues/982",
-    "https://github.com/CrossGL/crosstl/issues/984",
-    "https://github.com/CrossGL/crosstl/issues/985",
+    "https://github.com/CrossGL/crosstl/issues/1001",
+    "https://github.com/CrossGL/crosstl/issues/1002",
+    "https://github.com/CrossGL/crosstl/issues/1003",
+    "https://github.com/CrossGL/crosstl/issues/1004",
+    "https://github.com/CrossGL/crosstl/issues/1006",
+    "https://github.com/CrossGL/crosstl/issues/1007",
 )
 RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/939",
@@ -45,7 +45,13 @@ RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/944",
     "https://github.com/CrossGL/crosstl/issues/945",
     "https://github.com/CrossGL/crosstl/issues/946",
+    "https://github.com/CrossGL/crosstl/issues/979",
+    "https://github.com/CrossGL/crosstl/issues/980",
+    "https://github.com/CrossGL/crosstl/issues/981",
+    "https://github.com/CrossGL/crosstl/issues/982",
     "https://github.com/CrossGL/crosstl/issues/983",
+    "https://github.com/CrossGL/crosstl/issues/984",
+    "https://github.com/CrossGL/crosstl/issues/985",
 )
 
 

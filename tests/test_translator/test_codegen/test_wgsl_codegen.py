@@ -371,10 +371,132 @@ def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings():
     assert "var color: vec3<f32> = _TestBuffer.colors[0];" in generated
 
 
+def test_wgsl_codegen_lowers_uniform_blocks_to_uniform_struct_bindings():
+    shader = """
+    shader WGSLUniformBlock {
+        uniform Camera @set(2) @binding(3) {
+            mat4 viewProj;
+            vec4 tint;
+        };
+        vertex {
+            vec4 main(vec3 position @ POSITION) @ gl_Position {
+                vec4 projected = viewProj * vec4(position, 1.0);
+                return projected + tint;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "struct Camera {\n" "    viewProj: mat4x4<f32>,\n" "    tint: vec4<f32>,\n" "};"
+    ) in generated
+    assert "@group(2) @binding(3)\nvar<uniform> _Camera: Camera;" in generated
+    assert (
+        "var projected: vec4<f32> = " "(_Camera.viewProj * vec4<f32>(position, 1.0));"
+    ) in generated
+    assert "return (projected + _Camera.tint);" in generated
+
+
+def test_wgsl_codegen_rejects_resource_members_in_uniform_buffers():
+    shader = """
+    shader WGSLUniformResourceMember {
+        cbuffer Bad {
+            sampler2D colorTex;
+        };
+        compute {
+            void main() {
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target does not support resource member Bad\.colorTex "
+            r"of type sampler2D inside uniform buffers"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    array_shader = """
+    shader WGSLUniformResourceMemberArray {
+        cbuffer Bad {
+            sampler2D colorTex[2];
+        };
+        compute {
+            void main() {
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target does not support resource member Bad\.colorTex "
+            r"of type sampler2D inside uniform buffers"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(array_shader))
+
+
+def test_wgsl_codegen_rejects_storage_buffer_members_in_uniform_buffers():
+    shader = """
+    shader WGSLUniformStorageBufferMember {
+        cbuffer Bad {
+            StructuredBuffer<float> values;
+        };
+        compute {
+            void main() {
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target does not support storage-buffer resource member "
+            r"Bad\.values inside uniform buffers"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_unsized_array_members_in_uniform_buffers():
+    shader = """
+    shader WGSLUniformRuntimeArray {
+        cbuffer Bad {
+            float values[];
+        };
+        compute {
+            void main() {
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target does not support runtime-sized array member "
+            r"Bad\.values inside uniform buffers"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_lowers_structured_buffers_to_storage_bindings():
     shader = """
     shader WGSLStructuredBuffers {
-        StructuredBuffer<float> values;
+        StructuredBuffer<float> values @set(2) @binding(4);
         RWStructuredBuffer<float> outValues;
         compute {
             void main(uint3 gid @ gl_GlobalInvocationID) {
@@ -387,12 +509,138 @@ def test_wgsl_codegen_lowers_structured_buffers_to_storage_bindings():
 
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
-    assert "@group(0) @binding(0)\nvar<storage, read> values: array<f32>;" in generated
+    assert "@group(2) @binding(4)\nvar<storage, read> values: array<f32>;" in generated
     assert (
-        "@group(0) @binding(1)\n"
+        "@group(0) @binding(5)\n"
         "var<storage, read_write> outValues: array<f32>;" in generated
     )
     assert "outValues[gid.x] = values[gid.x];" in generated
+
+
+def test_wgsl_codegen_lowers_structured_buffer_access_helpers():
+    shader = """
+    shader WGSLStructuredBufferHelpers {
+        struct Payload {
+            vec4 color;
+            float weight;
+        };
+        StructuredBuffer<Payload> values;
+        RWStructuredBuffer<Payload> outValues;
+        compute {
+            void main(uint3 gid @ gl_GlobalInvocationID) {
+                Payload first = buffer_load(values, gid.x);
+                Payload second = values.Load(gid.y);
+                buffer_store(outValues, gid.x, first);
+                outValues.Store(gid.y, second);
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var<storage, read> values: array<Payload>;" in generated
+    assert "var<storage, read_write> outValues: array<Payload>;" in generated
+    assert "var first: Payload = values[gid.x];" in generated
+    assert "var second: Payload = values[gid.y];" in generated
+    assert "outValues[gid.x] = first;" in generated
+    assert "outValues[gid.y] = second;" in generated
+    assert "buffer_load" not in generated
+    assert "buffer_store" not in generated
+    assert ".Load" not in generated
+    assert ".Store" not in generated
+
+
+def test_wgsl_codegen_rejects_readonly_structured_buffer_stores():
+    shader = """
+    shader WGSLReadonlyStructuredBufferStore {
+        StructuredBuffer<float> values;
+        compute {
+            void main() {
+                buffer_store(values, 0, 1.0);
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="cannot store through read-only StructuredBuffer",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "expected"),
+    [
+        (
+            "AppendStructuredBuffer<float> appendValues;",
+            "does not support AppendStructuredBuffer resources yet",
+        ),
+        (
+            "ConsumeStructuredBuffer<float> consumeValues;",
+            "does not support ConsumeStructuredBuffer resources yet",
+        ),
+        (
+            "ByteAddressBuffer rawBytes;",
+            "does not support ByteAddressBuffer resources yet",
+        ),
+        (
+            "RWByteAddressBuffer rawBytes;",
+            "does not support RWByteAddressBuffer resources yet",
+        ),
+    ],
+)
+def test_wgsl_codegen_rejects_unsupported_storage_buffer_resource_forms(
+    declaration, expected
+):
+    shader = f"""
+    shader WGSLUnsupportedStorageBufferForms {{
+        {declaration}
+        compute {{
+            void main() {{
+                return;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+@pytest.mark.parametrize(
+    ("statement", "expected"),
+    [
+        (
+            "buffer_dimensions(values);",
+            "does not support storage buffer helper buffer_dimensions yet",
+        ),
+        (
+            "values.GetDimensions();",
+            "does not support storage buffer member helper GetDimensions yet",
+        ),
+    ],
+)
+def test_wgsl_codegen_rejects_unsupported_structured_buffer_helpers(
+    statement, expected
+):
+    shader = f"""
+    shader WGSLUnsupportedStructuredBufferHelpers {{
+        StructuredBuffer<float> values;
+        compute {{
+            void main() {{
+                {statement}
+                return;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected):
+        WGSLCodeGen().generate(parse_shader(shader))
 
 
 def test_wgsl_codegen_lowers_buffer_pointers_to_storage_bindings():

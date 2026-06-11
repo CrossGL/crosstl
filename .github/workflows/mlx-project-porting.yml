@@ -3,12 +3,12 @@ name: MLX Project Porting
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   MLX_COMMIT: "968d264f2903d578e699c4452a4dbf48633921aa"
-  MLX_OPENGL_TEMPLATE_INSTANTIATION_ISSUE: "https://github.com/CrossGL/crosstl/issues/979"
-  MLX_METAL_NUMERIC_SPECIALIZATION_ISSUE: "https://github.com/CrossGL/crosstl/issues/980"
-  MLX_SPIRV_STORAGE_BUFFER_OVERLOADS_ISSUE: "https://github.com/CrossGL/crosstl/issues/981"
-  PROJECT_RUNTIME_ADAPTERS_ISSUE: "https://github.com/CrossGL/crosstl/issues/982"
-  MLX_METAL_HELPER_SPECIALIZATION_ISSUE: "https://github.com/CrossGL/crosstl/issues/984"
-  MLX_NATIVE_MACRO_FORMS_ISSUE: "https://github.com/CrossGL/crosstl/issues/985"
+  PROJECT_NATIVE_DIRECTIVE_PLANNING_ISSUE: "https://github.com/CrossGL/crosstl/issues/1001"
+  METAL_GENERATED_SPECIALIZATION_IDENTIFIER_ISSUE: "https://github.com/CrossGL/crosstl/issues/1002"
+  PROJECT_TEMPLATE_VARIANT_MATERIALIZATION_ISSUE: "https://github.com/CrossGL/crosstl/issues/1003"
+  PROJECT_TEMPLATE_SPECIALIZATION_SCALE_ISSUE: "https://github.com/CrossGL/crosstl/issues/1004"
+  RESOURCE_POINTER_PROVENANCE_ISSUE: "https://github.com/CrossGL/crosstl/issues/1006"
+  PROJECT_RUNTIME_TEST_EXECUTION_ISSUE: "https://github.com/CrossGL/crosstl/issues/1007"
 
 on:
   push:

@@ -13,14 +13,21 @@ from crosstl.project.runtime_verification import (
     TRANSLATION_FAILED,
     UNAVAILABLE,
     RuntimeAdapterContract,
+    RuntimeDispatchGeometry,
+    RuntimeEntryPoint,
+    RuntimeExecutionAdapter,
     RuntimeExecutionError,
+    RuntimeExecutionRequest,
     RuntimeExecutorAvailability,
     RuntimeExecutorResult,
     RuntimeExecutorSkipped,
+    RuntimeResourceBinding,
+    RuntimeSpecializationConstant,
     RuntimeVerificationError,
     compare_runtime_outputs,
     load_runtime_verification_fixtures,
     parse_runtime_verification_fixtures,
+    prepare_runtime_execution,
     verify_runtime_fixtures,
 )
 
@@ -205,6 +212,99 @@ def test_compare_runtime_outputs_applies_tolerance():
     assert failed[0]["mismatchCount"] == 1
 
 
+def test_prepare_runtime_execution_maps_artifact_metadata_to_plan(tmp_path):
+    artifact_path = tmp_path / "out" / "opengl" / "debug" / "add.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("// translated shader", encoding="utf-8")
+    artifact = _translated_artifact(
+        path="out/opengl/debug/add.glsl",
+        compileSteps=[
+            {
+                "kind": "compile-source",
+                "command": ["compiler", "add.glsl"],
+                "metadata": {"profile": "compute"},
+            }
+        ],
+        loadSteps=[
+            {
+                "kind": "load-module",
+                "metadata": {"apiCalls": ["createModule"]},
+            }
+        ],
+    )
+    fixture = parse_runtime_verification_fixtures(
+        {
+            "fixtures": [
+                _runtime_fixture(
+                    inputs=[
+                        {
+                            "name": "lhs",
+                            "kind": "buffer",
+                            "dtype": "float32",
+                            "shape": [8],
+                            "values": [1.0] * 8,
+                        }
+                    ],
+                    expectedOutputs=[
+                        {
+                            "name": "out",
+                            "kind": "buffer",
+                            "dtype": "float32",
+                            "shape": [8],
+                            "values": [2.0] * 8,
+                        }
+                    ],
+                )
+            ]
+        }
+    )[0]
+    contract = RuntimeAdapterContract(
+        entry_points=(
+            RuntimeEntryPoint(
+                name="main",
+                stage="compute",
+                workgroup_size=(4, 1, 1),
+            ),
+        ),
+        resource_bindings=(
+            RuntimeResourceBinding(name="lhs", kind="buffer", binding=0),
+            RuntimeResourceBinding(name="out", kind="buffer", binding=1),
+        ),
+        specialization_constants=(
+            RuntimeSpecializationConstant(
+                name="tile_size",
+                dtype="uint32",
+                value=4,
+                required=True,
+            ),
+        ),
+        dispatch=RuntimeDispatchGeometry(entry_point="main", global_size=(8, 1, 1)),
+    )
+    request = RuntimeExecutionRequest(
+        fixture=fixture,
+        artifact=artifact,
+        artifact_path=artifact_path,
+        project_root=tmp_path,
+        adapter_contract=contract,
+    )
+
+    plan = prepare_runtime_execution(request)
+
+    assert plan.compile_steps[0].action == "compile-source"
+    assert plan.compile_steps[0].command == ("compiler", "add.glsl")
+    assert plan.load_steps[0].action == "load-module"
+    assert plan.resource_bindings[0].source == "input"
+    assert plan.resource_bindings[1].source == "expectedOutput"
+    assert plan.constant_bindings[0].value == 4
+    assert plan.dispatch.workgroup_count == (2, 1, 1)
+    assert plan.to_json()["resourceBindings"][0]["value"] == {
+        "name": "lhs",
+        "kind": "buffer",
+        "dtype": "float32",
+        "shape": [8],
+    }
+
+
 def test_verify_runtime_fixtures_reports_pass_and_writes_json(tmp_path):
     artifact_path = tmp_path / "out" / "opengl" / "debug" / "add.glsl"
     artifact_path.parent.mkdir(parents=True)
@@ -250,6 +350,164 @@ def test_verify_runtime_fixtures_reports_pass_and_writes_json(tmp_path):
     assert report["results"][0]["status"] == PASSED
     persisted = json.loads(output_path.read_text(encoding="utf-8"))
     assert persisted["summary"] == report["summary"]
+
+
+def test_verify_runtime_fixtures_runs_execution_adapter_pipeline(tmp_path):
+    artifact_path = tmp_path / "out" / "opengl" / "debug" / "add.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("// translated shader", encoding="utf-8")
+
+    class VectorAddAdapter(RuntimeExecutionAdapter):
+        name = "vector-add-adapter"
+
+        def dispatch_fixture(self, state):
+            assert state.plan.dispatch.entry_point == "main"
+            assert state.plan.dispatch.workgroup_count == (1, 1, 1)
+            assert state.resource_values["out"] is None
+            state.record_step("dispatch", "deterministic-vector-add")
+            return {
+                "out": {
+                    "dtype": "float32",
+                    "shape": [2],
+                    "values": [
+                        lhs + rhs
+                        for lhs, rhs in zip(
+                            state.resource_values["lhs"],
+                            state.resource_values["rhs"],
+                        )
+                    ],
+                }
+            }
+
+    report = verify_runtime_fixtures(
+        _artifact_report(
+            tmp_path,
+            [
+                _translated_artifact(
+                    entryPoints=[
+                        {
+                            "name": "main",
+                            "stage": "compute",
+                            "workgroupSize": [2, 1, 1],
+                        }
+                    ],
+                    resourceBindings=[
+                        {"name": "lhs", "kind": "buffer", "binding": 0},
+                        {"name": "rhs", "kind": "buffer", "binding": 1},
+                        {"name": "out", "kind": "buffer", "binding": 2},
+                    ],
+                    dispatch={
+                        "entryPoint": "main",
+                        "globalSize": [2, 1, 1],
+                    },
+                )
+            ],
+        ),
+        {
+            "fixtures": [
+                _runtime_fixture(
+                    inputs=[
+                        {
+                            "name": "lhs",
+                            "kind": "buffer",
+                            "dtype": "float32",
+                            "shape": [2],
+                            "values": [1.0, 2.0],
+                        },
+                        {
+                            "name": "rhs",
+                            "kind": "buffer",
+                            "dtype": "float32",
+                            "shape": [2],
+                            "values": [10.0, 20.0],
+                        },
+                    ],
+                    expectedOutputs=[
+                        {
+                            "name": "out",
+                            "kind": "buffer",
+                            "dtype": "float32",
+                            "shape": [2],
+                            "values": [11.0, 22.0],
+                        }
+                    ],
+                )
+            ]
+        },
+        executors={"opengl": VectorAddAdapter()},
+    )
+
+    result = report["results"][0]
+    assert result["status"] == PASSED
+    assert result["runtimeExecution"]["resourceBindings"][2]["source"] == (
+        "expectedOutput"
+    )
+    assert result["runtimeExecution"]["dispatch"]["workgroupCount"] == [1, 1, 1]
+    assert [
+        step["phase"] for step in result["executor"]["details"]["adapterSteps"]
+    ] == [
+        "compile",
+        "load",
+        "bind",
+        "bind",
+        "dispatch",
+        "collect",
+    ]
+
+
+def test_verify_runtime_fixtures_reports_setup_diagnostic_with_source_span(tmp_path):
+    source_span = {
+        "file": "kernels/add.cgl",
+        "line": 4,
+        "column": 5,
+        "offset": 12,
+        "length": 8,
+        "endLine": 4,
+        "endColumn": 13,
+        "endOffset": 20,
+    }
+    generated_span = {
+        "file": "out/opengl/debug/add.glsl",
+        "line": 8,
+        "column": 1,
+        "offset": 32,
+        "length": 8,
+        "endLine": 8,
+        "endColumn": 9,
+        "endOffset": 40,
+    }
+
+    report = verify_runtime_fixtures(
+        _artifact_report(
+            tmp_path,
+            [
+                _translated_artifact(
+                    resourceBindings=[
+                        {
+                            "name": "missing",
+                            "kind": "buffer",
+                            "binding": 0,
+                        }
+                    ],
+                    sourceMap={
+                        "source": source_span,
+                        "generated": generated_span,
+                    },
+                )
+            ],
+        ),
+        {"fixtures": [_runtime_fixture()]},
+    )
+
+    result = report["results"][0]
+    diagnostic = result["diagnostics"][0]
+    assert result["status"] == RUNTIME_FAILED
+    assert result["failurePhase"] == "runtime-setup"
+    assert diagnostic["code"] == "project.runtime-verification.resource-unbound"
+    assert diagnostic["artifact"]["source"] == "kernels/add.cgl"
+    assert diagnostic["sourceSpan"] == source_span
+    assert diagnostic["generatedSpan"] == generated_span
+    assert diagnostic["location"] == source_span
 
 
 def test_verify_runtime_fixtures_runs_executable_adapter_contract_fixture():
