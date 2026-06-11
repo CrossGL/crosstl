@@ -5163,14 +5163,15 @@ def test_hlsl_cbuffer_register_overlap_raises():
     }
     """
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Conflicting DirectX resource binding for 'Material': "
-            "b2 overlaps 'Camera' b2"
-        ),
-    ):
+    with pytest.raises(ValueError) as exc_info:
         generate_code(parse_code(tokenize_code(code)))
+    message = str(exc_info.value)
+    assert (
+        "Conflicting DirectX resource binding for 'Material': "
+        "b2 overlaps 'Camera' b2"
+    ) in message
+    assert "Material: @binding(2) on cbuffer Material" in message
+    assert "Camera: @register(b2) on cbuffer Camera" in message
 
 
 def test_hlsl_cbuffer_register_spaces_are_independent():
