@@ -231,6 +231,9 @@ class WGSLCodeGen:
     WRITABLE_STRUCTURED_BUFFER_TYPE_NAMES = {
         "rwstructuredbuffer",
     }
+    CONSTANT_BUFFER_TYPE_NAMES = {
+        "constantbuffer",
+    }
     UNSUPPORTED_STORAGE_BUFFER_TYPE_NAMES = {
         "appendstructuredbuffer",
         "byteaddressbuffer",
@@ -439,11 +442,21 @@ class WGSLCodeGen:
             self.function_resource_member_parameters(ast, target_stage)
         )
         global_variable_nodes = self._collect_global_variables(ast, target_stage)
+        stage_resource_parameters = self._collect_stage_resource_parameters(
+            ast, target_stage
+        )
         self._module_variable_types = {
             getattr(node, "name", ""): getattr(node, "var_type", None)
             for node in global_variable_nodes
             if getattr(node, "name", "")
         }
+        self._module_variable_types.update(
+            {
+                getattr(parameter, "name", ""): getattr(parameter, "param_type", None)
+                for parameter in stage_resource_parameters
+                if getattr(parameter, "name", "")
+            }
+        )
         helper_function_nodes = list(self._helper_functions(ast, target_stage))
         all_function_nodes = list(helper_function_nodes)
         all_function_nodes.extend(
@@ -457,9 +470,11 @@ class WGSLCodeGen:
             )
         )
         self._module_storage_access_modes = self.module_storage_access_modes(
-            global_variable_nodes
+            global_variable_nodes, stage_resource_parameters
         )
-        self.reserve_explicit_resource_bindings(cbuffers, global_variable_nodes)
+        self.reserve_explicit_resource_bindings(
+            cbuffers, global_variable_nodes, stage_resource_parameters
+        )
         if structs:
             emitted_sections.append(
                 "\n\n".join(self.generate_struct(node) for node in structs)
@@ -475,6 +490,13 @@ class WGSLCodeGen:
             emitted_sections.append(
                 "\n\n".join(self.generate_cbuffer(node) for node in cbuffers)
             )
+
+        stage_resources = [
+            self.generate_stage_resource_parameter(node)
+            for node in stage_resource_parameters
+        ]
+        if stage_resources:
+            emitted_sections.append("\n".join(stage_resources))
 
         global_variables = [
             self.generate_global_variable(node) for node in global_variable_nodes
@@ -567,6 +589,11 @@ class WGSLCodeGen:
             attributes = [f"@{stage_name}"]
             if stage_name == "compute":
                 attributes.append(self.generate_workgroup_size_attribute(stage_node))
+            stage_resource_parameter_ids = {
+                id(parameter)
+                for parameter in getattr(entry_point, "parameters", [])
+                if self.is_stage_resource_parameter(parameter)
+            }
             signature = self.generate_function_signature(
                 entry_point,
                 name=entry_name or f"{stage_name}_main",
@@ -574,6 +601,7 @@ class WGSLCodeGen:
                 leading_parameters=self.stage_implicit_builtin_parameters(
                     entry_point, stage_name
                 ),
+                skip_parameter_ids=stage_resource_parameter_ids,
             )
             self.push_identifier_scope(
                 getattr(param, "name", "")
@@ -630,12 +658,22 @@ class WGSLCodeGen:
         return f"{signature} {body}"
 
     def generate_function_signature(
-        self, func, name=None, return_attributes=(), leading_parameters=()
+        self,
+        func,
+        name=None,
+        return_attributes=(),
+        leading_parameters=(),
+        skip_parameter_ids=(),
     ):
         function_name = name or func.name
+        skip_parameter_ids = set(skip_parameter_ids or ())
         parameters = ", ".join(
             list(leading_parameters)
-            + [self.generate_parameter(param) for param in func.parameters]
+            + [
+                self.generate_parameter(param)
+                for param in func.parameters
+                if id(param) not in skip_parameter_ids
+            ]
         )
         return_type = self.type_name_string(func.return_type)
         if return_type == "void":
@@ -938,6 +976,40 @@ class WGSLCodeGen:
         if resource_declarations:
             declaration += "\n" + "\n".join(resource_declarations)
         return declaration
+
+    def generate_stage_resource_parameter(self, node):
+        unsupported_storage_type = self.unsupported_storage_buffer_type_name(
+            node.param_type
+        )
+        if unsupported_storage_type is not None:
+            raise ValueError(
+                "WGSL target does not support "
+                f"{unsupported_storage_type} resources yet"
+            )
+        storage_buffer_access = self.structured_buffer_access(node.param_type)
+        if storage_buffer_access:
+            attributes = (
+                self.explicit_binding_attributes(node) or self.next_binding_attributes()
+            )
+            return (
+                f"{attributes}\nvar<storage, {storage_buffer_access}> "
+                f"{node.name}: "
+                f"{self.type_name_string(node.param_type, allow_storage_resources=True)};"
+            )
+        uniform_type = self.stage_uniform_parameter_type(node)
+        if uniform_type is not None:
+            self.validate_uniform_binding_type(uniform_type)
+            attributes = (
+                self.explicit_binding_attributes(node) or self.next_binding_attributes()
+            )
+            return (
+                f"{attributes}\nvar<uniform> {node.name}: "
+                f"{self.type_name_string(uniform_type)};"
+            )
+        raise ValueError(
+            "WGSL target cannot lower stage resource parameter "
+            f"{node.name} of type {node.param_type}"
+        )
 
     def generate_sampled_texture_global_variable(self, node, texture_type):
         if node.initial_value is not None:
@@ -1879,6 +1951,52 @@ class WGSLCodeGen:
             return "read_write"
         return "read"
 
+    def constant_buffer_element_type(self, vtype):
+        if not isinstance(vtype, NamedType):
+            return None
+        base_name = str(vtype.name).lower()
+        if base_name not in self.CONSTANT_BUFFER_TYPE_NAMES:
+            return None
+        if len(vtype.generic_args) != 1:
+            raise ValueError(
+                "WGSL target requires ConstantBuffer resources to declare one "
+                "element type"
+            )
+        return vtype.generic_args[0]
+
+    def stage_uniform_parameter_type(self, parameter):
+        constant_buffer_type = self.constant_buffer_element_type(parameter.param_type)
+        if constant_buffer_type is not None:
+            return constant_buffer_type
+
+        if not self.has_binding_attribute(parameter):
+            return None
+
+        qualifier_names = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        if "constant" not in qualifier_names:
+            return None
+
+        param_type = getattr(parameter, "param_type", None)
+        if isinstance(param_type, ReferenceType):
+            return param_type.referenced_type
+        if isinstance(param_type, PointerType):
+            pointee_type = param_type.pointee_type
+            if self.struct_type_name(pointee_type) in self._structs_by_name:
+                return pointee_type
+            return None
+        return param_type
+
+    def validate_uniform_binding_type(self, uniform_type):
+        struct_name = self.struct_type_name(self.array_element_type(uniform_type))
+        struct = self._structs_by_name.get(struct_name)
+        if struct is None:
+            return
+        for member in getattr(struct, "members", []) or []:
+            self.validate_cbuffer_member(struct, member)
+
     def unsupported_storage_buffer_type_name(self, vtype):
         if not isinstance(vtype, NamedType):
             return None
@@ -2047,11 +2165,21 @@ class WGSLCodeGen:
                     struct_names.add(struct_name)
         return struct_names
 
-    def module_storage_access_modes(self, global_variables):
+    def module_storage_access_modes(self, global_variables, stage_resource_parameters=()):
         modes = {}
         for variable in global_variables:
             if self.is_glsl_buffer_block_variable(variable):
                 modes[variable.name] = self.glsl_buffer_block_access(variable)
+                continue
+            access = self.structured_buffer_access(getattr(variable, "var_type", None))
+            if access:
+                modes[variable.name] = access
+        for parameter in stage_resource_parameters:
+            access = self.structured_buffer_access(
+                getattr(parameter, "param_type", None)
+            )
+            if access:
+                modes[parameter.name] = access
         return modes
 
     def is_buffer_pointer_type(self, vtype, qualifiers=()):
@@ -2694,24 +2822,39 @@ class WGSLCodeGen:
         self.reserve_binding(group, sampler_binding)
         self._reserved_sampler_bindings[id(node)] = (group, sampler_binding)
 
-    def explicit_resource_binding_nodes(self, cbuffers, global_variables):
+    def declared_resource_type(self, node):
+        return getattr(
+            node,
+            "param_type",
+            getattr(node, "var_type", getattr(node, "member_type", None)),
+        )
+
+    def explicit_resource_binding_nodes(
+        self, cbuffers, global_variables, stage_resource_parameters=()
+    ):
         for node in cbuffers:
             yield node
         for node in global_variables:
             yield node
-            for info in self.resource_paths_for_type(getattr(node, "var_type", None)):
+            for info in self.resource_paths_for_type(self.declared_resource_type(node)):
+                yield info["member"]
+        for node in stage_resource_parameters:
+            yield node
+            for info in self.resource_paths_for_type(self.declared_resource_type(node)):
                 yield info["member"]
 
-    def reserve_explicit_resource_bindings(self, cbuffers, global_variables):
+    def reserve_explicit_resource_bindings(
+        self, cbuffers, global_variables, stage_resource_parameters=()
+    ):
         resource_nodes = list(
-            self.explicit_resource_binding_nodes(cbuffers, global_variables)
+            self.explicit_resource_binding_nodes(
+                cbuffers, global_variables, stage_resource_parameters
+            )
         )
         for node in resource_nodes:
             self.reserve_explicit_binding_for_node(node)
         for node in resource_nodes:
-            resource_type = getattr(
-                node, "var_type", getattr(node, "member_type", None)
-            )
+            resource_type = self.declared_resource_type(node)
             if self.sampled_texture_type(resource_type) is not None:
                 self.reserve_explicit_sampler_for_texture_node(node)
 
@@ -2742,7 +2885,7 @@ class WGSLCodeGen:
             arguments = getattr(attr, "arguments", []) or []
             if key in {"group", "set", "space"} and arguments:
                 group = self.generate_attribute_argument(arguments[0])
-            elif key == "binding" and arguments:
+            elif key in {"binding", "buffer"} and arguments:
                 binding = self.generate_attribute_argument(arguments[0])
                 register_class = None
             elif key == "register" and arguments:
@@ -2879,6 +3022,18 @@ class WGSLCodeGen:
             )
         )
 
+    def has_binding_attribute(self, node):
+        _group, binding = self.explicit_binding_components(node)
+        return binding is not None
+
+    def is_stage_resource_parameter(self, parameter):
+        param_type = getattr(parameter, "param_type", None)
+        if self.structured_buffer_element_type(param_type) is not None:
+            return True
+        if self.stage_uniform_parameter_type(parameter) is not None:
+            return True
+        return False
+
     def push_identifier_scope(self, names=()):
         self._identifier_scopes.append({name for name in names if name})
         self._value_type_scopes.append({})
@@ -2924,6 +3079,19 @@ class WGSLCodeGen:
         for stage_node in self._stage_nodes(ast, target_stage):
             variables.extend(getattr(stage_node, "local_variables", []) or [])
         return self._dedupe_by_name(variables)
+
+    def _collect_stage_resource_parameters(self, ast, target_stage):
+        parameters = []
+        for stage_node in self._stage_nodes(ast, target_stage):
+            entry_point = getattr(stage_node, "entry_point", None)
+            if entry_point is None:
+                continue
+            parameters.extend(
+                parameter
+                for parameter in getattr(entry_point, "parameters", []) or []
+                if self.is_stage_resource_parameter(parameter)
+            )
+        return self._dedupe_by_name(parameters)
 
     def _helper_functions(self, ast, target_stage):
         stage_entries = {
