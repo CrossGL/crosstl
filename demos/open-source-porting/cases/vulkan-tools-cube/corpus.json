@@ -11,8 +11,7 @@
         "cgl",
         "opengl",
         "metal",
-        "directx",
-        "vulkan"
+        "directx"
       ],
       "repository": "https://github.com/KhronosGroup/Vulkan-Tools",
       "commit": "68749eafbf27114a1dd807d6c870e53306673e64",
@@ -26,8 +25,7 @@
         "cgl",
         "opengl",
         "metal",
-        "directx",
-        "vulkan"
+        "directx"
       ],
       "repository": "https://github.com/KhronosGroup/Vulkan-Tools",
       "commit": "68749eafbf27114a1dd807d6c870e53306673e64",

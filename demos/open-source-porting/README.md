@@ -79,7 +79,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `sascha-willems-vulkan-headless-compute` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream headless compute shader unchanged. |
 | `slang-hello-world-compute` | `shader-slang/slang` at `29e69b0bf626f87500be73a7fb3764db25658c66` | Apache-2.0 WITH LLVM-exception | Slang | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream compute shader unchanged. |
 | `spirv-tools-basic-src` | `KhronosGroup/SPIRV-Tools` at `199cb207b911501ddd76dcddf100a6e21c15ef23` | Apache-2.0 | SPIR-V assembly | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream SPIR-V assembly fixture unchanged. |
-| `vulkan-tools-cube` | `KhronosGroup/Vulkan-Tools` at `68749eafbf27114a1dd807d6c870e53306673e64` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream cube demo shader pair unchanged. |
+| `vulkan-tools-cube` | `KhronosGroup/Vulkan-Tools` at `68749eafbf27114a1dd807d6c870e53306673e64` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX | Uses the upstream cube demo shader pair unchanged. Vulkan `VertexIndex` output determinism is tracked in issue #1255. |
 
 ## Source adjustments
 
@@ -192,9 +192,10 @@ The `KhronosGroup/SPIRV-Cross` round fragment shader is checked for CrossGL,
 OpenGL, Metal, DirectX, and Vulkan output.
 
 The `KhronosGroup/Vulkan-Tools` cube demo shaders are checked for CrossGL,
-OpenGL, Metal, DirectX, and Vulkan output after issue #819 restored HLSL
+OpenGL, Metal, and DirectX output after issue #819 restored HLSL
 reserved-keyword handling and issue #975 restored distinct DirectX vertex
-output semantics.
+output semantics. Vulkan output remains excluded until issue #1255 resolves
+cross-platform `VertexIndex` artifact determinism.
 
 The `ARM-software/opengl-es-sdk-for-android` cube shaders are checked for
 CrossGL, OpenGL, Metal, DirectX, and Vulkan output after issue #820 restored
