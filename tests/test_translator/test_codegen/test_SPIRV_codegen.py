@@ -24407,6 +24407,139 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_mlx_random_for_in_over_fixed_array_row_validates(self, tmp_path):
+        source_code = """
+        shader MLXRandomForInArrayRow {
+            constant uint[2][4] rotations = {
+                {13u, 15u, 26u, 6u},
+                {17u, 29u, 16u, 24u}
+            };
+
+            compute {
+                void main() {
+                    uint sum = 0u;
+                    for (int i = 0; i < 2; (++i)) {
+                        for r in rotations[i] {
+                            sum += r;
+                        }
+                    }
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        rotations_id = spirv_named_variable(
+            spv_code, "rotations", storage_class="Private"
+        )
+        row_accesses = re.findall(
+            rf"(%\d+) = OpAccessChain %\d+ {re.escape(rotations_id)} %\d+",
+            spv_code,
+        )
+        assert row_accesses
+        assert any(
+            re.search(
+                rf"OpAccessChain %\d+ {re.escape(row_access)} %\d+",
+                spv_code,
+            )
+            for row_access in row_accesses
+        )
+        assert not re.search(r"OpSLessThan %\d+ %\d+ %_arr_", spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mlx_random_storage_buffer_pointer_offset_alias_validates(self, tmp_path):
+        source_code = """
+        shader MLXRandomStorageBufferPointerOffset {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer uint* outValues;
+
+                void main() {
+                    uint base = 4u;
+                    outValues += base;
+                    for (int i = 0; i < 2; (++i)) {
+                        outValues[i] = uint(i);
+                    }
+                    return;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        out_values_id = spirv_named_variable(
+            spv_code, "outValues", storage_class="Uniform"
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(out_values_id)} %\d+ %\d+",
+            spv_code,
+        )
+        assert not re.search(r"OpFAdd %\d+ .*\boutValues\b", spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mlx_random_auto_struct_with_narrow_vector_alias_validates(self, tmp_path):
+        source_code = """
+        shader MLXRandomAutoStructNarrowVector {
+            struct rbits {
+                uvec2 val;
+                u8vec4[2] bytes;
+            }
+
+            rbits make_bits(uvec2 value) {
+                rbits bits;
+                bits.val = value;
+                bits.bytes[0] = u8vec4(1u, 2u, 3u, 4u);
+                bits.bytes[1] = u8vec4(5u, 6u, 7u, 8u);
+                return bits;
+            }
+
+            compute {
+                void main() {
+                    auto bits = make_bits(uvec2(1u, 2u));
+                    uint value = bits.bytes[1][0];
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        assert uint_type is not None
+        uvec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(uint_type.group(1))} 2\b",
+            spv_code,
+        )
+        uvec4_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(uint_type.group(1))} 4\b",
+            spv_code,
+        )
+        assert uvec2_type is not None
+        assert uvec4_type is not None
+        assert re.search(
+            rf"%\d+ = OpTypeStruct {uvec2_type.group(1)} %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpTypeArray {uvec4_type.group(1)} %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_bitwise_not_unary_operation(self, tmp_path):
         source_code = """
         shader BitwiseNot {
