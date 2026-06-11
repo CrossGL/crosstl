@@ -53,6 +53,9 @@ RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_KIND = (
 RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_KIND = (
     "crosstl-runtime-host-integration-execution-plan"
 )
+RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_KIND = (
+    "crosstl-runtime-host-integration-execution-result"
+)
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
 RUNTIME_LOADER_PLAN_CONTRACT = "runtime-loader-plan-v1"
@@ -75,6 +78,7 @@ RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_SCOPE = (
     "host-integration-handoff-readiness-inspection"
 )
 RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_SCOPE = "host-integration-execution-planning"
+RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_SCOPE = "host-integration-execution"
 RUNTIME_INTEGRATION_PLAN_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
@@ -152,6 +156,12 @@ RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_NON_GOALS = (
     "target-sdk-installation",
 )
 RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_NON_GOALS = (
+    "host-code-rewriting",
+    "device-execution",
+    "runtime-framework-generation",
+    "target-sdk-installation",
+)
+RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
     "runtime-framework-generation",
@@ -1057,6 +1067,67 @@ RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_STEP_FIELDS = frozenset(
         "sourceActionKind",
     )
 )
+RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourceExecutionPlan",
+        "sourceExecutionPlanHash",
+        "generatedAt",
+        "success",
+        "status",
+        "scope",
+        "nonGoals",
+        "handoffRoot",
+        "hostRoot",
+        "hostRootStatus",
+        "scaffoldRoot",
+        "scaffoldRootStatus",
+        "packageRoot",
+        "packageRootStatus",
+        "project",
+        "summary",
+        "targets",
+        "stepResults",
+        "executionPlan",
+        "diagnosticCounts",
+        "diagnostics",
+    )
+)
+RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_TARGET_FIELDS = frozenset(
+    (
+        "target",
+        "status",
+        "stepCount",
+        "passedStepCount",
+        "skippedStepCount",
+        "blockedStepCount",
+        "failedStepCount",
+        "requiredTools",
+        "hostResponsibilities",
+        "packagePaths",
+        "scaffoldFiles",
+    )
+)
+RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_STEP_FIELDS = frozenset(
+    (
+        "id",
+        "target",
+        "phase",
+        "kind",
+        "planStatus",
+        "resultStatus",
+        "message",
+        "loaderUnit",
+        "packagePath",
+        "outputPath",
+        "tools",
+        "hostResponsibilities",
+        "sourceActionKind",
+        "checks",
+        "diagnostics",
+    )
+)
 REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
 REPORT_PROJECT_FIELDS = frozenset(
     (
@@ -1097,14 +1168,13 @@ REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
     ("path", "resolvedPath", "status", "frontendVisible")
 )
 SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
+TARGET_SOURCE_OPTIONS_KEY = "target_options"
 TEMPLATE_VARIANTS_SOURCE_OPTION = "template_variants"
 METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION = "max_template_specializations"
 METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION = (
     "template_specialization_limit_source"
 )
-METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION = (
-    "max_template_materialization_work"
-)
+METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION = "max_template_materialization_work"
 METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION = (
     "template_materialization_work_limit_source"
 )
@@ -2686,6 +2756,116 @@ def _as_non_empty_str_mapping(value: Any, *, field_name: str) -> dict[str, str]:
     return result
 
 
+def _as_source_pattern_options(
+    value: Any,
+    *,
+    field_name: str,
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a table")
+    pattern_options: dict[str, dict[str, Any]] = {}
+    for pattern, per_source_options in value.items():
+        if not isinstance(pattern, str) or not pattern.strip():
+            raise ValueError(f"{field_name} keys must be non-empty strings")
+        source_path = _mapping_key_path(field_name, pattern)
+        if not isinstance(per_source_options, Mapping):
+            raise ValueError(f"{source_path} must be a table")
+        normalized_pattern_options: dict[str, Any] = {}
+        for per_source_name, per_source_value in per_source_options.items():
+            if not isinstance(per_source_name, str) or not per_source_name.strip():
+                raise ValueError(f"{source_path} keys must be non-empty strings")
+            if isinstance(per_source_value, bool):
+                normalized_pattern_options[per_source_name] = per_source_value
+            elif isinstance(per_source_value, int):
+                normalized_pattern_options[per_source_name] = per_source_value
+            elif isinstance(per_source_value, str):
+                normalized_pattern_options[per_source_name] = per_source_value
+            else:
+                raise ValueError(
+                    f"{source_path} entries must map option names to "
+                    "strings, integers, or booleans"
+                )
+        pattern_options[_normalize_project_relative_path(pattern)] = (
+            normalized_pattern_options
+        )
+    return pattern_options
+
+
+def _as_source_option_table(
+    source_backend: str,
+    options: Mapping[str, Any],
+    *,
+    option_path: str,
+    allow_template_variants: bool,
+    allow_target_options: bool,
+) -> dict[str, Any]:
+    normalized_options: dict[str, Any] = {}
+    for name, option_value in options.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"{option_path} keys must be non-empty strings")
+        if name == SOURCE_OPTION_PATTERNS_KEY:
+            normalized_options[name] = _as_source_pattern_options(
+                option_value,
+                field_name=_mapping_key_path(option_path, name),
+            )
+            continue
+        if name == TEMPLATE_VARIANTS_SOURCE_OPTION:
+            if not allow_template_variants:
+                raise ValueError(
+                    f"{_mapping_key_path(option_path, name)} is not supported here"
+                )
+            normalized_options[name] = _as_template_variant_options(
+                option_value,
+                field_name=_mapping_key_path(option_path, name),
+            )
+            continue
+        if name == TARGET_SOURCE_OPTIONS_KEY:
+            if not allow_target_options:
+                raise ValueError(
+                    f"{_mapping_key_path(option_path, name)} is not supported here"
+                )
+            if not isinstance(option_value, Mapping):
+                raise ValueError(
+                    f"{_mapping_key_path(option_path, name)} must be a table"
+                )
+            target_options: dict[str, dict[str, Any]] = {}
+            target_options_path = _mapping_key_path(option_path, name)
+            for target, target_source_options in option_value.items():
+                if not isinstance(target, str) or not target.strip():
+                    raise ValueError(
+                        f"{target_options_path} keys must be non-empty strings"
+                    )
+                target_path = _mapping_key_path(target_options_path, target)
+                if not isinstance(target_source_options, Mapping):
+                    raise ValueError(f"{target_path} must be a table")
+                target_key = normalize_backend_name(target) or target.strip().lower()
+                target_options[target_key] = _as_source_option_table(
+                    source_backend,
+                    target_source_options,
+                    option_path=target_path,
+                    allow_template_variants=False,
+                    allow_target_options=False,
+                )
+            normalized_options[name] = target_options
+            continue
+        if isinstance(option_value, bool):
+            normalized_options[name] = option_value
+        elif isinstance(option_value, int):
+            normalized_options[name] = option_value
+        elif isinstance(option_value, str):
+            normalized_options[name] = option_value
+        else:
+            raise ValueError(
+                f"{option_path} entries must map option names to strings, "
+                "integers, or booleans"
+            )
+    return _normalize_source_options_for_backend(
+        source_backend,
+        normalized_options,
+        option_path=option_path,
+    )
+
+
 def _as_source_options(value: Any, *, field_name: str) -> dict[str, dict[str, Any]]:
     if value is None:
         return {}
@@ -2704,78 +2884,13 @@ def _as_source_options(value: Any, *, field_name: str) -> dict[str, dict[str, An
         if not isinstance(options, Mapping):
             option_path = _mapping_key_path(field_name, source_backend)
             raise ValueError(f"{option_path} must be a table")
-        normalized_options: dict[str, Any] = {}
         option_path = _mapping_key_path(field_name, source_backend)
-        for name, option_value in options.items():
-            if not isinstance(name, str) or not name.strip():
-                raise ValueError(f"{option_path} keys must be non-empty strings")
-            if name == SOURCE_OPTION_PATTERNS_KEY:
-                if not isinstance(option_value, Mapping):
-                    raise ValueError(
-                        f"{_mapping_key_path(option_path, name)} must be a table"
-                    )
-                pattern_options: dict[str, dict[str, Any]] = {}
-                pattern_path = _mapping_key_path(option_path, name)
-                for pattern, per_source_options in option_value.items():
-                    if not isinstance(pattern, str) or not pattern.strip():
-                        raise ValueError(
-                            f"{pattern_path} keys must be non-empty strings"
-                        )
-                    source_path = _mapping_key_path(pattern_path, pattern)
-                    if not isinstance(per_source_options, Mapping):
-                        raise ValueError(f"{source_path} must be a table")
-                    normalized_pattern_options: dict[str, Any] = {}
-                    for per_source_name, per_source_value in per_source_options.items():
-                        if (
-                            not isinstance(per_source_name, str)
-                            or not per_source_name.strip()
-                        ):
-                            raise ValueError(
-                                f"{source_path} keys must be non-empty strings"
-                            )
-                        if isinstance(per_source_value, bool):
-                            normalized_pattern_options[per_source_name] = (
-                                per_source_value
-                            )
-                        elif isinstance(per_source_value, int):
-                            normalized_pattern_options[per_source_name] = (
-                                per_source_value
-                            )
-                        elif isinstance(per_source_value, str):
-                            normalized_pattern_options[per_source_name] = (
-                                per_source_value
-                            )
-                        else:
-                            raise ValueError(
-                                f"{source_path} entries must map option names to "
-                                "strings, integers, or booleans"
-                            )
-                    pattern_options[_normalize_project_relative_path(pattern)] = (
-                        normalized_pattern_options
-                    )
-                normalized_options[name] = pattern_options
-                continue
-            if name == TEMPLATE_VARIANTS_SOURCE_OPTION:
-                normalized_options[name] = _as_template_variant_options(
-                    option_value,
-                    field_name=_mapping_key_path(option_path, name),
-                )
-                continue
-            if isinstance(option_value, bool):
-                normalized_options[name] = option_value
-            elif isinstance(option_value, int):
-                normalized_options[name] = option_value
-            elif isinstance(option_value, str):
-                normalized_options[name] = option_value
-            else:
-                raise ValueError(
-                    f"{option_path} entries must map option names to strings, "
-                    "integers, or booleans"
-                )
-        normalized_options = _normalize_source_options_for_backend(
+        normalized_options = _as_source_option_table(
             backend_key,
-            normalized_options,
+            options,
             option_path=option_path,
+            allow_template_variants=True,
+            allow_target_options=True,
         )
         result[backend_key] = normalized_options
     return result
@@ -4916,36 +5031,45 @@ def _source_options_for_backend(
     return {
         name: value
         for name, value in source_options.items()
-        if name != SOURCE_OPTION_PATTERNS_KEY
+        if name not in {SOURCE_OPTION_PATTERNS_KEY, TARGET_SOURCE_OPTIONS_KEY}
     }
 
 
 def _source_options_for_unit(
-    config: ProjectConfig, source_backend: str, relative_path: str
+    config: ProjectConfig,
+    source_backend: str,
+    relative_path: str,
+    target: str | None = None,
 ) -> dict[str, Any]:
     register_default_sources()
     key = SOURCE_REGISTRY.resolve_name(source_backend) or source_backend.strip().lower()
     configured_options = config.source_options.get(key, {})
-    source_options = {
-        name: value
-        for name, value in configured_options.items()
-        if name != SOURCE_OPTION_PATTERNS_KEY
-    }
+    source_options: dict[str, Any] = {}
     template_limit_source = None
     work_limit_source = None
-    if METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in source_options:
-        template_limit_source = (
-            f"project.source_options.{key}."
-            f"{METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION}"
-        )
-    if METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION in source_options:
-        work_limit_source = (
-            f"project.source_options.{key}."
-            f"{METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION}"
-        )
 
-    source_patterns = configured_options.get(SOURCE_OPTION_PATTERNS_KEY)
-    if isinstance(source_patterns, Mapping):
+    def apply_options(option_values: Mapping[str, Any], option_path: str) -> None:
+        nonlocal template_limit_source, work_limit_source
+        for name, value in option_values.items():
+            if name in {SOURCE_OPTION_PATTERNS_KEY, TARGET_SOURCE_OPTIONS_KEY}:
+                continue
+            source_options[name] = value
+        if METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in option_values:
+            template_limit_source = (
+                f"{option_path}.{METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION}"
+            )
+        if METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION in option_values:
+            work_limit_source = (
+                f"{option_path}.{METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION}"
+            )
+
+    def apply_source_patterns(
+        option_values: Mapping[str, Any], option_path: str
+    ) -> None:
+        nonlocal template_limit_source, work_limit_source
+        source_patterns = option_values.get(SOURCE_OPTION_PATTERNS_KEY)
+        if not isinstance(source_patterns, Mapping):
+            return
         normalized_path = _normalize_project_relative_path(relative_path)
         for pattern, pattern_options in source_patterns.items():
             if not isinstance(pattern, str) or not isinstance(pattern_options, Mapping):
@@ -4956,7 +5080,7 @@ def _source_options_for_unit(
             source_options.update(pattern_options)
             if METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in pattern_options:
                 pattern_path = _mapping_key_path(
-                    f"project.source_options.{key}.{SOURCE_OPTION_PATTERNS_KEY}",
+                    f"{option_path}.{SOURCE_OPTION_PATTERNS_KEY}",
                     normalized_pattern,
                 )
                 template_limit_source = (
@@ -4964,7 +5088,7 @@ def _source_options_for_unit(
                 )
             if METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION in pattern_options:
                 pattern_path = _mapping_key_path(
-                    f"project.source_options.{key}.{SOURCE_OPTION_PATTERNS_KEY}",
+                    f"{option_path}.{SOURCE_OPTION_PATTERNS_KEY}",
                     normalized_pattern,
                 )
                 work_limit_source = (
@@ -4972,7 +5096,24 @@ def _source_options_for_unit(
                     f"{METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION}"
                 )
 
+    backend_option_path = f"project.source_options.{key}"
+    apply_options(configured_options, backend_option_path)
+    apply_source_patterns(configured_options, backend_option_path)
+
+    target_options = configured_options.get(TARGET_SOURCE_OPTIONS_KEY)
+    if target is not None and isinstance(target_options, Mapping):
+        target_key = normalize_backend_name(target) or target.strip().lower()
+        configured_target_options = target_options.get(target_key)
+        if isinstance(configured_target_options, Mapping):
+            target_option_path = _mapping_key_path(
+                f"{backend_option_path}.{TARGET_SOURCE_OPTIONS_KEY}",
+                target_key,
+            )
+            apply_options(configured_target_options, target_option_path)
+            apply_source_patterns(configured_target_options, target_option_path)
+
     source_options.pop(SOURCE_OPTION_PATTERNS_KEY, None)
+    source_options.pop(TARGET_SOURCE_OPTIONS_KEY, None)
     if (
         source_backend == "metal"
         and METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in source_options
@@ -4999,6 +5140,7 @@ def _frontend_source_options(source_options: Mapping[str, Any]) -> dict[str, Any
         if name
         not in {
             TEMPLATE_VARIANTS_SOURCE_OPTION,
+            TARGET_SOURCE_OPTIONS_KEY,
             METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION,
             METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION,
         }
@@ -9352,9 +9494,7 @@ class _MetalTemplateMaterializationWorkBudget:
             if self.unit is not None
             else None
         )
-        requested_signature = (
-            f"{self.pass_name}: {self.used} work items for {context}"
-        )
+        requested_signature = f"{self.pass_name}: {self.used} work items for {context}"
         suggested_action = (
             "raise max_template_materialization_work for this source pattern "
             "or backend, reduce implicit Metal template helper fan-out, or add "
@@ -10228,6 +10368,105 @@ def _metal_local_using_alias(
     )
 
 
+def _metal_rewrite_identifier_tokens(
+    text: str,
+    replacements: Mapping[str, str],
+) -> tuple[str, bool]:
+    if not replacements:
+        return text, False
+
+    parts: list[str] = []
+    changed = False
+    i = 0
+    while i < len(text):
+        if text[i].isalpha() or text[i] == "_":
+            j = i + 1
+            while j < len(text) and (text[j].isalnum() or text[j] == "_"):
+                j += 1
+            token = text[i:j]
+            replacement = (
+                None if text[max(0, i - 2) : i] == "::" else replacements.get(token)
+            )
+            if replacement is None:
+                parts.append(token)
+            else:
+                replacement_text = str(replacement)
+                parts.append(replacement_text)
+                changed = changed or replacement_text != token
+            i = j
+            continue
+        parts.append(text[i])
+        i += 1
+
+    if not changed:
+        return text, False
+    return "".join(parts), True
+
+
+def _raise_metal_type_identifier_rewrite_error(
+    *,
+    original_text: str,
+    current_text: str,
+    pass_count: int,
+    pass_limit: int,
+    work_budget: _MetalTemplateMaterializationWorkBudget | None,
+    offset: int,
+    length: int,
+    reason: str,
+) -> None:
+    from crosstl.backend.Metal.preprocessor import MetalTemplateSpecializationError
+
+    location = (
+        _source_location_at_offset(
+            work_budget.unit,
+            work_budget.source,
+            offset,
+            max(length, 0),
+        )
+        if work_budget is not None and work_budget.unit is not None
+        else None
+    )
+    location_text = (
+        f" Source context: {location.file}:{location.line}:{location.column}."
+        if location is not None
+        else ""
+    )
+    target_text = (
+        f" for target '{work_budget.target}'" if work_budget is not None else ""
+    )
+    pass_name = (
+        work_budget.pass_name
+        if work_budget is not None
+        else "metal-template-materialization/type-identifier-rewrite"
+    )
+    limit_source = (
+        f"{work_budget.limit_source}; type-alias dependency graph"
+        if work_budget is not None
+        else "type-alias dependency graph"
+    )
+    suggested_action = (
+        "break cyclic local using aliases or provide explicit template arguments "
+        "so Metal template materialization can resolve concrete types"
+    )
+    raise MetalTemplateSpecializationError(
+        "Metal template materialization type identifier rewrite limit exceeded "
+        f"while running {pass_name}{target_text}; {pass_count} rewrite passes "
+        f"requested, limit {pass_limit} from {limit_source}. "
+        f"Initial type '{original_text}' reached '{current_text}' before "
+        f"stabilizing ({reason}).{location_text} "
+        f"Suggested action: {suggested_action}.",
+        limit=pass_limit,
+        limit_source=limit_source,
+        unique_specialization_count=pass_count,
+        requested_signature=(
+            f"{pass_name}: {pass_count} type identifier rewrite passes for "
+            f"'{original_text}'"
+        ),
+        suggested_action=suggested_action,
+        source_location=location,
+    )
+
+
 def _metal_resolve_type_identifiers(
     preprocessor: Any,
     type_text: str,
@@ -10258,36 +10497,17 @@ def _metal_resolve_type_identifiers(
             length=length,
             context=f"resolving type '{text}'",
         )
-    alias_pattern = (
-        re.compile(
-            r"\b(?:"
-            + "|".join(re.escape(name) for name, _value in aliases_key)
-            + r")\b"
-        )
-        if aliases_key
-        else None
-    )
     alias_values = dict(aliases_key)
-    constant_pattern = (
-        re.compile(
-            r"\b(?:"
-            + "|".join(re.escape(name) for name, _value in constants_key)
-            + r")\b"
-        )
-        if constants_key
-        else None
-    )
     constant_values = dict(constants_key)
-    previous = None
-    while previous != text:
+    rewrite_pass_limit = max(1, len(alias_values) + len(constant_values) + 1)
+    seen_texts = {text}
+    for rewrite_pass in range(1, rewrite_pass_limit + 1):
         previous = text
-        if alias_pattern is not None:
-            text = alias_pattern.sub(lambda match: alias_values[match.group(0)], text)
-        if constant_pattern is not None:
-            text = constant_pattern.sub(
-                lambda match: constant_values[match.group(0)],
-                text,
-            )
+        text, alias_changed = _metal_rewrite_identifier_tokens(text, alias_values)
+        text, constant_changed = _metal_rewrite_identifier_tokens(
+            text,
+            constant_values,
+        )
         if "<" in text and ">" in text:
             base, arguments = _metal_generic_type_parts(preprocessor, text)
             if arguments:
@@ -10296,7 +10516,34 @@ def _metal_resolve_type_identifiers(
                     or argument
                     for argument in arguments
                 ]
-                text = f"{base}<{','.join(resolved_arguments)}>"
+                generic_text = f"{base}<{','.join(resolved_arguments)}>"
+                if generic_text != text:
+                    text = generic_text
+        if text == previous and not alias_changed and not constant_changed:
+            break
+        if text in seen_texts:
+            _raise_metal_type_identifier_rewrite_error(
+                original_text=cache_key[0],
+                current_text=text,
+                pass_count=rewrite_pass,
+                pass_limit=rewrite_pass_limit,
+                work_budget=work_budget,
+                offset=offset,
+                length=length,
+                reason="cycle detected",
+            )
+        seen_texts.add(text)
+    else:
+        _raise_metal_type_identifier_rewrite_error(
+            original_text=cache_key[0],
+            current_text=text,
+            pass_count=rewrite_pass_limit,
+            pass_limit=rewrite_pass_limit,
+            work_budget=work_budget,
+            offset=offset,
+            length=length,
+            reason="pass limit reached",
+        )
     resolved = _normalize_metal_type_text(text)
     if cache is not None:
         cache.resolved_types[cache_key] = resolved
@@ -12303,7 +12550,7 @@ def _project_template_materialization_for_artifact(
             1,
             len(templates),
         )
-        if materialization_work_items > preprocessor.max_template_specializations:
+        if materialization_work_items > materialization_work_limit:
             first_instantiation = source_instantiations[0]
             first_template = template_lookup.get(first_instantiation.function_name)
             if first_template is not None:
@@ -12331,7 +12578,7 @@ def _project_template_materialization_for_artifact(
                 f"{len(templates)} templates"
             )
             suggested_action = (
-                "raise max_template_specializations for this source pattern "
+                "raise max_template_materialization_work for this source pattern "
                 "or OpenGL target, or reduce source template instantiations"
             )
             raise MetalTemplateSpecializationError(
@@ -12339,13 +12586,13 @@ def _project_template_materialization_for_artifact(
                 f"GLSL codegen for '{unit.relative_path}'; "
                 f"{materialization_work_items} source-instantiation/template work "
                 f"items requested ({requested_signature}), limit "
-                f"{preprocessor.max_template_specializations} from "
-                f"{preprocessor.template_specialization_limit_source}. "
+                f"{materialization_work_limit} from "
+                f"{materialization_work_limit_source}. "
                 f"First {location_kind}: "
                 f"{location.file}:{location.line}:{location.column}. "
                 f"Suggested action: {suggested_action}.",
-                limit=preprocessor.max_template_specializations,
-                limit_source=preprocessor.template_specialization_limit_source,
+                limit=materialization_work_limit,
+                limit_source=materialization_work_limit_source,
                 requested_signature=requested_signature,
                 suggested_action=suggested_action,
                 source_location=location,
@@ -13378,7 +13625,10 @@ def translate_project(
                     artifacts.append(artifact)
                     continue
                 source_options = _source_options_for_unit(
-                    config, unit.source_backend, unit.relative_path
+                    config,
+                    unit.source_backend,
+                    unit.relative_path,
+                    target=target,
                 )
                 try:
                     template_materialization = (
@@ -13440,8 +13690,8 @@ def translate_project(
                         )
                         with materialized_path.open(
                             "w", encoding="utf-8", newline=""
-                        ) as materialized_file:
-                            materialized_file.write(template_materialization.text)
+                        ) as file:
+                            file.write(template_materialization.text)
                         translation_input_path = materialized_path
                         translation_defines = template_materialization.defines
                         translation_source_options = (
@@ -14357,7 +14607,7 @@ def _mojo_unresolved_target_construct_diagnostics(
             ),
             original_location=SourceLocation(file=str(artifact.get("source", ""))),
             **_artifact_diagnostic_context(artifact),
-            check_kind="artifact.validation",
+            check_kind="artifact",
             missing_capabilities=[MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY],
         )
     ]
@@ -23380,6 +23630,672 @@ def plan_runtime_host_integration_execution(
     }
 
 
+def _runtime_host_integration_execution_result_diagnostic(
+    path: Path,
+    code: str,
+    message: str,
+    *,
+    severity: str = "error",
+    target: Any = None,
+) -> ProjectDiagnostic:
+    return ProjectDiagnostic(
+        severity=severity,
+        code=f"project.runtime-host-integration-execution.{code}",
+        message=message,
+        location=SourceLocation(file=str(path)),
+        target=target if _is_non_empty_string(target) else None,
+        check_kind="runtime-host-integration-execution",
+    )
+
+
+def _runtime_host_integration_execution_load_plan(
+    path: Path,
+) -> tuple[dict[str, Any], list[ProjectDiagnostic]]:
+    try:
+        plan = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return {}, [
+            _runtime_host_integration_execution_result_diagnostic(
+                path,
+                "plan-read-failed",
+                f"Host integration execution plan could not be read: {exc}",
+            )
+        ]
+    except json.JSONDecodeError as exc:
+        return {}, [
+            _runtime_host_integration_execution_result_diagnostic(
+                path,
+                "plan-json-invalid",
+                f"Host integration execution plan is not valid JSON: {exc}",
+            )
+        ]
+    if not isinstance(plan, dict):
+        return {}, [
+            _runtime_host_integration_execution_result_diagnostic(
+                path,
+                "plan-invalid",
+                "Host integration execution input must be a JSON object.",
+            )
+        ]
+    return plan, []
+
+
+def _runtime_host_integration_execution_plan_diagnostics(
+    path: Path, plan: Mapping[str, Any]
+) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    if plan.get("schemaVersion") != REPORT_SCHEMA_VERSION:
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                path,
+                "plan-schema-invalid",
+                f"Host integration execution plan schemaVersion must be {REPORT_SCHEMA_VERSION}.",
+            )
+        )
+    if plan.get("kind") != RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_KIND:
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                path,
+                "plan-kind-invalid",
+                "Host integration execution input must be a "
+                f"{RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_KIND} document.",
+            )
+        )
+    if plan.get("success") is not True:
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                path,
+                "plan-failed",
+                "Host integration execution plan must be successful before "
+                "host integration execution can run.",
+            )
+        )
+    if not isinstance(plan.get("steps"), list):
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                path,
+                "plan-steps-invalid",
+                "Host integration execution plan steps must be a list.",
+            )
+        )
+    if not isinstance(plan.get("targets"), list):
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                path,
+                "plan-targets-invalid",
+                "Host integration execution plan targets must be a list.",
+            )
+        )
+    return diagnostics
+
+
+def _runtime_host_integration_execution_package_root(
+    package_root: str | os.PathLike[str] | None,
+    *,
+    plan_path: Path,
+) -> tuple[Path | None, str | None, str, list[ProjectDiagnostic]]:
+    if package_root is None:
+        return None, None, "not-provided", []
+    root = _filesystem_path_arg(package_root, field_name="Runtime package root")
+    if not root.exists():
+        return (
+            None,
+            str(root),
+            "missing",
+            [
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "package-root-missing",
+                    f"Runtime package root does not exist: {root}",
+                )
+            ],
+        )
+    if not root.is_dir():
+        return (
+            None,
+            str(root),
+            "not-directory",
+            [
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "package-root-not-directory",
+                    f"Runtime package root is not a directory: {root}",
+                )
+            ],
+        )
+    return root, str(root), "ready", []
+
+
+def _runtime_host_integration_execution_scaffold_root(
+    scaffold_root: str | os.PathLike[str] | None,
+    *,
+    plan_path: Path,
+) -> tuple[Path | None, str | None, str, list[ProjectDiagnostic]]:
+    if scaffold_root is None:
+        return None, None, "not-provided", []
+    root = _filesystem_path_arg(scaffold_root, field_name="Host loader scaffold root")
+    if not root.exists():
+        return (
+            None,
+            str(root),
+            "missing",
+            [
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "scaffold-root-missing",
+                    f"Host loader scaffold root does not exist: {root}",
+                )
+            ],
+        )
+    if not root.is_dir():
+        return (
+            None,
+            str(root),
+            "not-directory",
+            [
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "scaffold-root-not-directory",
+                    f"Host loader scaffold root is not a directory: {root}",
+                )
+            ],
+        )
+    return root, str(root), "ready", []
+
+
+def _runtime_host_integration_execution_check_payload(
+    kind: str,
+    status: str,
+    *,
+    field: str | None = None,
+    path: str | None = None,
+    tool: str | None = None,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"kind": kind, "status": status}
+    if field is not None:
+        payload["field"] = field
+    if path is not None:
+        payload["path"] = path
+    if tool is not None:
+        payload["tool"] = tool
+    if reason is not None:
+        payload["reason"] = reason
+    return payload
+
+
+def _runtime_host_integration_execution_file_check(
+    root: Path | None,
+    relative_path: Any,
+    *,
+    plan_path: Path,
+    step: Mapping[str, Any],
+    field_name: str,
+    root_label: str,
+    code_prefix: str,
+) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
+    if root is None:
+        return [
+            _runtime_host_integration_execution_check_payload(
+                "file-exists",
+                "skipped",
+                field=field_name,
+                reason=f"{root_label} is not provided.",
+            )
+        ], []
+    if not _is_non_empty_string(relative_path):
+        diagnostic = _runtime_host_integration_execution_result_diagnostic(
+            plan_path,
+            f"{code_prefix}-path-missing",
+            f"{field_name} must be a non-empty relative path.",
+            target=step.get("target"),
+        )
+        return [
+            _runtime_host_integration_execution_check_payload(
+                "file-exists", "failed", field=field_name
+            )
+        ], [diagnostic]
+    path_text = str(relative_path)
+    if _is_absolute_or_windows_drive_path(path_text):
+        diagnostic = _runtime_host_integration_execution_result_diagnostic(
+            plan_path,
+            f"{code_prefix}-path-absolute",
+            f"{field_name} must be relative to {root_label}.",
+            target=step.get("target"),
+        )
+        return [
+            _runtime_host_integration_execution_check_payload(
+                "file-exists", "failed", field=field_name, path=path_text
+            )
+        ], [diagnostic]
+    candidate = root / Path(path_text)
+    if not _is_relative_to(candidate, root):
+        diagnostic = _runtime_host_integration_execution_result_diagnostic(
+            plan_path,
+            f"{code_prefix}-path-outside-root",
+            f"{field_name} resolves outside {root_label}: {path_text}.",
+            target=step.get("target"),
+        )
+        return [
+            _runtime_host_integration_execution_check_payload(
+                "file-exists", "failed", field=field_name, path=path_text
+            )
+        ], [diagnostic]
+    if candidate.is_file():
+        return [
+            _runtime_host_integration_execution_check_payload(
+                "file-exists",
+                "passed",
+                field=field_name,
+                path=str(candidate),
+            )
+        ], []
+    diagnostic = _runtime_host_integration_execution_result_diagnostic(
+        plan_path,
+        f"{code_prefix}-missing",
+        f"{field_name} does not exist: {candidate}",
+        target=step.get("target"),
+    )
+    return [
+        _runtime_host_integration_execution_check_payload(
+            "file-exists",
+            "failed",
+            field=field_name,
+            path=str(candidate),
+        )
+    ], [diagnostic]
+
+
+def _runtime_host_integration_execution_tool_checks(
+    step: Mapping[str, Any],
+    *,
+    plan_path: Path,
+) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
+    checks: list[dict[str, Any]] = []
+    diagnostics: list[ProjectDiagnostic] = []
+    for tool in _record_sequence(step.get("tools")):
+        if not _is_non_empty_string(tool):
+            continue
+        resolved = shutil.which(str(tool))
+        if resolved:
+            checks.append(
+                _runtime_host_integration_execution_check_payload(
+                    "tool-available",
+                    "passed",
+                    tool=str(tool),
+                    path=resolved,
+                )
+            )
+            continue
+        checks.append(
+            _runtime_host_integration_execution_check_payload(
+                "tool-available",
+                "blocked",
+                tool=str(tool),
+                reason="Tool is not available on PATH.",
+            )
+        )
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                plan_path,
+                "tool-unavailable",
+                f"Host integration tool is not available on PATH: {tool}",
+                severity="warning",
+                target=step.get("target"),
+            )
+        )
+    if not checks:
+        checks.append(
+            _runtime_host_integration_execution_check_payload(
+                "tool-available",
+                "skipped",
+                reason="No host integration tools were listed for this step.",
+            )
+        )
+    return checks, diagnostics
+
+
+def _runtime_host_integration_execution_step_status(
+    checks: Sequence[Mapping[str, Any]],
+    diagnostics: Sequence[ProjectDiagnostic],
+    fallback: str,
+) -> str:
+    statuses = {check.get("status") for check in checks}
+    if any(diagnostic.severity == "error" for diagnostic in diagnostics):
+        return "failed"
+    if "failed" in statuses:
+        return "failed"
+    if "blocked" in statuses:
+        return "blocked"
+    if statuses and statuses <= {"skipped"}:
+        return "skipped"
+    if "skipped" in statuses and "passed" not in statuses:
+        return "skipped"
+    return fallback
+
+
+def _runtime_host_integration_execution_step_result(
+    step: Mapping[str, Any],
+    *,
+    plan_path: Path,
+    scaffold_root: Path | None,
+    package_root: Path | None,
+) -> tuple[dict[str, Any], list[ProjectDiagnostic]]:
+    checks: list[dict[str, Any]] = []
+    diagnostics: list[ProjectDiagnostic] = []
+    plan_status = step.get("status")
+    kind = step.get("kind")
+    phase = step.get("phase")
+    fallback_status = "passed" if plan_status == "ready" else str(plan_status)
+
+    if plan_status == "failed":
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                plan_path,
+                "plan-step-failed",
+                f"Host integration plan step failed before execution: {step.get('id')}",
+                target=step.get("target"),
+            )
+        )
+        checks.append(
+            _runtime_host_integration_execution_check_payload(
+                "plan-step-status", "failed", reason="Plan step is failed."
+            )
+        )
+    elif plan_status == "blocked":
+        checks.append(
+            _runtime_host_integration_execution_check_payload(
+                "plan-step-status", "blocked", reason="Plan step is blocked."
+            )
+        )
+        fallback_status = "blocked"
+    elif phase == "prepare-tools":
+        step_checks, step_diagnostics = _runtime_host_integration_execution_tool_checks(
+            step, plan_path=plan_path
+        )
+        checks.extend(step_checks)
+        diagnostics.extend(step_diagnostics)
+    elif kind == "consume-host-loader-unit":
+        step_checks, step_diagnostics = _runtime_host_integration_execution_file_check(
+            scaffold_root,
+            step.get("outputPath"),
+            plan_path=plan_path,
+            step=step,
+            field_name="outputPath",
+            root_label="host loader scaffold root",
+            code_prefix="output",
+        )
+        checks.extend(step_checks)
+        diagnostics.extend(step_diagnostics)
+    elif kind in {"load-package-artifact", "load-source-remap"}:
+        step_checks, step_diagnostics = _runtime_host_integration_execution_file_check(
+            package_root,
+            step.get("packagePath"),
+            plan_path=plan_path,
+            step=step,
+            field_name="packagePath",
+            root_label="runtime package root",
+            code_prefix="package",
+        )
+        checks.extend(step_checks)
+        diagnostics.extend(step_diagnostics)
+    elif kind == "satisfy-host-responsibility":
+        checks.append(
+            _runtime_host_integration_execution_check_payload(
+                "host-responsibility",
+                "skipped",
+                reason="Requires project-specific host code changes.",
+            )
+        )
+    else:
+        checks.append(
+            _runtime_host_integration_execution_check_payload(
+                "plan-step-ready", "passed"
+            )
+        )
+
+    result_status = _runtime_host_integration_execution_step_status(
+        checks, diagnostics, fallback_status
+    )
+    return {
+        "id": step.get("id"),
+        "target": step.get("target"),
+        "phase": phase,
+        "kind": kind,
+        "planStatus": plan_status,
+        "resultStatus": result_status,
+        "message": step.get("message"),
+        "loaderUnit": step.get("loaderUnit"),
+        "packagePath": step.get("packagePath"),
+        "outputPath": step.get("outputPath"),
+        "tools": [
+            tool
+            for tool in _record_sequence(step.get("tools"))
+            if _is_non_empty_string(tool)
+        ],
+        "hostResponsibilities": [
+            responsibility
+            for responsibility in _record_sequence(step.get("hostResponsibilities"))
+            if _is_non_empty_string(responsibility)
+        ],
+        "sourceActionKind": step.get("sourceActionKind"),
+        "checks": checks,
+        "diagnostics": [diagnostic.to_json() for diagnostic in diagnostics],
+    }, diagnostics
+
+
+def _runtime_host_integration_execution_result_status(
+    step_results: Sequence[Mapping[str, Any]], diagnostics: Sequence[Mapping[str, Any]]
+) -> str:
+    if any(diagnostic.get("severity") == "error" for diagnostic in diagnostics):
+        return "failed"
+    statuses = {step.get("resultStatus") for step in step_results}
+    if "failed" in statuses:
+        return "failed"
+    if "blocked" in statuses:
+        return "blocked"
+    if "skipped" in statuses and ("passed" in statuses or len(statuses) == 1):
+        return "partial" if "passed" in statuses else "skipped"
+    if "passed" in statuses:
+        return "passed"
+    return "empty"
+
+
+def _runtime_host_integration_execution_result_target(
+    target: Mapping[str, Any],
+    step_results: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    target_name = target.get("target")
+    target_steps = [step for step in step_results if step.get("target") == target_name]
+    passed_steps = [
+        step for step in target_steps if step.get("resultStatus") == "passed"
+    ]
+    skipped_steps = [
+        step for step in target_steps if step.get("resultStatus") == "skipped"
+    ]
+    blocked_steps = [
+        step for step in target_steps if step.get("resultStatus") == "blocked"
+    ]
+    failed_steps = [
+        step for step in target_steps if step.get("resultStatus") == "failed"
+    ]
+    status = _runtime_host_integration_execution_result_status(target_steps, [])
+    return {
+        "target": target_name,
+        "status": status,
+        "stepCount": len(target_steps),
+        "passedStepCount": len(passed_steps),
+        "skippedStepCount": len(skipped_steps),
+        "blockedStepCount": len(blocked_steps),
+        "failedStepCount": len(failed_steps),
+        "requiredTools": [
+            tool
+            for tool in _record_sequence(target.get("requiredTools"))
+            if _is_non_empty_string(tool)
+        ],
+        "hostResponsibilities": [
+            responsibility
+            for responsibility in _record_sequence(target.get("hostResponsibilities"))
+            if _is_non_empty_string(responsibility)
+        ],
+        "packagePaths": [
+            package_path
+            for package_path in _record_sequence(target.get("packagePaths"))
+            if _is_non_empty_string(package_path)
+        ],
+        "scaffoldFiles": [
+            scaffold_file
+            for scaffold_file in _record_sequence(target.get("scaffoldFiles"))
+            if _is_non_empty_string(scaffold_file)
+        ],
+    }
+
+
+def execute_runtime_host_integration(
+    execution_plan_path: str | os.PathLike[str],
+    *,
+    scaffold_root: str | os.PathLike[str] | None = None,
+    package_root: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Execute deterministic host integration checks from an execution plan."""
+
+    plan_path = _filesystem_path_arg(
+        execution_plan_path, field_name="Host integration execution plan path"
+    )
+    plan, load_diagnostics = _runtime_host_integration_execution_load_plan(plan_path)
+    diagnostics = list(load_diagnostics)
+    if plan:
+        diagnostics.extend(
+            _runtime_host_integration_execution_plan_diagnostics(plan_path, plan)
+        )
+    package_root_path, package_root_value, package_root_status, package_diagnostics = (
+        _runtime_host_integration_execution_package_root(
+            package_root, plan_path=plan_path
+        )
+    )
+    (
+        scaffold_root_path,
+        scaffold_root_value,
+        scaffold_root_status,
+        scaffold_diagnostics,
+    ) = _runtime_host_integration_execution_scaffold_root(
+        scaffold_root, plan_path=plan_path
+    )
+    diagnostics.extend(package_diagnostics)
+    diagnostics.extend(scaffold_diagnostics)
+
+    diagnostics_payload = [diagnostic.to_json() for diagnostic in diagnostics]
+    plan_ready = bool(plan) and not any(
+        diagnostic.severity == "error" for diagnostic in diagnostics
+    )
+    step_results: list[dict[str, Any]] = []
+    if plan_ready:
+        for step in _record_sequence(plan.get("steps")):
+            if not isinstance(step, Mapping):
+                continue
+            result, step_diagnostics = _runtime_host_integration_execution_step_result(
+                step,
+                plan_path=plan_path,
+                scaffold_root=scaffold_root_path,
+                package_root=package_root_path,
+            )
+            step_results.append(result)
+            diagnostics_payload.extend(
+                diagnostic.to_json() for diagnostic in step_diagnostics
+            )
+
+    passed_steps = [
+        step for step in step_results if step.get("resultStatus") == "passed"
+    ]
+    skipped_steps = [
+        step for step in step_results if step.get("resultStatus") == "skipped"
+    ]
+    blocked_steps = [
+        step for step in step_results if step.get("resultStatus") == "blocked"
+    ]
+    failed_steps = [
+        step for step in step_results if step.get("resultStatus") == "failed"
+    ]
+    targets = [
+        dict(target)
+        for target in _record_sequence(plan.get("targets"))
+        if isinstance(target, Mapping)
+    ]
+    required_tools = sorted(
+        {
+            tool
+            for target in targets
+            for tool in _record_sequence(target.get("requiredTools"))
+            if _is_non_empty_string(tool)
+        }
+    )
+    host_responsibilities = sorted(
+        {
+            responsibility
+            for target in targets
+            for responsibility in _record_sequence(target.get("hostResponsibilities"))
+            if _is_non_empty_string(responsibility)
+        }
+    )
+    status = _runtime_host_integration_execution_result_status(
+        step_results, diagnostics_payload
+    )
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_KIND,
+        "sourceExecutionPlan": str(plan_path),
+        "sourceExecutionPlanHash": _optional_source_hash(plan_path),
+        "generatedAt": int(time.time()),
+        "success": status != "failed",
+        "status": status,
+        "scope": RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_SCOPE,
+        "nonGoals": list(RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_NON_GOALS),
+        "handoffRoot": plan.get("handoffRoot") if plan else None,
+        "hostRoot": plan.get("hostRoot") if plan else None,
+        "hostRootStatus": plan.get("hostRootStatus") if plan else None,
+        "scaffoldRoot": scaffold_root_value,
+        "scaffoldRootStatus": scaffold_root_status,
+        "packageRoot": package_root_value,
+        "packageRootStatus": package_root_status,
+        "project": (
+            dict(plan.get("project"))
+            if isinstance(plan.get("project"), Mapping)
+            else {"targets": []}
+        ),
+        "summary": {
+            "targetCount": len(targets),
+            "stepCount": len(step_results),
+            "passedStepCount": len(passed_steps),
+            "skippedStepCount": len(skipped_steps),
+            "blockedStepCount": len(blocked_steps),
+            "failedStepCount": len(failed_steps),
+            "requiredToolCount": len(required_tools),
+            "hostResponsibilityCount": len(host_responsibilities),
+        },
+        "targets": [
+            _runtime_host_integration_execution_result_target(target, step_results)
+            for target in targets
+        ],
+        "stepResults": step_results,
+        "executionPlan": {
+            "kind": plan.get("kind") if plan else None,
+            "success": plan.get("success") if plan else False,
+            "status": plan.get("status") if plan else "failed",
+            "stepCount": (
+                (
+                    plan.get("summary", {}).get("stepCount", 0)
+                    if isinstance(plan.get("summary"), Mapping)
+                    else 0
+                )
+                if plan
+                else 0
+            ),
+        },
+        "diagnosticCounts": _diagnostic_payload_counts(diagnostics_payload),
+        "diagnostics": diagnostics_payload,
+    }
+
+
 def _inspection_artifact_matrix_summary(
     artifact_matrix: Any,
     artifacts: Any,
@@ -27926,11 +28842,82 @@ def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[st
                     )
                 )
                 continue
+            if name == TARGET_SOURCE_OPTIONS_KEY:
+                if not isinstance(option_value, Mapping):
+                    reasons.append(f"{name_prefix} must be an object")
+                    continue
+                for target, target_options in option_value.items():
+                    if not _is_non_empty_string(target):
+                        reasons.append(f"{name_prefix} keys must be non-empty strings")
+                        target_prefix = name_prefix
+                    else:
+                        target_prefix = _mapping_key_path(name_prefix, target)
+                    if not isinstance(target_options, Mapping):
+                        reasons.append(f"{target_prefix} must be an object")
+                        continue
+                    for (
+                        target_option_name,
+                        target_option_value,
+                    ) in target_options.items():
+                        if not _is_non_empty_string(target_option_name):
+                            reasons.append(
+                                f"{target_prefix} keys must be non-empty strings"
+                            )
+                            continue
+                        target_option_prefix = _mapping_key_path(
+                            target_prefix,
+                            target_option_name,
+                        )
+                        if target_option_name == SOURCE_OPTION_PATTERNS_KEY:
+                            if not isinstance(target_option_value, Mapping):
+                                reasons.append(
+                                    f"{target_option_prefix} must be an object"
+                                )
+                                continue
+                            for pattern, pattern_options in target_option_value.items():
+                                if not _is_non_empty_string(pattern):
+                                    reasons.append(
+                                        f"{target_option_prefix} keys must be "
+                                        "non-empty strings"
+                                    )
+                                    continue
+                                pattern_prefix = _mapping_key_path(
+                                    target_option_prefix,
+                                    pattern,
+                                )
+                                if not isinstance(pattern_options, Mapping):
+                                    reasons.append(
+                                        f"{pattern_prefix} must be an object"
+                                    )
+                                    continue
+                                if any(
+                                    not _is_non_empty_string(pattern_option)
+                                    for pattern_option in pattern_options
+                                ):
+                                    reasons.append(
+                                        f"{pattern_prefix} keys must be non-empty "
+                                        "strings"
+                                    )
+                                if any(
+                                    not isinstance(pattern_value, (str, int, bool))
+                                    for pattern_value in pattern_options.values()
+                                ):
+                                    reasons.append(
+                                        f"{pattern_prefix} values must be strings, "
+                                        "integers, or booleans"
+                                    )
+                            continue
+                        if not isinstance(target_option_value, (str, int, bool)):
+                            reasons.append(
+                                f"{target_prefix} values must be strings, "
+                                "integers, booleans, or source_patterns objects"
+                            )
+                continue
             if not isinstance(option_value, (str, int, bool)):
                 reasons.append(
                     f"{option_prefix} values must be strings, integers, "
-                    "booleans, source_patterns objects, or template_variants "
-                    "objects"
+                    "booleans, source_patterns objects, target_options "
+                    "objects, or template_variants objects"
                 )
     return reasons
 

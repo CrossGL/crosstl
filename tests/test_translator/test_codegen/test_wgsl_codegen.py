@@ -133,8 +133,7 @@ def test_wgsl_codegen_narrows_vec4_assignment_to_vec3_with_swizzle():
 
     assert (
         "output.fragPosition = "
-        "(_Uniforms.matModel * vec4<f32>(input.vertexPosition, 1.0)).xyz;"
-        in generated
+        "(_Uniforms.matModel * vec4<f32>(input.vertexPosition, 1.0)).xyz;" in generated
     )
     assert "vec3<f32>((_Uniforms.matModel *" not in generated
 
@@ -822,8 +821,8 @@ def test_wgsl_codegen_lowers_writeonly_uimage2d_to_storage_texture_store():
         "var dstTexture: texture_storage_2d<rgba32uint, write>;"
     ) in generated
     assert (
-        "textureStore(dstTexture, vec2<i32>(1, 2), vec4<u32>(3, 4, 5, 6));" in generated
-    )
+        "textureStore(dstTexture, vec2<i32>(1, 2), " "vec4<u32>(3, 4, 5, 6));"
+    ) in generated
     assert "imageStore" not in generated
 
 
@@ -869,8 +868,7 @@ def test_wgsl_codegen_infers_image2d_read_access_from_image_load():
         "var inputImage: texture_storage_2d<rgba32float, read>;"
     ) in generated
     assert (
-        "var color: vec4<f32> = textureLoad(inputImage, vec2<i32>(1, 2));"
-        in generated
+        "var color: vec4<f32> = textureLoad(inputImage, vec2<i32>(1, 2));" in generated
     )
     assert "imageLoad" not in generated
 
@@ -1099,9 +1097,7 @@ def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings(tmp_path):
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
     assert (
-        "struct UniformArrayElementF32 {\n"
-        "    @size(16) value: f32,\n"
-        "};"
+        "struct UniformArrayElementF32 {\n" "    @size(16) value: f32,\n" "};"
     ) in generated
     assert (
         "struct TestBuffer {\n"
@@ -1941,9 +1937,7 @@ def test_translate_metal_half_vector_aliases_to_wgsl_widens_to_f32(tmp_path):
     assert "fn buildViewDir(pair: vec2<f32>, z: f32) -> vec3<f32>" in generated
     assert "var dir: vec3<f32> = vec3<f32>(pair, z);" in generated
     assert "return vec3<f32>(dir.x, dir.yz);" in generated
-    assert (
-        "fn compute_main(@builtin(global_invocation_id) gid: vec3<u32>)" in generated
-    )
+    assert "fn compute_main(@builtin(global_invocation_id) gid: vec3<u32>)" in generated
     assert "var pair: vec2<f32> = vec2<f32>(1.0, 2.0);" in generated
     assert "var viewDir: vec3<f32> = buildViewDir(pair, 3.0);" in generated
     assert "var x: f32 = viewDir.x;" in generated
@@ -2254,7 +2248,10 @@ def test_wgsl_codegen_lowers_dynamic_sampled_texture_array_sampling():
     assert "@group(0) @binding(2)\nvar textures_1: texture_2d<f32>;" in generated
     assert "@group(0) @binding(3)\nvar textures_1_sampler: sampler;" in generated
     assert "return textures_sample(i32(index), uv);" in generated
-    assert "fn textures_sample(textures_index: i32, coords: vec2<f32>) -> vec4<f32>" in generated
+    assert (
+        "fn textures_sample(textures_index: i32, coords: vec2<f32>) -> vec4<f32>"
+        in generated
+    )
     assert "case 0:" in generated
     assert "return textureSample(textures_0, textures_0_sampler, coords);" in generated
     assert "case 1:" in generated
@@ -2281,7 +2278,10 @@ def test_wgsl_codegen_dispatches_dynamic_sampled_texture_array_function_argument
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
     assert "return sampleShadow_shadowMaps(i32(index), uv);" in generated
-    assert "fn sampleShadow_shadowMaps(shadowMaps_index: i32, uv: vec2<f32>) -> f32" in generated
+    assert (
+        "fn sampleShadow_shadowMaps(shadowMaps_index: i32, uv: vec2<f32>) -> f32"
+        in generated
+    )
     assert "return sampleShadow(shadowMaps_0, shadowMaps_0_sampler, uv);" in generated
     assert "return sampleShadow(shadowMaps_1, shadowMaps_1_sampler, uv);" in generated
 
@@ -2293,9 +2293,7 @@ def test_wgsl_codegen_covers_universal_pbr_fragment_shadow_map_array():
     generated = WGSLCodeGen().generate_program(ast, target_stage="fragment")
 
     for index in range(4):
-        assert (
-            f"var shadow_maps_{index}: texture_2d<f32>;" in generated
-        )
+        assert f"var shadow_maps_{index}: texture_2d<f32>;" in generated
         assert f"var shadow_maps_{index}_sampler: sampler;" in generated
         assert (
             "return calculateShadow("
@@ -2317,10 +2315,14 @@ def test_wgsl_codegen_covers_universal_pbr_full_translation():
 
     generated = WGSLCodeGen().generate(ast)
 
-    assert "fn fragment_main(input: FragmentInput) -> @location(0) vec4<f32>" in generated
+    assert (
+        "fn fragment_main(input: FragmentInput) -> @location(0) vec4<f32>" in generated
+    )
     assert "var shadow_maps_0: texture_2d<f32>;" in generated
     assert "fn calculateShadow_shadow_maps(" in generated
-    assert "var irradiance_map: texture_storage_2d_array<rgba16float, write>;" in generated
+    assert (
+        "var irradiance_map: texture_storage_2d_array<rgba16float, write>;" in generated
+    )
     assert "vec2<i32>(textureDimensions(irradiance_map))" in generated
     assert (
         "textureStore(irradiance_map, (vec3<i32>(coord, face_index)).xy, "

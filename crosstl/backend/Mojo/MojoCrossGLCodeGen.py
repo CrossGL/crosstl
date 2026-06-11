@@ -490,7 +490,28 @@ class MojoToCrossGLConverter:
         if selected:
             return selected
 
-        return set()
+        if "main" in function_names:
+            return set()
+
+        return {
+            function.name
+            for function in functions
+            if self.is_standalone_mojo_gpu_kernel(function)
+        }
+
+    def is_standalone_mojo_gpu_kernel(self, function):
+        return (
+            getattr(function, "name", None)
+            and self.function_has_mojo_gpu_resource_parameter(function)
+            and self.expression_uses_mojo_gpu_builtins(function)
+        )
+
+    def function_has_mojo_gpu_resource_parameter(self, function):
+        for parameter in getattr(function, "params", []) or []:
+            param_type = getattr(parameter, "vtype", None)
+            if isinstance(param_type, str) and param_type.startswith("TileTensor["):
+                return True
+        return False
 
     def collect_reachable_gpu_function_names(self, ast, kernel_names):
         if not kernel_names:
@@ -527,7 +548,9 @@ class MojoToCrossGLConverter:
         return calls
 
     def mojo_enqueue_function_kernel_name(self, node):
-        if not isinstance(node, CallNode) or not isinstance(node.callee, ArrayAccessNode):
+        if not isinstance(node, CallNode) or not isinstance(
+            node.callee, ArrayAccessNode
+        ):
             return None
         callee_array = node.callee.array
         if not (
@@ -898,7 +921,9 @@ class MojoToCrossGLConverter:
             try:
                 if hasattr(func, "body") and func.body:
                     code += self.generate_function_body(func.body, indent + 1)
-                if named_result and self.needs_named_result_fallthrough_return(func.body):
+                if named_result and self.needs_named_result_fallthrough_return(
+                    func.body
+                ):
                     code += f"{indent_str}    return {named_result_name};\n"
             finally:
                 self.named_result_stack.pop()
@@ -1084,7 +1109,9 @@ class MojoToCrossGLConverter:
             else None
         )
         if node.vtype or inferred_type:
-            declaration_type = self.map_type(node.vtype) if node.vtype else inferred_type
+            declaration_type = (
+                self.map_type(node.vtype) if node.vtype else inferred_type
+            )
             declaration = f"{declaration_type} {name}"
         else:
             var_type = "var" if node.var_type == "var" else "let"

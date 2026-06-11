@@ -664,6 +664,27 @@ or build-system tooling can decide what to run next. The plan remains metadata
 only: it does not rewrite host application code, execute device code, generate
 runtime framework code, or install target SDKs.
 
+Execute deterministic host integration checks from a saved execution plan:
+
+.. code-block:: bash
+
+   python -m crosstl execute-host-integration \
+     crosstl-host-integration-execution-plan.json \
+     --scaffold-root crosstl-host-loader-scaffolds \
+     --package-root crosstl-runtime-package \
+     --format text
+
+Host integration execution results emit a
+``crosstl-runtime-host-integration-execution-result`` JSON document. Execution
+validates the plan, records scaffold-root and package-root readiness, verifies
+generated loader scaffold files when ``--scaffold-root`` is provided, checks
+package artifact and source-remap paths when ``--package-root`` is provided,
+checks required host tools on ``PATH``, and reports project-specific host
+responsibilities as skipped actionable steps. Blocked plan steps remain blocked
+in the result, and missing files or invalid paths are emitted as structured
+diagnostics. This command still does not rewrite host application code, execute
+device code, generate runtime framework code, or install target SDKs.
+
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a
 related location. Remapped diagnostics also expose sanitized
@@ -696,9 +717,16 @@ configuration contract is intentionally small:
 
    [project.source_options.metal]
    max_template_specializations = 2048
+   max_template_materialization_work = 131072
 
    [project.source_options.metal.source_patterns."kernels/scan*.metal"]
    max_template_specializations = 4096
+
+   [project.source_options.metal.target_options.opengl]
+   max_template_materialization_work = 65536
+
+   [project.source_options.metal.target_options.opengl.source_patterns."kernels/gemv.metal"]
+   max_template_materialization_work = 131072
 
    [project.variants.debug]
    USE_FAST_PATH = "0"
@@ -737,12 +765,19 @@ variants are recorded in project reports. Source frontend options can also be
 set under ``[project.source_options.<source-backend>]`` and are forwarded only
 to source lexers that expose matching keyword options. Metal source imports
 support ``max_template_specializations`` for project-specific explicit helper
-materialization budgets. Use
+materialization budgets and ``max_template_materialization_work`` for project
+template materialization work budgets. The default materialization work budget
+is derived from the active template specialization limit, so larger finite
+source-instantiated kernels can complete without raising the unique helper
+specialization cap. Use
 ``[project.source_options.metal.source_patterns."<repo-relative-glob>"]`` to
-raise or lower the Metal budget for matching sources. When a Metal helper
-materialization budget is exceeded, project diagnostics report the unique
-concrete signature count, the active limit, the configuration field that set
-the limit, and a suggested remediation. Project reports include
+raise or lower Metal budgets for matching sources. Use
+``[project.source_options.metal.target_options.<target>]`` and its nested
+``source_patterns`` table to override budgets only for one target, such as
+OpenGL. When a Metal helper or materialization-work budget is exceeded,
+project diagnostics report the concrete signature count or work item count,
+the active limit, the configuration field that set the limit, and a suggested
+remediation. Project reports include
 order-preserving include-directory status records and status counts so missing,
 non-directory, outside-project, and frontend-visible active include directories
 can be triaged without re-running discovery. Missing include directories,

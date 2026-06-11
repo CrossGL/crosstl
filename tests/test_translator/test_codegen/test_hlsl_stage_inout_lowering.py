@@ -99,8 +99,8 @@ def assert_no_hlsl_entry_parameters(generated):
         (
             "vulkan",
             (
-                'OpEntryPoint Vertex',
-                'OpDecorate',
+                "OpEntryPoint Vertex",
+                "OpDecorate",
                 '"CrossGL_vertex_input_VSIn_Pos"',
                 '"CrossGL_vertex_output_PSIn_Color"',
             ),
@@ -143,8 +143,8 @@ def test_hlsl_struct_inout_vertex_entry_lowers_to_native_stage_entry(
         (
             "vulkan",
             (
-                'OpEntryPoint Fragment',
-                'OpExecutionMode',
+                "OpEntryPoint Fragment",
+                "OpExecutionMode",
                 '"CrossGL_fragment_input_PSIn_Color"',
                 '"CrossGL_fragment_output_PSOut_Color"',
             ),

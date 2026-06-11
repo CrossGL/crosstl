@@ -1629,9 +1629,7 @@ class MetalToCrossGLConverter:
             code += "@ stage_entry\n"
         code += "    " * indent
         implicit_buffer_bindings = (
-            self.apply_implicit_stage_entry_buffer_bindings(func)
-            if stage_entry
-            else []
+            self.apply_implicit_stage_entry_buffer_bindings(func) if stage_entry else []
         )
         previous_variable_types = self.current_variable_types
         self.current_variable_types = dict(self.global_variable_types)

@@ -157,6 +157,7 @@ void main() {
 }
 """
 
+
 def _write_source(tmp_path, filename, source):
     path = tmp_path / filename
     path.write_text(source, encoding="utf-8")
@@ -708,7 +709,7 @@ def test_metal_threadgroup_scratch_lowers_to_directx_groupshared(tmp_path):
     assert "threadgroup float" not in generated
     assert "    groupshared float scratch[256];" not in generated
     assert "mat_mul_scratch[tid] = 1.0;" in generated
-    assert "out_.Store(tid, mat_mul_scratch[tid]);" in generated
+    assert "out_[tid] = mat_mul_scratch[tid];" in generated
     assert "GroupMemoryBarrierWithGroupSync();" in generated
     assert generated.index("groupshared float mat_mul_scratch[256];") < generated.index(
         "void CSMain"
@@ -881,7 +882,7 @@ def test_metal_multi_entry_resource_names_are_scoped_for_directx(tmp_path):
     assert "RWStructuredBuffer<uint> write_kernel_C" in generated
     assert "RWStructuredBuffer<uint> write_kernel_inp" in generated
     assert "float v = (C.Load(index) + inp.Load(index));" in generated
-    assert "write_kernel_C.Store(index, write_kernel_inp.Load(index));" in generated
+    assert "write_kernel_C[index] = write_kernel_inp.Load(index);" in generated
     assert "RWStructuredBuffer<uint> C" not in generated
     assert "Conflicting DirectX resource declaration" not in generated
 
@@ -1265,8 +1266,8 @@ def test_hlsl_compute_scalar_splat_swizzle_lowers_for_vulkan_and_metal(tmp_path)
     assert "Could not find member xxxx" not in vulkan
     assert "int4 x = int4(a);" in metal
     assert "a.xxxx" not in metal
-    assert "unsupported Metal program-scope groupshared global" in metal
-    assert "unsupported Metal program-scope groupshared store" in metal
+    assert "threadgroup int a;" in metal
+    assert "unsupported Metal program-scope groupshared" not in metal
 
 
 def test_hlsl_legacy_sampler_register_lowers_to_opengl_binding(tmp_path):

@@ -4297,9 +4297,7 @@ class RustCodeGen:
                     )
                 )
                 if dispatch_thread_id_bridge is not None:
-                    param_name, param_rust_type, local_alias = (
-                        dispatch_thread_id_bridge
-                    )
+                    param_name, param_rust_type, local_alias = dispatch_thread_id_bridge
                     self.register_variable_type(param_name, "uint3", scope="local")
                     self.register_variable_type(
                         source_param_name, param_type, scope="local"
@@ -4507,9 +4505,7 @@ class RustCodeGen:
         else:
             alias_value = f"Vec2::<u32>::new({native_name}.x, {native_name}.y)"
         let_keyword = "let mut" if source_name in self.current_mutated_names else "let"
-        local_alias = (
-            f"{let_keyword} {local_name}: {mapped_type} = {alias_value};"
-        )
+        local_alias = f"{let_keyword} {local_name}: {mapped_type} = {alias_value};"
         return native_name, "Vec3<u32>", local_alias
 
     def rust_unique_local_identifier(self, candidate, used_names):
@@ -13591,8 +13587,7 @@ class RustCodeGen:
             ]
         )
         return (
-            '#[cfg_attr(feature = "crossgl_gpu", '
-            f"spirv({', '.join(spirv_args)}))] "
+            '#[cfg_attr(feature = "crossgl_gpu", ' f"spirv({', '.join(spirv_args)}))] "
         )
 
     def generate_rust_resource_parameter(self, resource_info):
