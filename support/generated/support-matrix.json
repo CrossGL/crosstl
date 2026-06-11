@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 144
+        "test_count": 146
       },
       "translator_codegen": {
         "exists": true,

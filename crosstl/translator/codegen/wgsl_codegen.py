@@ -3069,6 +3069,8 @@ class WGSLCodeGen:
                     return cbuffer_access
             return self.identifier_name(expr.name)
         if isinstance(expr, BinaryOpNode):
+            if expr.operator in {"&&", "||"}:
+                self.reject_bool_vector_logical_operator(expr)
             option_none_comparison = self.generate_builtin_option_none_comparison(
                 expr.left, expr.operator, expr.right
             )
@@ -3180,6 +3182,21 @@ class WGSLCodeGen:
             expr is self._statement_expression_node
             or expr is self._for_update_expression_node
         )
+
+    def reject_bool_vector_logical_operator(self, expr):
+        if not (
+            self.is_bool_vector_expression(expr.left)
+            or self.is_bool_vector_expression(expr.right)
+        ):
+            return
+        raise ValueError(
+            "WGSL target only lowers &&/|| for scalar bool operands; vector bool "
+            f"operand(s) are not valid for operator {expr.operator}"
+        )
+
+    def is_bool_vector_expression(self, expr):
+        shape = self.vector_shape(self.expression_type(expr))
+        return shape is not None and shape[0] == "bool"
 
     def generate_literal(self, node):
         value = node.value
@@ -6202,8 +6219,6 @@ class WGSLCodeGen:
         return None
 
     def binary_expression_type(self, expr):
-        if expr.operator not in {"+", "-", "*", "/", "%"}:
-            return None
         left_type = self.expression_type(expr.left)
         right_type = self.expression_type(expr.right)
         left_vector = self.vector_shape(left_type)
@@ -6212,6 +6227,20 @@ class WGSLCodeGen:
         right_matrix = self.matrix_shape(right_type)
         left_scalar = self.scalar_type_name(left_type)
         right_scalar = self.scalar_type_name(right_type)
+        if expr.operator in {"<", "<=", ">", ">=", "==", "!="}:
+            if left_vector is not None and right_vector is not None:
+                if left_vector[1] == right_vector[1]:
+                    return f"vec{left_vector[1]}<bool>"
+                return None
+            if left_vector is not None and right_scalar is not None:
+                return f"vec{left_vector[1]}<bool>"
+            if right_vector is not None and left_scalar is not None:
+                return f"vec{right_vector[1]}<bool>"
+            if left_scalar is not None and right_scalar is not None:
+                return "bool"
+            return None
+        if expr.operator not in {"+", "-", "*", "/", "%"}:
+            return None
         if expr.operator == "*":
             if left_matrix is not None and right_vector is not None:
                 matrix_element, columns, rows = left_matrix

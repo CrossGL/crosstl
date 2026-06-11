@@ -218,6 +218,57 @@ def test_wgsl_codegen_lowers_vector_clamp_scalar_bounds():
     assert "clamp(color, 0.0, 1.0)" not in generated
 
 
+def test_wgsl_codegen_keeps_scalar_bool_logical_operators():
+    shader = """
+    shader WGSLScalarBoolLogical {
+        fragment {
+            vec4 main(bool a @ TEXCOORD0, bool b @ TEXCOORD1) @ gl_FragColor {
+                bool both = a && b;
+                bool either = a || b;
+                return vec4<f32>(select(0.0, 1.0, both || either));
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var both: bool = (a && b);" in generated
+    assert "var either: bool = (a || b);" in generated
+    assert "select(0.0, 1.0, (both || either))" in generated
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "a && b",
+        "a || b",
+        "a && true",
+        "false || b",
+        "(color < vec3(1.0)) && b",
+    ],
+)
+def test_wgsl_codegen_rejects_vector_bool_logical_operators(expression):
+    shader = f"""
+    shader WGSLVectorBoolLogical {{
+        fragment {{
+            vec4 main(vec3 color @ TEXCOORD0) @ gl_FragColor {{
+                bvec3 a = bvec3(true, false, true);
+                bvec3 b = bvec3(false, true, true);
+                bvec3 result = {expression};
+                return vec4<f32>(select(0.0, 1.0, result.x));
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"WGSL target only lowers &&/\|\| for scalar bool operands",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_casts_integer_vector_constructor_arguments():
     shader = """
     shader WGSLIntegerVectorConstructorArgs {
