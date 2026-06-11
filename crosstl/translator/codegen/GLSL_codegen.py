@@ -6377,6 +6377,8 @@ class GLSLCodeGen:
         for func in self.stage_functions(ast, stage_name):
             parameters = getattr(func, "parameters", getattr(func, "params", [])) or []
             for param in parameters:
+                if self.is_stage_entry_resource_parameter(param):
+                    continue
                 type_name = self.type_node_name(getattr(param, "param_type", None))
                 if type_name in self.structs_by_name:
                     struct_names.add(type_name)
@@ -7835,6 +7837,8 @@ class GLSLCodeGen:
 
         maps = {}
         for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            if self.is_stage_entry_resource_parameter(param):
+                continue
             type_name = self.type_node_name(getattr(param, "param_type", None))
             struct = self.structs_by_name.get(type_name)
             if struct is None:
