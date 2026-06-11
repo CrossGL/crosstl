@@ -39458,6 +39458,135 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
     assert "work limit exceeded before GLSL codegen" in diagnostic["message"]
 
 
+def test_translate_project_metal_implicit_type_environment_cache_bounds_repeated_work(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "out"
+
+            [project.source_options.metal]
+            max_template_specializations = 2
+            max_template_materialization_work = 8
+            """).strip(),
+        encoding="utf-8",
+    )
+    repeated_declarations = "\n".join(
+        f"    float v{index} = v{index - 1};"
+        for index in range(1, 40)
+    )
+    (repo / "cached_implicit.metal").write_text(
+        textwrap.dedent(f"""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            T cast_value(T value) {{
+                return value;
+            }}
+
+            kernel void launch(device float* out [[buffer(0)]]) {{
+                float v0 = 1.0;
+            {repeated_declarations}
+                out[0] = cast_value(v39);
+            }}
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["specializations"] == [
+        {
+            "name": "cast_value",
+            "materializedName": "cast_value_float",
+            "parameters": {"T": "float"},
+            "parameterSources": {"T": "call-site"},
+            "source": "call-site",
+        }
+    ]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "cast_value_float(v39)" in output
+    assert "cast_value(v39)" not in output
+
+
+def test_translate_project_metal_implicit_type_environment_budget_diagnostic(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "out"
+
+            [project.source_options.metal]
+            max_template_specializations = 4
+            max_template_materialization_work = 3
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "budgeted_implicit.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            T cast_value(T value) {
+                return value;
+            }
+
+            kernel void launch(device float* out [[buffer(0)]]) {
+                using ValueT = float;
+                ValueT a = 1.0;
+                ValueT b = a;
+                out[0] = cast_value(b);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert "template materialization work budget exceeded" in artifact["error"].lower()
+    assert (
+        "implicit-template-materialization/type-environment"
+        in artifact["error"]
+    )
+    assert (
+        "limit 3 from "
+        "project.source_options.metal.max_template_materialization_work"
+        in artifact["error"]
+    )
+    assert not (repo / artifact["path"]).exists()
+
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-template-specialization": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.metal-template-specialization"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "budgeted_implicit.metal"
+    assert diagnostic["location"]["line"] == 10
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert (
+        "implicit-template-materialization/type-environment"
+        in diagnostic["message"]
+    )
+    assert "templates=1" in diagnostic["message"]
+
+
 def test_translate_project_metal_variant_template_materializes_for_opengl(
     tmp_path,
 ):
