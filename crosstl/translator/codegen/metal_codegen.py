@@ -357,6 +357,27 @@ class CharTypeMapper:
 class MetalCodeGen:
     """Emit Metal Shading Language from the shared CrossGL translator AST."""
 
+    BINARY_PRECEDENCE = {
+        "||": 1,
+        "&&": 2,
+        "|": 3,
+        "^": 4,
+        "&": 5,
+        "==": 6,
+        "!=": 6,
+        "<": 7,
+        ">": 7,
+        "<=": 7,
+        ">=": 7,
+        "<<": 8,
+        ">>": 8,
+        "+": 9,
+        "-": 9,
+        "*": 10,
+        "/": 10,
+        "%": 10,
+    }
+    ASSOCIATIVE_BINARY_OPS = {"+", "*", "&&", "||", "&", "|", "^"}
     METAL_RESERVED_LOCAL_IDENTIFIERS = {
         "kernel",
         "vertex",
@@ -8914,9 +8935,9 @@ class MetalCodeGen:
             else:
                 return str(expr)
         elif isinstance(expr, BinaryOpNode):
-            left = self.generate_binary_operand(expr.left)
-            right = self.generate_binary_operand(expr.right)
             operator = self.map_operator(expr.op)
+            left = self.generate_binary_operand(expr.left, operator)
+            right = self.generate_binary_operand(expr.right, operator, True)
             if operator in {"+", "-", "*", "/", "%"}:
                 expected_type = self.current_expression_expected_type
                 expression_width = self.vector_value_width(
@@ -8942,7 +8963,7 @@ class MetalCodeGen:
             )
             return f"{{{elements}}}"
         elif isinstance(expr, UnaryOpNode):
-            operand = self.generate_expression(expr.operand)
+            operand = self.generate_unary_operand(expr.operand)
             return f"{self.map_operator(expr.op)}{operand}"
         elif isinstance(expr, WaveOpNode):
             return self.generate_metal_wave_op_expression(expr)
@@ -9672,9 +9693,41 @@ class MetalCodeGen:
         arg = self.generate_expression(args[0])
         return f"{call_name}({arg})"
 
-    def generate_binary_operand(self, expr):
+    def binary_precedence(self, operator):
+        return self.BINARY_PRECEDENCE.get(operator, 0)
+
+    def binary_child_needs_parentheses(
+        self, parent_operator, child, is_right_child=False
+    ):
+        if not isinstance(child, BinaryOpNode):
+            return False
+
+        parent_precedence = self.binary_precedence(parent_operator)
+        child_operator = self.map_operator(getattr(child, "op", ""))
+        child_precedence = self.binary_precedence(child_operator)
+        if child_precedence < parent_precedence:
+            return True
+        if child_precedence > parent_precedence:
+            return False
+        return is_right_child and (
+            parent_operator not in self.ASSOCIATIVE_BINARY_OPS
+            or child_operator != parent_operator
+        )
+
+    def generate_binary_operand(self, expr, parent_operator=None, is_right_child=False):
         rendered = self.generate_expression(expr)
-        if isinstance(expr, TernaryOpNode):
+        if (
+            parent_operator is not None
+            and self.binary_child_needs_parentheses(
+                parent_operator, expr, is_right_child
+            )
+        ) or isinstance(expr, TernaryOpNode):
+            return f"({rendered})"
+        return rendered
+
+    def generate_unary_operand(self, expr):
+        rendered = self.generate_expression(expr)
+        if isinstance(expr, (BinaryOpNode, TernaryOpNode)):
             return f"({rendered})"
         return rendered
 
