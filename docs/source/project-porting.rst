@@ -615,6 +615,27 @@ read-only and remains bundle-local: it does not rewrite host application code,
 execute device code, generate runtime framework code, install target SDKs, or
 re-run host integration.
 
+Build a read-only host integration execution plan from an inspected handoff:
+
+.. code-block:: bash
+
+   python -m crosstl plan-host-integration-execution \
+     crosstl-host-integration/host-integration.json \
+     --host-root . \
+     --format text
+
+Host integration execution plans emit a
+``crosstl-runtime-host-integration-execution-plan`` JSON document. Planning
+runs handoff inspection first, records optional host-root readiness, and
+normalizes per-target handoff actions into stable phase-ordered execution
+steps. The step phases cover tool preparation, loader consumption, artifact
+loading, host responsibility handling, blocker resolution, and other host
+actions. Plans carry required tools, host responsibilities, package paths,
+scaffold files, target status, and structured diagnostics so downstream host
+or build-system tooling can decide what to run next. The plan remains metadata
+only: it does not rewrite host application code, execute device code, generate
+runtime framework code, or install target SDKs.
+
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a
 related location. Remapped diagnostics also expose sanitized

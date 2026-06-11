@@ -3348,6 +3348,50 @@
     },
     {
       "category": "project",
+      "description": "Build read-only phase-ordered host integration execution plans from handoff bundles.",
+      "id": "project.runtime_host_integration_execution_plan",
+      "name": "Runtime host integration execution plan",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_reports_ready_steps",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_carries_blocked_steps",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_rejects_failed_handoff_inspection",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_rejects_missing_host_root",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_integration_execution_text_outputs_steps",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_integration_execution_json_writes_output"
+          ],
+          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-step records, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_reports_ready_steps",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_carries_blocked_steps",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_rejects_failed_handoff_inspection",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_rejects_missing_host_root",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_integration_execution_text_outputs_steps",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_integration_execution_json_writes_output"
+          ],
+          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-step records, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_reports_ready_steps",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_carries_blocked_steps",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_rejects_failed_handoff_inspection",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_rejects_missing_host_root",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_integration_execution_text_outputs_steps",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_integration_execution_json_writes_output"
+          ],
+          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-step records, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Inspect existing project portability reports as concise JSON, text, or SARIF summaries for triage and migration planning.",
       "id": "project.report_inspection",
       "name": "Project report inspection",
@@ -4187,12 +4231,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 66,
+    "feature_count": 67,
     "status_counts": {
       "directx": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 64,
+        "supported": 65,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -4200,7 +4244,7 @@
       "metal": {
         "diagnostic": 3,
         "partial": 0,
-        "supported": 63,
+        "supported": 64,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -4208,7 +4252,7 @@
       "opengl": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 64,
+        "supported": 65,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

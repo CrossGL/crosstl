@@ -3281,8 +3281,9 @@ class VulkanSPIRVCodeGen:
             return [offsets_value] * 4, component_id
 
         offsets_type = self.value_types.get(offsets_value.id)
-        element_type = self.array_element_type_from_type(offsets_type)
-        if element_type is not None:
+        array_info = self.array_type_info_from_type(offsets_type)
+        if array_info is not None:
+            element_type, _ = array_info
             return [
                 self.composite_extract(offsets_value, element_type, index)
                 for index in range(4)

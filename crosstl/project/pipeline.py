@@ -46,6 +46,9 @@ RUNTIME_HOST_INTEGRATION_HANDOFF_KIND = "crosstl-runtime-host-integration-handof
 RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_KIND = (
     "crosstl-runtime-host-integration-handoff-inspection"
 )
+RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_KIND = (
+    "crosstl-runtime-host-integration-execution-plan"
+)
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
 RUNTIME_LOADER_PLAN_CONTRACT = "runtime-loader-plan-v1"
@@ -66,6 +69,7 @@ RUNTIME_HOST_INTEGRATION_HANDOFF_SCOPE = "host-integration-handoff-bundle"
 RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_SCOPE = (
     "host-integration-handoff-readiness-inspection"
 )
+RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_SCOPE = "host-integration-execution-planning"
 RUNTIME_INTEGRATION_PLAN_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
@@ -136,6 +140,12 @@ RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_NON_GOALS = (
     "runtime-framework-generation",
     "target-sdk-installation",
 )
+RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_NON_GOALS = (
+    "host-code-rewriting",
+    "device-execution",
+    "runtime-framework-generation",
+    "target-sdk-installation",
+)
 REPORT_FIELDS = frozenset(
     (
         "schemaVersion",
@@ -146,6 +156,7 @@ REPORT_FIELDS = frozenset(
         "summary",
         "units",
         "skipped",
+        "nativeDirectives",
         "artifacts",
         "diagnosticCounts",
         "diagnostics",
@@ -920,6 +931,65 @@ RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_TARGET_FIELDS = frozenset(
 RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_GENERATED_FILE_FIELDS = frozenset(
     ("path", "kind", "target", "status", "diagnostics")
 )
+RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourceHandoffManifest",
+        "sourceHandoffManifestHash",
+        "generatedAt",
+        "success",
+        "status",
+        "scope",
+        "nonGoals",
+        "handoffRoot",
+        "hostRoot",
+        "hostRootStatus",
+        "project",
+        "summary",
+        "targets",
+        "steps",
+        "handoffInspection",
+        "diagnosticCounts",
+        "diagnostics",
+    )
+)
+RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_TARGET_FIELDS = frozenset(
+    (
+        "target",
+        "status",
+        "loaderUnitCount",
+        "readyLoaderUnitCount",
+        "blockedLoaderUnitCount",
+        "failedLoaderUnitCount",
+        "stepCount",
+        "readyStepCount",
+        "blockedStepCount",
+        "failedStepCount",
+        "requiredTools",
+        "hostResponsibilities",
+        "packagePaths",
+        "scaffoldFiles",
+    )
+)
+RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_STEP_FIELDS = frozenset(
+    (
+        "id",
+        "target",
+        "phase",
+        "kind",
+        "status",
+        "severity",
+        "message",
+        "loaderUnit",
+        "scaffold",
+        "packagePath",
+        "outputPath",
+        "tools",
+        "hostResponsibilities",
+        "sourceActionKind",
+    )
+)
 REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
 REPORT_PROJECT_FIELDS = frozenset(
     (
@@ -958,6 +1028,18 @@ REPORT_SOURCE_ROOT_STATUS_FIELDS = frozenset(
 )
 REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
     ("path", "resolvedPath", "status", "frontendVisible")
+)
+REPORT_NATIVE_DIRECTIVE_FIELDS = frozenset(
+    (
+        "source",
+        "sourceBackend",
+        "line",
+        "column",
+        "kind",
+        "payload",
+        "handlingStatus",
+        "variant",
+    )
 )
 REPORT_SUMMARY_FIELDS = frozenset(
     (
@@ -2064,6 +2146,7 @@ INCLUDE_DEPENDENCY_STATUSES = frozenset(
     ("dynamic", "missing", "outside-project", "resolved", "system")
 )
 INCLUDE_DEPENDENCY_RESOLUTION_SOURCES = frozenset(("include-dir", "source"))
+NATIVE_DIRECTIVE_HANDLING_STATUSES = frozenset(("preserved", "unsupported"))
 DEFINE_PROCESSING_STATUSES = frozenset(("forwarded", "not-requested", "not-supported"))
 INCLUDE_PATH_PROCESSING_STATUSES = frozenset(
     ("forwarded", "not-requested", "not-supported")
@@ -4863,6 +4946,30 @@ def _macro_form_label(directive: str, body: str) -> str:
     return f"#{directive}"
 
 
+def _source_frontend_native_directive_plan(
+    *,
+    source_backend: str,
+    directive: str,
+    body: str,
+) -> dict[str, str] | None:
+    source_spec = SOURCE_REGISTRY.get(source_backend)
+    if source_spec is None:
+        return None
+    payload = _strip_preprocessor_line_comment(body).strip()
+    raw_plan = source_spec.classify_native_directive(directive, payload)
+    if raw_plan is None:
+        return None
+    kind = str(raw_plan.get("kind", "")).strip().lower()
+    handling_status = str(raw_plan.get("handlingStatus", "")).strip().lower()
+    if not kind or handling_status not in NATIVE_DIRECTIVE_HANDLING_STATUSES:
+        return None
+    return {
+        "kind": kind,
+        "payload": str(raw_plan.get("payload", payload)).strip(),
+        "handlingStatus": handling_status,
+    }
+
+
 def _unsupported_macro_form_reason(
     *,
     directive: str,
@@ -4940,6 +5047,16 @@ def _scan_native_macro_semantic_lines(
         if not _include_conditionals_active(conditional_stack):
             continue
 
+        if (
+            _source_frontend_native_directive_plan(
+                source_backend=source_backend,
+                directive=directive,
+                body=body,
+            )
+            is not None
+        ):
+            continue
+
         reason = _unsupported_macro_form_reason(
             directive=directive,
             body=body,
@@ -4964,6 +5081,104 @@ def _scan_native_macro_semantic_lines(
             )
         )
     return diagnostics
+
+
+def _scan_native_directive_lines(
+    config: ProjectConfig,
+    lines: Sequence[str],
+    relative_path: str,
+    *,
+    source_backend: str,
+    seen: set[tuple[str, int, str, str, str, str | None]],
+    variant: str | None = None,
+) -> list[ProjectNativeDirective]:
+    native_directives: list[ProjectNativeDirective] = []
+    conditional_stack: list[_IncludeConditionalFrame] = []
+    for line_number, line in enumerate(lines, start=1):
+        directive_match = PREPROCESSOR_DIRECTIVE_RE.match(line)
+        if not directive_match:
+            continue
+
+        directive = directive_match.group("directive")
+        body = directive_match.group("body")
+        if directive in {"if", "ifdef", "ifndef", "elif", "else", "endif"}:
+            _apply_include_conditional_directive(
+                config,
+                conditional_stack,
+                directive,
+                body,
+            )
+            continue
+
+        if not _include_conditionals_active(conditional_stack):
+            continue
+
+        plan = _source_frontend_native_directive_plan(
+            source_backend=source_backend,
+            directive=directive,
+            body=body,
+        )
+        if plan is None:
+            continue
+        key = (
+            relative_path,
+            line_number,
+            plan["kind"],
+            plan["payload"],
+            plan["handlingStatus"],
+            variant,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        native_directives.append(
+            ProjectNativeDirective(
+                source=relative_path,
+                source_backend=source_backend,
+                line=line_number,
+                column=max(1, line.find("#") + 1),
+                kind=plan["kind"],
+                payload=plan["payload"],
+                handling_status=plan["handlingStatus"],
+                variant=variant,
+            )
+        )
+    return native_directives
+
+
+def _scan_native_directive_planning(
+    config: ProjectConfig,
+    source_path: Path,
+    relative_path: str,
+    *,
+    source_backend: str,
+) -> list[ProjectNativeDirective]:
+    source_spec = SOURCE_REGISTRY.get(source_backend)
+    if source_spec is None or source_spec.native_directive_classifier is None:
+        return []
+    try:
+        lines = source_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+
+    native_directives: list[ProjectNativeDirective] = []
+    seen: set[tuple[str, int, str, str, str, str | None]] = set()
+    scan_lines = _mask_preprocessor_block_comments(lines)
+    for variant, defines in _variant_jobs(config):
+        scan_config = (
+            replace(config, defines=defines) if variant is not None else config
+        )
+        native_directives.extend(
+            _scan_native_directive_lines(
+                scan_config,
+                scan_lines,
+                relative_path,
+                source_backend=source_backend,
+                seen=seen,
+                variant=variant,
+            )
+        )
+    return native_directives
 
 
 def _scan_unsupported_wgsl_macro_semantics(
@@ -5765,6 +5980,32 @@ class ProjectDiagnostic:
         return payload
 
 
+@dataclass(frozen=True)
+class ProjectNativeDirective:
+    source: str
+    source_backend: str
+    line: int
+    column: int
+    kind: str
+    payload: str
+    handling_status: str
+    variant: str | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        payload = {
+            "source": self.source,
+            "sourceBackend": self.source_backend,
+            "line": self.line,
+            "column": self.column,
+            "kind": self.kind,
+            "payload": self.payload,
+            "handlingStatus": self.handling_status,
+        }
+        if self.variant:
+            payload["variant"] = self.variant
+        return payload
+
+
 def _configuration_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
     diagnostics: list[ProjectDiagnostic] = []
     location = _config_location(config)
@@ -6124,6 +6365,7 @@ class ProjectScan:
     config: ProjectConfig
     units: Sequence[ProjectTranslationUnit]
     skipped: Sequence[dict[str, Any]] = ()
+    native_directives: Sequence[ProjectNativeDirective] = ()
     diagnostics: Sequence[ProjectDiagnostic] = ()
 
     def to_report(
@@ -6141,6 +6383,7 @@ class ProjectScan:
             targets=report_targets,
             units=self.units,
             skipped=self.skipped,
+            native_directives=self.native_directives,
             artifacts=[],
             diagnostics=diagnostics,
             validation={"toolchains": [], "artifacts": []},
@@ -6161,6 +6404,7 @@ class ProjectPortabilityReport:
     targets: Sequence[str]
     units: Sequence[ProjectTranslationUnit]
     skipped: Sequence[dict[str, Any]]
+    native_directives: Sequence[ProjectNativeDirective]
     artifacts: Sequence[dict[str, Any]]
     diagnostics: Sequence[ProjectDiagnostic]
     validation: Mapping[str, Any]
@@ -6299,6 +6543,9 @@ class ProjectPortabilityReport:
             },
             "units": [unit.to_json() for unit in self.units],
             "skipped": list(self.skipped),
+            "nativeDirectives": [
+                directive.to_json() for directive in self.native_directives
+            ],
             "artifacts": list(self.artifacts),
             "diagnosticCounts": _diagnostic_counts(self.diagnostics),
             "diagnostics": diagnostics,
@@ -6482,6 +6729,7 @@ def scan_project(
     config = _config_with_selected_variants(config, variants)
     units: list[ProjectTranslationUnit] = []
     skipped: list[dict[str, Any]] = []
+    native_directives: list[ProjectNativeDirective] = []
     diagnostics: list[ProjectDiagnostic] = _configuration_diagnostics(config)
     diagnostics.extend(_source_root_diagnostics(config))
     diagnostics.extend(_include_dir_diagnostics(config))
@@ -6548,6 +6796,14 @@ def scan_project(
             )
             continue
 
+        native_directives.extend(
+            _scan_native_directive_planning(
+                config,
+                path,
+                relative_path,
+                source_backend=source_spec.name,
+            )
+        )
         include_dependencies, include_diagnostics = _scan_include_dependencies(
             config, path, relative_path, source_spec.name
         )
@@ -6579,7 +6835,11 @@ def scan_project(
             )
         )
     return ProjectScan(
-        config=config, units=units, skipped=skipped, diagnostics=diagnostics
+        config=config,
+        units=units,
+        skipped=skipped,
+        native_directives=native_directives,
+        diagnostics=diagnostics,
     )
 
 
@@ -6700,6 +6960,19 @@ def _webgl_stage_relative_path(relative_path: Path, stage_label: str) -> Path:
     if stage is None:
         return relative_path
     return _webgl_stage_path(relative_path, stage)
+
+
+def _glslang_generated_stage_sections(source: str) -> list[tuple[str, str]]:
+    matches = list(GLSLANG_GENERATED_STAGE_COMMENT_RE.finditer(source))
+    sections = []
+    for index, match in enumerate(matches):
+        stage_name = match.group(1).strip().lower().replace("-", "_").replace(" ", "_")
+        stage = GLSLANG_STAGE_BY_GENERATED_COMMENT.get(stage_name)
+        if stage is None:
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(source)
+        sections.append((stage, source[match.start() : end]))
+    return sections
 
 
 def _variant_jobs(
@@ -7111,23 +7384,33 @@ def _webgl_split_stage_artifacts(
     if artifact.get("target") != "webgl":
         return None
 
-    stages = _glslang_guarded_stages(output_path)
-    if len(stages) <= 1:
-        return None
-
     try:
         source = output_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
 
-    stage_artifacts = []
-    for stage in stages:
-        stage_label = WEBGL_PROJECT_STAGE_LABEL_BY_GLSLANG.get(stage)
+    stage_sources = []
+    for stage in _glslang_guarded_stages(output_path):
         macro = GLSLANG_GUARD_MACRO_BY_STAGE.get(stage)
-        if stage_label is None or macro is None:
+        if macro is None:
             continue
         stage_source = _filter_glslang_guarded_stage_source(source, macro)
-        if not stage_source.strip():
+        if stage_source.strip():
+            stage_sources.append((stage, stage_source))
+
+    if len(stage_sources) <= 1:
+        stage_sources = [
+            (stage, stage_source)
+            for stage, stage_source in _glslang_generated_stage_sections(source)
+            if stage_source.strip()
+        ]
+    if len(stage_sources) <= 1:
+        return None
+
+    stage_artifacts = []
+    for stage, stage_source in stage_sources:
+        stage_label = WEBGL_PROJECT_STAGE_LABEL_BY_GLSLANG.get(stage)
+        if stage_label is None:
             continue
 
         stage_path = _webgl_stage_path(output_path, stage)
@@ -8003,6 +8286,7 @@ def translate_project(
         targets=selected_targets,
         units=scan.units,
         skipped=scan.skipped,
+        native_directives=scan.native_directives,
         artifacts=artifacts,
         diagnostics=diagnostics,
         validation=validation,
@@ -13009,9 +13293,18 @@ def _runtime_loader_package_command_path(package_path: Any) -> str:
 def _runtime_loader_normalize_package_command_path(
     command: Sequence[str], package_path: Any
 ) -> list[str]:
-    native_path = str(Path(str(package_path)))
+    package_path_text = str(package_path)
     command_path = _runtime_loader_package_command_path(package_path)
-    return [command_path if part == native_path else part for part in command]
+    path_candidates = {
+        package_path_text,
+        package_path_text.replace("/", "\\"),
+        package_path_text.replace("\\", "/"),
+        str(Path(package_path_text)),
+    }
+    return [
+        command_path if argument in path_candidates else argument
+        for argument in command
+    ]
 
 
 def _runtime_loader_metadata_slug(value: Any, fallback: str) -> str:
@@ -16457,6 +16750,406 @@ def inspect_runtime_host_integration_handoff(
         },
         "diagnosticCounts": _diagnostic_counts(diagnostics),
         "diagnostics": [diagnostic.to_json() for diagnostic in diagnostics],
+    }
+
+
+def _runtime_host_integration_execution_plan_diagnostic(
+    path: Path,
+    code: str,
+    message: str,
+    *,
+    target: Any = None,
+) -> ProjectDiagnostic:
+    return ProjectDiagnostic(
+        severity="error",
+        code=f"project.runtime-host-integration-execution-plan.{code}",
+        message=message,
+        location=SourceLocation(file=str(path)),
+        target=target if _is_non_empty_string(target) else None,
+        check_kind="runtime-host-integration-execution-plan",
+    )
+
+
+def _runtime_host_integration_execution_plan_load_manifest(
+    path: Path,
+) -> tuple[dict[str, Any], list[ProjectDiagnostic]]:
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return {}, [
+            _runtime_host_integration_execution_plan_diagnostic(
+                path,
+                "manifest-read-failed",
+                f"Host integration handoff manifest could not be read: {exc}",
+            )
+        ]
+    except json.JSONDecodeError as exc:
+        return {}, [
+            _runtime_host_integration_execution_plan_diagnostic(
+                path,
+                "manifest-json-invalid",
+                f"Host integration handoff manifest is not valid JSON: {exc}",
+            )
+        ]
+    if not isinstance(manifest, dict):
+        return {}, [
+            _runtime_host_integration_execution_plan_diagnostic(
+                path,
+                "manifest-invalid",
+                "Host integration handoff manifest must be a JSON object.",
+            )
+        ]
+    return manifest, []
+
+
+def _runtime_host_integration_execution_host_root(
+    host_root: str | os.PathLike[str] | None,
+    *,
+    manifest_path: Path,
+) -> tuple[str | None, str, list[ProjectDiagnostic]]:
+    if host_root is None:
+        return None, "not-provided", []
+    root = _filesystem_path_arg(host_root, field_name="Host root")
+    if not root.exists():
+        return (
+            str(root),
+            "missing",
+            [
+                _runtime_host_integration_execution_plan_diagnostic(
+                    manifest_path,
+                    "host-root-missing",
+                    f"Host root does not exist: {root}",
+                )
+            ],
+        )
+    if not root.is_dir():
+        return (
+            str(root),
+            "not-directory",
+            [
+                _runtime_host_integration_execution_plan_diagnostic(
+                    manifest_path,
+                    "host-root-not-directory",
+                    f"Host root is not a directory: {root}",
+                )
+            ],
+        )
+    return str(root), "ready", []
+
+
+def _runtime_host_integration_execution_action_phase(kind: Any) -> str:
+    if kind == "consume-host-loader-unit":
+        return "consume-loader"
+    if kind == "load-package-artifact":
+        return "load-artifact"
+    if kind == "satisfy-host-responsibility":
+        return "satisfy-host-responsibility"
+    if _is_non_empty_string(kind) and str(kind).startswith("resolve-"):
+        return "resolve-blockers"
+    return "run-host-action"
+
+
+def _runtime_host_integration_execution_action_status(action: Mapping[str, Any]) -> str:
+    kind = action.get("kind")
+    severity = action.get("severity")
+    if kind == "resolve-loader-scaffold-blockers":
+        return "blocked"
+    if severity == "error":
+        return "failed"
+    if severity == "warning":
+        return "blocked"
+    return "ready"
+
+
+def _runtime_host_integration_execution_action_step(
+    action: Mapping[str, Any],
+    index: int,
+    *,
+    unit_by_id: Mapping[Any, Mapping[str, Any]],
+    used_ids: set[str],
+) -> dict[str, Any]:
+    target = action.get("target")
+    kind = action.get("kind") or "run-host-action"
+    loader_unit = action.get("loaderUnit")
+    unit = unit_by_id.get(loader_unit, {})
+    target_slug = _runtime_host_loader_scaffold_unique_slug(
+        target if _is_non_empty_string(target) else "target",
+        "target",
+        set(),
+    )
+    kind_slug = _runtime_host_loader_scaffold_unique_slug(kind, "step", set())
+    step_id = _runtime_host_loader_scaffold_unique_slug(
+        f"{target_slug}-{index + 1:04d}-{kind_slug}",
+        f"step-{index + 1:04d}",
+        used_ids,
+    )
+    return {
+        "id": step_id,
+        "target": target,
+        "phase": _runtime_host_integration_execution_action_phase(kind),
+        "kind": kind,
+        "status": _runtime_host_integration_execution_action_status(action),
+        "severity": action.get("severity") or "note",
+        "message": action.get("message") or "Run host integration action.",
+        "loaderUnit": loader_unit,
+        "scaffold": action.get("scaffold"),
+        "packagePath": action.get("packagePath"),
+        "outputPath": action.get("outputPath"),
+        "tools": [
+            tool
+            for tool in _record_sequence(action.get("tools"))
+            if _is_non_empty_string(tool)
+        ],
+        "hostResponsibilities": [
+            responsibility
+            for responsibility in _record_sequence(unit.get("hostResponsibilities"))
+            if _is_non_empty_string(responsibility)
+        ],
+        "sourceActionKind": action.get("kind"),
+    }
+
+
+def _runtime_host_integration_execution_tool_step(
+    target: Any,
+    tool: str,
+    index: int,
+    *,
+    used_ids: set[str],
+) -> dict[str, Any]:
+    target_slug = _runtime_host_loader_scaffold_unique_slug(
+        target if _is_non_empty_string(target) else "target",
+        "target",
+        set(),
+    )
+    tool_slug = _runtime_host_loader_scaffold_unique_slug(tool, "tool", set())
+    step_id = _runtime_host_loader_scaffold_unique_slug(
+        f"{target_slug}-{index + 1:04d}-prepare-{tool_slug}",
+        f"step-{index + 1:04d}",
+        used_ids,
+    )
+    return {
+        "id": step_id,
+        "target": target,
+        "phase": "prepare-tools",
+        "kind": "verify-host-tool",
+        "status": "ready",
+        "severity": "note",
+        "message": f"Verify host integration tool is available: {tool}.",
+        "loaderUnit": None,
+        "scaffold": None,
+        "packagePath": None,
+        "outputPath": None,
+        "tools": [tool],
+        "hostResponsibilities": [],
+        "sourceActionKind": None,
+    }
+
+
+def _runtime_host_integration_execution_target(
+    target: Mapping[str, Any],
+    steps: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    target_name = target.get("target")
+    target_steps = [step for step in steps if step.get("target") == target_name]
+    ready_steps = [step for step in target_steps if step.get("status") == "ready"]
+    blocked_steps = [step for step in target_steps if step.get("status") == "blocked"]
+    failed_steps = [step for step in target_steps if step.get("status") == "failed"]
+    return {
+        "target": target_name,
+        "status": target.get("status"),
+        "loaderUnitCount": target.get("loaderUnitCount", 0),
+        "readyLoaderUnitCount": target.get("readyLoaderUnitCount", 0),
+        "blockedLoaderUnitCount": target.get("blockedLoaderUnitCount", 0),
+        "failedLoaderUnitCount": target.get("failedLoaderUnitCount", 0),
+        "stepCount": len(target_steps),
+        "readyStepCount": len(ready_steps),
+        "blockedStepCount": len(blocked_steps),
+        "failedStepCount": len(failed_steps),
+        "requiredTools": [
+            tool
+            for tool in _record_sequence(target.get("requiredTools"))
+            if _is_non_empty_string(tool)
+        ],
+        "hostResponsibilities": [
+            responsibility
+            for responsibility in _record_sequence(target.get("hostResponsibilities"))
+            if _is_non_empty_string(responsibility)
+        ],
+        "packagePaths": [
+            package_path
+            for package_path in _record_sequence(target.get("packagePaths"))
+            if _is_non_empty_string(package_path)
+        ],
+        "scaffoldFiles": [
+            scaffold_file
+            for scaffold_file in _record_sequence(target.get("scaffoldFiles"))
+            if _is_non_empty_string(scaffold_file)
+        ],
+    }
+
+
+def plan_runtime_host_integration_execution(
+    handoff_manifest_path: str | os.PathLike[str],
+    *,
+    host_root: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Build a read-only host integration execution plan from a handoff bundle."""
+
+    manifest_path = _filesystem_path_arg(
+        handoff_manifest_path, field_name="Host integration handoff manifest path"
+    )
+    host_root_value, host_root_status, host_root_diagnostics = (
+        _runtime_host_integration_execution_host_root(
+            host_root, manifest_path=manifest_path
+        )
+    )
+    inspection = inspect_runtime_host_integration_handoff(manifest_path)
+    diagnostics_payload = [
+        dict(diagnostic)
+        for diagnostic in _record_sequence(inspection.get("diagnostics"))
+        if isinstance(diagnostic, Mapping)
+    ]
+    diagnostics_payload.extend(
+        diagnostic.to_json() for diagnostic in host_root_diagnostics
+    )
+
+    handoff: dict[str, Any] = {}
+    load_diagnostics: list[ProjectDiagnostic] = []
+    if inspection.get("success") is True:
+        handoff, load_diagnostics = (
+            _runtime_host_integration_execution_plan_load_manifest(manifest_path)
+        )
+        diagnostics_payload.extend(
+            diagnostic.to_json() for diagnostic in load_diagnostics
+        )
+
+    targets = [
+        dict(target)
+        for target in _record_sequence(handoff.get("targets"))
+        if isinstance(target, Mapping)
+    ]
+    units = [
+        dict(unit)
+        for unit in _record_sequence(handoff.get("loaderUnits"))
+        if isinstance(unit, Mapping)
+    ]
+    actions = [
+        dict(action)
+        for action in _record_sequence(handoff.get("actions"))
+        if isinstance(action, Mapping)
+    ]
+    unit_by_id = {unit.get("id"): unit for unit in units if unit.get("id") is not None}
+    used_ids: set[str] = set()
+    steps: list[dict[str, Any]] = []
+    for target in targets:
+        for tool in _record_sequence(target.get("requiredTools")):
+            if not _is_non_empty_string(tool):
+                continue
+            steps.append(
+                _runtime_host_integration_execution_tool_step(
+                    target.get("target"),
+                    tool,
+                    len(steps),
+                    used_ids=used_ids,
+                )
+            )
+    for action in actions:
+        steps.append(
+            _runtime_host_integration_execution_action_step(
+                action,
+                len(steps),
+                unit_by_id=unit_by_id,
+                used_ids=used_ids,
+            )
+        )
+
+    ready_steps = [step for step in steps if step.get("status") == "ready"]
+    blocked_steps = [step for step in steps if step.get("status") == "blocked"]
+    failed_steps = [step for step in steps if step.get("status") == "failed"]
+    ready_units = [unit for unit in units if unit.get("status") == "ready"]
+    blocked_units = [unit for unit in units if unit.get("status") == "blocked"]
+    failed_units = [unit for unit in units if unit.get("status") == "failed"]
+    required_tools = sorted(
+        {
+            tool
+            for target in targets
+            for tool in _record_sequence(target.get("requiredTools"))
+            if _is_non_empty_string(tool)
+        }
+    )
+    host_responsibilities = sorted(
+        {
+            responsibility
+            for target in targets
+            for responsibility in _record_sequence(target.get("hostResponsibilities"))
+            if _is_non_empty_string(responsibility)
+        }
+    )
+    failed = any(
+        diagnostic.get("severity") == "error" for diagnostic in diagnostics_payload
+    ) or bool(failed_steps)
+    status = (
+        _runtime_host_loader_scaffold_status(
+            len(ready_units),
+            len(blocked_units) + len(blocked_steps),
+            failed=bool(failed_units or failed_steps),
+        )
+        if not failed
+        else "failed"
+    )
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_KIND,
+        "sourceHandoffManifest": str(manifest_path),
+        "sourceHandoffManifestHash": _optional_source_hash(manifest_path),
+        "generatedAt": int(time.time()),
+        "success": not failed,
+        "status": status,
+        "scope": RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_SCOPE,
+        "nonGoals": list(RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_NON_GOALS),
+        "handoffRoot": str(manifest_path.parent),
+        "hostRoot": host_root_value,
+        "hostRootStatus": host_root_status,
+        "project": (
+            dict(handoff.get("project"))
+            if isinstance(handoff.get("project"), Mapping)
+            else {"targets": []}
+        ),
+        "summary": {
+            "targetCount": len(targets),
+            "loaderUnitCount": len(units),
+            "readyLoaderUnitCount": len(ready_units),
+            "blockedLoaderUnitCount": len(blocked_units),
+            "failedLoaderUnitCount": len(failed_units),
+            "stepCount": len(steps),
+            "readyStepCount": len(ready_steps),
+            "blockedStepCount": len(blocked_steps),
+            "failedStepCount": len(failed_steps),
+            "requiredToolCount": len(required_tools),
+            "hostResponsibilityCount": len(host_responsibilities),
+        },
+        "targets": [
+            _runtime_host_integration_execution_target(target, steps)
+            for target in targets
+        ],
+        "steps": steps,
+        "handoffInspection": {
+            "kind": inspection.get("kind"),
+            "success": inspection.get("success"),
+            "status": inspection.get("status"),
+            "targetCount": (
+                inspection.get("summary", {}).get("targetCount", 0)
+                if isinstance(inspection.get("summary"), Mapping)
+                else 0
+            ),
+            "generatedFileCount": (
+                inspection.get("summary", {}).get("generatedFileCount", 0)
+                if isinstance(inspection.get("summary"), Mapping)
+                else 0
+            ),
+        },
+        "diagnosticCounts": _diagnostic_payload_counts(diagnostics_payload),
+        "diagnostics": diagnostics_payload,
     }
 
 
@@ -20833,6 +21526,82 @@ def _skipped_contract_reasons(
     return reasons
 
 
+def _native_directive_contract_reasons(
+    index: int,
+    native_directive: Any,
+    *,
+    units_by_path: dict[str, UnitDeclaration] | None = None,
+    project: Mapping[str, Any] | None = None,
+    require_registered_source_backend: bool = False,
+    require_closed_fields: bool = False,
+) -> list[str]:
+    prefix = f"nativeDirectives[{index}]"
+    if not isinstance(native_directive, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = (
+        _unsupported_mapping_field_reasons(
+            prefix, native_directive, REPORT_NATIVE_DIRECTIVE_FIELDS
+        )
+        if require_closed_fields
+        else []
+    )
+    source = native_directive.get("source")
+    reasons.extend(_repository_path_contract_reasons(f"{prefix}.source", source))
+    source_backend = native_directive.get("sourceBackend")
+    reasons.extend(
+        _source_backend_contract_reasons(
+            f"{prefix}.sourceBackend",
+            source_backend,
+            require_registered=require_registered_source_backend,
+        )
+    )
+    if (
+        units_by_path is not None
+        and _is_non_empty_string(source)
+        and _is_report_identity_path(source)
+    ):
+        unit_declaration = units_by_path.get(source)
+        if unit_declaration is None:
+            reasons.append(f"{prefix}.source must be listed in units")
+        elif source_backend != unit_declaration[1].get("sourceBackend"):
+            reasons.append(
+                f"{prefix}.sourceBackend must match "
+                f"units[{unit_declaration[0]}].sourceBackend "
+                f"({_value_mismatch_context(unit_declaration[1].get('sourceBackend'), source_backend)})"
+            )
+
+    for field_name in ("line", "column"):
+        value = native_directive.get(field_name)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            reasons.append(f"{prefix}.{field_name} must be a positive integer")
+
+    if not _is_non_empty_string(native_directive.get("kind")):
+        reasons.append(f"{prefix}.kind must be a string")
+    if not isinstance(native_directive.get("payload"), str):
+        reasons.append(f"{prefix}.payload must be a string")
+    handling_status = native_directive.get("handlingStatus")
+    if handling_status not in NATIVE_DIRECTIVE_HANDLING_STATUSES:
+        reasons.append(
+            "{}.handlingStatus must be one of {}".format(
+                prefix, ", ".join(sorted(NATIVE_DIRECTIVE_HANDLING_STATUSES))
+            )
+        )
+    if "variant" in native_directive:
+        variant = native_directive.get("variant")
+        if not _is_non_empty_string(variant):
+            reasons.append(f"{prefix}.variant must be a string")
+        elif isinstance(project, Mapping):
+            project_variants = project.get("variants", {})
+            if (
+                isinstance(project_variants, Mapping)
+                and project_variants
+                and variant not in project_variants
+            ):
+                reasons.append(f"{prefix}.variant must be listed in project.variants")
+    return reasons
+
+
 def _config_string_list_contract_reasons(prefix: str, value: Any) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         return [f"{prefix} must be a list of strings"]
@@ -24108,6 +24877,28 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             reasons.extend(_duplicate_path_contract_reasons("skipped", skipped))
             if isinstance(units, list):
                 reasons.extend(_unit_skipped_path_contract_reasons(units, skipped))
+
+    native_directives = report.get("nativeDirectives", [])
+    if has_summary and "nativeDirectives" not in report:
+        reasons.append("nativeDirectives must be a list")
+    if has_summary or "nativeDirectives" in report:
+        if not isinstance(native_directives, list):
+            reasons.append("nativeDirectives must be a list")
+        else:
+            units_by_path = _declared_units_by_path(
+                units, require_full_metadata=has_summary
+            )
+            for index, native_directive in enumerate(native_directives):
+                reasons.extend(
+                    _native_directive_contract_reasons(
+                        index,
+                        native_directive,
+                        units_by_path=units_by_path,
+                        project=project if isinstance(project, Mapping) else None,
+                        require_registered_source_backend=has_summary,
+                        require_closed_fields=has_summary,
+                    )
+                )
 
     if has_summary and isinstance(units, list) and isinstance(skipped, list):
         reasons.extend(

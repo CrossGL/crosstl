@@ -31,6 +31,7 @@ from crosstl.project import (
     load_project_config,
     plan_runtime_adapters,
     plan_runtime_host_bindings,
+    plan_runtime_host_integration_execution,
     plan_runtime_host_loader_consumption,
     plan_runtime_integration,
     scan_project,
@@ -295,6 +296,7 @@ def test_project_package_exposes_public_api_surface():
         "prepare_runtime_execution",
         "plan_runtime_adapters",
         "plan_runtime_host_bindings",
+        "plan_runtime_host_integration_execution",
         "plan_runtime_host_loader_consumption",
         "plan_runtime_integration",
         "scan_project",
@@ -4466,6 +4468,84 @@ def test_scan_project_rejects_crossgl_function_like_native_macro_form(tmp_path):
         diagnostic["message"]
     )
     assert "LOCAL_VALUE" not in diagnostic["message"]
+
+
+def test_scan_project_represents_metal_mode_directive_without_macro_warning(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.metal").write_text(
+        textwrap.dedent("""
+            #mode threaded   tile_width=16 // scan payload comment
+            kernel void main0() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["metal"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+    assert payload["nativeDirectives"] == [
+        {
+            "source": "shaders/kernel.metal",
+            "sourceBackend": "metal",
+            "line": 1,
+            "column": 1,
+            "kind": "mode",
+            "payload": "threaded tile_width=16",
+            "handlingStatus": "preserved",
+        }
+    ]
+
+
+def test_scan_project_unknown_metal_directive_keeps_macro_native_warning(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.metal").write_text(
+        textwrap.dedent("""
+            #native_unknown payload
+            kernel void main0() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["metal"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    diagnostic = payload["diagnostics"][0]
+
+    assert validation["success"] is True
+    assert payload["nativeDirectives"] == []
+    assert payload["summary"]["missingCapabilityCounts"] == {"macro.native": 1}
+    assert diagnostic["code"] == "project.scan.unsupported-macro-form"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["macro.native"]
+    assert diagnostic["location"]["file"] == "shaders/kernel.metal"
+    assert diagnostic["location"]["line"] == 1
+    assert "unknown preprocessor directive" in diagnostic["message"]
 
 
 def test_scan_project_scopes_define_shadowing_to_selected_variants(tmp_path):
@@ -30485,6 +30565,232 @@ def test_project_cli_inspect_host_integration_handoff_json_writes_output(tmp_pat
     )
     assert payload["summary"]["readyTargetCount"] == 1
     assert payload["generatedFiles"][0]["status"] == "ready"
+
+
+def test_plan_runtime_host_integration_execution_reports_ready_steps(tmp_path):
+    repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+    before_files = sorted(
+        path.relative_to(handoff_dir).as_posix()
+        for path in handoff_dir.rglob("*")
+        if path.is_file()
+    )
+
+    payload = plan_runtime_host_integration_execution(
+        handoff_dir / "host-integration.json",
+        host_root=repo,
+    )
+
+    after_files = sorted(
+        path.relative_to(handoff_dir).as_posix()
+        for path in handoff_dir.rglob("*")
+        if path.is_file()
+    )
+    assert after_files == before_files
+    assert set(payload) == (
+        project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_FIELDS
+    )
+    assert (
+        payload["kind"] == project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_KIND
+    )
+    assert payload["success"] is True
+    assert payload["status"] == "ready"
+    assert (
+        payload["scope"]
+        == project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_SCOPE
+    )
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_NON_GOALS
+    )
+    assert payload["hostRoot"] == str(repo)
+    assert payload["hostRootStatus"] == "ready"
+    assert payload["handoffInspection"]["success"] is True
+    assert payload["handoffInspection"]["status"] == "ready"
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "loaderUnitCount": 1,
+        "readyLoaderUnitCount": 1,
+        "blockedLoaderUnitCount": 0,
+        "failedLoaderUnitCount": 0,
+        "stepCount": 6,
+        "readyStepCount": 6,
+        "blockedStepCount": 0,
+        "failedStepCount": 0,
+        "requiredToolCount": 0,
+        "hostResponsibilityCount": 2,
+    }
+    assert set(payload["targets"][0]) == (
+        project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_TARGET_FIELDS
+    )
+    assert payload["targets"][0]["target"] == "cgl"
+    assert payload["targets"][0]["status"] == "ready"
+    assert payload["targets"][0]["stepCount"] == 6
+    assert payload["targets"][0]["failedStepCount"] == 0
+    assert len(payload["targets"][0]["hostResponsibilities"]) == 2
+    assert [step["kind"] for step in payload["steps"]] == [
+        "consume-host-loader-unit",
+        "load-package-artifact",
+        "load-source-remap",
+        "bind-host-interface",
+        "satisfy-host-responsibility",
+        "satisfy-host-responsibility",
+    ]
+    assert [step["phase"] for step in payload["steps"]] == [
+        "consume-loader",
+        "load-artifact",
+        "run-host-action",
+        "run-host-action",
+        "satisfy-host-responsibility",
+        "satisfy-host-responsibility",
+    ]
+    assert payload["steps"][0]["id"] == "cgl-0001-consume-host-loader-unit"
+    assert all(
+        set(step)
+        == project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_STEP_FIELDS
+        for step in payload["steps"]
+    )
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+
+
+def test_plan_runtime_host_integration_execution_carries_blocked_steps(tmp_path):
+    _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
+        tmp_path, targets=("vulkan",)
+    )
+
+    payload = plan_runtime_host_integration_execution(
+        handoff_dir / "host-integration.json"
+    )
+
+    assert payload["success"] is True
+    assert payload["status"] == "blocked"
+    assert payload["hostRoot"] is None
+    assert payload["hostRootStatus"] == "not-provided"
+    assert payload["summary"]["loaderUnitCount"] == 1
+    assert payload["summary"]["readyLoaderUnitCount"] == 0
+    assert payload["summary"]["blockedLoaderUnitCount"] == 1
+    assert payload["summary"]["stepCount"] == 1
+    assert payload["summary"]["blockedStepCount"] == 1
+    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["status"] == "blocked"
+    assert payload["targets"][0]["blockedStepCount"] == 1
+    assert payload["steps"][0]["kind"] == "resolve-loader-scaffold-blockers"
+    assert payload["steps"][0]["phase"] == "resolve-blockers"
+    assert payload["steps"][0]["status"] == "blocked"
+    assert payload["steps"][0]["severity"] == "warning"
+
+
+def test_plan_runtime_host_integration_execution_rejects_failed_handoff_inspection(
+    tmp_path,
+):
+    _, handoff_dir, handoff_payload = _build_runtime_host_integration_handoff_fixture(
+        tmp_path
+    )
+    target_path = handoff_dir / handoff_payload["targets"][0]["handoffFile"]
+    target_path.unlink()
+
+    payload = plan_runtime_host_integration_execution(
+        handoff_dir / "host-integration.json"
+    )
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["summary"]["targetCount"] == 0
+    assert payload["steps"] == []
+    assert payload["handoffInspection"]["success"] is False
+    assert payload["diagnosticCounts"]["error"] >= 1
+    assert any(
+        diagnostic["code"]
+        == "project.runtime-host-integration-handoff-inspection.target-missing"
+        for diagnostic in payload["diagnostics"]
+    )
+
+
+def test_plan_runtime_host_integration_execution_rejects_missing_host_root(tmp_path):
+    repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+
+    payload = plan_runtime_host_integration_execution(
+        handoff_dir / "host-integration.json",
+        host_root=repo / "missing-host",
+    )
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["hostRoot"] == str(repo / "missing-host")
+    assert payload["hostRootStatus"] == "missing"
+    assert payload["summary"]["stepCount"] == 6
+    assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == (
+        "project.runtime-host-integration-execution-plan.host-root-missing"
+    )
+
+
+def test_project_cli_plan_host_integration_execution_text_outputs_steps(tmp_path):
+    repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+    manifest_path = handoff_dir / "host-integration.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-host-integration-execution",
+            str(manifest_path),
+            "--host-root",
+            str(repo),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Runtime host integration execution plan: {manifest_path}" in result.stdout
+    assert "Status: ready" in result.stdout
+    assert "Host root:" in result.stdout
+    assert "Execution scope: host-integration-execution-planning" in result.stdout
+    assert (
+        "Execution non-goals: host-code-rewriting, device-execution, "
+        "runtime-framework-generation, target-sdk-installation"
+    ) in result.stdout
+    assert "Summary: 1 targets, 6 steps, 6 ready, 0 blocked, 0 failed" in (
+        result.stdout
+    )
+    assert "Runtime host integration execution steps:" in result.stdout
+    assert "consume-host-loader-unit" in result.stdout
+
+
+def test_project_cli_plan_host_integration_execution_json_writes_output(tmp_path):
+    repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+    output_path = repo / "host-integration-execution-plan.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-host-integration-execution",
+            str(handoff_dir / "host-integration.json"),
+            "--host-root",
+            str(repo),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert (
+        payload["kind"] == project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_KIND
+    )
+    assert payload["summary"]["readyStepCount"] == 6
+    assert payload["steps"][0]["kind"] == "consume-host-loader-unit"
 
 
 def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp_path):
