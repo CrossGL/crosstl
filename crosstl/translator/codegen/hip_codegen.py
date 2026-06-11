@@ -415,6 +415,24 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "samplerCubeArrayShadow": "hipTextureObject_t",
             "sampler2DMS": "hipTextureObject_t",
             "sampler2DMSArray": "hipTextureObject_t",
+            "isampler1D": "hipTextureObject_t",
+            "isampler1DArray": "hipTextureObject_t",
+            "isampler2D": "hipTextureObject_t",
+            "isampler3D": "hipTextureObject_t",
+            "isamplerCube": "hipTextureObject_t",
+            "isampler2DArray": "hipTextureObject_t",
+            "isamplerCubeArray": "hipTextureObject_t",
+            "isampler2DMS": "hipTextureObject_t",
+            "isampler2DMSArray": "hipTextureObject_t",
+            "usampler1D": "hipTextureObject_t",
+            "usampler1DArray": "hipTextureObject_t",
+            "usampler2D": "hipTextureObject_t",
+            "usampler3D": "hipTextureObject_t",
+            "usamplerCube": "hipTextureObject_t",
+            "usampler2DArray": "hipTextureObject_t",
+            "usamplerCubeArray": "hipTextureObject_t",
+            "usampler2DMS": "hipTextureObject_t",
+            "usampler2DMSArray": "hipTextureObject_t",
             "image1D": "hipSurfaceObject_t",
             "image1DArray": "hipSurfaceObject_t",
             "image2D": "hipSurfaceObject_t",
@@ -6064,7 +6082,35 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             coord_type = self.expression_result_type(raw_coord)
         return self.vector_component_count_for_type(coord_type)
 
+    def sampled_texture_shape_type(self, texture_type):
+        """Return the float sampler shape spelling for typed sampled textures."""
+        texture_type = self.resource_base_type(texture_type)
+        if not isinstance(texture_type, str):
+            return None
+        for prefix in ("isampler", "usampler"):
+            if texture_type.startswith(prefix):
+                return f"sampler{texture_type[len(prefix):]}"
+        return texture_type
+
+    def sampled_texture_value_type(self, texture_type):
+        """Return the HIP vector type read from a sampled texture."""
+        texture_type = self.resource_base_type(texture_type)
+        if isinstance(texture_type, str) and texture_type.startswith("isampler"):
+            return "int4"
+        if isinstance(texture_type, str) and texture_type.startswith("usampler"):
+            return "uint4"
+        return "float4"
+
+    def is_sampled_texture_family_type(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            isinstance(texture_type, str)
+            and texture_type != "sampler"
+            and texture_type.startswith(("sampler", "isampler", "usampler"))
+        )
+
     def expected_texel_fetch_coordinate_count(self, texture_type):
+        texture_type = self.sampled_texture_shape_type(texture_type)
         return {
             "sampler1D": 1,
             "sampler1DArray": 2,
@@ -6074,6 +6120,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         }.get(texture_type)
 
     def expected_texture_coordinate_count(self, texture_type):
+        texture_type = self.sampled_texture_shape_type(texture_type)
         return {
             "sampler1D": 1,
             "sampler1DArray": 2,
@@ -6100,6 +6147,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return None
 
     def expected_texture_gradient_coordinate_counts(self, texture_type):
+        texture_type = self.sampled_texture_shape_type(texture_type)
         return {
             "sampler1D": {1},
             "sampler1DArray": {1},
@@ -6131,6 +6179,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return None
 
     def expected_projected_texture_coordinate_count(self, texture_type):
+        texture_type = self.sampled_texture_shape_type(texture_type)
         return {
             "sampler1D": 2,
             "sampler2D": 3,
@@ -6158,6 +6207,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return None
 
     def projected_coord_args(self, texture_type, texture_name, coord):
+        texture_type = self.sampled_texture_shape_type(texture_type)
         projection_component = {
             "sampler1D": "y",
             "sampler2D": "z",
@@ -6180,6 +6230,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return ", ".join([texture_name, *projected_components])
 
     def expected_texel_fetch_offset_count(self, texture_type):
+        texture_type = self.sampled_texture_shape_type(texture_type)
         return {
             "sampler1D": 1,
             "sampler1DArray": 1,
@@ -6210,6 +6261,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         )
 
     def hip_texture_gradient_argument(self, texture_type, raw_gradient, gradient):
+        texture_type = self.sampled_texture_shape_type(texture_type)
         if texture_type not in {"sampler3D", "samplerCube", "samplerCubeArray"}:
             return gradient
 
@@ -6798,7 +6850,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             texture_type = self.resource_base_type(
                 self.get_expression_type(raw_args[0])
             )
-            if texture_type is not None and not self.is_sampled_resource_type(
+            if texture_type is not None and not self.is_sampled_texture_family_type(
                 texture_type
             ):
                 return self.unsupported_sampled_resource_call(
@@ -6812,15 +6864,17 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 return self.unsupported_multisample_resource_call(
                     func_name, texture_type, args
                 )
-            if texture_type in {"samplerCube", "samplerCubeArray"}:
+            texture_shape = self.sampled_texture_shape_type(texture_type)
+            if texture_shape in {"samplerCube", "samplerCubeArray"}:
                 return self.unsupported_sampled_resource_call(
                     func_name, texture_type, args
                 )
 
             texture_name = args[0]
             coord = args[1]
+            value_type = self.sampled_texture_value_type(texture_type)
             expected_coord_count = self.expected_texel_fetch_coordinate_count(
-                texture_type
+                texture_shape
             )
             actual_coord_count = self.texel_fetch_coordinate_count(raw_args[1])
             if (
@@ -6833,30 +6887,30 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     texture_type,
                     args,
                 )
-            if texture_type == "sampler1D":
-                return f"tex1Dfetch<float4>({texture_name}, {coord})"
-            if texture_type == "sampler1DArray":
+            if texture_shape == "sampler1D":
+                return f"tex1Dfetch<{value_type}>({texture_name}, {coord})"
+            if texture_shape == "sampler1DArray":
                 return (
-                    f"tex1DLayered<float4>({texture_name}, "
+                    f"tex1DLayered<{value_type}>({texture_name}, "
                     f"{self.coord_component(coord, 'x')}, "
                     f"{self.coord_component(coord, 'y')})"
                 )
-            if texture_type == "sampler2D":
+            if texture_shape == "sampler2D":
                 return (
-                    f"tex2D<float4>({texture_name}, "
+                    f"tex2D<{value_type}>({texture_name}, "
                     f"{self.coord_component(coord, 'x')}, "
                     f"{self.coord_component(coord, 'y')})"
                 )
-            if texture_type == "sampler2DArray":
+            if texture_shape == "sampler2DArray":
                 return (
-                    f"tex2DLayered<float4>({texture_name}, "
+                    f"tex2DLayered<{value_type}>({texture_name}, "
                     f"{self.coord_component(coord, 'x')}, "
                     f"{self.coord_component(coord, 'y')}, "
                     f"{self.coord_component(coord, 'z')})"
                 )
-            if texture_type == "sampler3D":
+            if texture_shape == "sampler3D":
                 return (
-                    f"tex3D<float4>({texture_name}, "
+                    f"tex3D<{value_type}>({texture_name}, "
                     f"{self.coord_component(coord, 'x')}, "
                     f"{self.coord_component(coord, 'y')}, "
                     f"{self.coord_component(coord, 'z')})"
@@ -6981,7 +7035,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def generate_texel_fetch_offset_call(self, raw_args, args):
         texture_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
-        if texture_type is not None and not self.is_sampled_resource_type(texture_type):
+        if texture_type is not None and not self.is_sampled_texture_family_type(
+            texture_type
+        ):
             return self.unsupported_sampled_resource_call(
                 "texelFetchOffset", texture_type, args
             )
@@ -6993,7 +7049,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return self.unsupported_multisample_resource_call(
                 "texelFetchOffset", texture_type, args
             )
-        if texture_type in {"samplerCube", "samplerCubeArray"}:
+        texture_shape = self.sampled_texture_shape_type(texture_type)
+        if texture_shape in {"samplerCube", "samplerCubeArray"}:
             return self.unsupported_sampled_resource_call(
                 "texelFetchOffset", texture_type, args
             )
@@ -7016,30 +7073,31 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         texture_name = args[0]
         coord = args[1]
         offset = args[3]
-        if texture_type == "sampler1D":
-            return f"tex1Dfetch<float4>({texture_name}, ({coord} + {offset}))"
-        if texture_type == "sampler1DArray":
+        value_type = self.sampled_texture_value_type(texture_type)
+        if texture_shape == "sampler1D":
+            return f"tex1Dfetch<{value_type}>({texture_name}, ({coord} + {offset}))"
+        if texture_shape == "sampler1DArray":
             return (
-                f"tex1DLayered<float4>({texture_name}, "
+                f"tex1DLayered<{value_type}>({texture_name}, "
                 f"({self.coord_component(coord, 'x')} + {offset}), "
                 f"{self.coord_component(coord, 'y')})"
             )
-        if texture_type == "sampler2D":
+        if texture_shape == "sampler2D":
             return (
-                f"tex2D<float4>({texture_name}, "
+                f"tex2D<{value_type}>({texture_name}, "
                 f"{self.offset_coord_component(coord, offset, 'x')}, "
                 f"{self.offset_coord_component(coord, offset, 'y')})"
             )
-        if texture_type == "sampler2DArray":
+        if texture_shape == "sampler2DArray":
             return (
-                f"tex2DLayered<float4>({texture_name}, "
+                f"tex2DLayered<{value_type}>({texture_name}, "
                 f"{self.offset_coord_component(coord, offset, 'x')}, "
                 f"{self.offset_coord_component(coord, offset, 'y')}, "
                 f"{self.coord_component(coord, 'z')})"
             )
-        if texture_type == "sampler3D":
+        if texture_shape == "sampler3D":
             return (
-                f"tex3D<float4>({texture_name}, "
+                f"tex3D<{value_type}>({texture_name}, "
                 f"{self.offset_coord_component(coord, offset, 'x')}, "
                 f"{self.offset_coord_component(coord, offset, 'y')}, "
                 f"{self.offset_coord_component(coord, offset, 'z')})"
@@ -9603,6 +9661,15 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return None
 
     def resource_call_result_type(self, func_name, raw_args):
+        if func_name in {"texelFetch", "texelFetchOffset"} and raw_args:
+            resource_type = self.resource_base_type(
+                self.resource_expression_type(raw_args[0])
+            )
+            if self.is_shadow_resource_type(resource_type):
+                return "float"
+            if self.is_sampled_texture_family_type(resource_type):
+                return self.sampled_texture_value_type(resource_type)
+
         if func_name in {
             "textureProj",
             "textureProjLod",

@@ -6912,6 +6912,94 @@ def test_translate_project_glsl_alpha_stitch_storage_image_lowers_to_wgsl(
     }
 
 
+def test_translate_project_glsl_usampler_texel_fetch_lowers_to_cuda_hip_slang(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "alpha_stitch.glsl").write_text(
+        textwrap.dedent("""
+            #version 450
+            layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+            layout(binding = 0) uniform usampler2D srcRGB;
+            layout(binding = 1) uniform usampler2D srcAlpha;
+            layout(binding = 2, rgba32ui) uniform restrict writeonly uimage2D dstTexture;
+
+            void main() {
+                uvec2 rgbBlock = texelFetch(
+                    srcRGB,
+                    ivec2(gl_GlobalInvocationID.xy),
+                    0
+                ).xy;
+                uvec2 alphaBlock = texelFetch(
+                    srcAlpha,
+                    ivec2(gl_GlobalInvocationID.xy),
+                    0
+                ).xy;
+                imageStore(
+                    dstTexture,
+                    ivec2(gl_GlobalInvocationID.xy),
+                    uvec4(rgbBlock.xy, alphaBlock.xy)
+                );
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["cuda", "hip", "slang"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("cuda", "translated"),
+        ("hip", "translated"),
+        ("slang", "translated"),
+    }
+
+    cuda = (repo / "out" / "cuda" / "alpha_stitch.cu").read_text(
+        encoding="utf-8"
+    )
+    hip = (repo / "out" / "hip" / "alpha_stitch.hip").read_text(encoding="utf-8")
+    slang = (repo / "out" / "slang" / "alpha_stitch.slang").read_text(
+        encoding="utf-8"
+    )
+
+    assert "cudaTextureObject_t srcRGB;" in cuda
+    assert "cudaTextureObject_t srcAlpha;" in cuda
+    assert "tex2D<uint4>(srcRGB" in cuda
+    assert "tex2D<uint4>(srcAlpha" in cuda
+    assert "cgl_uint2_construct_uint4_xy" in cuda
+    assert "cgl_uint2_construct_float4_xy" not in cuda
+    assert "unsupported CUDA sampled resource call: texelFetch" not in cuda
+
+    assert "hipTextureObject_t srcRGB;" in hip
+    assert "hipTextureObject_t srcAlpha;" in hip
+    assert "tex2D<uint4>(srcRGB" in hip
+    assert "tex2D<uint4>(srcAlpha" in hip
+    assert "cgl_uint2_construct_uint4_xy" in hip
+    assert "cgl_uint2_construct_float4_xy" not in hip
+    assert "unsupported HIP sampled resource call: texelFetch" not in hip
+
+    assert "Sampler2D<uint4> srcRGB" in slang
+    assert "Sampler2D<uint4> srcAlpha" in slang
+    assert "srcRGB.Load(int3(" in slang
+    assert "srcAlpha.Load(int3(" in slang
+    assert "float4(0.0)" not in slang
+    assert "unsupported Slang sampled texture: texelFetch" not in slang
+
+    for generated in (cuda, hip, slang):
+        assert "usampler2D srcRGB" not in generated
+        assert "usampler2D srcAlpha" not in generated
+
+
 def test_translate_project_preserves_anonymous_glsl_ssbo_shape_for_targets(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
