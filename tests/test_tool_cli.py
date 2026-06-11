@@ -35,6 +35,7 @@ TOOLS = [
                 "inspect-runtime-package",
                 "plan-host-bindings",
                 "plan-runtime-adapters",
+                "materialize-runtime-adapters",
                 "runtime-loader-manifest",
                 "scaffold-host-loaders",
                 "inspect-host-loader-scaffolds",
@@ -156,6 +157,15 @@ TOOLS = [
             ("plan-runtime-adapters",),
             (
                 "usage:",
+                "--format",
+                "--output",
+            ),
+        ),
+        (
+            ("materialize-runtime-adapters",),
+            (
+                "usage:",
+                "--adapter-dir",
                 "--format",
                 "--output",
             ),

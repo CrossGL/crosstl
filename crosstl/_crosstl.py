@@ -1425,6 +1425,154 @@ def _run_plan_runtime_adapters(args):
     return 0 if payload["success"] else 1
 
 
+def _format_runtime_adapter_package(payload):
+    lines = [f"Runtime adapter descriptors: {payload.get('sourcePackage')}"]
+    for header_line in (
+        _format_payload_schema_version(payload, "Descriptor schema version"),
+        _format_payload_kind(payload, "Descriptor kind"),
+        _format_payload_generated_at(payload, "Descriptor generated at"),
+        _format_payload_hash(payload, "sourcePackageHash", "Source package hash"),
+    ):
+        if header_line:
+            lines.append(header_line)
+    lines.append(f"Status: {'ok' if payload.get('success') else 'failed'}")
+    package_root = payload.get("packageRoot")
+    if isinstance(package_root, str) and package_root:
+        lines.append(f"Package root: {package_root}")
+    adapter_root = payload.get("adapterRoot")
+    if isinstance(adapter_root, str) and adapter_root:
+        lines.append(f"Adapter root: {adapter_root}")
+    adapter_manifest = payload.get("adapterManifest")
+    if isinstance(adapter_manifest, str) and adapter_manifest:
+        lines.append(f"Adapter manifest: {adapter_manifest}")
+    scope = payload.get("scope")
+    if isinstance(scope, str) and scope:
+        lines.append(f"Descriptor scope: {scope}")
+    non_goals = payload.get("nonGoals")
+    if isinstance(non_goals, list):
+        non_goal_labels = [
+            non_goal for non_goal in non_goals if isinstance(non_goal, str) and non_goal
+        ]
+        if non_goal_labels:
+            lines.append(f"Descriptor non-goals: {', '.join(non_goal_labels)}")
+
+    project = payload.get("project")
+    for project_line in (
+        _format_project_root_path(project),
+        _format_project_output_dir(project),
+        _format_project_string_list(project, "Project targets", "targets"),
+    ):
+        if project_line:
+            lines.append(project_line)
+
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        lines.append(
+            "Summary: "
+            f"{summary.get('targetCount', 0)} targets, "
+            f"{summary.get('descriptorCount', 0)} descriptors, "
+            f"{summary.get('readyDescriptorCount', 0)} ready, "
+            f"{summary.get('blockedDescriptorCount', 0)} blocked, "
+            f"{summary.get('runtimeReferenceCount', 0)} runtime references"
+        )
+
+    targets = payload.get("targets", [])
+    if targets:
+        lines.append("Runtime adapter descriptor targets:")
+        for target in targets:
+            if not isinstance(target, Mapping):
+                continue
+            required_tools = target.get("requiredTools")
+            tool_suffix = ""
+            if isinstance(required_tools, list):
+                tools = [tool for tool in required_tools if isinstance(tool, str)]
+                if tools:
+                    tool_suffix = f"; tools: {', '.join(tools)}"
+            lines.append(
+                "- "
+                f"{target.get('target', 'unknown')}: "
+                f"{target.get('descriptorCount', 0)} descriptors, "
+                f"{target.get('readyDescriptorCount', 0)} ready"
+                f"{tool_suffix}"
+            )
+
+    descriptors = payload.get("descriptors", [])
+    if descriptors:
+        lines.append("Runtime adapter descriptors:")
+        for descriptor in descriptors:
+            if not isinstance(descriptor, Mapping):
+                continue
+            details = []
+            descriptor_path = descriptor.get("descriptorPath")
+            if isinstance(descriptor_path, str) and descriptor_path:
+                details.append(f"descriptor: {descriptor_path}")
+            host_status = descriptor.get("hostInterfaceStatus")
+            if isinstance(host_status, str) and host_status:
+                details.append(f"interface: {host_status}")
+            required_tools = descriptor.get("requiredTools")
+            if isinstance(required_tools, list):
+                tools = [tool for tool in required_tools if isinstance(tool, str)]
+                if tools:
+                    details.append(f"tools: {', '.join(tools)}")
+            suffix = f" [{'; '.join(details)}]" if details else ""
+            lines.append(
+                "- "
+                f"{descriptor.get('target', 'unknown')}: "
+                f"{descriptor.get('packagePath') or '<missing package path>'} "
+                f"via {descriptor.get('adapterKind', 'target-source-adapter')}"
+                f"{suffix}"
+            )
+
+    actions = payload.get("actions", [])
+    if actions:
+        lines.append("Runtime adapter descriptor actions:")
+        for action in actions:
+            if not isinstance(action, Mapping):
+                continue
+            details = []
+            severity = action.get("severity")
+            if isinstance(severity, str) and severity:
+                details.append(f"severity: {severity}")
+            target = action.get("target")
+            if isinstance(target, str) and target:
+                details.append(f"target: {target}")
+            package_path = action.get("packagePath")
+            if isinstance(package_path, str) and package_path:
+                details.append(f"package path: {package_path}")
+            suffix = f" [{'; '.join(details)}]" if details else ""
+            lines.append(
+                "- "
+                f"{action.get('kind', 'unknown')}{suffix}: "
+                f"{action.get('message', '')}"
+            )
+
+    diagnostics = payload.get("diagnostics", [])
+    if diagnostics:
+        lines.append("Diagnostics:")
+        for diagnostic in diagnostics:
+            if isinstance(diagnostic, Mapping):
+                lines.append(_format_project_diagnostic_line(diagnostic))
+    return "\n".join(lines) + "\n"
+
+
+def _run_materialize_runtime_adapters(args):
+    from .project import materialize_runtime_adapters
+
+    payload = materialize_runtime_adapters(args.package_manifest, args.adapter_dir)
+    if args.format == "sarif":
+        _write_json_payload(
+            _format_project_diagnostics_sarif(
+                payload, tool_name="CrossTL runtime adapter descriptor packaging"
+            ),
+            args.output,
+        )
+    elif args.format == "text":
+        _write_text_payload(_format_runtime_adapter_package(payload), args.output)
+    else:
+        _write_json_payload(payload, args.output)
+    return 0 if payload["success"] else 1
+
+
 def _format_runtime_loader_manifest(payload):
     lines = [f"Runtime loader manifest: {payload.get('sourcePackage')}"]
     for header_line in (
@@ -6088,6 +6236,31 @@ def _build_parser():
     )
     runtime_adapter_parser.set_defaults(func=_run_plan_runtime_adapters)
 
+    runtime_adapter_package_parser = subparsers.add_parser(
+        "materialize-runtime-adapters",
+        help="Write runtime adapter descriptor files from a runtime package manifest",
+    )
+    runtime_adapter_package_parser.add_argument(
+        "package_manifest", help="Runtime package manifest JSON"
+    )
+    runtime_adapter_package_parser.add_argument(
+        "--adapter-dir",
+        required=True,
+        help="Directory where runtime adapter descriptor files are written",
+    )
+    runtime_adapter_package_parser.add_argument(
+        "--format",
+        choices=("json", "text", "sarif"),
+        default="json",
+        help="Runtime adapter descriptor package output format",
+    )
+    runtime_adapter_package_parser.add_argument(
+        "--output",
+        "-o",
+        help="Write runtime adapter descriptor package report; use '-' for stdout",
+    )
+    runtime_adapter_package_parser.set_defaults(func=_run_materialize_runtime_adapters)
+
     runtime_loader_parser = subparsers.add_parser(
         "runtime-loader-manifest",
         help="Build a runtime loader manifest from a runtime package manifest",
@@ -6305,6 +6478,7 @@ def _use_legacy_cli(argv):
         "inspect-runtime-package",
         "plan-host-bindings",
         "plan-runtime-adapters",
+        "materialize-runtime-adapters",
         "runtime-loader-manifest",
         "scaffold-host-loaders",
         "inspect-host-loader-scaffolds",

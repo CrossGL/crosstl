@@ -1767,8 +1767,7 @@ class GLSLCodeGen:
                 if remainder.startswith("uniform ") and "{" in remainder:
                     minimum_version = max(minimum_version or 0, 330)
                 if any(
-                    remainder.startswith(f"{direction} ")
-                    for direction in ("in", "out")
+                    remainder.startswith(f"{direction} ") for direction in ("in", "out")
                 ):
                     minimum_version = max(minimum_version or 0, 330)
                 continue
