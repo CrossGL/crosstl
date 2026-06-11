@@ -349,11 +349,22 @@ def _load_metal():
 def _classify_metal_native_directive(
     directive: str, payload: str
 ) -> Mapping[str, Any] | None:
-    if directive != "mode":
+    normalized_payload = " ".join(payload.split())
+    if directive == "mode":
+        return {
+            "kind": "mode",
+            "payload": normalized_payload,
+            "handlingStatus": "preserved",
+        }
+    if directive != "name":
         return None
+    if normalized_payload.endswith("\\"):
+        normalized_payload = normalized_payload[:-1].rstrip()
+    if normalized_payload.endswith(","):
+        normalized_payload = normalized_payload[:-1].rstrip()
     return {
-        "kind": "mode",
-        "payload": " ".join(payload.split()),
+        "kind": "name",
+        "payload": normalized_payload,
         "handlingStatus": "preserved",
     }
 
