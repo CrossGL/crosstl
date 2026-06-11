@@ -6,6 +6,7 @@ from crosstl.backend.common_ast import (
     ArrayAccessNode,
     AssignmentNode,
     BinaryOpNode,
+    CallNode,
     CastNode,
     DiscardNode,
     DoWhileNode,
@@ -472,6 +473,35 @@ def test_parse_dependent_numeric_template_call_from_mlx_fp_quantized():
 
     assert isinstance(call, FunctionCallNode)
     assert call.name == "qdot<U,tn*pack_factor,bits>"
+
+
+def test_parse_numeric_template_call_without_prior_template_declaration():
+    code = """
+    void run(device float* out) {
+        project_helper<16, 4>(out);
+    }
+    """
+    ast = parse_ok(code)
+    call = ast.functions[0].body[0]
+
+    assert isinstance(call, FunctionCallNode)
+    assert call.name == "project_helper<16,4>"
+
+
+def test_parse_numeric_template_braced_functor_call_statement():
+    code = """
+    struct Quantize {};
+
+    void run(float value) {
+        Quantize<4>{}(value);
+    }
+    """
+    ast = parse_ok(code)
+    call = ast.functions[0].body[0]
+
+    assert isinstance(call, CallNode)
+    assert isinstance(call.callee, FunctionCallNode)
+    assert call.callee.name == "Quantize<4>"
 
 
 def test_numeric_template_parse_error_reports_context_and_position():
