@@ -15,6 +15,7 @@ from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.slang_codegen import SlangCodeGen
+from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 
 FRAGMENT_SMOKE_SHADER = """
 shader ExternalValidatorSmoke {
@@ -67,6 +68,60 @@ shader ExternalValidatorWaveQuad {
                 + (quadAny ? 1u : 0u) + (quadAll ? 1u : 0u);
         }
     }
+}
+"""
+
+
+GLSL_SPECIALIZATION_CONSTANT_VERTEX_SHADER = """
+#version 400
+
+layout(constant_id = 16) const int arraySize = 5;
+in vec4 ucol[arraySize];
+
+layout(constant_id = 17) const bool spBool = true;
+layout(constant_id = 18) const float spFloat = 3.14;
+layout(constant_id = 19) const double spDouble = 3.1415926535897932384626433832795;
+layout(constant_id = 22) const uint scale = 2;
+
+layout(constant_id = 24) gl_MaxImageUnits;
+
+out vec4 color;
+out int size;
+
+void foo(vec4 p[arraySize]);
+
+void main()
+{
+    color = ucol[2];
+    size = arraySize;
+    if (spBool)
+        color *= scale;
+    color += float(spDouble / spFloat);
+
+    foo(ucol);
+}
+
+layout(constant_id = 116) const int dupArraySize = 12;
+in vec4 dupUcol[dupArraySize];
+
+layout(constant_id = 117) const bool spDupBool = true;
+layout(constant_id = 118) const float spDupFloat = 3.14;
+layout(constant_id = 119) const double spDupDouble = 3.1415926535897932384626433832795;
+layout(constant_id = 122) const uint dupScale = 2;
+
+void foo(vec4 p[arraySize])
+{
+    color += dupUcol[2];
+    size += dupArraySize;
+    if (spDupBool)
+        color *= dupScale;
+    color += float(spDupDouble / spDupFloat);
+}
+
+int builtin_spec_constant()
+{
+    int result = gl_MaxImageUnits;
+    return result;
 }
 """
 
@@ -1118,6 +1173,16 @@ void main() {
 """
 
 
+MIXED_GLSL_150_FRAGMENT_OUTPUT_SHADER = """
+#version 150
+out vec4 outputColor;
+
+void main() {
+    outputColor = vec4(1.0);
+}
+"""
+
+
 GLSL_GEOMETRY_INTERFACE_BLOCK_VALIDATOR_SHADER = """
 shader GLSLGeometryInterfaceBlockValidator {
     @glsl_interface_block(in) @glsl_interface_instance(vertexIn) @glsl_interface_array
@@ -1674,6 +1739,10 @@ def _mixed_glsl_ast(source, shader_type):
     return crosstl.translator.parse(crossgl)
 
 
+def _glsl_specialization_constant_ast():
+    return _mixed_glsl_ast(GLSL_SPECIALIZATION_CONSTANT_VERTEX_SHADER, "vertex")
+
+
 def _require_tool(name):
     path = shutil.which(name)
     if not path:
@@ -1758,6 +1827,93 @@ def _run_hlsl_glslang_spirv_validator(glslang, spirv_val, stage, entry, source_p
         ]
     )
     _run_validator([spirv_val, str(output_path)])
+
+
+def test_mixed_glsl_specialization_constants_lower_for_target_codegen():
+    shader_ast = _glsl_specialization_constant_ast()
+
+    glsl = GLSLCodeGen().generate(shader_ast)
+    assert "layout(constant_id" not in glsl
+    assert "CrossGL fallback: OpenGL source validation cannot preserve" in glsl
+    assert "const int arraySize = 5;" in glsl
+    assert glsl.count("void foo") == 1
+    assert "output." not in glsl
+
+    metal = MetalCodeGen().generate(shader_ast)
+    assert "constant_id" not in metal
+    assert (
+        "Metal source output cannot preserve GLSL specialization constant id" in metal
+    )
+    assert "Metal does not support double specialization constant" in metal
+    assert "constant double spDouble" not in metal
+    assert "thread VertexOutput& output" in metal
+    assert "constant int gl_MaxImageUnits = 8;" in metal
+    assert "Metal vertex entry points require a position output" in metal
+    assert "float4 __crossgl_position [[position]];" in metal
+
+    spirv = VulkanSPIRVCodeGen().generate(shader_ast)
+    assert "WARNING" not in spirv
+    assert "SpecId 16" in spirv
+    assert "SpecId 116" in spirv
+    assert re.search(r"OpFunctionCall %\d+ %\d+ %\d+ %\d+", spirv)
+
+
+def test_mixed_glsl_specialization_constants_opengl_validates_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "specialization_constants.vert"
+
+    shader_path.write_text(
+        GLSLCodeGen().generate(_glsl_specialization_constant_ast()),
+        encoding="utf-8",
+    )
+
+    _run_validator([glslang, "-S", "vert", str(shader_path)])
+
+
+def test_mixed_glsl_specialization_constants_metal_output_compiles_with_xcrun_metal(
+    tmp_path,
+):
+    xcrun = _require_xcrun_tool("metal")
+    shader_path = tmp_path / "specialization_constants.metal"
+    output_path = tmp_path / "specialization_constants.air"
+
+    shader_path.write_text(
+        MetalCodeGen().generate(_glsl_specialization_constant_ast()),
+        encoding="utf-8",
+    )
+
+    _run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_mixed_glsl_specialization_constants_spirv_output_validates_with_spirv_tools(
+    tmp_path,
+):
+    spirv_as = _require_tool("spirv-as")
+    spirv_val = _require_tool("spirv-val")
+    asm_path = tmp_path / "specialization_constants.spvasm"
+    spv_path = tmp_path / "specialization_constants.spv"
+
+    asm_path.write_text(
+        VulkanSPIRVCodeGen().generate(_glsl_specialization_constant_ast()),
+        encoding="utf-8",
+    )
+
+    _run_validator([spirv_as, str(asm_path), "-o", str(spv_path)])
+    _run_validator([spirv_val, str(spv_path)])
 
 
 def _compile_slang_hlsl_entry(
@@ -2981,6 +3137,22 @@ def test_mixed_glsl_fragment_color_depth_validate_with_glslangvalidator(
     assert "fragColor" not in code
     assert "return color" not in code
     assert "\n    vec4 color;" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "frag", str(shader_path)])
+
+
+def test_mixed_glsl_150_fragment_output_validates_with_glslangvalidator(tmp_path):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "mixed_glsl_150_fragment_output.frag"
+
+    code = GLSLCodeGen().generate_stage(
+        _mixed_glsl_ast(MIXED_GLSL_150_FRAGMENT_OUTPUT_SHADER, "fragment"),
+        "fragment",
+    )
+    assert code.lstrip().startswith("#version 330 core\n")
+    assert "#version 150" not in code
+    assert "layout(location = 0) out vec4 fragColor;" in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "frag", str(shader_path)])

@@ -4,6 +4,8 @@ from typing import List
 import pytest
 
 import crosstl.translator
+from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
+from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.translator.ast import (
     ArrayNode,
     AttributeNode,
@@ -144,6 +146,24 @@ def test_directx_compute_rootsignature_attribute_is_not_return_semantic():
     assert "allMemoryBarrier();" not in generated_code
 
 
+def test_directx_compute_metal_max_total_threads_attribute_is_not_return_semantic():
+    shader = """
+    shader MetalThreadgroupMetadataCompute {
+        compute {
+            void main() @max_total_threads_per_threadgroup(1024) {
+                int value = 1;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "[numthreads(1, 1, 1)]" in generated_code
+    assert "return semantic 'max_total_threads_per_threadgroup'" not in generated_code
+    assert "max_total_threads_per_threadgroup" not in generated_code
+
+
 def test_hlsl_stencil_ref_return_semantic_codegen():
     shader = """
     shader StencilOut {
@@ -158,6 +178,35 @@ def test_hlsl_stencil_ref_return_semantic_codegen():
 
     assert "uint PSMain(): SV_StencilRef" in generated_code
     assert "gl_FragStencilRefEXT" not in generated_code
+
+
+def test_glsl_fragment_fragcoord_lowers_to_hlsl_position_input(tmp_path):
+    shader = """
+    #version 330 core
+    out vec4 fragColor;
+
+    void main() {
+        if (mod(gl_FragCoord.x, 2.0) < 1.0 ||
+            mod(gl_FragCoord.y, 2.0) < 1.0) {
+            discard;
+        }
+        fragColor = vec4(1.0);
+    }
+    """
+    shader_path = tmp_path / "noise.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "gl_FragCoord" not in generated_code
+    assert "float4 _crossglFragCoord : SV_Position" in generated_code
+    assert "_crossglFragCoord.x" in generated_code
+    assert "_crossglFragCoord.y" in generated_code
 
 
 def test_directx_user_defined_synchronization_names_are_not_lowered():
@@ -1495,6 +1544,31 @@ def test_hlsl_multiple_cbuffers_sequential_registers():
     assert "float roughness;" in generated_code
     assert "float metalness;" in generated_code
     assert "float3 emissive;" in generated_code
+
+
+def test_hlsl_program_constant_metadata_does_not_emit_resource_array_suffix():
+    shader = """
+    shader SpriteEffectProgramConstantResource {
+        sampler2D Texture @ hlsl_program_constant @ register(t0);
+        sampler TextureSampler @ register(s0);
+        mat4 MatrixTransform @ hlsl_program_constant;
+
+        vertex {
+            vec4 main(vec4 position @ POSITION0) @ SV_Position {
+                return MatrixTransform * position;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "Texture2D Texture : register(t0);" in generated_code
+    assert "SamplerState TextureSampler : register(s0);" in generated_code
+    assert "float4x4 MatrixTransform;" in generated_code
+    assert "hlsl_program_constant" not in generated_code
+    assert "Texture[hlsl_program_constant]" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
 def test_hlsl_structured_buffer_register_t0_and_rw_register_u0():
@@ -6586,6 +6660,30 @@ def test_hlsl_two_argument_atan_renames_shadowed_atan2_locals():
     assert "float angle = (atan2(direction.y, direction.x) + atan2_);" in generated_code
     assert "helper(atan2_, direction.y, direction.x)" in generated_code
     assert "float atan2 = direction.x;" not in generated_code
+
+
+def test_hlsl_reserved_linear_parameter_is_renamed_consistently():
+    shader = """
+    shader HlslReservedLinearParameter {
+        float linearToSrgb(float linear) {
+            return linear + (linear * linear);
+        }
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                float converted = linearToSrgb(uv.x);
+                return vec4(converted, converted, converted, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float linearToSrgb(float linear_)" in generated_code
+    assert "return (linear_ + (linear_ * linear_));" in generated_code
+    assert re.search(r"\blinear\b", generated_code) is None
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
 def test_hlsl_two_argument_atan_renames_shadowed_global_atan2_function():

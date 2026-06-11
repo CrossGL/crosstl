@@ -29,12 +29,14 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/unary.metal",
 )
 EXPECTED_METAL_KERNEL_COUNT = 40
-ISSUE_THREADGROUP_METADATA = "https://github.com/CrossGL/crosstl/issues/850"
-ISSUE_RESOURCE_DECL_SCOPE = "https://github.com/CrossGL/crosstl/issues/851"
-ISSUE_OPENGL_BINDINGS = "https://github.com/CrossGL/crosstl/issues/852"
-ISSUE_VULKAN_QUANTIZED_LITERAL = "https://github.com/CrossGL/crosstl/issues/854"
-ISSUE_VULKAN_SORT_RECURSION = "https://github.com/CrossGL/crosstl/issues/855"
-ISSUE_OPENGL_HELPER_DECLARATIONS = "https://github.com/CrossGL/crosstl/issues/862"
+ISSUE_OPENGL_TEMPLATE_TYPES = "https://github.com/CrossGL/crosstl/issues/888"
+ISSUE_OPENGL_SIMD_INTRINSICS = "https://github.com/CrossGL/crosstl/issues/889"
+ISSUE_DIRECTX_STEEL_TYPE_CRASHES = "https://github.com/CrossGL/crosstl/issues/890"
+ISSUE_DIRECTX_BINDINGS = "https://github.com/CrossGL/crosstl/issues/891"
+ISSUE_DIRECTX_GROUPSHARED_NAMES = "https://github.com/CrossGL/crosstl/issues/892"
+ISSUE_VULKAN_SORT_OVERLOADS = "https://github.com/CrossGL/crosstl/issues/893"
+ISSUE_RUNTIME_MANIFEST = "https://github.com/CrossGL/crosstl/issues/894"
+ISSUE_RUNTIME_VERIFICATION = "https://github.com/CrossGL/crosstl/issues/895"
 
 
 class PortingCheckError(RuntimeError):
@@ -492,12 +494,14 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "runtimeIntegrationIncluded": False,
         },
         "trackedIssues": [
-            ISSUE_THREADGROUP_METADATA,
-            ISSUE_RESOURCE_DECL_SCOPE,
-            ISSUE_OPENGL_BINDINGS,
-            ISSUE_VULKAN_QUANTIZED_LITERAL,
-            ISSUE_VULKAN_SORT_RECURSION,
-            ISSUE_OPENGL_HELPER_DECLARATIONS,
+            ISSUE_OPENGL_TEMPLATE_TYPES,
+            ISSUE_OPENGL_SIMD_INTRINSICS,
+            ISSUE_DIRECTX_STEEL_TYPE_CRASHES,
+            ISSUE_DIRECTX_BINDINGS,
+            ISSUE_DIRECTX_GROUPSHARED_NAMES,
+            ISSUE_VULKAN_SORT_OVERLOADS,
+            ISSUE_RUNTIME_MANIFEST,
+            ISSUE_RUNTIME_VERIFICATION,
         ],
         "checks": checks,
         "status": "passed",

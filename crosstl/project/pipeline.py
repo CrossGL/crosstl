@@ -43,6 +43,9 @@ RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_KIND = (
     "crosstl-runtime-host-loader-consumption-plan"
 )
 RUNTIME_HOST_INTEGRATION_HANDOFF_KIND = "crosstl-runtime-host-integration-handoff"
+RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_KIND = (
+    "crosstl-runtime-host-integration-handoff-inspection"
+)
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
 RUNTIME_LOADER_PLAN_CONTRACT = "runtime-loader-plan-v1"
@@ -60,6 +63,9 @@ RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_SCOPE = (
 )
 RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_SCOPE = "host-loader-consumption-planning"
 RUNTIME_HOST_INTEGRATION_HANDOFF_SCOPE = "host-integration-handoff-bundle"
+RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_SCOPE = (
+    "host-integration-handoff-readiness-inspection"
+)
 RUNTIME_INTEGRATION_PLAN_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
@@ -119,6 +125,12 @@ RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_NON_GOALS = (
     "target-sdk-installation",
 )
 RUNTIME_HOST_INTEGRATION_HANDOFF_NON_GOALS = (
+    "host-code-rewriting",
+    "device-execution",
+    "runtime-framework-generation",
+    "target-sdk-installation",
+)
+RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
     "runtime-framework-generation",
@@ -810,6 +822,44 @@ RUNTIME_HOST_INTEGRATION_HANDOFF_TARGET_FIELDS = frozenset(
 )
 RUNTIME_HOST_INTEGRATION_HANDOFF_GENERATED_FILE_FIELDS = frozenset(
     ("path", "kind", "target")
+)
+RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourceHandoffManifest",
+        "sourceHandoffManifestHash",
+        "generatedAt",
+        "success",
+        "status",
+        "scope",
+        "nonGoals",
+        "handoffRoot",
+        "project",
+        "summary",
+        "targets",
+        "generatedFiles",
+        "handoffManifest",
+        "diagnosticCounts",
+        "diagnostics",
+    )
+)
+RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_TARGET_FIELDS = frozenset(
+    (
+        "target",
+        "status",
+        "manifestStatus",
+        "handoffFile",
+        "fileStatus",
+        "targetKind",
+        "targetStatus",
+        "loaderUnitCount",
+        "actionCount",
+        "diagnostics",
+    )
+)
+RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_GENERATED_FILE_FIELDS = frozenset(
+    ("path", "kind", "target", "status", "diagnostics")
 )
 REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
 REPORT_PROJECT_FIELDS = frozenset(
@@ -6226,6 +6276,20 @@ def _has_error_diagnostic(diagnostics: Sequence[ProjectDiagnostic], code: str) -
     )
 
 
+def _translation_failure_diagnostic_code(exc: Exception) -> str:
+    code = getattr(exc, "project_diagnostic_code", None)
+    return code if _is_non_empty_string(code) else "project.translate.failed"
+
+
+def _translation_failure_missing_capabilities(exc: Exception) -> list[str]:
+    capabilities = getattr(exc, "missing_capabilities", None)
+    if isinstance(capabilities, str):
+        return [capabilities]
+    if capabilities:
+        return [str(capability) for capability in capabilities]
+    return ["batch.translation"]
+
+
 def translate_project(
     config_or_root: ProjectConfig | str | os.PathLike[str],
     *,
@@ -6406,13 +6470,15 @@ def translate_project(
                     diagnostics.append(
                         ProjectDiagnostic(
                             severity="error",
-                            code="project.translate.failed",
+                            code=_translation_failure_diagnostic_code(exc),
                             message=str(exc),
                             location=SourceLocation(file=unit.relative_path),
                             target=target,
                             source_backend=unit.source_backend,
                             variant=variant,
-                            missing_capabilities=["batch.translation"],
+                            missing_capabilities=_translation_failure_missing_capabilities(
+                                exc
+                            ),
                         )
                     )
                 artifacts.append(artifact)
@@ -12953,6 +13019,516 @@ def build_runtime_host_integration_handoff(
             encoding="utf-8",
         )
     return payload
+
+
+def _runtime_host_integration_handoff_inspection_diagnostic(
+    path: Path,
+    code: str,
+    message: str,
+    *,
+    target: Any = None,
+) -> ProjectDiagnostic:
+    return ProjectDiagnostic(
+        severity="error",
+        code=f"project.runtime-host-integration-handoff-inspection.{code}",
+        message=message,
+        location=SourceLocation(file=str(path)),
+        target=target if _is_non_empty_string(target) else None,
+        check_kind="runtime-host-integration-handoff-inspection",
+    )
+
+
+def _runtime_host_integration_handoff_inspection_load_manifest(
+    path: Path,
+) -> tuple[dict[str, Any], list[ProjectDiagnostic]]:
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return {}, [
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                path,
+                "manifest-read-failed",
+                f"Host integration handoff manifest could not be read: {exc}",
+            )
+        ]
+    except json.JSONDecodeError as exc:
+        return {}, [
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                path,
+                "manifest-json-invalid",
+                f"Host integration handoff manifest is not valid JSON: {exc}",
+            )
+        ]
+    if not isinstance(manifest, dict):
+        return {}, [
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                path,
+                "manifest-invalid",
+                "Host integration handoff manifest must be a JSON object.",
+            )
+        ]
+    return manifest, []
+
+
+def _runtime_host_integration_handoff_inspection_manifest_diagnostics(
+    path: Path, manifest: Mapping[str, Any]
+) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    if manifest.get("schemaVersion") != REPORT_SCHEMA_VERSION:
+        diagnostics.append(
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                path,
+                "manifest-schema-invalid",
+                f"Host integration handoff schemaVersion must be {REPORT_SCHEMA_VERSION}.",
+            )
+        )
+    if manifest.get("kind") != RUNTIME_HOST_INTEGRATION_HANDOFF_KIND:
+        diagnostics.append(
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                path,
+                "manifest-kind-invalid",
+                "Host integration handoff inspection input must be a "
+                f"{RUNTIME_HOST_INTEGRATION_HANDOFF_KIND} document.",
+            )
+        )
+    if manifest.get("success") is not True:
+        diagnostics.append(
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                path,
+                "manifest-failed",
+                "Host integration handoff manifest must be successful before "
+                "handoff files can be inspected.",
+            )
+        )
+    for field_name in ("targets", "generatedFiles"):
+        if not isinstance(manifest.get(field_name), list):
+            diagnostics.append(
+                _runtime_host_integration_handoff_inspection_diagnostic(
+                    path,
+                    f"manifest-{field_name}-invalid",
+                    f"Host integration handoff manifest {field_name} must be a list.",
+                )
+            )
+    return diagnostics
+
+
+def _runtime_host_integration_handoff_inspection_resolve_path(
+    manifest_path: Path,
+    root: Path,
+    relative_path: Any,
+    *,
+    field_name: str,
+    code_prefix: str,
+    target: Any = None,
+) -> tuple[Path | None, list[ProjectDiagnostic]]:
+    if not _is_non_empty_string(relative_path):
+        return None, [
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                manifest_path,
+                f"{code_prefix}-path-missing",
+                f"{field_name} must be a non-empty relative path.",
+                target=target,
+            )
+        ]
+    if _is_absolute_or_windows_drive_path(relative_path):
+        return None, [
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                manifest_path,
+                f"{code_prefix}-path-absolute",
+                f"{field_name} must be relative to the handoff root.",
+                target=target,
+            )
+        ]
+    candidate = root / Path(relative_path)
+    if not _is_relative_to(candidate, root):
+        return None, [
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                manifest_path,
+                f"{code_prefix}-path-outside-root",
+                f"{field_name} resolves outside the handoff root.",
+                target=target,
+            )
+        ]
+    return candidate, []
+
+
+def _runtime_host_integration_handoff_inspection_file_diagnostics(
+    manifest_path: Path,
+    path: Path | None,
+    relative_path: Any,
+    *,
+    code_prefix: str,
+    target: Any = None,
+) -> list[ProjectDiagnostic]:
+    if path is None:
+        return []
+    if not path.exists():
+        return [
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                manifest_path,
+                f"{code_prefix}-missing",
+                f"Host integration handoff file is missing: {relative_path}.",
+                target=target,
+            )
+        ]
+    if not path.is_file():
+        return [
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                manifest_path,
+                f"{code_prefix}-not-file",
+                f"Host integration handoff path is not a file: {relative_path}.",
+                target=target,
+            )
+        ]
+    return []
+
+
+def _runtime_host_integration_handoff_inspection_load_target(
+    manifest_path: Path,
+    target_path: Path,
+    target: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[ProjectDiagnostic]]:
+    target_name = target.get("target")
+    try:
+        payload = json.loads(target_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return {}, [
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                manifest_path,
+                "target-read-failed",
+                f"Host integration target file could not be read: {exc}",
+                target=target_name,
+            )
+        ]
+    except json.JSONDecodeError as exc:
+        return {}, [
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                manifest_path,
+                "target-json-invalid",
+                f"Host integration target file is not valid JSON: {exc}",
+                target=target_name,
+            )
+        ]
+    if not isinstance(payload, dict):
+        return {}, [
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                manifest_path,
+                "target-invalid",
+                "Host integration target file must be a JSON object.",
+                target=target_name,
+            )
+        ]
+
+    diagnostics: list[ProjectDiagnostic] = []
+    if payload.get("schemaVersion") != REPORT_SCHEMA_VERSION:
+        diagnostics.append(
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                manifest_path,
+                "target-schema-invalid",
+                f"Host integration target schemaVersion must be {REPORT_SCHEMA_VERSION}.",
+                target=target_name,
+            )
+        )
+    if payload.get("kind") != "crosstl-runtime-host-integration-target":
+        diagnostics.append(
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                manifest_path,
+                "target-kind-invalid",
+                "Host integration target kind must be "
+                "crosstl-runtime-host-integration-target.",
+                target=target_name,
+            )
+        )
+    for field_name, code in (
+        ("target", "target-name-mismatch"),
+        ("status", "target-status-mismatch"),
+    ):
+        if payload.get(field_name) != target.get(field_name):
+            diagnostics.append(
+                _runtime_host_integration_handoff_inspection_diagnostic(
+                    manifest_path,
+                    code,
+                    f"Host integration target {field_name} does not match manifest.",
+                    target=target_name,
+                )
+            )
+    if not isinstance(payload.get("loaderUnits"), list):
+        diagnostics.append(
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                manifest_path,
+                "target-loader-units-invalid",
+                "Host integration target loaderUnits must be a list.",
+                target=target_name,
+            )
+        )
+    if not isinstance(payload.get("actions"), list):
+        diagnostics.append(
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                manifest_path,
+                "target-actions-invalid",
+                "Host integration target actions must be a list.",
+                target=target_name,
+            )
+        )
+    return payload, diagnostics
+
+
+def _runtime_host_integration_handoff_inspection_generated_file(
+    manifest_path: Path,
+    root: Path,
+    generated_file: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[ProjectDiagnostic]]:
+    target = generated_file.get("target")
+    relative_path = generated_file.get("path")
+    path, diagnostics = _runtime_host_integration_handoff_inspection_resolve_path(
+        manifest_path,
+        root,
+        relative_path,
+        field_name="generated file path",
+        code_prefix="generated-file",
+        target=target,
+    )
+    diagnostics.extend(
+        _runtime_host_integration_handoff_inspection_file_diagnostics(
+            manifest_path,
+            path,
+            relative_path,
+            code_prefix="generated-file",
+            target=target,
+        )
+    )
+    return (
+        {
+            "path": relative_path,
+            "kind": generated_file.get("kind"),
+            "target": target,
+            "status": "failed" if diagnostics else "ready",
+            "diagnostics": [diagnostic.code for diagnostic in diagnostics],
+        },
+        diagnostics,
+    )
+
+
+def _runtime_host_integration_handoff_inspection_target(
+    manifest_path: Path,
+    root: Path,
+    target: Mapping[str, Any],
+    generated_paths: set[str],
+) -> tuple[dict[str, Any], list[ProjectDiagnostic]]:
+    target_name = target.get("target")
+    handoff_file = target.get("handoffFile")
+    path, diagnostics = _runtime_host_integration_handoff_inspection_resolve_path(
+        manifest_path,
+        root,
+        handoff_file,
+        field_name="target handoffFile",
+        code_prefix="target",
+        target=target_name,
+    )
+    if _is_non_empty_string(handoff_file) and handoff_file not in generated_paths:
+        diagnostics.append(
+            _runtime_host_integration_handoff_inspection_diagnostic(
+                manifest_path,
+                "target-generated-file-missing",
+                "Host integration target handoffFile is not listed in generatedFiles.",
+                target=target_name,
+            )
+        )
+    diagnostics.extend(
+        _runtime_host_integration_handoff_inspection_file_diagnostics(
+            manifest_path,
+            path,
+            handoff_file,
+            code_prefix="target",
+            target=target_name,
+        )
+    )
+    target_payload: dict[str, Any] = {}
+    if path is not None and not diagnostics:
+        target_payload, target_diagnostics = (
+            _runtime_host_integration_handoff_inspection_load_target(
+                manifest_path, path, target
+            )
+        )
+        diagnostics.extend(target_diagnostics)
+
+    loader_unit_count = (
+        len(target_payload.get("loaderUnits"))
+        if isinstance(target_payload.get("loaderUnits"), list)
+        else 0
+    )
+    action_count = (
+        len(target_payload.get("actions"))
+        if isinstance(target_payload.get("actions"), list)
+        else 0
+    )
+    for field_name, actual_count, code in (
+        ("loaderUnitCount", loader_unit_count, "target-loader-unit-count-mismatch"),
+        ("actionCount", action_count, "target-action-count-mismatch"),
+    ):
+        expected_count = target.get(field_name)
+        if (
+            _is_non_negative_int(expected_count)
+            and target_payload
+            and actual_count != expected_count
+        ):
+            diagnostics.append(
+                _runtime_host_integration_handoff_inspection_diagnostic(
+                    manifest_path,
+                    code,
+                    f"Host integration target {field_name} does not match manifest.",
+                    target=target_name,
+                )
+            )
+
+    failed = any(diagnostic.severity == "error" for diagnostic in diagnostics)
+    return (
+        {
+            "target": target_name,
+            "status": "failed" if failed else target.get("status"),
+            "manifestStatus": target.get("status"),
+            "handoffFile": handoff_file,
+            "fileStatus": "failed" if failed else "ready",
+            "targetKind": target_payload.get("kind"),
+            "targetStatus": target_payload.get("status"),
+            "loaderUnitCount": loader_unit_count,
+            "actionCount": action_count,
+            "diagnostics": [diagnostic.code for diagnostic in diagnostics],
+        },
+        diagnostics,
+    )
+
+
+def _runtime_host_integration_handoff_inspection_status(
+    ready_count: int, blocked_count: int, failed_count: int
+) -> str:
+    return _runtime_host_loader_scaffold_status(
+        ready_count,
+        blocked_count,
+        failed=bool(failed_count),
+    )
+
+
+def inspect_runtime_host_integration_handoff(
+    handoff_manifest_path: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Inspect host integration handoff files before runtime tooling consumes them."""
+
+    manifest_path = _filesystem_path_arg(
+        handoff_manifest_path, field_name="Host integration handoff manifest path"
+    )
+    handoff_root = manifest_path.parent
+    manifest, diagnostics = _runtime_host_integration_handoff_inspection_load_manifest(
+        manifest_path
+    )
+    if manifest:
+        diagnostics.extend(
+            _runtime_host_integration_handoff_inspection_manifest_diagnostics(
+                manifest_path, manifest
+            )
+        )
+
+    generated_file_records: list[dict[str, Any]] = []
+    target_records: list[dict[str, Any]] = []
+    if not any(diagnostic.severity == "error" for diagnostic in diagnostics):
+        for generated_file in _record_sequence(manifest.get("generatedFiles")):
+            if not isinstance(generated_file, Mapping):
+                continue
+            record, current_diagnostics = (
+                _runtime_host_integration_handoff_inspection_generated_file(
+                    manifest_path, handoff_root, generated_file
+                )
+            )
+            generated_file_records.append(record)
+            diagnostics.extend(current_diagnostics)
+        generated_paths = {
+            generated_file.get("path")
+            for generated_file in generated_file_records
+            if _is_non_empty_string(generated_file.get("path"))
+        }
+        for target in _record_sequence(manifest.get("targets")):
+            if not isinstance(target, Mapping):
+                continue
+            record, current_diagnostics = (
+                _runtime_host_integration_handoff_inspection_target(
+                    manifest_path, handoff_root, target, generated_paths
+                )
+            )
+            target_records.append(record)
+            diagnostics.extend(current_diagnostics)
+
+    ready_count = sum(1 for target in target_records if target.get("status") == "ready")
+    blocked_count = sum(
+        1 for target in target_records if target.get("status") == "blocked"
+    )
+    failed_count = sum(
+        1 for target in target_records if target.get("status") == "failed"
+    )
+    verified_generated_count = sum(
+        1
+        for generated_file in generated_file_records
+        if generated_file.get("status") == "ready"
+    )
+    failed_generated_count = sum(
+        1
+        for generated_file in generated_file_records
+        if generated_file.get("status") != "ready"
+    )
+    manifest_summary = (
+        manifest.get("summary") if isinstance(manifest.get("summary"), Mapping) else {}
+    )
+    failed = any(diagnostic.severity == "error" for diagnostic in diagnostics)
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_KIND,
+        "sourceHandoffManifest": str(manifest_path),
+        "sourceHandoffManifestHash": _optional_source_hash(manifest_path),
+        "generatedAt": int(time.time()),
+        "success": not failed,
+        "status": (
+            _runtime_host_integration_handoff_inspection_status(
+                ready_count,
+                blocked_count,
+                failed_count,
+            )
+            if not failed
+            else "failed"
+        ),
+        "scope": RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_SCOPE,
+        "nonGoals": list(RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_NON_GOALS),
+        "handoffRoot": str(handoff_root),
+        "project": (
+            dict(manifest.get("project"))
+            if isinstance(manifest.get("project"), Mapping)
+            else {"targets": []}
+        ),
+        "summary": {
+            "targetCount": len(target_records),
+            "readyTargetCount": ready_count,
+            "blockedTargetCount": blocked_count,
+            "failedTargetCount": failed_count,
+            "generatedFileCount": len(generated_file_records),
+            "verifiedGeneratedFileCount": verified_generated_count,
+            "failedGeneratedFileCount": failed_generated_count,
+            "loaderUnitCount": manifest_summary.get("loaderUnitCount", 0),
+            "actionCount": manifest_summary.get("actionCount", 0),
+            "requiredToolCount": manifest_summary.get("requiredToolCount", 0),
+            "hostResponsibilityCount": manifest_summary.get(
+                "hostResponsibilityCount", 0
+            ),
+        },
+        "targets": target_records,
+        "generatedFiles": generated_file_records,
+        "handoffManifest": {
+            "kind": manifest.get("kind"),
+            "success": manifest.get("success"),
+            "status": manifest.get("status"),
+            "targetCount": manifest_summary.get("targetCount", 0),
+            "generatedFileCount": manifest_summary.get("generatedFileCount", 0),
+        },
+        "diagnosticCounts": _diagnostic_counts(diagnostics),
+        "diagnostics": [diagnostic.to_json() for diagnostic in diagnostics],
+    }
 
 
 def _inspection_artifact_matrix_summary(

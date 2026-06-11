@@ -643,16 +643,19 @@ class MetalCodeGen:
         self.cbuffer_parameter_names = {}
         self.cbuffer_member_references = {}
         self.ambiguous_cbuffer_members = set()
+        self.hlsl_program_constant_global_ids = set()
         self.cbuffers_by_name = {}
         self.user_function_names = set()
         self.function_parameter_names = {}
         self.function_parameter_infos = {}
         self.function_parameter_nodes = {}
+        self.metal_skipped_function_parameter_indices = {}
         self.function_return_types = {}
         self.function_image_access_requirements = {}
         self.function_cbuffer_dependencies = {}
         self.function_global_resource_dependencies = {}
         self.function_stage_parameter_dependencies = {}
+        self.function_stage_output_dependencies = {}
         self.function_metal_wave_lane_dependencies = {}
         self.function_metal_wave_lane_parameter_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
@@ -1232,7 +1235,11 @@ class MetalCodeGen:
         self.metal_fragment_entry_output_struct_names = set()
         self.metal_stage_io_struct_names = set()
         self.metal_stage_io_member_lowerings = {}
-        self.cbuffer_variables = getattr(ast, "cbuffers", []) or []
+        self.hlsl_program_constant_global_ids = set()
+        self.cbuffer_variables = list(getattr(ast, "cbuffers", []) or [])
+        hlsl_program_constants = self.synthetic_hlsl_program_constants_cbuffer(ast)
+        if hlsl_program_constants is not None:
+            self.cbuffer_variables.append(hlsl_program_constants)
         self.cbuffer_binding_indices = {}
         self.cbuffers_by_name = {
             cbuffer.name: cbuffer
@@ -1249,6 +1256,9 @@ class MetalCodeGen:
         )
         self.function_parameter_nodes = self.collect_function_parameter_nodes(
             all_functions
+        )
+        self.metal_skipped_function_parameter_indices = (
+            self.collect_unused_array_parameter_indices(all_functions)
         )
         self.function_return_types = {
             func.name: self.type_name_string(getattr(func, "return_type", "void"))
@@ -1644,6 +1654,7 @@ class MetalCodeGen:
             )
         )
         code += self.generate_constants(ast, leading_constants)
+        code += self.generate_metal_builtin_limit_fallbacks(ast, all_functions)
         code += self.generate_metal_struct_declarations(structs)
         code += self.generate_constants(
             ast, struct_dependent_constants, include_function_constants=False
@@ -1711,6 +1722,8 @@ class MetalCodeGen:
                 array_suffix = ""
 
             var_name = getattr(node, "name", getattr(node, "variable_name", None))
+            if id(node) in self.hlsl_program_constant_global_ids:
+                continue
             if self.is_metal_function_constant_variable(node):
                 continue
 
@@ -2137,8 +2150,11 @@ class MetalCodeGen:
         self.function_stage_parameter_dependencies = (
             self.collect_function_stage_parameter_dependencies(ast, target_stage)
         )
+        self.function_stage_output_dependencies = (
+            self.collect_function_stage_output_dependencies(ast, target_stage)
+        )
 
-        cbuffers = getattr(ast, "cbuffers", [])
+        cbuffers = self.cbuffer_variables
         if cbuffers:
             code += "// Constant Buffers\n"
             code += self.generate_cbuffers(ast)
@@ -2251,9 +2267,21 @@ class MetalCodeGen:
             const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
             value = getattr(node, "value", None)
             value_code = self.generate_constant_expression(value)
-            declaration = format_c_style_array_declaration(
-                self.map_type(const_type), name
-            )
+            mapped_type = self.map_type(const_type)
+            specialization_id = self.metal_specialization_constant_id(node)
+            if specialization_id is not None:
+                code += (
+                    "/* CrossGL fallback: Metal source output cannot preserve "
+                    f"GLSL specialization constant id {specialization_id} for "
+                    f"'{name}'; using the default literal. */\n"
+                )
+            if specialization_id is not None and mapped_type == "double":
+                code += (
+                    "/* CrossGL fallback: Metal does not support double "
+                    f"specialization constant '{name}'; lowered to float. */\n"
+                )
+                mapped_type = "float"
+            declaration = format_c_style_array_declaration(mapped_type, name)
             code += (
                 f"{self.metal_unused_declaration_qualifier('constant')} "
                 f"{declaration} = {value_code};\n"
@@ -2330,6 +2358,32 @@ class MetalCodeGen:
             if normalized in {"function_constant", "constant_id"}:
                 attributes.append(attr)
         return attributes
+
+    def metal_specialization_constant_id(self, node):
+        constant_id = None
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            normalized = str(attr_name).lower().replace("-", "_")
+            if normalized.startswith("metal_") or normalized.startswith("msl_"):
+                normalized = normalized.split("_", 1)[1]
+            if normalized != "constant_id":
+                continue
+            arguments = getattr(attr, "arguments", []) or []
+            if len(arguments) != 1:
+                continue
+            value = self.attribute_value_to_string(arguments[0])
+            if constant_id is not None and constant_id != value:
+                name = getattr(
+                    node, "name", getattr(node, "variable_name", "<unnamed>")
+                )
+                raise ValueError(
+                    "Conflicting Metal specialization constant ids for "
+                    f"'{name}': {constant_id} differs from {value}"
+                )
+            constant_id = value
+        return constant_id
 
     def is_metal_function_constant_variable(self, node):
         return bool(self.metal_function_constant_attributes(node))
@@ -2570,9 +2624,48 @@ class MetalCodeGen:
             return "false"
         return value_code
 
+    def synthetic_hlsl_program_constants_cbuffer(self, ast):
+        members = []
+        self.hlsl_program_constant_global_ids = set()
+        for node in getattr(ast, "global_variables", []) or []:
+            if not self.is_hlsl_program_constant_global(node):
+                continue
+            members.append(node)
+            self.hlsl_program_constant_global_ids.add(id(node))
+
+        if not members:
+            return None
+
+        cbuffer = StructNode(
+            self.unique_hlsl_program_constants_cbuffer_name(ast),
+            members,
+        )
+        cbuffer.is_cbuffer = True
+        cbuffer.buffer_kind = "cbuffer"
+        cbuffer.is_synthetic_hlsl_program_constants = True
+        return cbuffer
+
+    def is_hlsl_program_constant_global(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() == "hlsl_program_constant":
+                return True
+        return False
+
+    def unique_hlsl_program_constants_cbuffer_name(self, ast):
+        reserved_names = {
+            getattr(node, "name", None)
+            for node in (
+                list(getattr(ast, "structs", []) or [])
+                + list(getattr(ast, "cbuffers", []) or [])
+                + list(getattr(ast, "global_variables", []) or [])
+            )
+            if getattr(node, "name", None)
+        }
+        return self.unique_metal_generated_name("HlslProgramConstants", reserved_names)
+
     def generate_cbuffers(self, ast):
         code = ""
-        cbuffers = getattr(ast, "cbuffers", [])
+        cbuffers = self.cbuffer_variables or getattr(ast, "cbuffers", [])
         duplicate_names = collect_duplicate_cbuffer_names(cbuffers)
         if duplicate_names:
             names = ", ".join(sorted(duplicate_names))
@@ -2737,6 +2830,14 @@ class MetalCodeGen:
             )
             code += member_code
             dependencies.update(member_dependencies)
+        fallback_position = self.metal_vertex_output_position_fallback_member_name(node)
+        if fallback_position is not None:
+            code += (
+                "    /* CrossGL fallback: Metal vertex entry points require "
+                "a position output even when the GLSL source did not write "
+                "gl_Position. */\n"
+                f"    float4 {fallback_position} [[position]];\n"
+            )
         code += "};\n"
         dependencies.discard(node.name)
         return {"name": node.name, "dependencies": dependencies, "code": code}
@@ -3447,7 +3548,12 @@ class MetalCodeGen:
         self.current_metal_compute_builtin_parameter_names = {}
         self.local_variable_types = {}
         self.current_address_space_variables = {}
-        for p in param_list:
+        skipped_parameter_indices = self.skipped_function_parameter_indices(
+            self.current_function_name
+        )
+        for index, p in enumerate(param_list):
+            if index in skipped_parameter_indices:
+                continue
             if hasattr(p, "param_type"):
                 raw_param_type = (
                     self.type_name_string(p.param_type)
@@ -3676,6 +3782,30 @@ class MetalCodeGen:
                 reserved_parameter_names.add(name)
                 self.current_metal_graphics_builtin_parameter_names[builtin_name] = name
 
+        if shader_type == "fragment":
+            explicit_stage_builtins = self.explicit_graphics_stage_builtin_parameters(
+                param_list, shader_type
+            )
+            if explicit_stage_builtins.get("position"):
+                self.current_metal_graphics_builtin_parameter_names["gl_FragCoord"] = (
+                    explicit_stage_builtins["position"]
+                )
+            reserved_builtin_names = set(reserved_parameter_names)
+            reserved_builtin_names.update(
+                self.metal_function_local_variable_names(func)
+            )
+            for (
+                builtin_name,
+                name,
+                param_type,
+                attribute,
+            ) in self.required_metal_fragment_builtin_parameters(
+                func, reserved_builtin_names, explicit_stage_builtins
+            ):
+                params.append(f"{param_type} {name} [[{attribute}]]")
+                reserved_parameter_names.add(name)
+                self.current_metal_graphics_builtin_parameter_names[builtin_name] = name
+
         if shader_type == "compute":
             existing_param_names = {getattr(p, "name", None) for p in param_list}
             explicit_stage_builtins = self.explicit_compute_stage_builtin_parameters(
@@ -3727,6 +3857,9 @@ class MetalCodeGen:
 
         params_str = ", ".join(params)
         if shader_type is None:
+            params_str = self.append_required_stage_output_parameter(
+                params_str, self.current_function_name
+            )
             params_str = self.append_required_stage_parameter_parameters(
                 params_str, self.current_function_name
             )
@@ -3749,6 +3882,13 @@ class MetalCodeGen:
             ):
                 self.local_variable_types[parameter.name] = self.type_name_string(
                     self.parameter_raw_type(parameter)
+                )
+            stage_output_type = self.required_function_stage_output_type(
+                self.current_function_name
+            )
+            if stage_output_type is not None:
+                self.local_variable_types["output"] = self.type_name_string(
+                    stage_output_type
                 )
 
         if hasattr(func, "return_type"):
@@ -4364,6 +4504,8 @@ class MetalCodeGen:
             return None
         if name == "gl_VertexIndex":
             return "uint"
+        if name == "gl_FragCoord":
+            return "float4"
         return None
 
     def metal_compute_builtin_result_type(self, name):
@@ -4649,15 +4791,21 @@ class MetalCodeGen:
             ("gl_VertexIndex", "uint", "vertex_id"),
         ]
 
+    def metal_fragment_builtin_parameter_specs(self):
+        return [
+            ("gl_FragCoord", "float4", "position"),
+        ]
+
     def explicit_graphics_stage_builtin_parameters(self, parameters, stage_name):
-        if stage_name != "vertex":
+        if stage_name == "vertex":
+            builtin_specs = self.metal_vertex_builtin_parameter_specs()
+        elif stage_name == "fragment":
+            builtin_specs = self.metal_fragment_builtin_parameter_specs()
+        else:
             return {}
         stage_parameters = {}
         builtin_attributes = {
-            attribute
-            for _builtin_name, _param_type, attribute in (
-                self.metal_vertex_builtin_parameter_specs()
-            )
+            attribute for _builtin_name, _param_type, attribute in builtin_specs
         }
         for parameter in parameters or []:
             semantic = self.semantic_from_node(parameter)
@@ -4687,6 +4835,38 @@ class MetalCodeGen:
 
     def used_metal_vertex_builtin_names(self, body):
         builtin_names = {"gl_VertexIndex"}
+        used_names = set()
+        for node in self.iter_ast_nodes(body):
+            class_name = node.__class__.__name__
+            if "Identifier" not in class_name:
+                continue
+            name = getattr(node, "name", "")
+            base_name = name.split(".", 1)[0]
+            if base_name in builtin_names:
+                used_names.add(base_name)
+        return used_names
+
+    def required_metal_fragment_builtin_parameters(
+        self, func, reserved_names=None, explicit_stage_builtins=None
+    ):
+        used_names = self.used_metal_fragment_builtin_names(getattr(func, "body", []))
+        reserved_names = set(reserved_names or ())
+        explicit_stage_builtins = explicit_stage_builtins or {}
+        required_parameters = []
+        for (
+            builtin_name,
+            param_type,
+            attribute,
+        ) in self.metal_fragment_builtin_parameter_specs():
+            if builtin_name not in used_names or attribute in explicit_stage_builtins:
+                continue
+            name = self.unique_metal_generated_name("_crossglFragCoord", reserved_names)
+            reserved_names.add(name)
+            required_parameters.append((builtin_name, name, param_type, attribute))
+        return required_parameters
+
+    def used_metal_fragment_builtin_names(self, body):
+        builtin_names = {"gl_FragCoord"}
         used_names = set()
         for node in self.iter_ast_nodes(body):
             class_name = node.__class__.__name__
@@ -5465,6 +5645,15 @@ class MetalCodeGen:
             return f"{params_str}, {', '.join(stage_params)}"
         return ", ".join(stage_params)
 
+    def append_required_stage_output_parameter(self, params_str, func_name):
+        output_type = self.required_function_stage_output_type(func_name)
+        if output_type is None:
+            return params_str
+        declaration = f"thread {self.map_type(output_type)}& output"
+        if params_str:
+            return f"{params_str}, {declaration}"
+        return declaration
+
     def append_required_global_resource_parameters(self, params_str, func_name):
         resource_params = []
         for (
@@ -5845,10 +6034,17 @@ class MetalCodeGen:
                         f"{indent_str}return {return_wrapper['struct_name']}"
                         f"{{{value}}};\n"
                     )
-                return (
-                    f"{indent_str}return "
-                    f"{self.generate_expression_with_expected(stmt.value, self.current_function_return_type)};\n"
+                value = self.generate_expression_with_expected(
+                    stmt.value, self.current_function_return_type
                 )
+                fallback_return = (
+                    self.generate_metal_vertex_output_position_fallback_return(
+                        value, indent_str
+                    )
+                )
+                if fallback_return is not None:
+                    return fallback_return
+                return f"{indent_str}return " f"{value};\n"
         elif hasattr(stmt, "__class__") and "ExpressionStatementNode" in str(
             type(stmt)
         ):
@@ -8666,6 +8862,9 @@ class MetalCodeGen:
             self.validate_function_image_access_arguments(func_name, expr.args)
             args = self.generate_function_call_arguments(argument_func_name, expr.args)
             if self.function_call_matches_known_signature(func_name, expr.args):
+                args.extend(
+                    self.required_function_stage_output_argument_names(func_name)
+                )
                 args.extend(
                     self.required_function_stage_parameter_argument_names(func_name)
                 )
@@ -13621,6 +13820,59 @@ class MetalCodeGen:
             defaults[member_name] = "position"
         return defaults
 
+    def metal_vertex_output_position_fallback_member_name(self, struct_node):
+        struct_name = getattr(struct_node, "name", None)
+        if struct_name not in self.metal_vertex_entry_output_struct_names:
+            return None
+        if self.metal_vertex_output_has_position_semantic(struct_node):
+            return None
+
+        existing_names = {
+            getattr(member, "name", None)
+            for member in getattr(struct_node, "members", []) or []
+        }
+        return self.unique_metal_generated_name("__crossgl_position", existing_names)
+
+    def metal_vertex_output_has_position_semantic(self, struct_node):
+        default_semantics = self.metal_default_vertex_output_member_semantics(
+            struct_node
+        )
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = self.semantic_from_node(member)
+            if semantic is None:
+                semantic = default_semantics.get(getattr(member, "name", None))
+            if self.canonical_metal_semantic(semantic) == "position":
+                return True
+        return False
+
+    def metal_vertex_output_position_fallback_member_for_type(self, return_type):
+        base_type = (
+            self.type_name_string(return_type).split("<", 1)[0].split("[", 1)[0].strip()
+        )
+        struct_node = self.structs_by_name.get(base_type)
+        if struct_node is None:
+            return None
+        return self.metal_vertex_output_position_fallback_member_name(struct_node)
+
+    def generate_metal_vertex_output_position_fallback_return(
+        self, return_expr, indent_str
+    ):
+        fallback_member = self.metal_vertex_output_position_fallback_member_for_type(
+            self.current_function_return_type
+        )
+        if fallback_member is None:
+            return None
+
+        return_type = self.map_type(self.current_function_return_type)
+        reserved_names = set(self.local_variable_types)
+        result_name = self.unique_metal_generated_name("_crossglReturn", reserved_names)
+        return (
+            f"{indent_str}{return_type} {result_name} = {return_expr};\n"
+            f"{indent_str}{result_name}.{fallback_member} = "
+            "float4(0.0, 0.0, 0.0, 1.0);\n"
+            f"{indent_str}return {result_name};\n"
+        )
+
     def metal_default_fragment_output_member_semantics(self, struct_node):
         defaults = {}
         used_color_indices = set()
@@ -15678,6 +15930,23 @@ class MetalCodeGen:
             functions.extend(getattr(stage, "local_functions", []) or [])
         return functions
 
+    def generate_metal_builtin_limit_fallbacks(self, ast, functions):
+        if not self.functions_use_identifier(functions, "gl_MaxImageUnits"):
+            return ""
+        return (
+            "/* CrossGL fallback: GLSL builtin limit specialization "
+            "gl_MaxImageUnits is not available in Metal; using the OpenGL "
+            "minimum value. */\n"
+            f"{self.metal_unused_declaration_qualifier('constant')} "
+            "int gl_MaxImageUnits = 8;\n"
+        )
+
+    def functions_use_identifier(self, functions, name):
+        return any(
+            self.function_body_uses_identifier(getattr(func, "body", []), name)
+            for func in functions or []
+        )
+
     def collect_function_parameters(self, functions):
         parameters = []
         for func in functions or []:
@@ -15709,6 +15978,40 @@ class MetalCodeGen:
                 getattr(func, "parameters", getattr(func, "params", [])) or []
             )
         return parameter_nodes
+
+    def collect_unused_array_parameter_indices(self, functions):
+        skipped = {}
+        for func in functions or []:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            indices = set()
+            body = getattr(func, "body", [])
+            for index, param in enumerate(
+                getattr(func, "parameters", getattr(func, "params", [])) or []
+            ):
+                param_name = getattr(param, "name", None)
+                if not param_name:
+                    continue
+                raw_type = self.parameter_raw_type(param)
+                if not self.is_array_type_node(raw_type):
+                    continue
+                if self.is_resource_parameter_type(raw_type):
+                    continue
+                if not self.function_body_uses_identifier(body, param_name):
+                    indices.add(index)
+            if indices:
+                skipped[func_name] = indices
+        return skipped
+
+    def skipped_function_parameter_indices(self, func_name):
+        return self.metal_skipped_function_parameter_indices.get(func_name, set())
+
+    def function_body_uses_identifier(self, body, name):
+        for node in self.iter_ast_nodes(body):
+            if getattr(node, "name", None) == name:
+                return True
+        return False
 
     def structured_buffer_parameter_type_map(self, func):
         parameter_types = {}
@@ -16108,6 +16411,89 @@ class MetalCodeGen:
             parameter.name
             for parameter in self.required_function_stage_parameters(func_name)
         ]
+
+    def collect_function_stage_output_dependencies(self, ast, target_stage):
+        direct_dependencies = {}
+        function_calls = {}
+        output_types = {}
+
+        for func in self.all_functions(ast):
+            func_name = getattr(func, "name", None)
+            if func_name:
+                direct_dependencies.setdefault(func_name, None)
+                function_calls.setdefault(
+                    func_name, self.called_user_function_names(func)
+                )
+
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if not stage_matches(target_stage, stage_name):
+                continue
+            entry_point = getattr(stage, "entry_point", None)
+            output_type = getattr(entry_point, "return_type", None)
+            if output_type is None or self.type_name_string(output_type) == "void":
+                continue
+            stage_functions = list(getattr(stage, "local_functions", []) or [])
+            if entry_point is not None:
+                stage_functions.append(entry_point)
+            for func in stage_functions:
+                func_name = getattr(func, "name", None)
+                if not func_name:
+                    continue
+                output_types[func_name] = output_type
+                if self.direct_stage_output_dependency(func):
+                    direct_dependencies[func_name] = output_type
+                function_calls[func_name] = self.called_user_function_names(func)
+
+        dependencies = dict(direct_dependencies)
+        changed = True
+        while changed:
+            changed = False
+            for func_name, calls in function_calls.items():
+                if dependencies.get(func_name) is not None:
+                    continue
+                for called_name in calls:
+                    if dependencies.get(called_name) is not None:
+                        dependencies[func_name] = output_types.get(
+                            func_name
+                        ) or dependencies.get(called_name)
+                        changed = True
+                        break
+
+        return {
+            func_name: output_type
+            for func_name, output_type in dependencies.items()
+            if output_type is not None
+        }
+
+    def direct_stage_output_dependency(self, func):
+        parameter_names = {
+            getattr(param, "name", None)
+            for param in getattr(func, "parameters", getattr(func, "params", [])) or []
+        }
+        if "output" in parameter_names:
+            return False
+        local_names = set(parameter_names)
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if isinstance(node, VariableNode) and getattr(node, "name", None):
+                local_names.add(node.name)
+        if "output" in local_names:
+            return False
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if isinstance(node, MemberAccessNode):
+                if self.expression_name(getattr(node, "object", None)) == "output":
+                    return True
+            if getattr(node, "name", None) == "output":
+                return True
+        return False
+
+    def required_function_stage_output_type(self, func_name):
+        return self.function_stage_output_dependencies.get(func_name)
+
+    def required_function_stage_output_argument_names(self, func_name):
+        if self.required_function_stage_output_type(func_name) is None:
+            return []
+        return ["output"]
 
     def required_function_cbuffers(self, func_name):
         dependencies = self.function_cbuffer_dependencies.get(func_name, set())
@@ -16684,8 +17070,11 @@ class MetalCodeGen:
         parameter_infos = self.function_parameter_infos.get(func_name, [])
         if len(call_args) != len(parameter_infos):
             parameter_infos = []
+        skipped_indices = self.skipped_function_parameter_indices(func_name)
         args = []
         for index, arg in enumerate(call_args):
+            if index in skipped_indices:
+                continue
             param_name, param_type = (
                 parameter_infos[index] if index < len(parameter_infos) else (None, None)
             )

@@ -4,6 +4,7 @@ import subprocess
 
 import pytest
 
+import crosstl
 from crosstl.translator.ast import (
     AttributeNode,
     BinaryOpNode,
@@ -260,6 +261,63 @@ class TestSpirvId:
 
 
 class TestVulkanSPIRVCodeGen:
+    def assert_uint_int_min_literal_lowering(self, spv_code):
+        signed_int_types = set(re.findall(r"(%\d+) = OpTypeInt 32 1\b", spv_code))
+        signed_int_constants = {
+            value
+            for _, type_id, value in re.findall(
+                r"(%\d+) = OpConstant (%\d+) (-?\d+)\b", spv_code
+            )
+            if type_id in signed_int_types
+        }
+
+        assert "2147483648" in {
+            str(value) for value in spirv_uint_constant_values(spv_code).values()
+        }
+        assert "2147483648" not in signed_int_constants
+        assert "OpSNegate" not in spv_code
+        assert "OpISub" in spv_code
+        assert "OpBitcast" in spv_code
+
+    def test_signed_int_min_literal_lowers_through_unsigned_operand(self, tmp_path):
+        source_code = """
+        shader IntMinLiteral {
+            compute {
+                void main() {
+                    int value = -2147483648;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        self.assert_uint_int_min_literal_lowering(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_metal_unary_int_min_literal_translates_to_valid_spirv(self, tmp_path):
+        source_path = tmp_path / "unary.metal"
+        source_path.write_text(
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void unary_min_int() {
+                int value = -2147483648;
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        spv_code = crosstl.translate(
+            str(source_path), backend="vulkan", format_output=False
+        )
+
+        self.assert_uint_int_min_literal_lowering(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_initialization(self):
         gen = VulkanSPIRVCodeGen()
         assert gen.next_id == 1
@@ -16134,6 +16192,59 @@ class TestVulkanSPIRVCodeGen:
         assert "texelFetchOffset" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_unsigned_sampler_texel_fetch_uses_uint_sampled_image_type(self, tmp_path):
+        source_code = """
+        shader Resources {
+            usampler2d srcRGB;
+            uimage2d dstTexture @rgba32ui;
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(0, 0);
+                    uint zero = uint(0);
+                    uvec2 block = texelFetch(srcRGB, pixel, 0).xy;
+                    imageStore(dstTexture, pixel, uvec4(block.xy, zero, zero));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0", spv_code)
+        assert uint_type is not None
+        uvec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(uint_type.group(1))} 2",
+            spv_code,
+        )
+        uvec4_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(uint_type.group(1))} 4",
+            spv_code,
+        )
+        sampled_image = re.search(
+            rf"(%\d+) = OpTypeImage {re.escape(uint_type.group(1))} "
+            r"2D 0 0 0 1 Unknown",
+            spv_code,
+        )
+
+        assert uvec2_type is not None
+        assert uvec4_type is not None
+        assert sampled_image is not None
+        assert "OpTypeSampledImage" in spv_code
+        assert f"OpImageFetch {uvec4_type.group(1)}" in spv_code
+        assert re.search(
+            rf"%\d+ = OpVectorShuffle {re.escape(uvec2_type.group(1))} "
+            r"%\d+ %\d+ 0 1",
+            spv_code,
+        )
+        assert "Unknown type usampler" not in spv_code
+        assert "texelFetch requires a sampled image operand" not in spv_code
+        assert "Could not find member xy" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_sampled_texture_operations_reject_malformed_operands(self, tmp_path):
         source_code = """
         shader Resources {
@@ -22967,6 +23078,46 @@ class TestVulkanSPIRVCodeGen:
         assert e_id
         assert f_id
         assert g_id
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mlx_quantized_bit_packing_literals_use_valid_spirv_types(self, tmp_path):
+        source_code = """
+        shader MLXQuantizedBitPackingLiterals {
+            compute {
+                void main() {
+                    uint packed32 = 4278190080;
+                    uint masked32 = packed32 & 4278190080;
+                    u64 packed40 = 1095216660480;
+                    u64 masked40 = packed40 & 1095216660480;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1\b", spv_code)
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        u64_type = re.search(r"(%\d+) = OpTypeInt 64 0\b", spv_code)
+
+        assert int_type is not None
+        assert uint_type is not None
+        assert u64_type is not None
+        assert "OpCapability Int64" in spv_code
+        assert f"OpConstant {uint_type.group(1)} 4278190080" in spv_code
+        assert f"OpConstant {u64_type.group(1)} 1095216660480" in spv_code
+        assert not re.search(
+            rf"OpConstant {re.escape(int_type.group(1))} "
+            r"(4278190080|1095216660480)\b",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpBitwiseAnd {re.escape(u64_type.group(1))} %\d+ %\d+",
+            spv_code,
+        )
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 

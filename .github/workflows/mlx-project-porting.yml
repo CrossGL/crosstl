@@ -3,12 +3,14 @@ name: MLX Project Porting
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   MLX_COMMIT: "968d264f2903d578e699c4452a4dbf48633921aa"
-  MLX_THREADGROUP_METADATA_ISSUE: "https://github.com/CrossGL/crosstl/issues/850"
-  MLX_RESOURCE_DECL_SCOPE_ISSUE: "https://github.com/CrossGL/crosstl/issues/851"
-  MLX_OPENGL_BINDING_ISSUE: "https://github.com/CrossGL/crosstl/issues/852"
-  MLX_VULKAN_QUANTIZED_LITERAL_ISSUE: "https://github.com/CrossGL/crosstl/issues/854"
-  MLX_VULKAN_SORT_RECURSION_ISSUE: "https://github.com/CrossGL/crosstl/issues/855"
-  MLX_OPENGL_HELPER_DECLARATION_ISSUE: "https://github.com/CrossGL/crosstl/issues/862"
+  MLX_OPENGL_TEMPLATE_TYPES_ISSUE: "https://github.com/CrossGL/crosstl/issues/888"
+  MLX_OPENGL_SIMD_INTRINSICS_ISSUE: "https://github.com/CrossGL/crosstl/issues/889"
+  MLX_DIRECTX_STEEL_TYPE_CRASHES_ISSUE: "https://github.com/CrossGL/crosstl/issues/890"
+  MLX_DIRECTX_BINDINGS_ISSUE: "https://github.com/CrossGL/crosstl/issues/891"
+  MLX_DIRECTX_GROUPSHARED_NAMES_ISSUE: "https://github.com/CrossGL/crosstl/issues/892"
+  MLX_VULKAN_SORT_OVERLOADS_ISSUE: "https://github.com/CrossGL/crosstl/issues/893"
+  PROJECT_RUNTIME_MANIFEST_ISSUE: "https://github.com/CrossGL/crosstl/issues/894"
+  PROJECT_RUNTIME_VERIFICATION_ISSUE: "https://github.com/CrossGL/crosstl/issues/895"
 
 on:
   push:

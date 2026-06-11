@@ -25,6 +25,7 @@ from crosstl.project import (
     build_runtime_loader_manifest,
     build_runtime_package,
     inspect_project_report,
+    inspect_runtime_host_integration_handoff,
     inspect_runtime_host_loader_scaffolds,
     inspect_runtime_package,
     load_project_config,
@@ -168,6 +169,22 @@ SIMPLE_CROSSL = textwrap.dedent("""
     }
     """).strip()
 
+GLSL_FRAGMENT_INVOCATION_DENSITY_SOURCE = textwrap.dedent("""
+    #version 450 core
+    #extension GL_EXT_fragment_invocation_density : require
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        float invocationArea = float(
+            gl_FragSizeEXT.x * gl_FragSizeEXT.y
+        );
+        float h = (
+            clamp(1.0 - 1.0 / invocationArea, 0.0, 1.0)
+        ) / 1.35;
+        fragColor = vec4(h);
+    }
+    """).strip()
+
 
 class ProjectPathLike:
     def __init__(self, path):
@@ -197,6 +214,7 @@ def test_project_package_exposes_public_api_surface():
         "build_runtime_host_integration_handoff",
         "build_runtime_loader_manifest",
         "build_runtime_package",
+        "inspect_runtime_host_integration_handoff",
         "inspect_runtime_host_loader_scaffolds",
         "inspect_runtime_package",
         "inspect_project_report",
@@ -4525,6 +4543,82 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
     assert_spirv_asm_validates_if_available(vulkan, tmp_path)
 
 
+def test_translate_project_glsl_usampler_texel_fetch_lowers_to_uint_spirv(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "alpha_stitch.glsl").write_text(
+        textwrap.dedent("""
+            #version 450
+            layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+            layout(binding = 0) uniform usampler2D srcRGB;
+            layout(binding = 1) uniform usampler2D srcAlpha;
+            layout(binding = 2, rgba32ui) uniform restrict writeonly uimage2D dstTexture;
+
+            void main() {
+                uvec2 rgbBlock = texelFetch(
+                    srcRGB,
+                    ivec2(gl_GlobalInvocationID.xy),
+                    0
+                ).xy;
+                uvec2 alphaBlock = texelFetch(
+                    srcAlpha,
+                    ivec2(gl_GlobalInvocationID.xy),
+                    0
+                ).xy;
+                imageStore(
+                    dstTexture,
+                    ivec2(gl_GlobalInvocationID.xy),
+                    uvec4(rgbBlock.xy, alphaBlock.xy)
+                );
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("vulkan", "translated")}
+
+    vulkan = (repo / "out" / "vulkan" / "alpha_stitch.spvasm").read_text(
+        encoding="utf-8"
+    )
+    uint_type = re.search(r"(%\d+) = OpTypeInt 32 0", vulkan)
+    assert uint_type is not None
+    sampled_image = re.search(
+        rf"(%\d+) = OpTypeImage {re.escape(uint_type.group(1))} " r"2D 0 0 0 1 Unknown",
+        vulkan,
+    )
+    uvec4_type = re.search(
+        rf"(%\d+) = OpTypeVector {re.escape(uint_type.group(1))} 4",
+        vulkan,
+    )
+    assert sampled_image is not None
+    assert uvec4_type is not None
+    assert "OpTypeSampledImage" in vulkan
+    assert vulkan.count("OpImageFetch") == 2
+    assert vulkan.count(f"OpImageFetch {uvec4_type.group(1)}") == 2
+    assert re.search(r'OpName %\d+ "srcRGB"', vulkan)
+    assert re.search(r'OpName %\d+ "srcAlpha"', vulkan)
+    assert "DescriptorSet 0" in vulkan
+    for binding in ("Binding 0", "Binding 1", "Binding 2"):
+        assert binding in vulkan
+    assert "Unknown type usampler2D" not in vulkan
+    assert "texelFetch requires a sampled image operand" not in vulkan
+    assert "Could not find member xy" not in vulkan
+    assert "WARNING" not in vulkan
+    assert_spirv_asm_validates_if_available(vulkan, tmp_path)
+
+
 def test_translate_project_preserves_anonymous_glsl_ssbo_shape_for_targets(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
@@ -6583,6 +6677,57 @@ def test_translate_project_named_variants_apply_native_metal_preprocessor(
     assert "#include" not in release_output
     assert "#if" not in debug_output
     assert "#if" not in release_output
+
+
+def test_translate_project_materializes_mlx_metal_instantiate_kernel_entries(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "arange.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_arange(name, itype, offset) \\
+                instantiate_kernel("arange" #name, arange, itype, offset)
+
+            template <typename T, int Offset>
+            [[kernel]] void arange(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                out[gid] = T(gid + Offset);
+            }
+
+            instantiate_arange(float32, float, 7)
+            instantiate_arange(float16, half, 3)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["cgl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    output = (repo / "translated" / "cgl" / "shaders" / "arange.cgl").read_text(
+        encoding="utf-8"
+    )
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert "void arangefloat32(" in output
+    assert "buffer_store(out_, gid, float(gid + 7));" in output
+    assert "void arangefloat16(" in output
+    assert "buffer_store(out_, gid, float16(gid + 3));" in output
+    assert "void arange(" not in output
 
 
 def test_translate_project_named_variants_apply_native_slang_preprocessor(
@@ -19862,6 +20007,62 @@ def test_translate_project_records_structured_diagnostics_for_failures(tmp_path)
     assert payload["migration"]["actions"][0]["targets"] == ["opengl"]
 
 
+def test_translate_project_reports_glsl_fragment_invocation_density_as_unsupported(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "CubeFDM_fs.glsl").write_text(
+        GLSL_FRAGMENT_INVOCATION_DENSITY_SOURCE, encoding="utf-8"
+    )
+
+    report = translate_project(
+        repo,
+        targets=["metal", "directx", "vulkan"],
+        output_dir="out",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["artifactCount"] == 3
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 3
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.unsupported-feature": 3
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "glsl.builtin.gl_FragSizeEXT": 3,
+        "glsl.extension.GL_EXT_fragment_invocation_density": 3,
+    }
+    assert payload["summary"]["diagnosticsByTarget"] == {
+        "directx": 1,
+        "metal": 1,
+        "vulkan": 1,
+    }
+
+    diagnostics = payload["diagnostics"]
+    assert {diagnostic["code"] for diagnostic in diagnostics} == {
+        "project.translate.unsupported-feature"
+    }
+    for diagnostic in diagnostics:
+        assert diagnostic["sourceBackend"] == "opengl"
+        assert diagnostic["location"]["file"] == "CubeFDM_fs.glsl"
+        assert "GL_EXT_fragment_invocation_density" in diagnostic["message"]
+        assert "gl_FragSizeEXT" in diagnostic["message"]
+        assert diagnostic["missingCapabilities"] == [
+            "glsl.extension.GL_EXT_fragment_invocation_density",
+            "glsl.builtin.gl_FragSizeEXT",
+        ]
+
+    for artifact in payload["artifacts"]:
+        assert artifact["status"] == "failed"
+        assert artifact["sourceBackend"] == "opengl"
+        assert "GL_EXT_fragment_invocation_density" in artifact["error"]
+        assert "gl_FragSizeEXT" in artifact["error"]
+        assert "generatedHash" not in artifact
+        assert "generatedSizeBytes" not in artifact
+        assert not (repo / artifact["path"]).exists()
+
+
 def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -19935,7 +20136,7 @@ def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
     assert "return (floatBitsToUint(value) >> 16u);" in generated
     assert "float unpack_bfloat16(uint bits)" in generated
     assert "return uintBitsToFloat((bits << 16u));" in generated
-    assert "struct os_log {\n    int _crosstl_empty;\n};" in generated
+    assert "struct os_log {\n    int _crossgl_empty;\n};" in generated
     assert "struct Limits {" not in generated
     assert "U max;" not in generated
     assert "T ceildiv" not in generated
@@ -19945,6 +20146,98 @@ def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
     assert "bfloat16_t" not in generated
     assert "asuint(" not in generated
     assert "as_type<" not in generated
+
+
+def test_translate_project_reports_mlx_sort_vulkan_storage_buffer_recursion(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "sort_reduced.cgl").write_text(
+        textwrap.dedent("""
+            shader ReducedSortRecursion {
+                compute {
+                    @ stage_entry
+                    void block_sort(
+                        StructuredBuffer<int> inp @buffer(0),
+                        RWStructuredBuffer<int> out_ @buffer(1),
+                        uvec3 tid @gl_WorkGroupID
+                    ) {
+                        block_sort(inp, out_, tid, tid);
+                    }
+                }
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["vulkan"], output_dir="out").to_json()
+
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.unsupported-feature": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "spirv.storage_buffer_function_overload": 1
+    }
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "vulkan"
+    assert artifact["source"] == "sort_reduced.cgl"
+    assert "storage-buffer function inlining" in artifact["error"]
+    assert (
+        "overloaded storage-buffer helper calls are not supported" in artifact["error"]
+    )
+    assert "maximum recursion depth exceeded" not in artifact["error"]
+    assert "generatedHash" not in artifact
+    assert not (repo / artifact["path"]).exists()
+
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.unsupported-feature"
+    assert diagnostic["target"] == "vulkan"
+    assert diagnostic["location"]["file"] == "sort_reduced.cgl"
+    assert diagnostic["missingCapabilities"] == [
+        "spirv.storage_buffer_function_overload"
+    ]
+    assert "maximum recursion depth exceeded" not in diagnostic["message"]
+
+
+def test_translate_project_drops_mlx_metal_system_includes_for_opengl(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "arange.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_math>
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void arange(
+                device float* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                out[gid] = float(gid);
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"]["error"] == 0
+
+    artifact = payload["artifacts"][0]
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert artifact["status"] == "translated"
+    assert "#version 450 core" in generated
+    assert "#include <metal_math>" not in generated
+    assert "#include <metal_stdlib>" not in generated
+    assert "#include" not in generated
 
 
 def test_project_cli_translate_project_writes_report(tmp_path):
@@ -25816,6 +26109,273 @@ def test_project_cli_host_integration_handoff_json_writes_output(tmp_path):
     assert payload["kind"] == project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_KIND
     assert payload["summary"]["generatedFileCount"] == 3
     assert (handoff_dir / "HOST_INTEGRATION.md").is_file()
+
+
+def _build_runtime_host_integration_handoff_fixture(tmp_path, targets=("cgl",)):
+    repo, plan_path, _ = _write_host_loader_consumption_plan_fixture(
+        tmp_path, targets=targets
+    )
+    handoff_dir = repo / "host-integration"
+    handoff_payload = build_runtime_host_integration_handoff(plan_path, handoff_dir)
+    return repo, handoff_dir, handoff_payload
+
+
+def test_inspect_runtime_host_integration_handoff_reports_ready_bundle(tmp_path):
+    _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+
+    payload = inspect_runtime_host_integration_handoff(
+        handoff_dir / "host-integration.json"
+    )
+
+    assert set(payload) == (
+        project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_FIELDS
+    )
+    assert (
+        payload["kind"]
+        == project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_KIND
+    )
+    assert payload["success"] is True
+    assert payload["status"] == "ready"
+    assert (
+        payload["scope"]
+        == project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_SCOPE
+    )
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_NON_GOALS
+    )
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "readyTargetCount": 1,
+        "blockedTargetCount": 0,
+        "failedTargetCount": 0,
+        "generatedFileCount": 3,
+        "verifiedGeneratedFileCount": 3,
+        "failedGeneratedFileCount": 0,
+        "loaderUnitCount": 1,
+        "actionCount": 6,
+        "requiredToolCount": 0,
+        "hostResponsibilityCount": 2,
+    }
+    assert set(payload["targets"][0]) == (
+        project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_TARGET_FIELDS
+    )
+    assert payload["targets"][0]["target"] == "cgl"
+    assert payload["targets"][0]["status"] == "ready"
+    assert payload["targets"][0]["fileStatus"] == "ready"
+    assert payload["targets"][0]["targetKind"] == (
+        "crosstl-runtime-host-integration-target"
+    )
+    assert payload["targets"][0]["targetStatus"] == "ready"
+    assert payload["targets"][0]["loaderUnitCount"] == 1
+    assert payload["targets"][0]["actionCount"] == 6
+    for generated_file in payload["generatedFiles"]:
+        assert set(generated_file) == (
+            project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_GENERATED_FILE_FIELDS
+        )
+        assert generated_file["status"] == "ready"
+        assert generated_file["diagnostics"] == []
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+
+
+def test_inspect_runtime_host_integration_handoff_detects_missing_target_file(
+    tmp_path,
+):
+    _, handoff_dir, handoff_payload = _build_runtime_host_integration_handoff_fixture(
+        tmp_path
+    )
+    target_path = handoff_dir / handoff_payload["targets"][0]["handoffFile"]
+    target_path.unlink()
+
+    payload = inspect_runtime_host_integration_handoff(
+        handoff_dir / "host-integration.json"
+    )
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["summary"]["failedTargetCount"] == 1
+    assert payload["summary"]["failedGeneratedFileCount"] == 1
+    assert payload["targets"][0]["status"] == "failed"
+    assert payload["targets"][0]["fileStatus"] == "failed"
+    assert (
+        "project.runtime-host-integration-handoff-inspection.target-missing"
+        in payload["targets"][0]["diagnostics"]
+    )
+    assert (
+        "project.runtime-host-integration-handoff-inspection.generated-file-missing"
+        in payload["generatedFiles"][2]["diagnostics"]
+    )
+
+
+def test_inspect_runtime_host_integration_handoff_rejects_unsafe_generated_path(
+    tmp_path,
+):
+    _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+    manifest_path = handoff_dir / "host-integration.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["generatedFiles"][0]["path"] = "../HOST_INTEGRATION.md"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    payload = inspect_runtime_host_integration_handoff(manifest_path)
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["summary"]["failedGeneratedFileCount"] == 1
+    assert payload["generatedFiles"][0]["status"] == "failed"
+    assert (
+        "project.runtime-host-integration-handoff-inspection."
+        "generated-file-path-outside-root"
+    ) in payload["generatedFiles"][0]["diagnostics"]
+
+
+def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch(
+    tmp_path,
+):
+    _, handoff_dir, handoff_payload = _build_runtime_host_integration_handoff_fixture(
+        tmp_path
+    )
+    target_path = handoff_dir / handoff_payload["targets"][0]["handoffFile"]
+    target_payload = json.loads(target_path.read_text(encoding="utf-8"))
+    target_payload["actions"].append(
+        {
+            "kind": "manual-runtime-integration",
+            "severity": "note",
+            "message": "Injected mismatch for inspection coverage.",
+        }
+    )
+    target_path.write_text(json.dumps(target_payload), encoding="utf-8")
+
+    payload = inspect_runtime_host_integration_handoff(
+        handoff_dir / "host-integration.json"
+    )
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["summary"]["failedTargetCount"] == 1
+    assert payload["targets"][0]["status"] == "failed"
+    assert payload["targets"][0]["fileStatus"] == "failed"
+    assert payload["targets"][0]["actionCount"] == 7
+    assert (
+        "project.runtime-host-integration-handoff-inspection."
+        "target-action-count-mismatch"
+    ) in payload["targets"][0]["diagnostics"]
+
+
+def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle(tmp_path):
+    _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
+        tmp_path, targets=("vulkan",)
+    )
+
+    payload = inspect_runtime_host_integration_handoff(
+        handoff_dir / "host-integration.json"
+    )
+
+    assert payload["success"] is True
+    assert payload["status"] == "blocked"
+    assert payload["summary"]["targetCount"] == 1
+    assert payload["summary"]["readyTargetCount"] == 0
+    assert payload["summary"]["blockedTargetCount"] == 1
+    assert payload["summary"]["failedTargetCount"] == 0
+    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["status"] == "blocked"
+    assert payload["targets"][0]["targetStatus"] == "blocked"
+    assert payload["targets"][0]["loaderUnitCount"] == 1
+    assert payload["targets"][0]["actionCount"] == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+
+
+def test_inspect_runtime_host_integration_handoff_rejects_wrong_manifest_kind(
+    tmp_path,
+):
+    manifest_path = tmp_path / "host-integration.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-runtime-host-loader-consumption-plan",
+                "success": True,
+                "targets": [],
+                "generatedFiles": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = inspect_runtime_host_integration_handoff(manifest_path)
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["summary"]["targetCount"] == 0
+    assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == (
+        "project.runtime-host-integration-handoff-inspection.manifest-kind-invalid"
+    )
+
+
+def test_project_cli_inspect_host_integration_handoff_text_outputs_readiness(
+    tmp_path,
+):
+    _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+    manifest_path = handoff_dir / "host-integration.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-host-integration-handoff",
+            str(manifest_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert (
+        f"Runtime host integration handoff inspection: {manifest_path}" in result.stdout
+    )
+    assert "Status: ready" in result.stdout
+    assert (
+        "Inspection scope: host-integration-handoff-readiness-inspection"
+        in result.stdout
+    )
+    assert "Summary: 1 targets, 1 ready, 0 blocked, 0 failed" in result.stdout
+    assert "Generated file checks:" in result.stdout
+    assert "Runtime host integration handoff targets:" in result.stdout
+
+
+def test_project_cli_inspect_host_integration_handoff_json_writes_output(tmp_path):
+    repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+    output_path = repo / "host-integration-handoff-inspection.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-host-integration-handoff",
+            str(handoff_dir / "host-integration.json"),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert (
+        payload["kind"]
+        == project_pipeline.RUNTIME_HOST_INTEGRATION_HANDOFF_INSPECTION_KIND
+    )
+    assert payload["summary"]["readyTargetCount"] == 1
+    assert payload["generatedFiles"][0]["status"] == "ready"
 
 
 def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp_path):

@@ -1160,7 +1160,7 @@ class MetalToCrossGLConverter:
                                 )
                         struct_alignas = " ".join(parts) + " "
                     code += (
-                        f"    {self.generic_struct_prefix(struct_node)}"
+                        f"    {self.format_generic_prefix(struct_node)}"
                         f"{struct_alignas}struct "
                         f"{self.map_struct_name(struct_node.name)} {{\n"
                     )
@@ -1312,23 +1312,28 @@ class MetalToCrossGLConverter:
             mapped_names[raw_name] = candidate
         return mapped_names
 
+    def format_generic_prefix(self, node):
+        template_parameters = getattr(node, "template_parameters", []) or []
+        if template_parameters:
+            generics = [
+                self.sanitize_identifier(name)
+                for kind, name in template_parameters
+                if str(kind).startswith(("typename", "class")) and name
+            ]
+        else:
+            generics = [
+                self.sanitize_identifier(name)
+                for name in getattr(node, "generics", []) or []
+                if name
+            ]
+        if not generics:
+            return ""
+        return f"generic<{', '.join(generics)}> "
+
     def map_struct_name(self, name):
         if not name:
             return name
         return self.struct_name_map.get(name, self.sanitize_identifier(name))
-
-    def type_template_parameters(self, node):
-        parameters = []
-        for kind, name in getattr(node, "template_parameters", []) or []:
-            if str(kind).startswith(("typename", "class")) and name:
-                parameters.append(self.sanitize_identifier(name))
-        return parameters
-
-    def generic_struct_prefix(self, node):
-        parameters = self.type_template_parameters(node)
-        if not parameters:
-            return ""
-        return f"generic<{', '.join(parameters)}> "
 
     def iter_ast_children(self, node):
         if node is None or isinstance(node, (str, int, float, bool)):

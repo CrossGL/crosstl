@@ -1133,6 +1133,50 @@ def test_codegen_mul_intrinsic_imports_to_multiply_expression():
     parse_crossgl(crossgl)
 
 
+def test_codegen_hlsl_program_scope_constants_lower_to_metal_cbuffer():
+    # Reduced from MonoGame SpriteEffect.fx constants included through Macros.fxh.
+    crossgl = generate_crossgl("""
+        #define BEGIN_CONSTANTS
+        #define MATRIX_CONSTANTS float4x4 MatrixTransform;
+        #define END_CONSTANTS
+        BEGIN_CONSTANTS
+        MATRIX_CONSTANTS
+        END_CONSTANTS
+
+        struct VSInput {
+            float4 Position : POSITION0;
+            float4 Color : COLOR0;
+            float2 TextureCoordinate : TEXCOORD0;
+        };
+
+        struct VSOutput {
+            float4 Position : SV_Position;
+            float4 Color : COLOR0;
+            float2 TextureCoordinate : TEXCOORD0;
+        };
+
+        VSOutput VSMain(VSInput input) {
+            VSOutput output;
+            output.Position = mul(input.Position, MatrixTransform);
+            output.Color = input.Color;
+            output.TextureCoordinate = input.TextureCoordinate;
+            return output;
+        }
+    """)
+
+    assert "@ hlsl_program_constant" in crossgl
+    assert "mat4 MatrixTransform;" in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "unsupported Metal program-scope global initializer" not in metal
+    assert "constant float4x4 MatrixTransform" not in metal
+    assert "struct HlslProgramConstants" in metal
+    assert "float4x4 MatrixTransform;" in metal
+    assert "constant HlslProgramConstants& hlslProgramConstants [[buffer(0)]]" in metal
+    assert "input.Position * hlslProgramConstants.MatrixTransform" in metal
+
+
 def test_codegen_mad_intrinsic_from_microsoft_docs_imports_to_arithmetic_expression():
     # Source: Microsoft Learn HLSL mad intrinsic docs.
     # URL: https://learn.microsoft.com/windows/win32/direct3dhlsl/mad

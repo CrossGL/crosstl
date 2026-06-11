@@ -1840,6 +1840,56 @@ def test_codegen_device_buffer_parameters_use_structured_buffer_contract():
     assert "data[tid.x] = value * 2.0;" in metal
 
 
+def test_codegen_mlx_multi_entry_opengl_resource_bindings_do_not_overlap():
+    # Reduced from MLX-generated multi-entry Metal kernels where unrelated entry
+    # parameters reuse names and Metal buffer indices across kernels.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void scaled_dot_product_attention(
+        device float* out_ [[buffer(1)]],
+        constant uint* bmask [[buffer(11)]],
+        constant int* x_shape [[buffer(8)]],
+        uint tid [[thread_position_in_grid]]) {
+        out_[tid] = float(bmask[0] + uint(x_shape[0]));
+    }
+
+    kernel void quantized(
+        device float* out_ [[buffer(2)]],
+        constant uint* bmask [[buffer(13)]],
+        constant float* input [[buffer(0)]],
+        constant float* raders_b_q [[buffer(4)]],
+        constant int* x_shape [[buffer(9)]],
+        uint tid [[thread_position_in_grid]]) {
+        out_[tid] = input[tid] + float(bmask[0]) + raders_b_q[0] + float(x_shape[0]);
+    }
+
+    kernel void fence(
+        device float* timestamp [[buffer(0)]],
+        constant float* w_q [[buffer(4)]],
+        uint tid [[thread_position_in_grid]]) {
+        timestamp[tid] = w_q[0];
+    }
+    """
+    crossgl = convert(code)
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    buffer_bindings = [
+        int(binding)
+        for binding in re.findall(r"layout\(std430, binding = (\d+)\)", glsl)
+    ]
+    assert len(buffer_bindings) == len(set(buffer_bindings))
+    assert {0, 1, 2, 4, 8, 9, 11, 13}.issubset(buffer_bindings)
+
+    assert "layout(std430, binding = 3) buffer timestampBuffer" in glsl
+    assert "layout(std430, binding = 5) readonly buffer w_qBuffer" in glsl
+    assert "scaled_dot_product_attention_bmask[0]" not in glsl
+    assert "quantized_bmask[0]" in glsl
+    assert "quantized_out[tid]" in glsl
+    assert "quantized_x_shape[0]" in glsl
+
+
 def test_codegen_pointer_return_buffer_selector_reparses_from_compiler_fixture():
     # Reduced from local CrossGL-Compiler build artifact:
     # build/test-metal-storage-buffer-nonuniform-descriptor-array.cglb/backend/metal/

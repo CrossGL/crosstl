@@ -4,40 +4,52 @@
   "commit": "968d264f2903d578e699c4452a4dbf48633921aa",
   "tracked_issues": [
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/850",
-      "scope": "directx-opengl-threadgroup-metadata",
+      "issue": "https://github.com/CrossGL/crosstl/issues/888",
+      "scope": "opengl-template-element-types",
       "status": "open",
-      "summary": "Lower MLX Metal max_total_threads_per_threadgroup metadata for DirectX and OpenGL compute output."
+      "summary": "Specialize template element types in generated OpenGL project artifacts."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/851",
-      "scope": "directx-opengl-resource-declaration-scope",
+      "issue": "https://github.com/CrossGL/crosstl/issues/889",
+      "scope": "opengl-metal-simd-intrinsics",
       "status": "open",
-      "summary": "Scope MLX resource declarations per generated DirectX and OpenGL entry point."
+      "summary": "Lower Metal SIMD-group helper intrinsics for OpenGL validation."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/852",
-      "scope": "opengl-resource-bindings",
+      "issue": "https://github.com/CrossGL/crosstl/issues/890",
+      "scope": "directx-steel-type-crashes",
       "status": "open",
-      "summary": "Disambiguate OpenGL resource bindings for multi-entry MLX kernels."
+      "summary": "Replace DirectX NoneType crashes with translation or structured diagnostics."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/854",
-      "scope": "vulkan-quantized-literals",
+      "issue": "https://github.com/CrossGL/crosstl/issues/891",
+      "scope": "directx-project-bindings",
       "status": "open",
-      "summary": "Emit valid SPIR-V literals for MLX quantized bit-packing constants."
+      "summary": "Allocate non-overlapping DirectX bindings for project-scale parameter blocks."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/855",
-      "scope": "vulkan-sort-recursion",
+      "issue": "https://github.com/CrossGL/crosstl/issues/892",
+      "scope": "directx-groupshared-names",
       "status": "open",
-      "summary": "Avoid recursion overflow translating MLX sort.metal to Vulkan."
+      "summary": "Disambiguate promoted DirectX groupshared names for project kernels."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/862",
-      "scope": "opengl-helper-declarations",
+      "issue": "https://github.com/CrossGL/crosstl/issues/893",
+      "scope": "vulkan-storage-buffer-overloads",
       "status": "open",
-      "summary": "Emit GLSL-valid MLX helper declarations for OpenGL validation."
+      "summary": "Resolve overloaded storage-buffer helper calls for Vulkan project translation."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/894",
+      "scope": "runtime-integration-manifest",
+      "status": "open",
+      "summary": "Define backend-agnostic runtime integration manifest for project translations."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/895",
+      "scope": "runtime-verification-harness",
+      "status": "open",
+      "summary": "Add cross-backend runtime verification harness for project translations."
     }
   ]
 }

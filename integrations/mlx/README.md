@@ -57,19 +57,26 @@ The harness writes reports, generated artifacts, and command logs under
 
 ## Current Translator Gaps
 
-- CrossGL/crosstl#850: lower MLX Metal `max_total_threads_per_threadgroup`
-  metadata for DirectX and OpenGL compute output.
-- CrossGL/crosstl#851: scope MLX resource declarations per generated DirectX
-  and OpenGL entry point.
-- CrossGL/crosstl#852: disambiguate OpenGL resource bindings for multi-entry
-  MLX kernels.
-- CrossGL/crosstl#854: emit valid SPIR-V literals for MLX quantized
-  bit-packing constants.
-- CrossGL/crosstl#855: avoid recursion overflow translating MLX `sort.metal`
-  to Vulkan.
-- CrossGL/crosstl#862: emit GLSL-valid MLX helper declarations for OpenGL
+- CrossGL/crosstl#888: specialize template element types in generated OpenGL
+  project artifacts.
+- CrossGL/crosstl#889: lower Metal SIMD-group helper intrinsics for OpenGL
   validation.
+- CrossGL/crosstl#890: replace DirectX `NoneType` crashes in MLX Steel kernels
+  with translation or structured diagnostics.
+- CrossGL/crosstl#891: allocate non-overlapping DirectX bindings for
+  project-scale parameter blocks.
+- CrossGL/crosstl#892: disambiguate promoted DirectX `groupshared` names for
+  project kernels.
+- CrossGL/crosstl#893: resolve overloaded storage-buffer helper calls for
+  Vulkan project translation.
 
 These gaps are translator work. Host runtime integration gaps should be handled
 in MLX-specific integration code or downstream runtime adapters, not hidden as
 shader translation successes.
+
+## Runtime Integration Gaps
+
+- CrossGL/crosstl#894: define a backend-agnostic runtime integration manifest
+  for project translations.
+- CrossGL/crosstl#895: add a cross-backend runtime verification harness for
+  project translations, with MLX as the first substantial corpus.

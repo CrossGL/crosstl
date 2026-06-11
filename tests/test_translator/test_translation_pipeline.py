@@ -92,6 +92,23 @@ NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS = {
     ),
 }
 
+GLSL_FRAGMENT_INVOCATION_DENSITY_SOURCE = """
+#version 450 core
+#extension GL_EXT_fragment_invocation_density : require
+layout(location = 0) out vec4 fragColor;
+
+void main() {
+    float h = (
+        clamp(
+            1.0 - 1.0 / float(gl_FragSizeEXT.x * gl_FragSizeEXT.y),
+            0.0,
+            1.0
+        )
+    ) / 1.35;
+    fragColor = vec4(h);
+}
+"""
+
 
 def _write_source(tmp_path, filename, source):
     path = tmp_path / filename
@@ -502,6 +519,84 @@ def test_metal_scalar_dispatch_id_promotes_to_directx_uint3(tmp_path):
     assert "uint index : SV_DispatchThreadID" not in generated
 
 
+def test_metal_multi_entry_resource_names_are_scoped_for_directx(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "mlx-multi-entry-resource-scope.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        kernel void read_kernel(
+            device const float* C [[buffer(0)]],
+            device const float* inp [[buffer(1)]],
+            uint index [[thread_position_in_grid]]) {
+            float v = C[index] + inp[index];
+        }
+
+        kernel void write_kernel(
+            device uint* C [[buffer(2)]],
+            device uint* inp [[buffer(3)]],
+            uint index [[thread_position_in_grid]]) {
+            C[index] = inp[index];
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="directx", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "StructuredBuffer<float> C" in generated
+    assert "StructuredBuffer<float> inp" in generated
+    assert "RWStructuredBuffer<uint> write_kernel_C" in generated
+    assert "RWStructuredBuffer<uint> write_kernel_inp" in generated
+    assert "float v = (C.Load(index) + inp.Load(index));" in generated
+    assert "write_kernel_C.Store(index, write_kernel_inp.Load(index));" in generated
+    assert "RWStructuredBuffer<uint> C" not in generated
+    assert "Conflicting DirectX resource declaration" not in generated
+
+
+def test_metal_multi_entry_resource_names_are_scoped_for_opengl(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "mlx-multi-entry-resource-scope.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        kernel void read_kernel(
+            device const float* C [[buffer(0)]],
+            device const float* inp [[buffer(1)]],
+            uint index [[thread_position_in_grid]]) {
+            float v = C[index] + inp[index];
+        }
+
+        kernel void write_kernel(
+            device uint* C [[buffer(2)]],
+            device uint* inp [[buffer(3)]],
+            uint index [[thread_position_in_grid]]) {
+            C[index] = inp[index];
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="opengl", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "readonly buffer CBuffer { float C[]; };" in generated
+    assert "readonly buffer inpBuffer { float inp[]; };" in generated
+    assert "buffer write_kernel_CBuffer { uint write_kernel_C[]; };" in generated
+    assert "buffer write_kernel_inpBuffer { uint write_kernel_inp[]; };" in generated
+    assert "float v = (C[index] + inp[index]);" in generated
+    assert "write_kernel_C[index] = write_kernel_inp[index];" in generated
+    assert "buffer CBuffer { uint C[]; };" not in generated
+    assert "Conflicting OpenGL resource declaration" not in generated
+
+
 def test_slang_non_main_compute_entry_lowers_dispatch_id_to_opengl(tmp_path):
     source_path = _write_source(
         tmp_path,
@@ -835,6 +930,48 @@ def test_hlsl_compute_scalar_splat_swizzle_lowers_for_vulkan_and_metal(tmp_path)
     assert "unsupported Metal program-scope groupshared store" in metal
 
 
+def test_hlsl_legacy_sampler_register_lowers_to_opengl_binding(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "sprite.fx",
+        """
+        sampler2D Texture : register(s0);
+
+        float4 main(float2 uv : TEXCOORD0) : SV_Target
+        {
+            return tex2D(Texture, uv);
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="opengl", format_output=False
+    )
+
+    assert "layout(binding = 0) uniform sampler2D Texture;" in generated
+    assert "fragColor = texture(Texture, uv);" in generated
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "vulkan"])
+def test_glsl_fragment_invocation_density_rejects_unsupported_targets_before_output(
+    tmp_path, target
+):
+    source_path = _write_source(
+        tmp_path, "CubeFDM_fs.glsl", GLSL_FRAGMENT_INVOCATION_DENSITY_SOURCE
+    )
+    output_path = tmp_path / f"CubeFDM_fs.{target}.out"
+
+    with pytest.raises(ValueError, match="GL_EXT_fragment_invocation_density"):
+        crosstl.translate(
+            str(source_path),
+            backend=target,
+            save_shader=str(output_path),
+            format_output=False,
+        )
+
+    assert not output_path.exists()
+
+
 def test_metal_max_total_threads_metadata_translates_to_vulkan(tmp_path):
     source_path = _write_source(
         tmp_path,
@@ -860,6 +997,33 @@ def test_metal_max_total_threads_metadata_translates_to_vulkan(tmp_path):
     assert "OpEntryPoint GLCompute" in generated
     assert '"pinned_kernel"' in generated
     assert "return semantic" not in generated
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_metal_max_total_threads_metadata_is_not_return_semantic_for_void_compute(
+    tmp_path, target
+):
+    source_path = _write_source(
+        tmp_path,
+        "mlx-void-compute-max-total-threads.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        [[max_total_threads_per_threadgroup(1024)]]
+        kernel void pinned_kernel(
+            device float* out [[buffer(0)]],
+            uint index [[thread_position_in_grid]]) {
+            out[index] = 1.0;
+        }
+        """,
+    )
+
+    generated = crosstl.translate(str(source_path), backend=target, format_output=False)
+
+    _assert_generated_output_is_usable(generated)
+    assert "return semantic" not in generated
+    assert "max_total_threads_per_threadgroup" not in generated
 
 
 def test_hlsl_hello_const_buffers_vertex_semantics_lower_to_metal_attributes(
@@ -1006,6 +1170,32 @@ def test_hlsl_struct_inout_pixel_entry_generates_valid_glsl_and_metal(tmp_path):
 
     _compile_glslang_if_available(opengl, "fragment")
     _compile_metal_if_available(metal)
+
+
+def test_glsl_es_legacy_fragcolor_lowers_to_non_reserved_opengl_output(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "Cube_cube.frag",
+        """
+        precision lowp float;
+        varying vec3 vv3colour;
+        void main() { gl_FragColor = vec4(vv3colour, 1.0); }
+        """,
+    )
+
+    opengl = crosstl.translate(
+        str(source_path),
+        backend="opengl",
+        source_backend="opengl",
+        format_output=False,
+    )
+
+    assert "layout(location = 0) out vec4 fragColor;" in opengl
+    assert "fragColor = vec4(vv3colour, 1.0);" in opengl
+    assert "vec4 gl_FragColor;" not in opengl
+    assert "gl_FragColor" not in opengl
+
+    _compile_glslang_if_available(opengl, "fragment")
 
 
 @pytest.mark.parametrize("source_name", sorted(NATIVE_SOURCE_SNIPPETS))
