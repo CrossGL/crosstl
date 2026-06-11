@@ -49,7 +49,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `directx-shader-compiler-neg1` | `microsoft/DirectXShaderCompiler` at `d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652` | University of Illinois/NCSA | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream negated swizzle pixel shader unchanged. |
 | `directx-sdk-samples-tutorial02` | `walbourn/directx-sdk-samples-reworked` at `1ad8f0f6a3e4d9be7e54ca52640ac12b6565ab0c` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Direct3D 11 Tutorial02 effect include unchanged. |
 | `diligent-samples-tutorial02-cube` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Tutorial02 cube vertex and pixel shader pair with repository whitespace normalization. |
-| `diligent-samples-vrs-cube` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream VRS cube vertex and fragment-density shader pair unchanged. Metal and DirectX fragment-density lowering is tracked in issue #1208. |
+| `diligent-samples-vrs-cube` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream VRS cube vertex and fragment-density shader pair unchanged. Metal has no fragment-size input equivalent; DirectX demo validation is tracked in issue #1235. |
 | `glslang-push-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream push-constant vertex shader unchanged. |
 | `glslang-spec-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream specialization-constant vertex shader unchanged. Source-target output records fallback literals where native specialization IDs cannot be preserved. |
 | `godot-betsy-alpha-stitch` | `godotengine/godot` at `3df26a02c446710c979daa541b74f87edeca81b0` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Removes the Godot shader-section marker so the compute shader is standalone GLSL. |
@@ -176,9 +176,11 @@ checked for CrossGL, OpenGL, Metal, DirectX, and Vulkan output after issue
 The `DiligentGraphics/DiligentSamples` VRS cube vertex and fragment-density
 shaders are checked for CrossGL, OpenGL, and Vulkan output after issue #1190
 added Vulkan `FragSizeEXT` modeling for `GL_EXT_fragment_invocation_density`.
-Metal and DirectX still emit unresolved `gl_FragSizeEXT` in the fragment shader
-and remain excluded under issue #1208. The demo keeps host VRS render-pass
-attachment and pipeline-state integration out of scope.
+Metal remains excluded because the target does not expose a fragment-size input
+equivalent for this shader. DirectX output now lowers the fragment-size path
+through `SV_ShadingRate`, but remains excluded from checked artifacts until the
+Windows DXC smoke profile is VRS-aware under issue #1235. The demo keeps host
+VRS render-pass attachment and pipeline-state integration out of scope.
 
 The `g-truc/ogl-samples` flat-color shader pair is checked for CrossGL,
 Metal, OpenGL, and Vulkan output.
