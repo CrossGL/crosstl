@@ -399,7 +399,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 92,
+        "unsupported_marker_count": 93,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 151
+        "test_count": 153
       },
       "translator_codegen": {
         "exists": true,
@@ -5884,9 +5884,9 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_wave_intrinsics"
           ],
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "notes": "WGSL wave/subgroup intrinsic lowering has not been promoted yet; Wave* calls emit deterministic diagnostics instead of falling through to invalid expressions.",
           "status": "diagnostic"
         }
       }
@@ -5999,9 +5999,9 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_match_statements"
           ],
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "notes": "WGSL match/pattern lowering has not been promoted yet; match statements emit deterministic diagnostics while structured lowering is implemented.",
           "status": "diagnostic"
         }
       }

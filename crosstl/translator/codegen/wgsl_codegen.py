@@ -44,6 +44,7 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
     VectorType,
+    WaveOpNode,
     WhileNode,
 )
 from .enum_utils import (
@@ -3102,6 +3103,11 @@ class WGSLCodeGen:
             return f"{expr.operator}{operand}"
         if isinstance(expr, TernaryOpNode):
             return self.generate_ternary_expression(expr)
+        if isinstance(expr, WaveOpNode):
+            raise ValueError(
+                "WGSL target does not support wave/subgroup intrinsic "
+                f"{expr.operation} yet"
+            )
         if isinstance(expr, FunctionCallNode):
             return self.generate_function_call(expr)
         if isinstance(expr, ConstructorNode):

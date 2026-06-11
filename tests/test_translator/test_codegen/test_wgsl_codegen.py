@@ -2393,6 +2393,45 @@ def test_wgsl_codegen_rejects_do_while_statement():
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+def test_wgsl_codegen_rejects_wave_intrinsics():
+    shader = """
+    shader WGSLWaveIntrinsic {
+        compute {
+            void main() {
+                int sum = WaveActiveSum(1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="WGSL target does not support wave/subgroup intrinsic WaveActiveSum",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_match_statements():
+    shader = """
+    shader WGSLMatchStatement {
+        fragment {
+            vec4 main(int mode @ TEXCOORD0) @ gl_FragColor {
+                match mode {
+                    0 => { return vec4(1.0); },
+                    _ => { return vec4(0.0); },
+                }
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="WGSL target does not support match statements",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 @pytest.mark.parametrize(
     ("shader", "message"),
     (
