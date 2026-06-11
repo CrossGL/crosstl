@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import fnmatch
 import hashlib
 import json
@@ -9036,6 +9037,7 @@ def _metal_find_implicit_template_function_calls(
     templates_by_name: Mapping[str, Any],
     excluded_spans: Sequence[tuple[int, int]],
     included_spans: Sequence[tuple[int, int]] | None,
+    return_types: Mapping[str, str] | None = None,
 ) -> list[tuple[str, list[str], tuple[int, int]]]:
     calls: list[tuple[str, list[str], tuple[int, int]]] = []
     functions = preprocessor._find_non_template_function_definitions(
@@ -9043,18 +9045,17 @@ def _metal_find_implicit_template_function_calls(
         list(excluded_spans),
     )
     included = list(included_spans) if included_spans is not None else None
+    known_return_types = dict(return_types or {})
     for function in functions:
         if included is not None and preprocessor._containing_span(
             function.span[0], included
         ) is None:
             continue
-        header = source[function.span[0] : function.body_span[0]]
-        value_types = _metal_collect_local_value_types(
+        type_environment = _metal_function_type_environment(
             preprocessor,
             source,
-            function.body_span[0],
-            function.body_span[1],
-            _metal_function_parameter_types(preprocessor, header),
+            function,
+            known_return_types,
         )
         body = source[function.body_span[0] : function.body_span[1]]
         body_offset = function.body_span[0]
@@ -9092,38 +9093,18 @@ def _metal_find_implicit_template_function_calls(
                 i += consumed
                 continue
             arguments = preprocessor._split_top_level_commas(body[j + 1 : paren_end])
-            parameter_types = _metal_template_function_parameter_types(
+            inferred_arguments = _infer_plain_template_helper_arguments(
                 preprocessor,
                 template,
+                arguments,
+                type_environment,
+                known_return_types,
             )
-            if len(arguments) != len(parameter_types):
-                i = paren_end + 1
-                continue
-            bindings: dict[str, str] = {}
-            for parameter_type, argument in zip(parameter_types, arguments):
-                value_type = _metal_expression_value_type(
-                    preprocessor,
-                    argument,
-                    value_types,
-                )
-                if value_type is None:
-                    continue
-                for template_parameter in template.template_parameters:
-                    if re.search(rf"\b{re.escape(template_parameter)}\b", parameter_type):
-                        existing = bindings.get(template_parameter)
-                        if existing is None:
-                            bindings[template_parameter] = value_type
-                        elif existing != value_type:
-                            bindings.pop(template_parameter, None)
-            if all(parameter in bindings for parameter in template.template_parameters):
+            if inferred_arguments:
                 calls.append(
                     (
                         ident,
-                        _template_argument_values_from_parameters(
-                            preprocessor,
-                            template,
-                            bindings,
-                        ),
+                        inferred_arguments,
                         (body_offset + i, body_offset + i + consumed),
                     )
                 )
@@ -9141,6 +9122,7 @@ def _materialize_implicit_template_function_calls(
     *,
     preprocessor: Any,
     materialized: str,
+    source_contexts: Sequence[_SourceInstantiationTemplateContext] = (),
 ) -> _ImplicitTemplateMaterialization:
     templates = preprocessor._find_template_functions(materialized)
     templates_by_name = {template.name: template for template in templates}
@@ -9149,13 +9131,34 @@ def _materialize_implicit_template_function_calls(
         materialized,
         template_spans,
     )
+    return_types = _metal_reachable_function_return_types(
+        preprocessor,
+        materialized,
+        template_spans,
+        reachable_function_spans or [],
+    )
     implicit_calls = _metal_find_implicit_template_function_calls(
         preprocessor,
         materialized,
         templates_by_name,
         template_spans,
         reachable_function_spans,
+        return_types,
     )
+    context_by_materialized_name = {
+        context.materialized_name: context for context in source_contexts
+    }
+    inherited_context_spans: list[
+        tuple[tuple[int, int], _SourceInstantiationTemplateContext]
+    ] = []
+    if context_by_materialized_name:
+        for function in preprocessor._find_non_template_function_definitions(
+            materialized,
+            template_spans,
+        ):
+            context = context_by_materialized_name.get(function.name)
+            if context is not None:
+                inherited_context_spans.append((function.body_span, context))
     implicit_replacements: list[tuple[int, int, str]] = []
     implicit_materializations: list[tuple[str, tuple[str, ...], str]] = []
     specializations: list[dict[str, Any]] = []
@@ -9168,6 +9171,29 @@ def _materialize_implicit_template_function_calls(
         ):
             continue
         key = preprocessor._template_specialization_key(function_name, arguments)
+        inherited_context = next(
+            (
+                context
+                for context_span, context in inherited_context_spans
+                if context_span[0] <= span[0] < context_span[1]
+            ),
+            None,
+        )
+        if inherited_context is not None:
+            inherited = _inherited_template_arguments(
+                preprocessor,
+                template,
+                inherited_context.parameters,
+                inherited_context.parameter_sources,
+            )
+            if inherited is not None:
+                inherited_arguments, _parameters, _sources = inherited
+                inherited_key = preprocessor._template_specialization_key(
+                    function_name,
+                    inherited_arguments,
+                )
+                if inherited_key == key:
+                    continue
         materialized_name = preprocessor._template_specialization_identifier(
             function_name,
             list(key[1]),
@@ -9696,6 +9722,163 @@ def _metal_local_variable_declaration(
     return name, _normalize_metal_type_text(type_text)
 
 
+def _metal_evaluate_integer_constant_expression(
+    expression: str,
+    constants: Mapping[str, str],
+) -> str | None:
+    text = str(expression or "").strip()
+    if not text:
+        return None
+    for name, value in sorted(
+        constants.items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    ):
+        text = re.sub(rf"\b{re.escape(name)}\b", f"({value})", text)
+    text = re.sub(r"\b(?:short|int|uint|long|ulong)\s*\(", "(", text)
+    text = re.sub(r"\b([0-9]+)[uUlL]*\b", r"\1", text)
+    if re.search(r"[^0-9+\-*/%<>&|^~()\s]", text):
+        return None
+
+    try:
+        tree = ast.parse(text, mode="eval")
+    except SyntaxError:
+        return None
+
+    def eval_node(node: ast.AST) -> int | None:
+        if isinstance(node, ast.Expression):
+            return eval_node(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, int):
+            return int(node.value)
+        if isinstance(node, ast.UnaryOp):
+            value = eval_node(node.operand)
+            if value is None:
+                return None
+            if isinstance(node.op, ast.UAdd):
+                return value
+            if isinstance(node.op, ast.USub):
+                return -value
+            if isinstance(node.op, ast.Invert):
+                return ~value
+            return None
+        if isinstance(node, ast.BinOp):
+            left = eval_node(node.left)
+            right = eval_node(node.right)
+            if left is None or right is None:
+                return None
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, (ast.Div, ast.FloorDiv)):
+                if right == 0:
+                    return None
+                return int(left / right)
+            if isinstance(node.op, ast.Mod):
+                if right == 0:
+                    return None
+                return left % right
+            if isinstance(node.op, ast.LShift):
+                return left << right
+            if isinstance(node.op, ast.RShift):
+                return left >> right
+            if isinstance(node.op, ast.BitOr):
+                return left | right
+            if isinstance(node.op, ast.BitAnd):
+                return left & right
+            if isinstance(node.op, ast.BitXor):
+                return left ^ right
+        return None
+
+    value = eval_node(tree)
+    return str(value) if value is not None else None
+
+
+def _metal_local_constant_declaration(
+    statement: str,
+    constants: Mapping[str, str],
+) -> tuple[str, str] | None:
+    cleaned = _strip_metal_attribute_blocks(statement).strip().rstrip(";").strip()
+    match = re.match(
+        r"(?:static\s+)?(?:constexpr\s+)?(?:const\s+)?"
+        r"(?:short|ushort|int|uint|long|ulong|size_t|auto)\s+"
+        r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<value>.+)$",
+        cleaned,
+        re.DOTALL,
+    )
+    if match is None:
+        return None
+    value = _metal_evaluate_integer_constant_expression(
+        match.group("value"),
+        constants,
+    )
+    if value is None:
+        return None
+    return match.group("name"), value
+
+
+def _metal_local_using_alias(
+    preprocessor: Any,
+    statement: str,
+    aliases: Mapping[str, str],
+    constants: Mapping[str, str],
+) -> tuple[str, str] | None:
+    cleaned = _strip_metal_attribute_blocks(statement).strip().rstrip(";").strip()
+    match = re.match(
+        r"using\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<type>.+)$",
+        cleaned,
+        re.DOTALL,
+    )
+    if match is None:
+        return None
+    return (
+        match.group("name"),
+        _metal_resolve_type_identifiers(
+            preprocessor,
+            match.group("type"),
+            aliases=aliases,
+            constants=constants,
+        ),
+    )
+
+
+def _metal_resolve_type_identifiers(
+    preprocessor: Any,
+    type_text: str,
+    *,
+    aliases: Mapping[str, str],
+    constants: Mapping[str, str],
+) -> str:
+    text = _normalize_metal_type_text(type_text)
+    previous = None
+    while previous != text:
+        previous = text
+        for name, value in sorted(
+            aliases.items(),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        ):
+            text = re.sub(rf"\b{re.escape(name)}\b", str(value), text)
+        for name, value in sorted(
+            constants.items(),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        ):
+            text = re.sub(rf"\b{re.escape(name)}\b", str(value), text)
+        if "<" in text and ">" in text:
+            base, arguments = _metal_generic_type_parts(preprocessor, text)
+            if arguments:
+                resolved_arguments = [
+                    _metal_evaluate_integer_constant_expression(argument, constants)
+                    or argument
+                    for argument in arguments
+                ]
+                text = f"{base}<{','.join(resolved_arguments)}>"
+    return _normalize_metal_type_text(text)
+
+
 def _metal_function_type_environment(
     preprocessor: Any,
     source: str,
@@ -9703,24 +9886,52 @@ def _metal_function_type_environment(
     return_types: Mapping[str, str],
 ) -> dict[str, str]:
     environment: dict[str, str] = {}
+    constants: dict[str, str] = {}
+    aliases: dict[str, str] = {}
     header = _metal_function_header(source, function)
     for type_text, name, _variadic in _metal_function_parameter_declarations(
         preprocessor,
         header,
     ):
-        environment[name] = type_text
+        environment[name] = _metal_resolve_type_identifiers(
+            preprocessor,
+            type_text,
+            aliases=aliases,
+            constants=constants,
+        )
 
     body_start, body_end = function.body_span
     for start, end in _metal_statement_spans(source, body_start, body_end):
+        statement = source[start:end]
+        constant = _metal_local_constant_declaration(statement, constants)
+        if constant is not None:
+            name, value = constant
+            constants[name] = value
+            continue
+        alias = _metal_local_using_alias(
+            preprocessor,
+            statement,
+            aliases,
+            constants,
+        )
+        if alias is not None:
+            name, type_text = alias
+            aliases[name] = type_text
+            continue
         declaration = _metal_local_variable_declaration(
             preprocessor,
-            source[start:end],
+            statement,
             environment,
             return_types,
         )
         if declaration is not None:
             name, type_text = declaration
-            environment[name] = type_text
+            environment[name] = _metal_resolve_type_identifiers(
+                preprocessor,
+                type_text,
+                aliases=aliases,
+                constants=constants,
+            )
     return environment
 
 
@@ -11079,6 +11290,7 @@ def _project_template_materialization_for_artifact(
     implicit_materialization = _materialize_implicit_template_function_calls(
         preprocessor=preprocessor,
         materialized=materialized,
+        source_contexts=source_instantiation_contexts,
     )
     materialized = implicit_materialization.text
     specializations.extend(implicit_materialization.specializations)

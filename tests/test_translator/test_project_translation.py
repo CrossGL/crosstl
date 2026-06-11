@@ -10891,6 +10891,180 @@ def test_translate_project_opengl_propagates_steel_gemm_accumulator_binding(
     assert_compute_glsl_validates_if_available(output, tmp_path)
 
 
+def test_metal_project_materialization_concretizes_steel_attention_tile_helper(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    source = textwrap.dedent("""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        #define instantiate_attn(name, type, bq, bk) \\
+            instantiate_kernel("steel_attention_" #name, attention, type, bq, bk, float)
+
+        template <typename T, int M, int N, typename Frag>
+        struct Tile {
+            T value;
+        };
+
+        template <
+            typename Dtype,
+            typename Atype,
+            typename Btype,
+            int M,
+            int N,
+            int K,
+            typename FragD,
+            typename FragA,
+            typename FragB,
+            typename FragC>
+        METAL_FUNC void tile_matmad(
+            thread Tile<Dtype, M, N, FragD>& D,
+            thread Tile<Atype, M, K, FragA>& A,
+            thread Tile<Btype, K, N, FragB>& B,
+            thread Tile<Dtype, M, N, FragC>& C) {
+            D.value = A.value + B.value + C.value;
+        }
+
+        template <typename T, int BQ, int BK, typename AccumType = float>
+        [[kernel]] void attention(
+            device const T* src [[buffer(0)]],
+            device T* dst [[buffer(1)]],
+            uint gid [[thread_position_in_grid]]) {
+            constexpr int kFragSize = 8;
+            constexpr int kWarps = 4;
+            constexpr int TQ = BQ / (kWarps * kFragSize);
+            constexpr int TK = BK / kFragSize;
+            using Frag = Tile<AccumType, kFragSize, kFragSize, int>;
+            Tile<AccumType, TQ, 1, Frag> Qtile;
+            Tile<AccumType, 1, TK, Frag> Ktile;
+            Tile<AccumType, TQ, TK, Frag> Stile;
+            Qtile.value = AccumType(src[gid]);
+            Ktile.value = AccumType(src[gid]);
+            Stile.value = AccumType(0);
+            tile_matmad(Stile, Qtile, Ktile, Stile);
+            dst[gid] = T(Stile.value);
+        }
+
+        instantiate_attn(float32, float, 32, 16)
+        """).strip() + "\n"
+    source_path = shader_dir / "steel_attention.metal"
+    source_path.write_text(source, encoding="utf-8")
+    unit = project_pipeline.ProjectTranslationUnit(
+        path=source_path,
+        relative_path="shaders/steel_attention.metal",
+        source_backend="metal",
+        extension=".metal",
+        source_hash={"sha256": "test"},
+        source_size_bytes=len(source.encode("utf-8")),
+    )
+
+    materialized = project_pipeline._project_template_materialization_for_artifact(
+        unit=unit,
+        target="opengl",
+        variant=None,
+        defines={},
+        define_sources={},
+        include_paths=[],
+        source_options={},
+    )
+
+    assert materialized is not None
+    assert list(materialized.diagnostics) == []
+    specializations = {
+        record["name"]: record for record in materialized.metadata["specializations"]
+    }
+    assert specializations["tile_matmad"]["parameters"] == {
+        "Atype": "float",
+        "Btype": "float",
+        "Dtype": "float",
+        "FragA": "Tile<float,8,8,int>",
+        "FragB": "Tile<float,8,8,int>",
+        "FragC": "Tile<float,8,8,int>",
+        "FragD": "Tile<float,8,8,int>",
+        "K": "1",
+        "M": "1",
+        "N": "2",
+    }
+    assert "tile_matmad_float_float_float_1_2_1" in materialized.text
+    assert not re.search(r"\btile_matmad\s*\(", materialized.text)
+
+
+def test_metal_project_materialization_concretizes_steel_attention_load_helper(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    source = textwrap.dedent("""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        #define instantiate_attn(name, type, rows, cols) \\
+            instantiate_kernel("steel_attention_nax_" #name, attention_nax, type, rows, cols)
+
+        template <typename T, int Rows, int Cols>
+        struct LoadTile {
+            T value;
+        };
+
+        template <typename T, int Rows, int Cols>
+        METAL_FUNC void load(thread LoadTile<T, Rows, Cols>& tile, T value) {
+            tile.value = value;
+        }
+
+        template <typename T, int BQ, int BK>
+        [[kernel]] void attention_nax(
+            device const T* src [[buffer(0)]],
+            device T* dst [[buffer(1)]],
+            uint gid [[thread_position_in_grid]]) {
+            constexpr int Rows = BQ / 32;
+            constexpr int Cols = BK / 16;
+            using qtile_t = LoadTile<T, Rows, Cols>;
+            qtile_t tile;
+            load(tile, src[gid]);
+            dst[gid] = tile.value;
+        }
+
+        instantiate_attn(float32, float, 64, 32)
+        """).strip() + "\n"
+    source_path = shader_dir / "steel_attention_nax.metal"
+    source_path.write_text(source, encoding="utf-8")
+    unit = project_pipeline.ProjectTranslationUnit(
+        path=source_path,
+        relative_path="shaders/steel_attention_nax.metal",
+        source_backend="metal",
+        extension=".metal",
+        source_hash={"sha256": "test"},
+        source_size_bytes=len(source.encode("utf-8")),
+    )
+
+    materialized = project_pipeline._project_template_materialization_for_artifact(
+        unit=unit,
+        target="opengl",
+        variant=None,
+        defines={},
+        define_sources={},
+        include_paths=[],
+        source_options={},
+    )
+
+    assert materialized is not None
+    assert list(materialized.diagnostics) == []
+    specializations = {
+        record["name"]: record for record in materialized.metadata["specializations"]
+    }
+    assert specializations["load"]["parameters"] == {
+        "Cols": "2",
+        "Rows": "2",
+        "T": "float",
+    }
+    assert "load_float_2_2(tile, src[gid]);" in materialized.text
+    assert not re.search(r"\bload\s*\(", materialized.text)
+
+
 def test_translate_project_opengl_missing_accumulator_template_diagnostic(
     tmp_path,
 ):
