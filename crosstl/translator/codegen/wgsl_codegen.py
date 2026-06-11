@@ -592,6 +592,8 @@ class WGSLCodeGen:
         self._cbuffer_member_types = {}
         self._struct_resource_paths = {}
         self._glsl_buffer_block_struct_names = set()
+        self._uniform_buffer_struct_names = set()
+        self._uniform_scalar_array_wrappers = {}
         self._module_variable_types = {}
         self._module_storage_access_modes = {}
         self._module_storage_texture_access_modes = {}
@@ -630,6 +632,8 @@ class WGSLCodeGen:
         self._cbuffer_member_types = {}
         self._struct_resource_paths = {}
         self._glsl_buffer_block_struct_names = set()
+        self._uniform_buffer_struct_names = set()
+        self._uniform_scalar_array_wrappers = {}
         self._module_variable_types = {}
         self._module_storage_access_modes = {}
         self._module_storage_texture_access_modes = {}
@@ -702,7 +706,9 @@ class WGSLCodeGen:
         }
         self._module_variable_types.update(
             {
-                getattr(parameter, "name", ""): getattr(parameter, "param_type", None)
+                getattr(parameter, "name", ""): self.stage_resource_module_type(
+                    parameter
+                )
                 for parameter in stage_resource_parameters
                 if getattr(parameter, "name", "")
             }
@@ -723,6 +729,12 @@ class WGSLCodeGen:
                 global_variable_nodes, all_function_nodes
             )
         )
+        self._uniform_buffer_struct_names = self.uniform_buffer_struct_names(
+            cbuffers, global_variable_nodes, stage_resource_parameters
+        )
+        self._uniform_scalar_array_wrappers = (
+            self.uniform_scalar_array_wrapper_names(cbuffers, structs)
+        )
         self._module_storage_access_modes = self.module_storage_access_modes(
             global_variable_nodes, stage_resource_parameters
         )
@@ -736,6 +748,10 @@ class WGSLCodeGen:
         self.reserve_explicit_resource_bindings(
             cbuffers, global_variable_nodes, stage_resource_parameters
         )
+        uniform_scalar_array_wrappers = self.generate_uniform_scalar_array_wrappers()
+        if uniform_scalar_array_wrappers:
+            emitted_sections.append(uniform_scalar_array_wrappers)
+
         if structs:
             emitted_sections.append(
                 "\n\n".join(self.generate_struct(node) for node in structs)
@@ -1338,10 +1354,21 @@ class WGSLCodeGen:
                     "module-scope bindings instead of user-struct fields"
                 )
             attributes = self.wgsl_attributes(member.attributes, direction="generic")
-            prefix = f"{attributes} " if attributes else ""
             member_name = self.struct_member_identifier_name(node.name, member.name)
+            member_type = member.member_type
+            if node.name in self._uniform_buffer_struct_names:
+                if self.uniform_scalar_array_wrapper_name(member_type) is not None:
+                    attributes = " ".join(
+                        attribute
+                        for attribute in (attributes, "@align(16)")
+                        if attribute
+                    )
+                member_type_name = self.uniform_buffer_member_type_name(member_type)
+            else:
+                member_type_name = self.type_name_string(member_type)
+            prefix = f"{attributes} " if attributes else ""
             lines.append(
-                f"    {prefix}{member_name}: {self.type_name_string(member.member_type)},"
+                f"    {prefix}{member_name}: {member_type_name},"
             )
         lines.append("};")
         return "\n".join(lines)
@@ -1351,8 +1378,14 @@ class WGSLCodeGen:
         for member in getattr(node, "members", []) or []:
             self.validate_cbuffer_member(node, member)
             member_name = self.struct_member_identifier_name(node.name, member.name)
+            prefix = (
+                "@align(16) "
+                if self.uniform_scalar_array_wrapper_name(member.member_type) is not None
+                else ""
+            )
             lines.append(
-                f"    {member_name}: {self.type_name_string(member.member_type)},"
+                f"    {prefix}{member_name}: "
+                f"{self.uniform_buffer_member_type_name(member.member_type)},"
             )
         lines.append("};")
 
@@ -1885,10 +1918,13 @@ class WGSLCodeGen:
                     f"(*{pointer_name})"
                     f"[{self.generate_expression(expr.index_expr)}]"
                 )
-            return (
+            access = (
                 f"{self.generate_expression(expr.array_expr)}"
                 f"[{self.generate_expression(expr.index_expr)}]"
             )
+            if self.is_uniform_scalar_array_access(expr.array_expr):
+                return f"{access}.value"
+            return access
         if isinstance(expr, ArrayLiteralNode):
             return (
                 "array("
@@ -2495,6 +2531,51 @@ class WGSLCodeGen:
             return self.map_type_name(vtype)
         return str(vtype)
 
+    def uniform_buffer_member_type_name(self, vtype):
+        wrapper_name = self.uniform_scalar_array_wrapper_name(vtype)
+        if wrapper_name is None:
+            return self.type_name_string(vtype)
+        return self.array_type_name(wrapper_name, vtype)
+
+    def array_type_name(self, element_type_name, vtype):
+        if not isinstance(vtype, ArrayType):
+            raise ValueError("WGSL target expected an array type")
+        if vtype.size is None:
+            return f"array<{element_type_name}>"
+        size = (
+            self.generate_expression(vtype.size)
+            if hasattr(vtype.size, "__class__")
+            and not isinstance(vtype.size, (str, int))
+            else str(vtype.size)
+        )
+        return f"array<{element_type_name}, {size}>"
+
+    def uniform_scalar_array_wrapper_name(self, vtype):
+        scalar_type = self.uniform_scalar_array_element_type_name(vtype)
+        if scalar_type is None:
+            return None
+        return self._uniform_scalar_array_wrappers.get(scalar_type)
+
+    def uniform_scalar_array_element_type_name(self, vtype):
+        if not isinstance(vtype, ArrayType) or vtype.size is None:
+            return None
+        scalar_type = self.scalar_type_name(vtype.element_type)
+        if scalar_type in {"f32", "i32", "u32"}:
+            return scalar_type
+        return None
+
+    def generate_uniform_scalar_array_wrappers(self):
+        sections = []
+        for scalar_type, wrapper_name in sorted(
+            self._uniform_scalar_array_wrappers.items()
+        ):
+            sections.append(
+                f"struct {wrapper_name} {{\n"
+                f"    @size(16) value: {scalar_type},\n"
+                "};"
+            )
+        return "\n\n".join(sections)
+
     def map_type_name(self, type_name):
         normalized = type_name.strip()
         lower = normalized.lower()
@@ -2593,6 +2674,12 @@ class WGSLCodeGen:
                 return pointee_type
             return None
         return param_type
+
+    def stage_resource_module_type(self, parameter):
+        uniform_type = self.stage_uniform_parameter_type(parameter)
+        if uniform_type is not None:
+            return uniform_type
+        return getattr(parameter, "param_type", None)
 
     def validate_uniform_binding_type(self, uniform_type):
         struct_name = self.struct_type_name(self.array_element_type(uniform_type))
@@ -2885,6 +2972,82 @@ class WGSLCodeGen:
                 "WGSL target does not support runtime-sized array member "
                 f"{cbuffer.name}.{member.name} inside uniform buffers"
             )
+
+    def uniform_buffer_struct_names(
+        self, cbuffers, global_variables, stage_resource_parameters
+    ):
+        names = {
+            getattr(cbuffer, "name", "")
+            for cbuffer in cbuffers
+            if getattr(cbuffer, "name", "")
+        }
+        for variable in global_variables:
+            qualifier_names = {
+                str(qualifier).lower()
+                for qualifier in getattr(variable, "qualifiers", []) or []
+            }
+            if "uniform" not in qualifier_names:
+                continue
+            struct_name = self.struct_type_name(
+                self.array_element_type(getattr(variable, "var_type", None))
+            )
+            if struct_name:
+                names.add(struct_name)
+        for parameter in stage_resource_parameters:
+            uniform_type = self.stage_uniform_parameter_type(parameter)
+            struct_name = self.struct_type_name(self.array_element_type(uniform_type))
+            if struct_name:
+                names.add(struct_name)
+        names.discard("")
+        return names
+
+    def uniform_scalar_array_wrapper_names(self, cbuffers, structs):
+        scalar_types = set()
+        for cbuffer in cbuffers:
+            for member in getattr(cbuffer, "members", []) or []:
+                scalar_type = self.uniform_scalar_array_element_type_name(
+                    getattr(member, "member_type", None)
+                )
+                if scalar_type is not None:
+                    scalar_types.add(scalar_type)
+        for struct in structs:
+            if getattr(struct, "name", "") not in self._uniform_buffer_struct_names:
+                continue
+            for member in getattr(struct, "members", []) or []:
+                scalar_type = self.uniform_scalar_array_element_type_name(
+                    getattr(member, "member_type", None)
+                )
+                if scalar_type is not None:
+                    scalar_types.add(scalar_type)
+
+        used_names = set(self._type_identifier_names.values())
+        used_names.update(self._function_identifier_names.values())
+        used_names.update(self._module_identifier_names.values())
+        wrappers = {}
+        suffixes = {"f32": "F32", "i32": "I32", "u32": "U32"}
+        for scalar_type in sorted(scalar_types):
+            base_name = f"UniformArrayElement{suffixes[scalar_type]}"
+            wrapper_name = self.unique_wgsl_identifier(base_name, used_names)
+            wrappers[scalar_type] = wrapper_name
+            used_names.add(wrapper_name)
+        return wrappers
+
+    def is_uniform_scalar_array_access(self, array_expr):
+        if isinstance(array_expr, IdentifierNode):
+            if self.is_local_identifier(array_expr.name):
+                return False
+            member_type = self._cbuffer_member_types.get(array_expr.name)
+            return self.uniform_scalar_array_wrapper_name(member_type) is not None
+        if isinstance(array_expr, MemberAccessNode):
+            object_type = self.array_element_type(
+                self.expression_type(array_expr.object_expr)
+            )
+            struct_name = self.struct_type_name(object_type)
+            if struct_name not in self._uniform_buffer_struct_names:
+                return False
+            member_type = self._struct_member_types.get((struct_name, array_expr.member))
+            return self.uniform_scalar_array_wrapper_name(member_type) is not None
+        return False
 
     def unsized_array_type(self, vtype):
         while isinstance(vtype, ArrayType):
@@ -3362,7 +3525,12 @@ class WGSLCodeGen:
 
     def register_parameter_value_types(self, function):
         for parameter in getattr(function, "parameters", []) or []:
-            self.register_value_type(parameter.name, parameter.param_type)
+            value_type = (
+                self.stage_resource_module_type(parameter)
+                if self.is_stage_resource_parameter(parameter)
+                else parameter.param_type
+            )
+            self.register_value_type(parameter.name, value_type)
             self.register_parameter_resource_aliases(parameter)
 
     def register_parameter_resource_aliases(self, parameter):
