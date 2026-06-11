@@ -1350,7 +1350,9 @@ class VulkanSPIRVCodeGen:
                 and variable_type.type.base_type != result_type.type.base_type
             ):
                 loaded = self.load_from_variable(variable_id, variable_type)
-                return self.convert_value_to_type(loaded, result_type)
+                return self.convert_value_to_type(
+                    loaded, result_type, allow_vector_resize=True
+                )
             return self.load_from_variable(variable_id, result_type)
 
         variable_type = self.pointer_pointee_type(variable_id)
@@ -1370,6 +1372,7 @@ class VulkanSPIRVCodeGen:
         target_type: SpirvId,
         *,
         allow_vector_to_scalar: bool = False,
+        allow_vector_resize: bool = False,
     ) -> SpirvId:
         """Convert scalar values to a compatible scalar or vector target type."""
         target_type = self.ensure_registered_type(target_type)
@@ -1418,31 +1421,44 @@ class VulkanSPIRVCodeGen:
             return value_id
 
         if source_vector is not None:
-            if source_vector[1] != target_vector[1]:
+            if source_vector[1] != target_vector[1] and not allow_vector_resize:
                 return value_id
-            target_component_type = self.register_primitive_type(target_vector[0])
-            source_component_type = self.register_primitive_type(source_vector[0])
-            components = []
-            for index in range(source_vector[1]):
-                component = self.composite_extract(
-                    value_id, source_component_type, index
-                )
-                converted = self.convert_scalar_to_type(
-                    component, target_component_type
-                )
-                if (
-                    self.normalize_primitive_name(converted.type.base_type)
-                    != target_vector[0]
-                ):
-                    return value_id
-                components.append(converted)
-            return self.composite_construct(target_type, components)
+            converted = self.convert_vector_to_type(
+                value_id, source_vector, target_type, target_vector
+            )
+            return converted or value_id
 
         component_type = self.register_primitive_type(target_vector[0])
         converted = self.convert_scalar_to_type(value_id, component_type)
         if self.normalize_primitive_name(converted.type.base_type) != target_vector[0]:
             return value_id
         return self.splat_scalar_to_vector(converted, target_type)
+
+    def convert_vector_to_type(
+        self,
+        value_id: SpirvId,
+        source_vector: Tuple[str, int],
+        target_type: SpirvId,
+        target_vector: Tuple[str, int],
+    ) -> Optional[SpirvId]:
+        target_component_type = self.register_primitive_type(target_vector[0])
+        source_component_type = self.register_primitive_type(source_vector[0])
+        components = []
+        copied_components = min(source_vector[1], target_vector[1])
+        for index in range(copied_components):
+            component = self.composite_extract(value_id, source_component_type, index)
+            converted = self.convert_scalar_to_type(component, target_component_type)
+            if (
+                self.normalize_primitive_name(converted.type.base_type)
+                != target_vector[0]
+            ):
+                return None
+            components.append(converted)
+
+        while len(components) < target_vector[1]:
+            components.append(self.default_value_for_type(target_component_type))
+
+        return self.composite_construct(target_type, components)
 
     def value_has_type(self, value_id: SpirvId, target_type: SpirvId) -> bool:
         value_type = self.value_types.get(

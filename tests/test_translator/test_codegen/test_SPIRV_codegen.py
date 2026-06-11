@@ -27466,6 +27466,99 @@ class TestSpirvShaderValidation:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_entry_point_builtin_vector_parameter_resizes_to_declared_width(
+        self, tmp_path
+    ):
+        source_code = """
+        shader BuiltinParameterResize {
+            compute {
+                void main(uvec2 id @ gl_GlobalInvocationID) {
+                    uvec2 copy = id;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        global_id = spirv_named_variable(
+            spv_code, "gl_GlobalInvocationID", storage_class="Input"
+        )
+        local_id = spirv_named_variable(spv_code, "id", storage_class="Function")
+        global_load = re.search(rf"(%\d+) = OpLoad %\d+ {global_id}", spv_code)
+        local_store = re.search(rf"OpStore {local_id} (%\d+)", spv_code)
+
+        assert global_load is not None
+        assert local_store is not None
+        assert local_store.group(1) != global_load.group(1)
+        assert re.search(
+            rf"{re.escape(local_store.group(1))} = OpCompositeConstruct %\d+ "
+            r"%\d+ %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_metal_matmul_style_uvec2_id_and_output_buffer_store_validate(
+        self, tmp_path
+    ):
+        source_code = """
+        shader main {
+            struct MatMulParams {
+                uint row_dim_x;
+                uint col_dim_x;
+                uint inner_dim;
+            }
+
+            compute {
+                @ stage_entry
+                void mat_mul_simple1(
+                    StructuredBuffer<float> A @buffer(0),
+                    StructuredBuffer<float> B @buffer(1),
+                    RWStructuredBuffer<float> X @buffer(2),
+                    constant MatMulParams& params @buffer(3),
+                    uvec2 id @gl_GlobalInvocationID
+                ) {
+                    const uint row_dim_x = params.row_dim_x;
+                    const uint col_dim_x = params.col_dim_x;
+                    const uint inner_dim = params.inner_dim;
+                    if (id.x < col_dim_x && id.y < row_dim_x) {
+                        const uint index = id.y * col_dim_x + id.x;
+                        float sum = 0;
+                        for (uint k = 0; k < inner_dim; (++k)) {
+                            const uint index_A = id.y * inner_dim + k;
+                            const uint index_B = k * col_dim_x + id.x;
+                            sum += buffer_load(A, index_A) * buffer_load(B, index_B);
+                        }
+                        buffer_store(X, index, sum);
+                    }
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        output_buffer = spirv_named_variable(spv_code, "X", storage_class="Uniform")
+        output_stores = [
+            access_id
+            for access_id, operands in re.findall(
+                r"(%\d+) = OpAccessChain %\d+ ([^\n]+)\nOpStore \1 %\d+",
+                spv_code,
+            )
+            if output_buffer in operands.split()
+        ]
+
+        assert output_stores
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_mixed_compute_builtin_aliases_share_interface_variable(self, tmp_path):
         source_code = """
         shader MixedComputeBuiltinAliases {
