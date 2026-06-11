@@ -1,5 +1,4 @@
 import crosstl
-
 from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import OpenCLToCrossGLConverter
 from crosstl.backend.OpenCL.OpenCLLexer import OpenCLLexer
 from crosstl.backend.OpenCL.OpenCLParser import OpenCLParser
