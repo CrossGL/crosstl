@@ -1,0 +1,39 @@
+{
+  "description": "Open-source porting demo CI inputs derived from checked-in test metadata.",
+  "pytest": {
+    "cases": [
+      {
+        "id": "directx-toolchain-monogame-sprite-entry-profiles",
+        "selector": "monogame_sprite_entries",
+        "targets": [
+          "directx"
+        ],
+        "tests": [
+          "test_directx_toolchain_smoke_commands_use_monogame_sprite_entries"
+        ]
+      },
+      {
+        "id": "directx-toolchain-monogame-generic-wrapper",
+        "selector": "monogame_entries_not_empty_generic_wrapper",
+        "targets": [
+          "directx"
+        ],
+        "tests": [
+          "test_project_directx_smoke_runs_monogame_entries_not_empty_generic_wrapper"
+        ]
+      },
+      {
+        "id": "directx-toolchain-cuda-vector-add",
+        "selector": "cuda_vector_add_demo_directx_outputs_valid_hlsl",
+        "targets": [
+          "directx"
+        ],
+        "tests": [
+          "test_translate_project_cli_cuda_vector_add_demo_directx_outputs_valid_hlsl"
+        ]
+      }
+    ],
+    "test_file": "tests/test_translator/test_project_translation.py"
+  },
+  "schema_version": 1
+}

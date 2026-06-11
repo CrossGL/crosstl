@@ -8,6 +8,8 @@ The matrix is intentionally data-driven:
   test locations, and official documentation sources.
 - `features.json` lists the capabilities CrossGL wants to support and the current
   status per backend.
+- `demo-ci-metadata.json` lists the checked-in open-source porting demo cases
+  that the demo workflow turns into pytest inputs.
 - `generated/support-matrix.json` and `docs/source/support-matrix.rst` are generated
   by `tools/support_matrix.py`.
 - `generated/graphics-backend-roadmap.json` is a focused generated view for the

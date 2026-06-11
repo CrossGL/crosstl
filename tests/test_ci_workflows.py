@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
 ACTIONS_DIR = ROOT / ".github" / "actions"
 CI_COVERAGE_SCRIPT = ROOT / "tools" / "ci_coverage.py"
+DEMO_CI_METADATA_PATH = ROOT / "support" / "demo-ci-metadata.json"
 PYTHON_VERSIONS = {"3.8", "3.9", "3.10", "3.11", "3.12", "3.13"}
 RUNNER_OSES = {"ubuntu-latest", "windows-latest", "macOS-latest"}
 BACKEND_TEST_MATRIX_NAMES = {
@@ -212,6 +213,8 @@ def test_full_suite_runs_runtime_parity_only_for_available_adapters():
 def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
     workflows = _workflow_texts()
     demo = workflows.get("demo.yml", "")
+    demo_metadata = json.loads(DEMO_CI_METADATA_PATH.read_text(encoding="utf-8"))
+    demo_selectors = [case["selector"] for case in demo_metadata["pytest"]["cases"]]
 
     assert demo, "demo.yml must exist"
     assert "name: Open-Source Porting Demo" in demo
@@ -223,16 +226,24 @@ def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
     assert _matrix_values(demo, "os") == RUNNER_OSES
     assert '".github/workflows/demo.yml"' in demo
     assert '"demos/open-source-porting/**"' in demo
+    assert '"support/demo-ci-metadata.json"' in demo
     assert '"tests/test_demo_open_source_porting.py"' in demo
     assert '"tests/test_project_test_runner.py"' in demo
     assert '"tests/test_translator/test_project_translation.py"' in demo
+    assert '"tools/demo_ci_metadata.py"' in demo
     assert "id: run_demo_tests" in demo
-    for selector in (
-        "monogame_sprite_entries",
-        "monogame_entries_not_empty_generic_wrapper",
-        "cuda_vector_add_demo_directx_outputs_valid_hlsl",
-    ):
-        assert selector in demo
+    assert (
+        "readarray -t demo_test_files < <(python tools/demo_ci_metadata.py "
+        "emit-pytest-files)"
+    ) in demo
+    assert (
+        'demo_selector="$(python tools/demo_ci_metadata.py emit-pytest-selector)"'
+        in demo
+    )
+    assert '"${demo_test_files[@]}"' in demo
+    assert '-k "$demo_selector"' in demo
+    for selector in demo_selectors:
+        assert selector not in demo
     assert (
         "--junitxml support/generated/demo-reports/${{ matrix.os }}/"
         "open-source-porting-demo-pytest.xml"
@@ -2041,6 +2052,7 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
         '"docs/source/project-porting.rst"',
         '"docs/source/support-matrix.rst"',
         '"examples/test.py"',
+        '"tools/demo_ci_metadata.py"',
         '"tests/test_backend/**"',
         '"tests/test_demo_open_source_porting.py"',
         '"tests/test_examples_test_script.py"',
