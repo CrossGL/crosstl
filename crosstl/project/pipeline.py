@@ -5109,7 +5109,7 @@ def _scan_native_directive_lines(
     source_backend: str,
     seen: set[tuple[str, int, str, str, str, str | None]],
     variant: str | None = None,
-) -> list["ProjectNativeDirective"]:
+) -> list[ProjectNativeDirective]:
     native_directives: list[ProjectNativeDirective] = []
     conditional_stack: list[_IncludeConditionalFrame] = []
     for line_number, line in enumerate(lines, start=1):
@@ -5170,7 +5170,7 @@ def _scan_native_directive_planning(
     relative_path: str,
     *,
     source_backend: str,
-) -> list["ProjectNativeDirective"]:
+) -> list[ProjectNativeDirective]:
     source_spec = SOURCE_REGISTRY.get(source_backend)
     if source_spec is None or source_spec.native_directive_classifier is None:
         return []
@@ -13813,18 +13813,28 @@ def plan_runtime_adapters(
 def _runtime_loader_metadata_source(
     path: Any, field: str = "packagePath"
 ) -> dict[str, Any]:
-    return {"field": field, "path": path}
+    return {"field": field, "path": _runtime_loader_package_path(path)}
+
+
+def _runtime_loader_package_path(package_path: Any) -> str:
+    return PurePosixPath(str(package_path).replace("\\", "/")).as_posix()
+
+
+def _runtime_loader_optional_package_path(package_path: Any) -> Any:
+    if not _is_non_empty_string(package_path):
+        return package_path
+    return _runtime_loader_package_path(package_path)
 
 
 def _runtime_loader_package_command_path(package_path: Any) -> str:
-    return PurePosixPath(str(package_path).replace("\\", "/")).as_posix()
+    return _runtime_loader_package_path(package_path)
 
 
 def _runtime_loader_normalize_package_command_path(
     command: Sequence[str], package_path: Any
 ) -> list[str]:
     package_path_text = str(package_path)
-    command_path = _runtime_loader_package_command_path(package_path)
+    command_path = _runtime_loader_package_path(package_path)
     path_candidates = {
         package_path_text,
         package_path_text.replace("/", "\\"),
@@ -13871,6 +13881,7 @@ def _runtime_loader_webgl_program_groups(
         package_path = adapter.get("packagePath")
         if not _is_non_empty_string(package_path):
             continue
+        package_path = _runtime_loader_package_path(package_path)
         binding_source_path = None
         binding_id = adapter.get("binding")
         if _is_non_empty_string(binding_id):
@@ -13878,7 +13889,7 @@ def _runtime_loader_webgl_program_groups(
         source_group_path = (
             binding_source_path
             or adapter.get("sourcePath")
-            or adapter.get("packagePath")
+            or package_path
         )
         defines = (
             dict(adapter.get("defines"))
@@ -13902,7 +13913,8 @@ def _runtime_loader_webgl_program_groups(
                 "variant": variant,
                 "defines": list(defines_key),
                 "packagePaths": [
-                    adapter.get("packagePath") for adapter in group_adapters
+                    _runtime_loader_optional_package_path(adapter.get("packagePath"))
+                    for adapter in group_adapters
                 ],
             },
             sort_keys=True,
@@ -13921,6 +13933,7 @@ def _runtime_loader_webgl_program_groups(
             package_path = adapter.get("packagePath")
             if not _is_non_empty_string(package_path):
                 continue
+            package_path = _runtime_loader_package_path(package_path)
             stages.append(
                 {
                     "stage": stage,
@@ -13942,7 +13955,9 @@ def _runtime_loader_webgl_program_groups(
         for adapter in group_adapters:
             package_path = adapter.get("packagePath")
             if _is_non_empty_string(package_path):
-                groups_by_package_path[str(package_path)] = group_payload
+                groups_by_package_path[
+                    _runtime_loader_package_path(package_path)
+                ] = group_payload
     return groups_by_package_path
 
 
@@ -13973,7 +13988,7 @@ def _runtime_loader_host_entry_points(
 def _runtime_loader_package_artifact_path(
     package_path: Any, package_root: Path | None
 ) -> Path:
-    artifact_path = Path(str(package_path))
+    artifact_path = Path(_runtime_loader_package_path(package_path))
     if package_root is not None and not artifact_path.is_absolute():
         return package_root / artifact_path
     return artifact_path
@@ -14061,7 +14076,9 @@ def _runtime_loader_target_load_metadata(
             "stage": stage,
             "shaderType": _runtime_loader_webgl_shader_type(stage),
         }
-        program_group = webgl_program_groups.get(str(package_path))
+        program_group = webgl_program_groups.get(
+            _runtime_loader_package_path(package_path)
+        )
         if isinstance(program_group, Mapping):
             metadata["programGroup"] = dict(program_group)
         return metadata
@@ -14145,7 +14162,7 @@ def _runtime_loader_manifest_load_steps(
     package_root: Path | None = None,
     target_metadata: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    package_path = adapter.get("packagePath")
+    package_path = _runtime_loader_optional_package_path(adapter.get("packagePath"))
     target = adapter.get("target")
     steps = [
         {
@@ -14166,23 +14183,26 @@ def _runtime_loader_manifest_load_steps(
     if isinstance(source_remap, Mapping) and _is_non_empty_string(
         source_remap.get("packagePath")
     ):
+        source_remap_package_path = _runtime_loader_package_path(
+            source_remap.get("packagePath")
+        )
         steps.append(
             {
                 "kind": "load-source-remap",
                 "message": (
                     "Load source-remap metadata "
-                    f"{source_remap.get('packagePath')} for diagnostics and "
+                    f"{source_remap_package_path} for diagnostics and "
                     "provenance."
                 ),
                 "target": target,
-                "packagePath": source_remap.get("packagePath"),
+                "packagePath": source_remap_package_path,
                 "tools": [],
                 "command": None,
                 "hostInterfaceStatus": None,
                 "metadata": {
                     "source": {
                         "field": "sourceRemap.packagePath",
-                        "path": source_remap.get("packagePath"),
+                        "path": source_remap_package_path,
                     }
                 },
             }
@@ -14308,11 +14328,29 @@ def _runtime_loader_manifest_blockers(
 ) -> list[dict[str, Any]]:
     adapter_id = adapter.get("id")
     return [
-        dict(action)
+        _runtime_loader_manifest_action(action)
         for action in actions
         if action.get("adapter") == adapter_id
         and action.get("kind") == "resolve-host-interface-metadata"
     ]
+
+
+def _runtime_loader_manifest_action(action: Mapping[str, Any]) -> dict[str, Any]:
+    payload = dict(action)
+    if _is_non_empty_string(payload.get("packagePath")):
+        payload["packagePath"] = _runtime_loader_package_path(payload["packagePath"])
+    return payload
+
+
+def _runtime_loader_manifest_source_remap(
+    source_remap: Any,
+) -> dict[str, Any] | None:
+    if not isinstance(source_remap, Mapping):
+        return None
+    payload = dict(source_remap)
+    if _is_non_empty_string(payload.get("packagePath")):
+        payload["packagePath"] = _runtime_loader_package_path(payload["packagePath"])
+    return payload
 
 
 def _runtime_loader_manifest_load_unit(
@@ -14338,12 +14376,13 @@ def _runtime_loader_manifest_load_unit(
         else "not-inspected"
     )
     validation["loadReady"] = not blockers
+    package_path = _runtime_loader_optional_package_path(adapter.get("packagePath"))
     return {
         "id": adapter.get("id"),
         "target": adapter.get("target"),
         "adapterKind": adapter.get("adapterKind"),
         "artifactFormat": adapter.get("artifactFormat"),
-        "packagePath": adapter.get("packagePath"),
+        "packagePath": package_path,
         "sourcePath": adapter.get("sourcePath"),
         "sourceBackend": adapter.get("sourceBackend"),
         "stage": adapter.get("stage"),
@@ -14353,10 +14392,8 @@ def _runtime_loader_manifest_load_unit(
             if isinstance(adapter.get("defines"), Mapping)
             else {}
         ),
-        "sourceRemap": (
-            dict(adapter.get("sourceRemap"))
-            if isinstance(adapter.get("sourceRemap"), Mapping)
-            else None
+        "sourceRemap": _runtime_loader_manifest_source_remap(
+            adapter.get("sourceRemap")
         ),
         "hostInterface": (
             dict(host_interface)
@@ -14512,7 +14549,7 @@ def build_runtime_loader_manifest(
             _runtime_loader_manifest_target(target, load_units) for target in targets
         ],
         "loadUnits": load_units,
-        "actions": [dict(action) for action in actions],
+        "actions": [_runtime_loader_manifest_action(action) for action in actions],
         "runtimePlan": (
             dict(adapter_plan.get("runtimePlan"))
             if isinstance(adapter_plan.get("runtimePlan"), Mapping)
