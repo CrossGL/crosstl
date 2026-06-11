@@ -1701,9 +1701,7 @@ MOJO_UNRESOLVED_TARGET_CONSTRUCT_RULES = (
     (
         "spirv-unresolved-warning",
         "SPIR-V unresolved-lowering warning",
-        re.compile(
-            r";\s*WARNING:.*\b(?:Unknown|unknown|unresolved|Could not find)\b"
-        ),
+        re.compile(r";\s*WARNING:.*\b(?:Unknown|unknown|unresolved|Could not find)\b"),
     ),
 )
 MOJO_SPIRV_BLOCK_ONLY_OPS = frozenset(
@@ -9376,46 +9374,100 @@ def _plain_template_call_replacements(
     excluded_spans: Sequence[tuple[int, int]],
     included_spans: Sequence[tuple[int, int]] | None,
 ) -> list[tuple[int, int, str]]:
+    if not replacements_by_name:
+        return []
+
     replacements: list[tuple[int, int, str]] = []
-    i = 0
-    excluded = list(excluded_spans)
-    included = list(included_spans) if included_spans is not None else None
-    while i < len(source):
-        if source[i] in "\"'":
-            _literal, consumed = preprocessor._read_string(source, i)
-            i += consumed
-            continue
-        if source.startswith("//", i):
-            end = source.find("\n", i)
-            if end == -1:
-                break
-            i = end + 1
-            continue
-        if source.startswith("/*", i):
-            end = source.find("*/", i + 2)
-            if end == -1:
-                break
-            i = end + 2
-            continue
-        span = preprocessor._containing_span(i, excluded)
-        if span is not None:
-            i = span[1]
-            continue
-        if included is not None and preprocessor._containing_span(i, included) is None:
-            i += 1
-            continue
-        if source[i].isalpha() or source[i] == "_":
-            ident, consumed = preprocessor._read_identifier(source, i)
-            replacement = replacements_by_name.get(ident)
-            j = i + consumed
-            while j < len(source) and source[j].isspace():
-                j += 1
-            if replacement is not None and j < len(source) and source[j] == "(":
-                replacements.append((i, i + consumed, replacement))
-            i += consumed
-            continue
-        i += 1
+    source_length = len(source)
+    excluded = _normalized_scan_spans(excluded_spans, source_length)
+    scan_ranges = (
+        _normalized_scan_spans(included_spans, source_length)
+        if included_spans is not None
+        else [(0, source_length)]
+    )
+    excluded_index = 0
+    for scan_start, scan_end in scan_ranges:
+        i = scan_start
+        excluded_index = _advance_scan_span_index(excluded, excluded_index, i)
+        while i < scan_end:
+            excluded_index = _advance_scan_span_index(excluded, excluded_index, i)
+            scan_limit = scan_end
+            if excluded_index < len(excluded):
+                excluded_start, excluded_end = excluded[excluded_index]
+                if excluded_start <= i < excluded_end:
+                    i = excluded_end
+                    continue
+                if excluded_start < scan_limit:
+                    scan_limit = excluded_start
+
+            while i < scan_limit:
+                if source[i] in "\"'":
+                    _literal, consumed = preprocessor._read_string(source, i)
+                    i += consumed
+                    continue
+                if source.startswith("//", i):
+                    end = source.find("\n", i)
+                    if end == -1:
+                        return replacements
+                    i = end + 1
+                    continue
+                if source.startswith("/*", i):
+                    end = source.find("*/", i + 2)
+                    if end == -1:
+                        return replacements
+                    i = end + 2
+                    continue
+                if source[i].isalpha() or source[i] == "_":
+                    ident, consumed = preprocessor._read_identifier(source, i)
+                    replacement = replacements_by_name.get(ident)
+                    j = i + consumed
+                    while j < source_length and source[j].isspace():
+                        j += 1
+                    if (
+                        replacement is not None
+                        and j < source_length
+                        and source[j] == "("
+                    ):
+                        replacements.append((i, i + consumed, replacement))
+                    i += consumed
+                    continue
+                i += 1
     return replacements
+
+
+def _normalized_scan_spans(
+    spans: Sequence[tuple[int, int]] | None,
+    source_length: int,
+) -> list[tuple[int, int]]:
+    if not spans:
+        return []
+    normalized: list[tuple[int, int]] = []
+    for start, end in spans:
+        start = max(0, min(int(start), source_length))
+        end = max(0, min(int(end), source_length))
+        if end > start:
+            normalized.append((start, end))
+    if not normalized:
+        return []
+    normalized.sort()
+    merged = [normalized[0]]
+    for start, end in normalized[1:]:
+        previous_start, previous_end = merged[-1]
+        if start <= previous_end:
+            merged[-1] = (previous_start, max(previous_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _advance_scan_span_index(
+    spans: Sequence[tuple[int, int]],
+    index: int,
+    position: int,
+) -> int:
+    while index < len(spans) and spans[index][1] <= position:
+        index += 1
+    return index
 
 
 def _explicit_template_call_replacements(
@@ -9425,61 +9477,76 @@ def _explicit_template_call_replacements(
     excluded_spans: Sequence[tuple[int, int]],
     included_spans: Sequence[tuple[int, int]] | None,
 ) -> list[tuple[int, int, str]]:
+    if not replacements_by_name:
+        return []
+
     replacements: list[tuple[int, int, str]] = []
-    i = 0
-    excluded = list(excluded_spans)
-    included = list(included_spans) if included_spans is not None else None
-    while i < len(source):
-        if source[i] in "\"'":
-            _literal, consumed = preprocessor._read_string(source, i)
-            i += consumed
-            continue
-        if source.startswith("//", i):
-            end = source.find("\n", i)
-            if end == -1:
-                break
-            i = end + 1
-            continue
-        if source.startswith("/*", i):
-            end = source.find("*/", i + 2)
-            if end == -1:
-                break
-            i = end + 2
-            continue
-        span = preprocessor._containing_span(i, excluded)
-        if span is not None:
-            i = span[1]
-            continue
-        if included is not None and preprocessor._containing_span(i, included) is None:
-            i += 1
-            continue
-        if source[i].isalpha() or source[i] == "_":
-            ident, consumed = preprocessor._read_identifier(source, i)
-            replacement = replacements_by_name.get(ident)
-            j = i + consumed
-            while j < len(source) and source[j].isspace():
-                j += 1
-            if replacement is None or j >= len(source) or source[j] != "<":
-                i += consumed
-                continue
-            angle_end = preprocessor._find_matching_angle(source, j)
-            if angle_end is None:
-                i += consumed
-                continue
-            k = angle_end + 1
-            while k < len(source) and source[k].isspace():
-                k += 1
-            if k < len(source) and source[k] == "(":
-                replacements.append(
-                    (
-                        preprocessor._scoped_identifier_start(source, i),
-                        angle_end + 1,
-                        replacement,
-                    )
-                )
-            i = angle_end + 1
-            continue
-        i += 1
+    source_length = len(source)
+    excluded = _normalized_scan_spans(excluded_spans, source_length)
+    scan_ranges = (
+        _normalized_scan_spans(included_spans, source_length)
+        if included_spans is not None
+        else [(0, source_length)]
+    )
+    excluded_index = 0
+    for scan_start, scan_end in scan_ranges:
+        i = scan_start
+        excluded_index = _advance_scan_span_index(excluded, excluded_index, i)
+        while i < scan_end:
+            excluded_index = _advance_scan_span_index(excluded, excluded_index, i)
+            scan_limit = scan_end
+            if excluded_index < len(excluded):
+                excluded_start, excluded_end = excluded[excluded_index]
+                if excluded_start <= i < excluded_end:
+                    i = excluded_end
+                    continue
+                if excluded_start < scan_limit:
+                    scan_limit = excluded_start
+
+            while i < scan_limit:
+                if source[i] in "\"'":
+                    _literal, consumed = preprocessor._read_string(source, i)
+                    i += consumed
+                    continue
+                if source.startswith("//", i):
+                    end = source.find("\n", i)
+                    if end == -1:
+                        return replacements
+                    i = end + 1
+                    continue
+                if source.startswith("/*", i):
+                    end = source.find("*/", i + 2)
+                    if end == -1:
+                        return replacements
+                    i = end + 2
+                    continue
+                if source[i].isalpha() or source[i] == "_":
+                    ident, consumed = preprocessor._read_identifier(source, i)
+                    replacement = replacements_by_name.get(ident)
+                    j = i + consumed
+                    while j < source_length and source[j].isspace():
+                        j += 1
+                    if replacement is None or j >= source_length or source[j] != "<":
+                        i += consumed
+                        continue
+                    angle_end = preprocessor._find_matching_angle(source, j)
+                    if angle_end is None:
+                        i += consumed
+                        continue
+                    k = angle_end + 1
+                    while k < source_length and source[k].isspace():
+                        k += 1
+                    if k < source_length and source[k] == "(":
+                        replacements.append(
+                            (
+                                preprocessor._scoped_identifier_start(source, i),
+                                angle_end + 1,
+                                replacement,
+                            )
+                        )
+                    i = angle_end + 1
+                    continue
+                i += 1
     return replacements
 
 
@@ -12575,9 +12642,7 @@ def translate_project(
                                 config, target, artifact, output_path
                             )
                         diagnostics.extend(
-                            _generated_placeholder_diagnostics(
-                                artifact_records, config
-                            )
+                            _generated_placeholder_diagnostics(artifact_records, config)
                         )
                     diagnostics.extend(mojo_host_diagnostics)
                 except Exception as exc:  # noqa: BLE001
@@ -13441,10 +13506,8 @@ def _mojo_unresolved_target_construct_diagnostics(
                 offset=int(first_finding["offset"]),
                 length=int(first_finding["length"]),
                 end_line=int(first_finding["line"]),
-                end_column=int(first_finding["column"])
-                + int(first_finding["length"]),
-                end_offset=int(first_finding["offset"])
-                + int(first_finding["length"]),
+                end_column=int(first_finding["column"]) + int(first_finding["length"]),
+                end_offset=int(first_finding["offset"]) + int(first_finding["length"]),
             ),
             original_location=SourceLocation(file=str(artifact.get("source", ""))),
             **_artifact_diagnostic_context(artifact),
