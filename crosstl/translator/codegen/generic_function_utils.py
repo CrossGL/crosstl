@@ -156,11 +156,18 @@ def iter_function_nodes(ast_node):
     yield from visit(ast_node)
 
 
-def reject_unsupported_generic_functions(ast_node, target_name):
+def reject_unsupported_generic_functions(ast_node, target_name, specializations=None):
     """Reject generic functions before emitting non-specialized target code."""
+    specialized_source_names = {
+        key[0]
+        for key in specializations or {}
+        if isinstance(key, tuple) and key
+    }
     for func in iter_function_nodes(ast_node):
         generic_params = generic_function_parameters(func)
         if not generic_params:
+            continue
+        if getattr(func, "name", None) in specialized_source_names:
             continue
         suffix = f" ({', '.join(generic_params)})" if generic_params else ""
         raise ValueError(
@@ -188,6 +195,25 @@ def generic_function_call_name(generator, func_name, args):
     if key is None:
         return None
     return (getattr(generator, "generic_function_specialized_names", {}) or {}).get(key)
+
+
+def raise_unresolved_generic_function_call(generator, func_name, target_name):
+    """Raise when a target cannot infer a concrete generic helper call."""
+    candidates = (getattr(generator, "generic_function_definitions", {}) or {}).get(
+        func_name,
+        [],
+    )
+    if not candidates:
+        return
+
+    func = candidates[0]
+    generic_params = generic_function_parameters(func)
+    suffix = f" ({', '.join(generic_params)})" if generic_params else ""
+    raise ValueError(
+        f"{target_name} codegen cannot infer concrete template arguments for "
+        f"generic function '{func_name}'{suffix}; specialize the function before "
+        f"{target_name} generation"
+    )
 
 
 def generic_function_call_key(generator, func_name, args):
@@ -373,8 +399,13 @@ def generate_static_generic_numeric_call(generator, func_name):
         return None
 
     mapped_type = generator.map_type(concrete_type)
+    mapped_type_key = str(mapped_type).lower()
     value = 1 if method == "one" else 0
-    if "float" in mapped_type or "half" in mapped_type or mapped_type == "double":
+    if (
+        "float" in mapped_type_key
+        or "half" in mapped_type_key
+        or mapped_type_key == "double"
+    ):
         return f"{value}.0"
     return str(value)
 

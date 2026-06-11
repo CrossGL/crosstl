@@ -127,6 +127,33 @@ class TestCudaCodeGen:
         ):
             CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
+    def test_generic_function_call_emits_concrete_specialization_for_cuda_codegen(
+        self,
+    ):
+        source_code = """
+        shader GenericHelperSpecialization {
+            generic<T> fn fallback_zero(value: T, enabled: bool) -> T {
+                if (enabled) {
+                    return value;
+                }
+                return T::zero();
+            }
+
+            float use_helper(float value) {
+                return fallback_zero(value, false);
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "__device__ float fallback_zero_float(float value, bool enabled)" in cuda_code
+        assert "return 0.0;" in cuda_code
+        assert "return fallback_zero_float(value, false);" in cuda_code
+        assert "T fallback_zero(T value" not in cuda_code
+        assert "return fallback_zero(value, false);" not in cuda_code
+        assert "T::zero" not in cuda_code
+
     def test_simple_function_generation(self):
         source_code = """
         shader TestShader {

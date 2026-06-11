@@ -28,6 +28,15 @@ from ..ast import (
 )
 from .array_utils import parse_array_type, split_array_type_suffix
 from .generic_function_utils import (
+    generate_numeric_trait_method_call,
+    generate_static_generic_numeric_call,
+    generic_function_call_name,
+    generic_function_emission_list,
+    generic_function_parameters,
+    iter_function_nodes,
+    numeric_trait_method_result_type,
+    prepare_generic_function_specializations,
+    raise_unresolved_generic_function_call,
     reject_unsupported_generic_functions as reject_generic_functions_for_target,
 )
 from .match_utils import (
@@ -304,7 +313,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.output = []
         self.indent_level = 0
         self.validate_supported_stage_types(ast_node)
-        self.reject_unsupported_generic_functions(ast_node)
         self.variable_types = {}
         self.current_function_return_type = None
         self.match_temp_variable_index = 0
@@ -322,6 +330,22 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         ) = self.collect_struct_member_metadata(ast_node)
         self.struct_member_semantics = {}
         self.function_return_types = self.collect_function_return_types(ast_node)
+        self.generic_function_definitions = {}
+        self.generic_function_definition_ordinals = {}
+        self.generic_function_specializations = {}
+        self.generic_function_specialized_names = {}
+        self.current_generic_function_substitutions = {}
+        generic_function_specializations = prepare_generic_function_specializations(
+            self,
+            list(iter_function_nodes(ast_node)),
+        )
+        self.function_return_types.update(
+            {
+                func.name: self.type_name_string(getattr(func, "return_type", "void"))
+                for func in generic_function_specializations.values()
+            }
+        )
+        self.reject_unsupported_generic_functions(ast_node)
         self.helper_functions = {}
         self.query_metadata_aliases = {}
         self.query_return_sources = self.collect_simple_query_return_sources(ast_node)
@@ -375,7 +399,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def reject_unsupported_generic_functions(self, ast_node):
         """Reject generic functions before emitting non-compilable CUDA code."""
-        reject_generic_functions_for_target(ast_node, "CUDA")
+        reject_generic_functions_for_target(
+            ast_node,
+            "CUDA",
+            self.generic_function_specializations,
+        )
 
     def unsupported_stage_types(self):
         return set()
@@ -1037,6 +1065,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         functions = getattr(node, "functions", [])
         for func in functions:
+            if generic_function_parameters(func):
+                for specialized_func in generic_function_emission_list(self, func):
+                    self.visit(specialized_func)
+                    self.emit("")
+                continue
             self.visit(func)
             self.emit("")
 
@@ -1075,6 +1108,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                         self.current_stage_name = saved_stage_name
                         for func in getattr(stage, "local_functions", []):
                             if id(func) in emitted_local_functions:
+                                continue
+                            if generic_function_parameters(func):
+                                for specialized_func in generic_function_emission_list(
+                                    self,
+                                    func,
+                                ):
+                                    self.visit(specialized_func)
+                                    self.emit("")
+                                emitted_local_functions.add(id(func))
                                 continue
                             self.visit(func)
                             self.emit("")
@@ -1198,10 +1240,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         saved_stage_builtin_aliases = self.stage_builtin_aliases
         saved_stage_builtin_alias_types = self.stage_builtin_alias_types
         saved_current_function_is_kernel_entry = self.current_function_is_kernel_entry
+        saved_generic_function_substitutions = (
+            self.current_generic_function_substitutions
+        )
         saved_structured_buffer_length_parameters = (
             self.current_structured_buffer_length_parameters
         )
         self.current_function_name = node.name
+        self.current_generic_function_substitutions = (
+            getattr(node, "_generic_substitutions", {}) or {}
+        )
         self.current_structured_buffer_length_parameters = {}
         self.query_metadata_aliases = {}
         self.stage_builtin_aliases = {}
@@ -1388,6 +1436,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.current_function_is_kernel_entry = (
                 saved_current_function_is_kernel_entry
             )
+            self.current_generic_function_substitutions = (
+                saved_generic_function_substitutions
+            )
             self.current_structured_buffer_length_parameters = (
                 saved_structured_buffer_length_parameters
             )
@@ -1439,6 +1490,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.stage_builtin_aliases = saved_stage_builtin_aliases
         self.stage_builtin_alias_types = saved_stage_builtin_alias_types
         self.current_function_is_kernel_entry = saved_current_function_is_kernel_entry
+        self.current_generic_function_substitutions = (
+            saved_generic_function_substitutions
+        )
         self.current_structured_buffer_length_parameters = (
             saved_structured_buffer_length_parameters
         )
@@ -3175,6 +3229,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             raw_args = node.arguments
         elif hasattr(node, "args"):
             raw_args = node.args
+
+        numeric_trait_call = generate_numeric_trait_method_call(
+            self,
+            function_expr,
+            raw_args,
+        )
+        if numeric_trait_call is not None:
+            return numeric_trait_call
+
+        static_generic_call = generate_static_generic_numeric_call(self, func_name)
+        if static_generic_call is not None:
+            return static_generic_call
+
+        specialized_func_name = generic_function_call_name(self, func_name, raw_args)
+        if specialized_func_name is not None:
+            func_name = specialized_func_name
+        else:
+            raise_unresolved_generic_function_call(self, func_name, "CUDA")
 
         args = [self.visit(arg) for arg in raw_args]
 
@@ -7271,6 +7343,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if isinstance(node, FunctionCallNode):
             function_expr = getattr(node, "function", getattr(node, "name", None))
             func_name = getattr(function_expr, "name", function_expr)
+            numeric_result_type = numeric_trait_method_result_type(self, node)
+            if numeric_result_type is not None:
+                return numeric_result_type
+            raw_args = getattr(node, "arguments", getattr(node, "args", [])) or []
+            specialized_func_name = generic_function_call_name(
+                self,
+                func_name,
+                raw_args,
+            )
+            if specialized_func_name in self.function_return_types:
+                return self.function_return_types[specialized_func_name]
             if self.is_user_defined_function(func_name):
                 return self.function_return_types.get(func_name)
             if func_name in CUDA_WAVE_OP_ARITIES:
@@ -7280,7 +7363,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 )
             if func_name == "ReportHit":
                 return "bool"
-            raw_args = getattr(node, "arguments", getattr(node, "args", [])) or []
             if (
                 func_name in {"inverseSqrt", "rsqrt"}
                 and raw_args

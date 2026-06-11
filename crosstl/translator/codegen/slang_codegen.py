@@ -82,6 +82,15 @@ from .enum_utils import (
     sanitize_type_name,
 )
 from .generic_function_utils import (
+    generate_numeric_trait_method_call,
+    generate_static_generic_numeric_call,
+    generic_function_call_name,
+    generic_function_emission_list,
+    generic_function_parameters,
+    iter_function_nodes,
+    numeric_trait_method_result_type,
+    prepare_generic_function_specializations,
+    raise_unresolved_generic_function_call,
     reject_unsupported_generic_functions as reject_generic_functions_for_target,
 )
 from .glsl_buffer_layout import (
@@ -216,6 +225,11 @@ class SlangCodeGen:
         self.user_functions_by_name = {}
         self.user_function_return_types = {}
         self.user_function_parameter_types = {}
+        self.generic_function_definitions = {}
+        self.generic_function_definition_ordinals = {}
+        self.generic_function_specializations = {}
+        self.generic_function_specialized_names = {}
+        self.current_generic_function_substitutions = {}
         self.user_struct_names = set()
         self.user_structs_by_name = {}
         self.structs_by_name = {}
@@ -333,9 +347,9 @@ class SlangCodeGen:
         """Generate Slang source for a CrossGL AST or AST fragment."""
         outermost = not self._generating
         if outermost:
-            self.reject_unsupported_generic_functions(ast)
             self._generating = True
             self.variable_types = {}
+            self.local_variable_types = self.variable_types
             self.image_resource_types = {}
             self.image_resource_accesses = {}
             self.buffer_resource_types = {}
@@ -354,6 +368,46 @@ class SlangCodeGen:
             self.user_function_parameter_types = (
                 self.collect_user_function_parameter_types(ast)
             )
+            self.generic_function_definitions = {}
+            self.generic_function_definition_ordinals = {}
+            self.generic_function_specializations = {}
+            self.generic_function_specialized_names = {}
+            self.current_generic_function_substitutions = {}
+            generic_function_specializations = prepare_generic_function_specializations(
+                self,
+                list(iter_function_nodes(ast)),
+            )
+            if generic_function_specializations:
+                specialized_functions = list(generic_function_specializations.values())
+                self.user_function_names.update(
+                    func.name
+                    for func in specialized_functions
+                    if getattr(func, "name", None)
+                )
+                self.user_functions_by_name.update(
+                    {
+                        func.name: func
+                        for func in specialized_functions
+                        if getattr(func, "name", None)
+                    }
+                )
+                self.user_function_return_types.update(
+                    {
+                        func.name: self.type_name_string(
+                            getattr(func, "return_type", "void")
+                        )
+                        for func in specialized_functions
+                        if getattr(func, "name", None)
+                    }
+                )
+                self.user_function_parameter_types.update(
+                    {
+                        func.name: self.function_parameter_type_names(func)
+                        for func in specialized_functions
+                        if getattr(func, "name", None)
+                    }
+                )
+            self.reject_unsupported_generic_functions(ast)
             user_structs = self.collect_user_structs(ast)
             self.user_struct_names = {
                 struct.name for struct in user_structs if getattr(struct, "name", None)
@@ -502,6 +556,13 @@ class SlangCodeGen:
 
             functions = getattr(ast, "functions", [])
             for function in functions:
+                if generic_function_parameters(function):
+                    for specialized_func in generic_function_emission_list(
+                        self,
+                        function,
+                    ):
+                        result += self.generate_function(specialized_func) + "\n\n"
+                    continue
                 if hasattr(function, "qualifiers") and function.qualifiers:
                     qualifier = function.qualifiers[0] if function.qualifiers else None
                 else:
@@ -553,7 +614,11 @@ class SlangCodeGen:
 
     def reject_unsupported_generic_functions(self, ast_node):
         """Reject generic functions before emitting non-compilable Slang code."""
-        reject_generic_functions_for_target(ast_node, "Slang")
+        reject_generic_functions_for_target(
+            ast_node,
+            "Slang",
+            self.generic_function_specializations,
+        )
 
     def emit_helper_functions(self):
         helpers = ""
@@ -1695,6 +1760,13 @@ class SlangCodeGen:
 
         functions = getattr(node, "functions", [])
         for function in functions:
+            if generic_function_parameters(function):
+                for specialized_func in generic_function_emission_list(
+                    self,
+                    function,
+                ):
+                    result += self.generate_function(specialized_func) + "\n\n"
+                continue
             stage_name = self.get_function_stage(function)
             if stage_name:
                 result += f"// {stage_name.title()} Shader\n"
@@ -4105,6 +4177,10 @@ class SlangCodeGen:
         for func in local_functions:
             if id(func) in forward_declaration_ids:
                 continue
+            if generic_function_parameters(func):
+                for specialized_func in generic_function_emission_list(self, func):
+                    result += self.generate_function(specialized_func) + "\n\n"
+                continue
             if getattr(func, "name", None) in patch_constant_function_names:
                 result += (
                     self.generate_function(
@@ -5661,6 +5737,12 @@ class SlangCodeGen:
         saved_identifier_aliases = self.identifier_aliases.copy()
         saved_hull_output_rewrite = self.current_hull_output_rewrite
         saved_expression_temp_names = self.expression_temp_names
+        saved_generic_function_substitutions = (
+            getattr(self, "current_generic_function_substitutions", {}) or {}
+        )
+        self.current_generic_function_substitutions = (
+            getattr(node, "_generic_substitutions", {}) or {}
+        )
         self.expression_temp_names = set()
         if hasattr(node, "return_type"):
             ret_type_name = self.convert_type_node_to_string(node.return_type)
@@ -5988,6 +6070,9 @@ class SlangCodeGen:
         self.identifier_aliases = saved_identifier_aliases
         self.current_hull_output_rewrite = saved_hull_output_rewrite
         self.expression_temp_names = saved_expression_temp_names
+        self.current_generic_function_substitutions = (
+            saved_generic_function_substitutions
+        )
         return result
 
     def generate_compute_numthreads(self, execution_config=None):
@@ -8669,6 +8754,17 @@ class SlangCodeGen:
                 return self.slang_ray_tracing_result_type(operation)
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
+            numeric_result_type = numeric_trait_method_result_type(self, expr)
+            if numeric_result_type is not None:
+                return numeric_result_type
+            raw_args = getattr(expr, "arguments", getattr(expr, "args", [])) or []
+            specialized_func_name = generic_function_call_name(
+                self,
+                func_name,
+                raw_args,
+            )
+            if specialized_func_name in self.user_function_return_types:
+                return self.user_function_return_types[specialized_func_name]
             if isinstance(func_name, str) and "::" in func_name:
                 enum_name, _variant_name = func_name.split("::", 1)
                 if func_name in self.enum_variant_constructor_fields:
@@ -9036,6 +9132,21 @@ class SlangCodeGen:
                 callee = func_expr
             else:
                 callee = self.generate_expression(func_expr)
+            numeric_trait_call = generate_numeric_trait_method_call(
+                self,
+                func_expr,
+                node.args,
+            )
+            if numeric_trait_call is not None:
+                return numeric_trait_call
+            static_generic_call = generate_static_generic_numeric_call(self, callee)
+            if static_generic_call is not None:
+                return static_generic_call
+            specialized_callee = generic_function_call_name(self, callee, node.args)
+            if specialized_callee is not None:
+                callee = specialized_callee
+            else:
+                raise_unresolved_generic_function_call(self, callee, "Slang")
             synchronization_call = self.generate_slang_synchronization_call(
                 callee, node.args, statement_context=False
             )

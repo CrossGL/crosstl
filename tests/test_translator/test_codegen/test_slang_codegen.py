@@ -81,6 +81,32 @@ def test_generic_trait_methods_are_diagnostic_for_slang_codegen():
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_generic_function_call_emits_concrete_specialization_for_slang_codegen():
+    code = """
+    shader GenericHelperSpecialization {
+        generic<T> fn fallback_zero(value: T, enabled: bool) -> T {
+            if (enabled) {
+                return value;
+            }
+            return T::zero();
+        }
+
+        float use_helper(float value) {
+            return fallback_zero(value, false);
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float fallback_zero_float(float value, bool enabled)" in generated
+    assert "return 0.0;" in generated
+    assert "return fallback_zero_float(value, false);" in generated
+    assert "T fallback_zero(T value" not in generated
+    assert "return fallback_zero(value, false);" not in generated
+    assert "T::zero" not in generated
+
+
 def compile_generated_slang(
     generated_code,
     tmp_path,

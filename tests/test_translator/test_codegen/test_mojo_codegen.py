@@ -8383,6 +8383,32 @@ def test_generic_trait_methods_are_diagnostic_for_mojo_codegen():
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_generic_function_call_emits_concrete_specialization_for_mojo_codegen():
+    code = """
+    shader GenericHelperSpecialization {
+        generic<T> fn fallback_zero(value: T, enabled: bool) -> T {
+            if (enabled) {
+                return value;
+            }
+            return T::zero();
+        }
+
+        float use_helper(float value) {
+            return fallback_zero(value, false);
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn fallback_zero_float(value: Float32, enabled: Bool) -> Float32:" in generated
+    assert "return 0.0" in generated
+    assert "return fallback_zero_float(value, False)" in generated
+    assert "fn fallback_zero(value: T" not in generated
+    assert "return fallback_zero(value, False)" not in generated
+    assert "T::zero" not in generated
+
+
 def test_generic_payload_enum_match_expression_uses_single_subject_call():
     code = """
     generic<T, E> struct Result {
