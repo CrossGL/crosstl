@@ -128,11 +128,12 @@ and DirectX output were retested after issue #829 closed and are now checked.
 Metal output was retested after issue #887 closed and is now checked.
 
 The `glfw/glfw` OpenGL triangle shader strings were tested as a candidate and
-exposed a CrossGL intermediate keyword collision: the fragment shader uses
-`fragment` as a user output variable, which currently fails downstream target
-generation after GLSL-to-CrossGL conversion. That translator issue is tracked
-in issue #766, and the case is intentionally not checked in until keyword-safe
-identifier handling preserves the shader output.
+originally exposed the CrossGL intermediate keyword collision tracked in issue
+#766. Retesting after that fix showed the remaining blocker is Metal output:
+the fragment shader uses `fragment` as a user output variable, and Metal
+codegen still emits `fragment` as a local identifier even though it is a Metal
+stage keyword. That follow-up is tracked in issue #1140, and the case is
+intentionally not checked in until generated Metal artifacts compile directly.
 
 The `KhronosGroup/glslang` specialization-constant vertex shader from
 `Test/spv.specConstant.vert` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515`
