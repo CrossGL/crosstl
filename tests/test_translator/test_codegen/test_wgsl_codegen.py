@@ -403,6 +403,31 @@ def test_wgsl_generic_struct_diagnostic_names_unsupported_member():
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+def test_wgsl_codegen_rejects_derivatives_in_helpers_with_specific_diagnostic():
+    shader = """
+    shader WGSLHelperDerivative {
+        vec2 slopes(vec2 uv) {
+            return dFdx(uv) + ddy(uv);
+        }
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return vec4(slopes(uv), 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WGSL target cannot lower derivative intrinsic\\(s\\) inside helper "
+            "function slopes yet; keep them directly in fragment entry points: "
+            "dFdx, ddy"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_lowers_stage_interface_array_members():
     shader = """
     shader WGSLStageInterfaceArray {
@@ -489,6 +514,45 @@ def test_wgsl_codegen_maps_derivative_intrinsics():
     assert "ddy(" not in generated
     assert "ddx_fine(" not in generated
     assert "dFdyCoarse(" not in generated
+
+
+@pytest.mark.parametrize(
+    "stage_body",
+    [
+        """
+        vertex {
+            vec4 main(vec3 position @ POSITION) @ gl_Position {
+                vec3 dx = dFdx(position);
+                return vec4(dx, 1.0);
+            }
+        }
+        """,
+        """
+        compute {
+            void main() {
+                vec3 value = vec3(1.0);
+                vec3 dx = ddx(value);
+                return;
+            }
+        }
+        """,
+    ],
+)
+def test_wgsl_codegen_rejects_derivative_intrinsics_outside_fragment_stage(stage_body):
+    shader = f"""
+    shader WGSLDerivativeStage {{
+        {stage_body}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target cannot lower derivative intrinsic .* outside fragment "
+            r"stage; WebGPU/WGSL derivative builtins are fragment-only"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
 
 
 def test_wgsl_codegen_emits_compute_workgroup_size():

@@ -1741,6 +1741,15 @@ class WGSLCodeGen:
                 f"compute entry points: {calls}"
             )
 
+        derivative_calls = self.function_derivative_call_names(function)
+        if derivative_calls:
+            calls = ", ".join(sorted(set(derivative_calls)))
+            raise ValueError(
+                "WGSL target cannot lower derivative intrinsic(s) inside helper "
+                f"function {function.name} yet; keep them directly in fragment "
+                f"entry points: {calls}"
+            )
+
     def direct_workgroup_size_references(self, function):
         body = getattr(function, "body", None)
         if body is None or not hasattr(body, "walk"):
@@ -1766,6 +1775,23 @@ class WGSLCodeGen:
             normalized_name = self.semantic_key(function_name)
             if (
                 normalized_name in self.BARRIER_FUNCTION_NAMES
+                and not self.is_user_defined_function_call(node, function_name)
+            ):
+                calls.append(function_name)
+        return tuple(calls)
+
+    def function_derivative_call_names(self, function):
+        body = getattr(function, "body", None)
+        if body is None or not hasattr(body, "walk"):
+            return ()
+        calls = []
+        for node in body.walk():
+            if not isinstance(node, FunctionCallNode):
+                continue
+            function_name = self.expression_name(node.function)
+            normalized_name = self.semantic_key(function_name)
+            if (
+                normalized_name in self.DERIVATIVE_FUNCTION_NAME_MAP
                 and not self.is_user_defined_function_call(node, function_name)
             ):
                 calls.append(function_name)
@@ -3274,6 +3300,12 @@ class WGSLCodeGen:
                 "WGSL target supports derivative intrinsic "
                 f"{function_name}() with exactly 1 argument; got "
                 f"{len(node.arguments)}"
+            )
+        if self._current_stage_name != "fragment":
+            raise ValueError(
+                "WGSL target cannot lower derivative intrinsic "
+                f"{function_name}() outside fragment stage; WebGPU/WGSL "
+                "derivative builtins are fragment-only"
             )
         return f"{mapped_name}({self.generate_expression(node.arguments[0])})"
 
