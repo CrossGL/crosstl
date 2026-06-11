@@ -14177,11 +14177,8 @@ class VulkanSPIRVCodeGen:
         return self.uniform_scalar_size(type_id)
 
     def uniform_scalar_size(self, type_id: SpirvId) -> int:
-        return (
-            8
-            if self.normalize_primitive_name(type_id.type.base_type) == "double"
-            else 4
-        )
+        primitive_name = self.normalize_primitive_name(type_id.type.base_type)
+        return 8 if primitive_name in {"double", "i64", "u64"} else 4
 
     def uniform_array_stride(self, element_type: SpirvId) -> int:
         return self.align_to(self.uniform_layout_size(element_type), 16)
