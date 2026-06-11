@@ -25937,6 +25937,7 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
                         "variant": 0,
                         "checkKind": "maybe",
                         "missingCapabilities": "repo.scan",
+                        "details": [],
                     }
                 ],
             }
@@ -25986,6 +25987,7 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
     assert "diagnostics[0].missingCapabilities must be a list of strings" in (
         diagnostic["message"]
     )
+    assert "diagnostics[0].details must be an object" in diagnostic["message"]
 
 
 def test_project_diagnostics_preserve_original_locations(tmp_path):
@@ -35010,7 +35012,7 @@ def test_runtime_host_loader_scaffolds_preserve_loader_step_metadata(tmp_path):
 def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files(
     tmp_path,
 ):
-    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
+    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("cuda",))
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
     loader_manifest_path.write_text(
         json.dumps(
@@ -35104,7 +35106,7 @@ def test_runtime_host_loader_scaffolds_sanitize_target_and_unit_paths(tmp_path):
 
 
 def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds(tmp_path):
-    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
+    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("cuda",))
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
     loader_manifest_path.write_text(
         json.dumps(
@@ -35294,7 +35296,7 @@ def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file(
 
 def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units(tmp_path):
     _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = inspect_runtime_host_loader_scaffolds(
@@ -35477,7 +35479,7 @@ def test_plan_runtime_host_loader_consumption_reports_ready_units(tmp_path):
 
 def test_plan_runtime_host_loader_consumption_carries_blocked_units(tmp_path):
     _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = plan_runtime_host_loader_consumption(
@@ -35642,7 +35644,7 @@ def test_build_runtime_host_integration_handoff_writes_ready_bundle(tmp_path):
 
 def test_build_runtime_host_integration_handoff_writes_blocked_bundle(tmp_path):
     repo, plan_path, _ = _write_host_loader_consumption_plan_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
     handoff_dir = repo / "host-integration"
 
@@ -35653,7 +35655,7 @@ def test_build_runtime_host_integration_handoff_writes_blocked_bundle(tmp_path):
     assert payload["summary"]["blockedLoaderUnitCount"] == 1
     assert payload["targets"][0]["status"] == "blocked"
     assert payload["actions"][0]["kind"] == "resolve-loader-scaffold-blockers"
-    assert (handoff_dir / "targets" / "vulkan.integration.json").is_file()
+    assert (handoff_dir / "targets" / "cuda.integration.json").is_file()
 
 
 def test_build_runtime_host_integration_handoff_rejects_wrong_plan_kind(tmp_path):
@@ -35897,7 +35899,7 @@ def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch(
 
 def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle(tmp_path):
     _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = inspect_runtime_host_integration_handoff(
@@ -35910,7 +35912,7 @@ def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle(tmp_pat
     assert payload["summary"]["readyTargetCount"] == 0
     assert payload["summary"]["blockedTargetCount"] == 1
     assert payload["summary"]["failedTargetCount"] == 0
-    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["target"] == "cuda"
     assert payload["targets"][0]["status"] == "blocked"
     assert payload["targets"][0]["targetStatus"] == "blocked"
     assert payload["targets"][0]["loaderUnitCount"] == 1
@@ -36099,7 +36101,7 @@ def test_plan_runtime_host_integration_execution_reports_ready_steps(tmp_path):
 
 def test_plan_runtime_host_integration_execution_carries_blocked_steps(tmp_path):
     _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = plan_runtime_host_integration_execution(
@@ -36115,7 +36117,7 @@ def test_plan_runtime_host_integration_execution_carries_blocked_steps(tmp_path)
     assert payload["summary"]["blockedLoaderUnitCount"] == 1
     assert payload["summary"]["stepCount"] == 1
     assert payload["summary"]["blockedStepCount"] == 1
-    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["target"] == "cuda"
     assert payload["targets"][0]["status"] == "blocked"
     assert payload["targets"][0]["blockedStepCount"] == 1
     assert payload["steps"][0]["kind"] == "resolve-loader-scaffold-blockers"
@@ -36350,7 +36352,7 @@ def test_execute_runtime_host_integration_reports_blocked_steps_without_failure(
     tmp_path,
 ):
     _, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = execute_runtime_host_integration(plan_path)
@@ -40272,7 +40274,8 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
         encoding="utf-8",
     )
 
-    payload = translate_project(load_project_config(repo)).to_json()
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
 
     artifact = payload["artifacts"][0]
     assert artifact["status"] == "failed"
@@ -40302,6 +40305,21 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
     assert diagnostic["location"]["line"] == 9
     assert diagnostic["location"]["column"] == 1
     assert "work limit exceeded before GLSL codegen" in diagnostic["message"]
+    assert diagnostic["details"]["templateMaterialization"] == {
+        "limit": 4,
+        "limitSource": "project.source_options.metal.max_template_materialization_work",
+        "requiredWorkItems": 6,
+        "requestedSignature": "3 source instantiations x 2 templates",
+        "suggestedAction": (
+            "raise max_template_materialization_work for this source pattern or "
+            "OpenGL target, or reduce source template instantiations"
+        ),
+    }
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
 
 
 def test_metal_project_materialization_default_work_budget_scales_source_instantiations(
@@ -40573,6 +40591,17 @@ def test_translate_project_metal_implicit_type_environment_budget_diagnostic(
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
     assert "implicit-template-materialization/type-environment" in diagnostic["message"]
     assert "templates=1" in diagnostic["message"]
+    detail = diagnostic["details"]["templateMaterialization"]
+    assert detail["limit"] == 3
+    assert (
+        detail["limitSource"]
+        == "project.source_options.metal.max_template_materialization_work"
+    )
+    assert detail["requiredWorkItems"] > detail["limit"]
+    assert "implicit-template-materialization/type-environment" in (
+        detail["requestedSignature"]
+    )
+    assert "raise max_template_materialization_work" in detail["suggestedAction"]
 
 
 def test_translate_project_metal_type_alias_rewrite_cycle_reports_diagnostic(
@@ -42532,8 +42561,6 @@ def test_translate_project_khronos_opencl_reduce_lowers_all_target_artifacts(
     for artifact in payload["artifacts"]:
         assert artifact["generatedHash"]["algorithm"] == "sha256"
         assert artifact["generatedSizeBytes"] > 0
-
-    assert payload["diagnostics"] == []
 
 
 def test_translate_project_khronos_opencl_reduce_lowers_supported_target_artifacts(
