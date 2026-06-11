@@ -2497,6 +2497,7 @@ def test_main_writes_sync_failure_summary_on_mutation_failure(
 ):
     module = load_sync_module()
     matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "missing-signals.json"
     summary_path = tmp_path / "support-issue-sync-summary.json"
     matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
     monkeypatch.setenv("GITHUB_TOKEN", "token")
@@ -2516,6 +2517,8 @@ def test_main_writes_sync_failure_summary_on_mutation_failure(
         [
             "--matrix",
             str(matrix_path),
+            "--signals",
+            str(signals_path),
             "--repo",
             "owner/repo",
             "--inspect-existing",
