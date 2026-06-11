@@ -1,5 +1,6 @@
 """CrossGL-to-GLSL code generator."""
 
+import re
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -294,6 +295,14 @@ class GLSLCodeGen:
     """Emit GLSL source from the shared CrossGL translator AST."""
 
     OPENGL_DESCRIPTOR_SET_BINDING_STRIDE = 1024
+    METAL_ONLY_SYSTEM_INCLUDES = frozenset(
+        {
+            "metal_math",
+            "metal_math.h",
+            "metal_stdlib",
+            "metal_stdlib.h",
+        }
+    )
     MESH_STAGE_NAMES = {"mesh", "task", "amplification", "object"}
     UNSIGNED_VECTOR_COMPUTE_BUILTINS = {"gl_GlobalInvocationID"}
     GLSL_STAGE_GUARD_MACROS = {
@@ -1609,6 +1618,20 @@ class GLSLCodeGen:
                 extensions.add(extension_name)
         return extensions
 
+    def should_emit_glsl_preprocessor_directive(self, directive):
+        if not isinstance(directive, PreprocessorNode):
+            return True
+        if str(directive.directive).lstrip("#") != "include":
+            return True
+
+        content = str(getattr(directive, "content", "") or "").strip()
+        if not content:
+            return True
+        match = re.match(r'^[<"]([^>"]+)[>"]', content)
+        include_name = match.group(1) if match else content.split()[0]
+        normalized = include_name.strip().replace("\\", "/").lower()
+        return normalized not in self.METAL_ONLY_SYSTEM_INCLUDES
+
     def glsl_extension_enabled(self, extension_name):
         return extension_name in self.current_glsl_extensions
 
@@ -2495,6 +2518,8 @@ class GLSLCodeGen:
         version_line = None
         extra_lines = []
         for directive in preprocessors:
+            if not self.should_emit_glsl_preprocessor_directive(directive):
+                continue
             if isinstance(directive, PreprocessorNode):
                 if directive.directive == "precision":
                     line = (

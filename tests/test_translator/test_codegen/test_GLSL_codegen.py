@@ -12,6 +12,7 @@ from crosstl.translator.ast import (
     IdentifierNode,
     NamedType,
     ParameterNode,
+    PreprocessorNode,
     PrimitiveType,
     ReturnNode,
     ShaderNode,
@@ -86,6 +87,24 @@ def test_glsl_specialization_constant_metadata_emits_layout():
         "literal. */"
     ) in generated
     assert "const int LIGHTING_MODEL = 0;" in generated
+
+
+def test_glsl_codegen_drops_metal_system_includes_but_preserves_glsl_includes():
+    ast = ShaderNode(
+        "IncludeFilters",
+        ExecutionModel.COMPUTE_KERNEL,
+        preprocessors=[
+            PreprocessorNode("include", "<metal_math>"),
+            PreprocessorNode("include", "<metal_stdlib>"),
+            PreprocessorNode("include", "<shared.glsl>"),
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "#include <metal_math>" not in generated
+    assert "#include <metal_stdlib>" not in generated
+    assert "#include <shared.glsl>" in generated
 
 
 def test_glsl_tile_image_ext_importer_attribute_roundtrips():

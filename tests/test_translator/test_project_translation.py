@@ -20115,6 +20115,41 @@ def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
     assert "asuint(" not in generated
 
 
+def test_translate_project_drops_mlx_metal_system_includes_for_opengl(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "arange.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_math>
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void arange(
+                device float* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                out[gid] = float(gid);
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"]["error"] == 0
+
+    artifact = payload["artifacts"][0]
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert artifact["status"] == "translated"
+    assert "#version 450 core" in generated
+    assert "#include <metal_math>" not in generated
+    assert "#include <metal_stdlib>" not in generated
+    assert "#include" not in generated
+
+
 def test_project_cli_translate_project_writes_report(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
