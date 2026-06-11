@@ -344,7 +344,25 @@ class HLSLCodeGen:
         "sample": "sample",
         "linear_sample": "sample",
     }
-    HLSL_RESERVED_IDENTIFIER_NAMES = {"linear"}
+    HLSL_RESERVED_IDENTIFIER_NAMES = {
+        "centroid",
+        "column_major",
+        "globallycoherent",
+        "line",
+        "lineadj",
+        "linear",
+        "nointerpolation",
+        "noperspective",
+        "point",
+        "precise",
+        "row_major",
+        "sample",
+        "snorm",
+        "triangle",
+        "triangleadj",
+        "uniform",
+        "unorm",
+    }
     HLSL_FEEDBACK_WRITE_HELPERS = {
         "write_sampler_feedback": ("WriteSamplerFeedback", {4, 5}),
         "write_sampler_feedback_bias": ("WriteSamplerFeedbackBias", {5, 6}),
