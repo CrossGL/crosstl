@@ -676,6 +676,10 @@ def test_translate_project_glslang_spec_constant_vertex_to_directx(tmp_path):
         "void foo(float4 p[arraySize], VertexInput input, " "inout VertexOutput output)"
     ) in generated
     assert "foo(input.ucol, input, output);" in generated
+    assert "float4 ucol[arraySize]: TEXCOORD0;" in generated
+    assert "float4 dupUcol[dupArraySize]: TEXCOORD5;" in generated
+    assert "float4 dupUcol[dupArraySize]: TEXCOORD1;" not in generated
+    assert_directx_vertex_validates_if_available(generated, tmp_path)
 
 
 def test_translate_project_glsl_overloaded_vector_helper_to_mojo(tmp_path):

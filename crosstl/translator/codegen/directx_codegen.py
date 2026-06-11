@@ -326,6 +326,16 @@ class DirectXUnresolvedSourceTypeError(ValueError):
         super().__init__(message)
 
 
+class DirectXSemanticArraySizeError(ValueError):
+    """Diagnostic exception for stage semantic arrays with unknown extents."""
+
+    project_diagnostic_code = "project.translate.directx-semantic-array-size"
+    missing_capabilities = ("directx.semantic-array-size",)
+
+    def __init__(self, message):
+        super().__init__(message)
+
+
 class HLSLCodeGen:
     """Emit HLSL source from the shared CrossGL translator AST."""
 
@@ -12739,6 +12749,127 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
         return name_semantics.get(getattr(member, "name", ""))
 
+    def hlsl_semantic_range_start(self, semantic):
+        mapped_semantic = self.hlsl_semantic_name(semantic)
+        semantic_text = str(mapped_semantic)
+        suffix_start = len(semantic_text)
+        while suffix_start > 0 and semantic_text[suffix_start - 1].isdigit():
+            suffix_start -= 1
+
+        base = semantic_text[:suffix_start] or semantic_text
+        suffix = semantic_text[suffix_start:]
+        return base.lower(), int(suffix) if suffix else 0
+
+    def hlsl_struct_member_semantic_slot_count(self, struct_name, member, semantic):
+        raw_type = self.hlsl_struct_member_raw_type(member)
+        size_expr = None
+        if isinstance(member, ArrayNode):
+            size_expr = getattr(member, "size", None)
+        elif raw_type is not None and str(type(raw_type)).find("ArrayType") != -1:
+            size_expr = getattr(raw_type, "size", None)
+        else:
+            type_name = self.type_name_string(raw_type)
+            _base_type, array_suffix = split_array_type_suffix(str(type_name or ""))
+            if not array_suffix:
+                return 1
+            first_dimension = array_suffix[1:].split("]", 1)[0]
+            size_expr = first_dimension if first_dimension else None
+
+        count = self.literal_int_value(size_expr, self.literal_int_constants)
+        if count is not None and count > 0:
+            return count
+
+        member_name = getattr(member, "name", "<anonymous>")
+        semantic_name = self.hlsl_semantic_name(semantic)
+        size_label = (
+            self.expression_to_string(size_expr) if size_expr is not None else ""
+        )
+        size_suffix = f" from '{size_label}'" if size_label else ""
+        raise DirectXSemanticArraySizeError(
+            f"DirectX struct '{struct_name}' member '{member_name}' uses "
+            f"array-valued semantic '{semantic_name}' but its array size"
+            f"{size_suffix} cannot be resolved to a positive integer. "
+            "Use a literal or compile-time integer constant array size before "
+            "translating stage input/output semantics to DirectX."
+        )
+
+    def hlsl_reserve_semantic_range(
+        self, used_ranges, struct_name, member_name, semantic, count
+    ):
+        semantic_base, start = self.hlsl_semantic_range_start(semantic)
+        count = max(count or 1, 1)
+        end = start + count - 1
+        ranges = used_ranges.setdefault(semantic_base, [])
+        for used_start, used_end, used_member in ranges:
+            if start <= used_end and used_start <= end:
+                range_label = self.hlsl_semantic_range_label(semantic, start, end)
+                used_label = self.hlsl_semantic_range_label(
+                    semantic, used_start, used_end
+                )
+                raise ValueError(
+                    f"Conflicting DirectX semantic range in struct '{struct_name}' "
+                    f"for member '{member_name}': {range_label} overlaps "
+                    f"member '{used_member}' {used_label}"
+                )
+        ranges.append((start, end, member_name))
+
+    def hlsl_semantic_range_label(self, semantic, start, end):
+        semantic_base, _ = self.hlsl_semantic_range_start(semantic)
+        if start == end:
+            return f"{semantic_base.upper()}{start}"
+        return f"{semantic_base.upper()}{start}-{semantic_base.upper()}{end}"
+
+    def hlsl_semantic_range_is_used(self, used_ranges, semantic, count=1):
+        semantic_base, start = self.hlsl_semantic_range_start(semantic)
+        end = start + max(count or 1, 1) - 1
+        for used_start, used_end, _used_member in used_ranges.get(semantic_base, []):
+            if start <= used_end and used_start <= end:
+                return True
+        return False
+
+    def hlsl_next_available_semantic_index(
+        self, used_ranges, semantic_base, start, count
+    ):
+        semantic_key, _ = self.hlsl_semantic_range_start(semantic_base)
+        count = max(count or 1, 1)
+        index = max(start, 0)
+        ranges = used_ranges.get(semantic_key, [])
+        while True:
+            end = index + count - 1
+            conflict_end = None
+            for used_start, used_end, _used_member in ranges:
+                if index <= used_end and used_start <= end:
+                    conflict_end = (
+                        used_end
+                        if conflict_end is None
+                        else max(conflict_end, used_end)
+                    )
+            if conflict_end is None:
+                return index
+            index = conflict_end + 1
+
+    def hlsl_declared_struct_semantic_ranges(self, struct_node):
+        used_ranges = {}
+        struct_name = getattr(struct_node, "name", "<anonymous>")
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = self.hlsl_struct_member_declared_semantic(member)
+            if (
+                semantic is None
+                or self.hlsl_location_attribute_index(member) is not None
+            ):
+                continue
+            count = self.hlsl_struct_member_semantic_slot_count(
+                struct_name, member, semantic
+            )
+            self.hlsl_reserve_semantic_range(
+                used_ranges,
+                struct_name,
+                getattr(member, "name", "<anonymous>"),
+                semantic,
+                count,
+            )
+        return used_ranges
+
     def hlsl_can_default_fragment_input_semantic(self, member_type):
         type_name = self.type_name_string(member_type)
         if not type_name:
@@ -12762,18 +12893,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             return {}
 
-        used_semantics = set()
-        for member in getattr(struct_node, "members", []) or []:
-            semantic = self.hlsl_struct_member_declared_semantic(member)
-            if (
-                semantic is not None
-                and self.hlsl_location_attribute_index(member) is None
-            ):
-                used_semantics.add(self.hlsl_semantic_key(semantic))
+        used_ranges = self.hlsl_declared_struct_semantic_ranges(struct_node)
 
         defaults = {}
         position_names = {"position", "vertexposition", "vertex_position", "pos"}
-        if self.hlsl_semantic_key("POSITION") not in used_semantics:
+        if not self.hlsl_semantic_range_is_used(used_ranges, "POSITION"):
             for member in getattr(struct_node, "members", []) or []:
                 member_name = getattr(member, "name", None)
                 if not member_name:
@@ -12787,7 +12911,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 ):
                     continue
                 defaults[member_name] = "POSITION"
-                used_semantics.add(self.hlsl_semantic_key("POSITION"))
+                self.hlsl_reserve_semantic_range(
+                    used_ranges,
+                    struct_node.name,
+                    member_name,
+                    "POSITION",
+                    1,
+                )
                 break
 
         next_texcoord = 0
@@ -12807,12 +12937,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
             if location_index is not None:
                 next_texcoord = location_index
-            while self.hlsl_semantic_key(f"TEXCOORD{next_texcoord}") in used_semantics:
-                next_texcoord += 1
+            count = self.hlsl_struct_member_semantic_slot_count(
+                struct_node.name, member, f"TEXCOORD{next_texcoord}"
+            )
+            next_texcoord = self.hlsl_next_available_semantic_index(
+                used_ranges, "TEXCOORD", next_texcoord, count
+            )
             semantic = f"TEXCOORD{next_texcoord}"
             defaults[member_name] = semantic
-            used_semantics.add(self.hlsl_semantic_key(semantic))
-            next_texcoord += 1
+            self.hlsl_reserve_semantic_range(
+                used_ranges,
+                struct_node.name,
+                member_name,
+                semantic,
+                count,
+            )
+            next_texcoord += count
         return defaults
 
     def hlsl_default_vertex_output_member_semantics(self, struct_node):
@@ -12822,18 +12962,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             return {}
 
-        used_semantics = set()
-        for member in getattr(struct_node, "members", []) or []:
-            semantic = self.hlsl_struct_member_declared_semantic(member)
-            if (
-                semantic is not None
-                and self.hlsl_location_attribute_index(member) is None
-            ):
-                used_semantics.add(self.hlsl_semantic_key(semantic))
+        used_ranges = self.hlsl_declared_struct_semantic_ranges(struct_node)
 
         defaults = {}
         position_names = {"position", "clipposition", "clip_position"}
-        if self.hlsl_semantic_key("SV_Position") not in used_semantics:
+        if not self.hlsl_semantic_range_is_used(used_ranges, "SV_Position"):
             for member in getattr(struct_node, "members", []) or []:
                 member_name = getattr(member, "name", None)
                 if not member_name:
@@ -12845,7 +12978,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if self.map_type(self.hlsl_struct_member_type_name(member)) != "float4":
                     continue
                 defaults[member_name] = "SV_Position"
-                used_semantics.add(self.hlsl_semantic_key("SV_Position"))
+                self.hlsl_reserve_semantic_range(
+                    used_ranges,
+                    struct_node.name,
+                    member_name,
+                    "SV_Position",
+                    1,
+                )
                 break
 
         next_texcoord = 0
@@ -12867,12 +13006,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
             if location_index is not None:
                 next_texcoord = location_index
-            while self.hlsl_semantic_key(f"TEXCOORD{next_texcoord}") in used_semantics:
-                next_texcoord += 1
+            count = self.hlsl_struct_member_semantic_slot_count(
+                struct_node.name, member, f"TEXCOORD{next_texcoord}"
+            )
+            next_texcoord = self.hlsl_next_available_semantic_index(
+                used_ranges, "TEXCOORD", next_texcoord, count
+            )
             semantic = f"TEXCOORD{next_texcoord}"
             defaults[member_name] = semantic
-            used_semantics.add(self.hlsl_semantic_key(semantic))
-            next_texcoord += 1
+            self.hlsl_reserve_semantic_range(
+                used_ranges,
+                struct_node.name,
+                member_name,
+                semantic,
+                count,
+            )
+            next_texcoord += count
         return defaults
 
     def hlsl_default_fragment_input_member_semantics(self, struct_node):
@@ -12882,14 +13031,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             return {}
 
-        used_semantics = set()
-        for member in getattr(struct_node, "members", []) or []:
-            semantic = self.hlsl_struct_member_declared_semantic(member)
-            if (
-                semantic is not None
-                and self.hlsl_location_attribute_index(member) is None
-            ):
-                used_semantics.add(self.hlsl_semantic_key(semantic))
+        used_ranges = self.hlsl_declared_struct_semantic_ranges(struct_node)
 
         defaults = {}
         next_texcoord = 0
@@ -12909,12 +13051,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
             if location_index is not None:
                 next_texcoord = location_index
-            while self.hlsl_semantic_key(f"TEXCOORD{next_texcoord}") in used_semantics:
-                next_texcoord += 1
+            count = self.hlsl_struct_member_semantic_slot_count(
+                struct_node.name, member, f"TEXCOORD{next_texcoord}"
+            )
+            next_texcoord = self.hlsl_next_available_semantic_index(
+                used_ranges, "TEXCOORD", next_texcoord, count
+            )
             semantic = f"TEXCOORD{next_texcoord}"
             defaults[member_name] = semantic
-            used_semantics.add(self.hlsl_semantic_key(semantic))
-            next_texcoord += 1
+            self.hlsl_reserve_semantic_range(
+                used_ranges,
+                struct_node.name,
+                member_name,
+                semantic,
+                count,
+            )
+            next_texcoord += count
         return defaults
 
     def hlsl_default_fragment_output_member_semantics(self, struct_node):
@@ -12924,11 +13076,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             return {}
 
-        used_semantics = set()
-        for member in getattr(struct_node, "members", []) or []:
-            semantic = self.hlsl_struct_member_declared_semantic(member)
-            if semantic is not None:
-                used_semantics.add(self.hlsl_semantic_key(semantic))
+        used_ranges = self.hlsl_declared_struct_semantic_ranges(struct_node)
 
         defaults = {}
         next_target = 0
@@ -12944,24 +13092,36 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if normalized_name in {"depth", "fragdepth", "glfragdepth"}:
                 if (
                     mapped_type == "float"
-                    and self.hlsl_semantic_key("SV_DEPTH") not in used_semantics
+                    and not self.hlsl_semantic_range_is_used(used_ranges, "SV_DEPTH")
                 ):
                     defaults[member_name] = "SV_DEPTH"
-                    used_semantics.add(self.hlsl_semantic_key("SV_DEPTH"))
+                    self.hlsl_reserve_semantic_range(
+                        used_ranges,
+                        struct_node.name,
+                        member_name,
+                        "SV_DEPTH",
+                        1,
+                    )
                 continue
 
             if mapped_type != "float4":
                 continue
-            while self.hlsl_semantic_key(
-                f"SV_TARGET{next_target}"
-            ) in used_semantics or (
+            while self.hlsl_semantic_range_is_used(
+                used_ranges, f"SV_TARGET{next_target}"
+            ) or (
                 next_target == 0
-                and self.hlsl_semantic_key("SV_TARGET") in used_semantics
+                and self.hlsl_semantic_range_is_used(used_ranges, "SV_TARGET")
             ):
                 next_target += 1
             semantic = "SV_TARGET" if next_target == 0 else f"SV_TARGET{next_target}"
             defaults[member_name] = semantic
-            used_semantics.add(self.hlsl_semantic_key(semantic))
+            self.hlsl_reserve_semantic_range(
+                used_ranges,
+                struct_node.name,
+                member_name,
+                semantic,
+                1,
+            )
             next_target += 1
         return defaults
 
