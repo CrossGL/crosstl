@@ -1907,9 +1907,7 @@ class HLSLCodeGen:
                 self.hlsl_declaration_has_groupshared_qualifier,
             ),
         )
-        for node, alias in self.hlsl_groupshared_declarations_to_emit(
-            groupshared_vars
-        ):
+        for node, alias in self.hlsl_groupshared_declarations_to_emit(groupshared_vars):
             code += self.generate_hlsl_hoisted_groupshared_declaration(node, alias)
 
         if cbuffers:
@@ -13589,7 +13587,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ]
         required_parameters = []
         for builtin_name, param_type, semantic in builtin_parameters:
-            if builtin_name not in used_names or builtin_name in explicit_stage_builtins:
+            if (
+                builtin_name not in used_names
+                or builtin_name in explicit_stage_builtins
+            ):
                 continue
             name = self.hlsl_unique_local_identifier(
                 "_crossglFragCoord", reserved_names

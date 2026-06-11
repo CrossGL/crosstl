@@ -3771,8 +3771,7 @@ def test_glsl_compute_metal_max_total_threads_attribute_is_not_return_semantic()
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
 
     assert (
-        "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;"
-        in generated
+        "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;" in generated
     )
     assert "return semantic 'max_total_threads_per_threadgroup'" not in generated
     assert "max_total_threads_per_threadgroup" not in generated

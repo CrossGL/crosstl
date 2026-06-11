@@ -282,7 +282,6 @@ from .stage_utils import (
     collect_stage_local_structs,
     collect_stage_local_variables,
     compute_local_size,
-    declaration_signature,
     deduplicate_named_declarations,
     normalize_stage_name,
     order_functions_by_dependencies,
@@ -5712,8 +5711,8 @@ class GLSLCodeGen:
             self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
             stage_resource_alias = stage_entry_resource_aliases.get(p.name)
             if stage_resource_alias:
-                self.local_variable_types[stage_resource_alias] = (
-                    self.type_name_string(raw_param_type)
+                self.local_variable_types[stage_resource_alias] = self.type_name_string(
+                    raw_param_type
                 )
             self.validate_resource_access_metadata_operands(p)
             self.record_structured_buffer_access_metadata(

@@ -3,9 +3,9 @@ from typing import List
 
 import pytest
 
+import crosstl.translator
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
-import crosstl.translator
 from crosstl.translator.ast import (
     ArrayNode,
     AttributeNode,
@@ -10131,7 +10131,7 @@ def test_directx_function_local_groupshared_variables_lower_to_global_scope():
     assert "    groupshared uint scratch;" not in generated
     assert "main_scratch = 1u;" in generated
     assert generated.index("groupshared uint main_scratch;") < generated.index(
-        "[shader(\"amplification\")]"
+        '[shader("amplification")]'
     )
 
 

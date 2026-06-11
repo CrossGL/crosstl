@@ -435,9 +435,9 @@ def test_metal_threadgroup_scratch_lowers_to_directx_groupshared(tmp_path):
     assert "mat_mul_scratch[tid] = 1.0;" in generated
     assert "out_.Store(tid, mat_mul_scratch[tid]);" in generated
     assert "GroupMemoryBarrierWithGroupSync();" in generated
-    assert generated.index(
-        "groupshared float mat_mul_scratch[256];"
-    ) < generated.index("void CSMain")
+    assert generated.index("groupshared float mat_mul_scratch[256];") < generated.index(
+        "void CSMain"
+    )
 
 
 def test_metal_constant_reference_parameter_lowers_to_directx_constant_buffer(
@@ -1019,9 +1019,7 @@ def test_metal_max_total_threads_metadata_is_not_return_semantic_for_void_comput
         """,
     )
 
-    generated = crosstl.translate(
-        str(source_path), backend=target, format_output=False
-    )
+    generated = crosstl.translate(str(source_path), backend=target, format_output=False)
 
     _assert_generated_output_is_usable(generated)
     assert "return semantic" not in generated

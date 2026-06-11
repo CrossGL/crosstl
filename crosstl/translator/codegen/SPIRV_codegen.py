@@ -16578,8 +16578,7 @@ class VulkanSPIRVCodeGen:
 
         function_key = id(function_node)
         if any(
-            key == function_key
-            for key, _name in self.inline_storage_buffer_call_stack
+            key == function_key for key, _name in self.inline_storage_buffer_call_stack
         ):
             cycle = [
                 name

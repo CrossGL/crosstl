@@ -2,9 +2,9 @@ import re
 import shutil
 import subprocess
 
-import crosstl
 import pytest
 
+import crosstl
 from crosstl.translator.ast import (
     AttributeNode,
     BinaryOpNode,

@@ -3787,9 +3787,9 @@ class MetalCodeGen:
                 param_list, shader_type
             )
             if explicit_stage_builtins.get("position"):
-                self.current_metal_graphics_builtin_parameter_names[
-                    "gl_FragCoord"
-                ] = explicit_stage_builtins["position"]
+                self.current_metal_graphics_builtin_parameter_names["gl_FragCoord"] = (
+                    explicit_stage_builtins["position"]
+                )
             reserved_builtin_names = set(reserved_parameter_names)
             reserved_builtin_names.update(
                 self.metal_function_local_variable_names(func)
@@ -4860,9 +4860,7 @@ class MetalCodeGen:
         ) in self.metal_fragment_builtin_parameter_specs():
             if builtin_name not in used_names or attribute in explicit_stage_builtins:
                 continue
-            name = self.unique_metal_generated_name(
-                "_crossglFragCoord", reserved_names
-            )
+            name = self.unique_metal_generated_name("_crossglFragCoord", reserved_names)
             reserved_names.add(name)
             required_parameters.append((builtin_name, name, param_type, attribute))
         return required_parameters

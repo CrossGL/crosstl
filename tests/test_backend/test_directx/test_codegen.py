@@ -1173,10 +1173,7 @@ def test_codegen_hlsl_program_scope_constants_lower_to_metal_cbuffer():
     assert "constant float4x4 MatrixTransform" not in metal
     assert "struct HlslProgramConstants" in metal
     assert "float4x4 MatrixTransform;" in metal
-    assert (
-        "constant HlslProgramConstants& hlslProgramConstants [[buffer(0)]]"
-        in metal
-    )
+    assert "constant HlslProgramConstants& hlslProgramConstants [[buffer(0)]]" in metal
     assert "input.Position * hlslProgramConstants.MatrixTransform" in metal
 
 

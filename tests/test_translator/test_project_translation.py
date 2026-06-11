@@ -4595,8 +4595,7 @@ def test_translate_project_glsl_usampler_texel_fetch_lowers_to_uint_spirv(
     uint_type = re.search(r"(%\d+) = OpTypeInt 32 0", vulkan)
     assert uint_type is not None
     sampled_image = re.search(
-        rf"(%\d+) = OpTypeImage {re.escape(uint_type.group(1))} "
-        r"2D 0 0 0 1 Unknown",
+        rf"(%\d+) = OpTypeImage {re.escape(uint_type.group(1))} " r"2D 0 0 0 1 Unknown",
         vulkan,
     )
     uvec4_type = re.search(
@@ -20153,9 +20152,9 @@ def test_translate_project_reports_mlx_sort_vulkan_storage_buffer_recursion(
     assert artifact["target"] == "vulkan"
     assert artifact["source"] == "sort_reduced.cgl"
     assert "storage-buffer function inlining" in artifact["error"]
-    assert "overloaded storage-buffer helper calls are not supported" in artifact[
-        "error"
-    ]
+    assert (
+        "overloaded storage-buffer helper calls are not supported" in artifact["error"]
+    )
     assert "maximum recursion depth exceeded" not in artifact["error"]
     assert "generatedHash" not in artifact
     assert not (repo / artifact["path"]).exists()
