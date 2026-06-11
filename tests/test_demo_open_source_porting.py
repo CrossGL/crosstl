@@ -192,6 +192,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
     }
     assert _workflow_step_cases(workflow, "macOS Metal smoke checks") == {
         "angle-simple-texture-2d",
+        "apple-modern-rendering-mesh-viewdir",
         "arm-opengl-es-sdk-cube",
         "directx-graphics-samples-hello-triangle",
         "directx-graphics-samples-hello-texture",
@@ -238,6 +239,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "monogame-sprite-effect",
         "openframeworks-noise-shader",
         "sascha-willems-vulkan-headless-compute",
+        "vulkan-tools-cube",
         "vulkan-samples-dynamic-line-grid",
     }
 
@@ -277,7 +279,6 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
         for path in CASE_ROOT.glob("*/crosstl-out/metal/*.metal")
         if path.parts[-4]
         not in {
-            "apple-modern-rendering-mesh-viewdir",
             "directx-graphics-samples-hello-triangle",
             "sascha-willems-vulkan-conservative-triangle",
         }
@@ -309,6 +310,8 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
         "demos/open-source-porting/cases/openframeworks-noise-shader/crosstl-out/directx/noise.frag.hlsl",
         "demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/directx/headless.hlsl",
         "demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/directx/hello-world.hlsl",
+        "demos/open-source-porting/cases/vulkan-tools-cube/crosstl-out/directx/cube.vert.hlsl",
+        "demos/open-source-porting/cases/vulkan-tools-cube/crosstl-out/directx/cube.frag.hlsl",
         "demos/open-source-porting/cases/vulkan-samples-dynamic-line-grid/crosstl-out/directx/grid.hlsl",
     } == directx_paths
     assert all((ROOT / path).is_file() for path in directx_paths)

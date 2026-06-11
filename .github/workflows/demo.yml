@@ -138,6 +138,7 @@ jobs:
             --check \
             --run-toolchains \
             --require-toolchain-runs \
+            --case apple-modern-rendering-mesh-viewdir \
             --case directx-graphics-samples-hello-triangle \
             --case directx-graphics-samples-hello-texture \
             --case directx-shader-compiler-neg1 \
@@ -181,6 +182,7 @@ jobs:
           for shader in \
             demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/metal/SimpleTexture2D.frag.metal \
             demos/open-source-porting/cases/angle-simple-texture-2d/crosstl-out/metal/SimpleTexture2D.vert.metal \
+            demos/open-source-porting/cases/apple-modern-rendering-mesh-viewdir/crosstl-out/metal/AAPLMeshRenderer.metal \
             demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/metal/Cube_cube.frag.metal \
             demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/metal/Cube_cube.vert.metal \
             demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/metal/shaders.metal \
@@ -244,6 +246,7 @@ jobs:
             --case arm-opengl-es-sdk-cube \
             --case sascha-willems-vulkan-headless-compute \
             --case slang-hello-world-compute \
+            --case vulkan-tools-cube \
             --case vulkan-samples-dynamic-line-grid \
             --target directx \
             --reports-dir support/generated/demo-reports/windows-directx
@@ -284,6 +287,8 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.frag.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/directx/headless.hlsl CSMain cs_6_0
           compile_hlsl demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/directx/hello-world.hlsl CSMain cs_6_0
+          compile_hlsl demos/open-source-porting/cases/vulkan-tools-cube/crosstl-out/directx/cube.vert.hlsl VSMain vs_6_0
+          compile_hlsl demos/open-source-porting/cases/vulkan-tools-cube/crosstl-out/directx/cube.frag.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/vulkan-samples-dynamic-line-grid/crosstl-out/directx/grid.hlsl PSMain ps_6_0
         shell: bash
 

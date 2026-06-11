@@ -55,7 +55,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `spirv-cross-round-fragment` | `KhronosGroup/SPIRV-Cross` at `146679ff8255a6068518685599d7fb8761d1b570` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream fragment reference shader unchanged. |
 | `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. |
 | `angle-simple-texture-2d` | `google/angle` at `52232eaf409a28d77947df5622af274e1ef770c6` | BSD-style | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses extracted upstream SimpleTexture2D shader strings. |
-| `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, OpenGL, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. Metal target validation is tracked in issue #988. |
+| `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. |
 | `arm-opengl-es-sdk-cube` | `ARM-software/opengl-es-sdk-for-android` at `c3caf759bb2e71fa9a118b3e3abd996cf00e660a` | MIT | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream cube shader pair unchanged. |
 | `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. OpenGL resource lowering is tracked in issue #973, and DirectX buffer-resource lowering is tracked in issue #974. |
 | `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, Metal, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. Host launch and memory-management integration remain outside the demo scope. |
@@ -75,7 +75,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `sascha-willems-vulkan-headless-compute` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream headless compute shader unchanged. |
 | `slang-hello-world-compute` | `shader-slang/slang` at `29e69b0bf626f87500be73a7fb3764db25658c66` | Apache-2.0 WITH LLVM-exception | Slang | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream compute shader unchanged. |
 | `spirv-tools-basic-src` | `KhronosGroup/SPIRV-Tools` at `199cb207b911501ddd76dcddf100a6e21c15ef23` | Apache-2.0 | SPIR-V assembly | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream SPIR-V assembly fixture unchanged. |
-| `vulkan-tools-cube` | `KhronosGroup/Vulkan-Tools` at `68749eafbf27114a1dd807d6c870e53306673e64` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream cube demo shader pair unchanged. DirectX vertex-output semantic lowering is tracked in issue #975. |
+| `vulkan-tools-cube` | `KhronosGroup/Vulkan-Tools` at `68749eafbf27114a1dd807d6c870e53306673e64` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream cube demo shader pair unchanged. |
 
 ## Source adjustments
 
@@ -152,11 +152,10 @@ Metal, and Vulkan. DirectX output was retested after issue #959 closed and is
 now checked with the other generated targets.
 
 The `donaldwuid/apple_metal_sample_code` mesh view-direction slice is checked
-through CrossGL, OpenGL, DirectX, and Vulkan. Returned `viewDir` preservation
-was retested after issue #951 closed, and OpenGL and Vulkan output were
-restored after issues #971 and #972 closed. Metal output remains excluded
-until resource attributes are emitted outside `stage_in` wrapper structs; that
-translator follow-up is tracked in issue #988.
+through CrossGL, OpenGL, Metal, DirectX, and Vulkan. Returned `viewDir`
+preservation was retested after issue #951 closed, OpenGL and Vulkan output
+were restored after issues #971 and #972 closed, and Metal resource attributes
+were retested after issue #988 closed.
 
 The `DiligentGraphics/DiligentSamples` Tutorial02 Cube shaders from
 `Tutorials/Tutorial02_Cube/assets/cube.vsh` and
@@ -182,10 +181,9 @@ The `nvpro-samples/vk_mini_samples` rectangle shader pair is checked for
 CrossGL, Metal, OpenGL, and Vulkan output.
 
 The `KhronosGroup/Vulkan-Tools` cube demo shaders are checked for CrossGL,
-OpenGL, Metal, and Vulkan output after issue #819 restored HLSL
-reserved-keyword handling. DirectX remains excluded because generated stage
-output varyings currently collide on the same HLSL semantic; that translator
-issue is tracked in issue #975.
+OpenGL, Metal, DirectX, and Vulkan output after issue #819 restored HLSL
+reserved-keyword handling and issue #975 restored distinct DirectX vertex
+output semantics.
 
 The `ARM-software/opengl-es-sdk-for-android` cube shaders are checked for
 CrossGL, OpenGL, Metal, DirectX, and Vulkan output after issue #820 restored
