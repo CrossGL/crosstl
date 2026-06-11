@@ -238,6 +238,7 @@ class VulkanSPIRVCodeGen:
         self.generic_function_specializations = {}
         self.generic_function_specialized_names = {}
         self.current_generic_function_substitutions = {}
+        self.generic_type_parameter_names = set()
         self.local_variable_types = {}
         self.spirv_skipped_function_parameter_indices = {}
         self.spirv_skipped_function_parameter_indices_by_id = {}
@@ -12845,6 +12846,9 @@ class VulkanSPIRVCodeGen:
             type_str = "None"
 
         type_str = self.normalize_reference_type_name(type_str)
+        substitutions = self.current_generic_function_substitutions or {}
+        if type_str in substitutions:
+            return self.map_crossgl_type(substitutions[type_str])
         type_str = self.normalize_generic_vector_type(type_str)
         type_str = self.normalize_hlsl_matrix_type(type_str)
 
@@ -12938,9 +12942,44 @@ class VulkanSPIRVCodeGen:
 
         if type_str in self.struct_types:
             return self.struct_types[type_str]
+        if type_str in self.generic_type_parameter_names:
+            return self.register_primitive_type("float")
         else:
             self.emit(f"; WARNING: Unknown type {type_str}, using float as default")
             return self.register_primitive_type("float")
+
+    def collect_generic_type_parameter_names(self, root):
+        names = set()
+        visited = set()
+
+        def walk(value):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return
+            if isinstance(value, dict):
+                for child in value.values():
+                    walk(child)
+                return
+            if isinstance(value, (list, tuple, set)):
+                for child in value:
+                    walk(child)
+                return
+
+            value_id = id(value)
+            if value_id in visited:
+                return
+            visited.add(value_id)
+
+            for param in getattr(value, "generic_params", []) or []:
+                name = getattr(param, "name", None)
+                if name:
+                    names.add(name)
+
+            if hasattr(value, "__dict__"):
+                for child in vars(value).values():
+                    walk(child)
+
+        walk(root)
+        return names
 
     def ensure_declared_struct_type(self, type_name: str) -> Optional[SpirvId]:
         if type_name in self.struct_types:
@@ -22341,6 +22380,70 @@ class VulkanSPIRVCodeGen:
         self.mark_non_uniform_result(copied)
         return copied
 
+    def process_numeric_trait_method_call(self, callee_expr, args):
+        member = getattr(callee_expr, "member", None)
+        operator = {
+            "add": "+",
+            "sub": "-",
+            "mul": "*",
+            "div": "/",
+        }.get(member)
+        if operator is None:
+            return None
+        if len(args or []) != 1:
+            self.emit(
+                f"; WARNING: numeric trait method '{member}' requires one operand"
+            )
+            return self.default_value_for_type(self.register_primitive_type("float"))
+
+        object_expr = getattr(
+            callee_expr, "object", getattr(callee_expr, "object_expr", None)
+        )
+        left = self.process_expression(object_expr)
+        right = self.process_expression(args[0])
+        if left is None or right is None:
+            return self.default_value_for_type(self.register_primitive_type("float"))
+
+        left_type = self.registered_value_type(left) or self.ensure_registered_type(
+            left.type
+        )
+        right_type = self.registered_value_type(right) or self.ensure_registered_type(
+            right.type
+        )
+        result_type = self.binary_expression_result_type(
+            operator, left_type, right_type
+        )
+        if result_type is None:
+            result_type = left_type
+
+        return self.binary_operation(operator, result_type, left, right)
+
+    def process_static_generic_numeric_call(self, callee_name):
+        if not isinstance(callee_name, str) or "::" not in callee_name:
+            return None
+
+        type_param, method = callee_name.split("::", 1)
+        if method not in {"zero", "one"}:
+            return None
+
+        substitutions = self.current_generic_function_substitutions or {}
+        concrete_type = substitutions.get(type_param)
+        if not concrete_type:
+            return None
+
+        mapped_type = self.map_crossgl_type(concrete_type)
+        primitive_name = self.normalize_primitive_name(mapped_type.type.base_type)
+        if primitive_name in {"float", "double"}:
+            value = 1.0 if method == "one" else 0.0
+            return self.register_constant(value, mapped_type)
+        if primitive_name in self.INTEGER_TYPE_NAMES:
+            value = 1 if method == "one" else 0
+            return self.register_constant(value, mapped_type)
+        if method == "zero":
+            return self.default_value_for_type(mapped_type)
+
+        return None
+
     def process_expression(self, expr) -> Optional[SpirvId]:
         """Process a CrossGL expression."""
         if expr is None:
@@ -22615,6 +22718,18 @@ class VulkanSPIRVCodeGen:
                 callee_name = callee_expr.name
             elif isinstance(callee_expr, str):
                 callee_name = callee_expr
+
+            numeric_trait_call = self.process_numeric_trait_method_call(
+                callee_expr, expr.args
+            )
+            if numeric_trait_call is not None:
+                return numeric_trait_call
+
+            static_generic_numeric_call = self.process_static_generic_numeric_call(
+                callee_name
+            )
+            if static_generic_numeric_call is not None:
+                return static_generic_numeric_call
 
             if (
                 isinstance(callee_name, str)
@@ -24351,6 +24466,9 @@ class VulkanSPIRVCodeGen:
                     self.enum_declarations.setdefault(node.name, node)
 
         collect_type_declarations(struct_declarations)
+        self.generic_type_parameter_names = self.collect_generic_type_parameter_names(
+            ast
+        )
         self.glsl_buffer_block_type_names = self.collect_glsl_buffer_block_type_names(
             ast
         )

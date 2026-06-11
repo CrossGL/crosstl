@@ -83,6 +83,7 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
     ("advanced/GenericPatternMatching.cgl", "metal"),
     ("advanced/GenericPatternMatching.cgl", "opengl"),
     ("advanced/GenericPatternMatching.cgl", "slang"),
+    ("advanced/GenericPatternMatching.cgl", "vulkan"),
     ("advanced/GenericPatternMatching.cgl", "webgl"),
     ("cross_platform/UniversalPBRShader.cgl", "directx"),
     ("cross_platform/UniversalPBRShader.cgl", "metal"),
@@ -110,9 +111,7 @@ GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES = (
     ),
 )
 
-GENERIC_FUNCTION_KNOWN_LEAK_BACKEND_CASES = (
-    ("advanced/GenericPatternMatching.cgl", "vulkan", "T::zero"),
-)
+GENERIC_FUNCTION_KNOWN_LEAK_BACKEND_CASES = ()
 
 KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
     (
