@@ -31618,57 +31618,64 @@ def _run_toolchain_smoke(
             continue
         if not artifact_path.is_file():
             continue
-        smoke_commands = _toolchain_smoke_commands(
-            target, tools, artifact_path, artifact=artifact
-        )
-        for command, check_kind in smoke_commands:
-            if not command or not shutil.which(command[0]):
-                continue
-            try:
-                stdin = (
-                    _toolchain_smoke_stdin(target, command, artifact_path)
-                    if "--stdin" in command
-                    else None
-                )
-                completed = subprocess.run(
-                    command,
-                    cwd=str(root),
-                    input=stdin,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=TOOLCHAIN_SMOKE_TIMEOUT_SECONDS,
-                )
-                returncode = completed.returncode
-                stdout = _toolchain_output_text(completed.stdout)
-                stderr = _toolchain_output_text(completed.stderr)
-            except subprocess.TimeoutExpired as exc:
-                returncode = TOOLCHAIN_TIMEOUT_RETURNCODE
-                stdout = _toolchain_output_text(getattr(exc, "stdout", None))
-                stderr = _toolchain_output_text(getattr(exc, "stderr", None))
-                timeout_message = (
-                    "Validation toolchain timed out after "
-                    f"{TOOLCHAIN_SMOKE_TIMEOUT_SECONDS} seconds."
-                )
-                stderr = f"{stderr.rstrip()}\n{timeout_message}".strip()
-            run = {
-                "source": str(artifact.get("source", "")),
-                "target": target,
-                "path": str(artifact["path"]),
-                "command": command,
-                "checkKind": check_kind,
-                "returncode": returncode,
-                "status": "ok" if returncode == 0 else "failed",
-                "stdout": stdout[-4000:],
-                "stderr": stderr[-4000:],
-            }
-            if _is_non_empty_string(artifact.get("sourceBackend")):
-                run["sourceBackend"] = artifact["sourceBackend"]
-            if _is_non_empty_string(artifact.get("stage")):
-                run["stage"] = artifact["stage"]
-            if artifact.get("variant") is not None:
-                run["variant"] = artifact["variant"]
-            runs.append(run)
+        with tempfile.TemporaryDirectory(prefix="crosstl-toolchain-") as temp_dir:
+            smoke_commands = _toolchain_smoke_commands(
+                target,
+                tools,
+                artifact_path,
+                artifact=artifact,
+                temp_dir=Path(temp_dir),
+            )
+            for command, check_kind in smoke_commands:
+                if not command or not shutil.which(command[0]):
+                    continue
+                try:
+                    stdin = (
+                        _toolchain_smoke_stdin(target, command, artifact_path)
+                        if "--stdin" in command
+                        else None
+                    )
+                    completed = subprocess.run(
+                        command,
+                        cwd=str(root),
+                        input=stdin,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=TOOLCHAIN_SMOKE_TIMEOUT_SECONDS,
+                    )
+                    returncode = completed.returncode
+                    stdout = _toolchain_output_text(completed.stdout)
+                    stderr = _toolchain_output_text(completed.stderr)
+                except subprocess.TimeoutExpired as exc:
+                    returncode = TOOLCHAIN_TIMEOUT_RETURNCODE
+                    stdout = _toolchain_output_text(getattr(exc, "stdout", None))
+                    stderr = _toolchain_output_text(getattr(exc, "stderr", None))
+                    timeout_message = (
+                        "Validation toolchain timed out after "
+                        f"{TOOLCHAIN_SMOKE_TIMEOUT_SECONDS} seconds."
+                    )
+                    stderr = f"{stderr.rstrip()}\n{timeout_message}".strip()
+                run = {
+                    "source": str(artifact.get("source", "")),
+                    "target": target,
+                    "path": str(artifact["path"]),
+                    "command": command,
+                    "checkKind": check_kind,
+                    "returncode": returncode,
+                    "status": "ok" if returncode == 0 else "failed",
+                    "stdout": stdout[-4000:],
+                    "stderr": stderr[-4000:],
+                }
+                if _is_non_empty_string(artifact.get("sourceBackend")):
+                    run["sourceBackend"] = artifact["sourceBackend"]
+                if _is_non_empty_string(artifact.get("stage")):
+                    run["stage"] = artifact["stage"]
+                if artifact.get("variant") is not None:
+                    run["variant"] = artifact["variant"]
+                runs.append(run)
+                if returncode != 0:
+                    break
     return runs
 
 
@@ -31678,6 +31685,7 @@ def _toolchain_smoke_commands(
     artifact_path: Path,
     *,
     artifact: Mapping[str, Any] | None = None,
+    temp_dir: Path | None = None,
 ) -> list[tuple[list[str], str]]:
     if target == "directx":
         return [
@@ -31693,6 +31701,12 @@ def _toolchain_smoke_commands(
             return [
                 ([tools[0], "--stdin", "-S", stage], "artifact") for stage in stages
             ]
+    if target == "vulkan" and artifact_path.suffix.lower() == ".spvasm":
+        return _vulkan_spirv_assembly_smoke_commands(
+            tools,
+            artifact_path,
+            temp_dir=temp_dir,
+        )
     smoke_command = _toolchain_smoke_command(
         target,
         tools,
@@ -31726,6 +31740,25 @@ def _toolchain_smoke_command(
     if availability_command is None:
         return None
     return list(availability_command), "tool-availability"
+
+
+def _vulkan_spirv_assembly_smoke_commands(
+    tools: Sequence[str], artifact_path: Path, *, temp_dir: Path | None = None
+) -> list[tuple[list[str], str]]:
+    if len(tools) < 2:
+        return []
+    validator = tools[0]
+    assembler = tools[1]
+    assembler_command = [assembler, str(artifact_path), "-o", os.devnull]
+    if not shutil.which(assembler) or not shutil.which(validator):
+        return [(assembler_command, "artifact")]
+    if temp_dir is None:
+        temp_dir = Path(tempfile.gettempdir())
+    output_path = temp_dir / f"{artifact_path.stem}.spv"
+    return [
+        ([assembler, str(artifact_path), "-o", str(output_path)], "artifact"),
+        ([validator, str(output_path)], "artifact"),
+    ]
 
 
 def _toolchain_smoke_stdin(target: str, command: Sequence[str], artifact_path: Path):
