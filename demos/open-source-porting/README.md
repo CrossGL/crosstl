@@ -66,13 +66,13 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `nvpro-vk-mini-samples-rectangle` | `nvpro-samples/vk_mini_samples` at `994ac9f446ef44962c563b9600c8e9f117a3725d` | Apache-2.0 | GLSL | CrossGL, Metal, OpenGL, DirectX, Vulkan | Uses the upstream rectangle shader pair unchanged. |
 | `ogl-samples-flat-color` | `g-truc/ogl-samples` at `38cada7a9458864265e25415ae61586d500ff5fc` | MIT | GLSL | CrossGL, Metal, OpenGL, DirectX, Vulkan | Uses the upstream GLSL 330 flat-color shader pair unchanged. |
 | `openframeworks-noise-shader` | `openframeworks/openFrameworks` at `63eb03828c40de713b85db7810f1c519d8b9b0cc` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream noise shader pair with whitespace normalization. |
-| `opencl-sdk-saxpy` | `KhronosGroup/OpenCL-SDK` at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` | Apache-2.0 | OpenCL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream SAXPY compute kernel unchanged. DirectX `fma` lowering is tracked in issue #1227. |
+| `opencl-sdk-saxpy` | `KhronosGroup/OpenCL-SDK` at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` | Apache-2.0 | OpenCL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream SAXPY compute kernel unchanged. |
 | `rocm-examples-add-kernel` | `ROCm/rocm-examples` at `cf369da68f209c315074204bd0eb61d1a5c015d1` | MIT | HIP | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream sphinx-marked add-kernel slice. Host HIP runtime setup remains outside the demo scope. |
 | `raylib-base-fragment` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream base fragment shader unchanged. |
 | `raylib-base-vertex` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream base vertex shader unchanged. |
 | `raylib-lighting-shader-pair` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream lighting vertex and fragment shaders unchanged. |
 | `renderdoc-vktext-fragment` | `baldurk/renderdoc` at `6660344c3d8024dc5107afa2115c5035ceb85533` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Vulkan text fragment shader unchanged. |
-| `rust-gpu-compute-collatz` | `Rust-GPU/rust-gpu` at `36e3348cdc2f824afec64b3b5af5d369d98a4c0d` | Apache-2.0 OR MIT | Rust-GPU | Metal | Uses the upstream compute shader unchanged. CGL/Vulkan reference stability is tracked in issue #1232; DirectX buffer lowering is tracked in issue #1230. |
+| `rust-gpu-compute-collatz` | `Rust-GPU/rust-gpu` at `36e3348cdc2f824afec64b3b5af5d369d98a4c0d` | Apache-2.0 OR MIT | Rust-GPU | CrossGL, Metal, DirectX, Vulkan | Uses the upstream compute shader unchanged. |
 | `rust-gpu-graphics-stage-inputs` | `Rust-GPU/rust-gpu` at `36e3348cdc2f824afec64b3b5af5d369d98a4c0d` | Apache-2.0 OR MIT | Rust-GPU | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses a reduced graphics shader slice that keeps the plain vertex input and fragment color path. |
 | `rust-gpu-vulkan-examples-triangle-overlay` | `Rust-GPU/VulkanShaderExamples` at `b29a37eb46802b5ea6882af4808d6887fc184581` | MIT | Rust-GPU | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream conservative raster triangle-overlay shader unchanged. |
 | `sascha-willems-vulkan-conservative-triangle` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream conservative raster triangle vertex shader without semantic edits. Host conservative-rasterizer pipeline state remains outside the demo scope. |
@@ -103,9 +103,9 @@ patch translator output.
 
 The ROCm add-kernel DirectX artifact is checked after HIP pointer-parameter
 lowering landed in #1219. The SPIR-V Tools basic-source DirectX artifact is
-checked after the corresponding DirectX lowering fix landed on main. Rust-GPU
-compute CGL/Vulkan output remains excluded under issue #1232, and DirectX
-output remains excluded under issue #1230.
+checked after the corresponding DirectX lowering fix landed on main. OpenCL
+SAXPY DirectX output is checked after issue #1227 closed, and Rust-GPU compute
+CGL/Vulkan/DirectX output is checked after issue #1232 and issue #1230 closed.
 
 The `google/angle` SimpleTexture2D case extracts the upstream GLSL ES shader
 strings from `samples/simple_texture_2d/SimpleTexture2D.cpp` into standalone
@@ -249,9 +249,8 @@ task outside this demo scope.
 The `Rust-GPU/VulkanShaderExamples` conservative raster triangle-overlay shader
 was retested after issue #776 closed and is now checked for OpenGL, Metal,
 DirectX, and Vulkan output. The `Rust-GPU/rust-gpu` compute Collatz shader was
-retested after issue #809 closed and is now checked for Metal output.
-CGL/Vulkan output for the Collatz shader is excluded under issue #1232, and
-DirectX output is excluded under issue #1230. The `Rust-GPU/rust-gpu`
+retested after issue #809, issue #1232, and issue #1230 closed and is now
+checked for CrossGL, Metal, DirectX, and Vulkan output. The `Rust-GPU/rust-gpu`
 graphics stage-input slice is checked for CrossGL, OpenGL, Metal, DirectX, and
 Vulkan output. Full Rust-GPU crate builds, host-side dispatch, and runtime
 validation remain outside this source-focused demo scope.
@@ -277,7 +276,8 @@ source.
 
 The `KhronosGroup/OpenCL-SDK` SAXPY kernel was retested after issue #751 and
 issue #768 closed and is now checked for OpenGL, Metal, and Vulkan output.
-DirectX output remains excluded under issue #1227.
+DirectX output was retested after issue #1227 closed and is now checked as a
+compute shader.
 
 The `bkvogel/metal_performance_testing` matmul kernel is checked for CrossGL,
 OpenGL, Metal, DirectX, and Vulkan output after issue #1158 restored OpenGL

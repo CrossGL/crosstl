@@ -1,0 +1,270 @@
+{
+  "generatedFile": "crosstl-out/vulkan/lib.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 211,
+        "file": "crosstl-out/vulkan/lib.spvasm",
+        "length": 43,
+        "line": 8,
+        "offset": 168
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 46,
+        "endOffset": 1254,
+        "file": "lib.rs",
+        "length": 16,
+        "line": 45,
+        "offset": 1238
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 249,
+        "file": "crosstl-out/vulkan/lib.spvasm",
+        "length": 38,
+        "line": 9,
+        "offset": 211
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 44,
+        "endOffset": 1207,
+        "file": "lib.rs",
+        "length": 50,
+        "line": 43,
+        "offset": 1157
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 497,
+        "file": "crosstl-out/vulkan/lib.spvasm",
+        "length": 36,
+        "line": 20,
+        "offset": 461
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 48,
+        "endOffset": 1389,
+        "file": "lib.rs",
+        "length": 89,
+        "line": 47,
+        "offset": 1300
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 737,
+        "file": "crosstl-out/vulkan/lib.spvasm",
+        "length": 26,
+        "line": 28,
+        "offset": 711
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 48,
+        "endOffset": 1389,
+        "file": "lib.rs",
+        "length": 89,
+        "line": 47,
+        "offset": 1300
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 789,
+        "file": "crosstl-out/vulkan/lib.spvasm",
+        "length": 20,
+        "line": 31,
+        "offset": 769
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 536,
+        "file": "lib.rs",
+        "length": 95,
+        "line": 15,
+        "offset": 441
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 34,
+        "endOffset": 832,
+        "file": "crosstl-out/vulkan/lib.spvasm",
+        "length": 23,
+        "line": 33,
+        "offset": 809
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 536,
+        "file": "lib.rs",
+        "length": 95,
+        "line": 15,
+        "offset": 441
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 878,
+        "file": "crosstl-out/vulkan/lib.spvasm",
+        "length": 23,
+        "line": 35,
+        "offset": 855
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 536,
+        "file": "lib.rs",
+        "length": 95,
+        "line": 15,
+        "offset": 441
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 42,
+        "endOffset": 1023,
+        "file": "crosstl-out/vulkan/lib.spvasm",
+        "length": 22,
+        "line": 41,
+        "offset": 1001
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 536,
+        "file": "lib.rs",
+        "length": 95,
+        "line": 15,
+        "offset": 441
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 43,
+        "endOffset": 1045,
+        "file": "crosstl-out/vulkan/lib.spvasm",
+        "length": 22,
+        "line": 42,
+        "offset": 1023
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 536,
+        "file": "lib.rs",
+        "length": 95,
+        "line": 15,
+        "offset": 441
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 46,
+        "endOffset": 1130,
+        "file": "crosstl-out/vulkan/lib.spvasm",
+        "length": 22,
+        "line": 45,
+        "offset": 1108
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 536,
+        "file": "lib.rs",
+        "length": 95,
+        "line": 15,
+        "offset": 441
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 112,
+        "endOffset": 2629,
+        "file": "crosstl-out/vulkan/lib.spvasm",
+        "length": 20,
+        "line": 111,
+        "offset": 2609
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 536,
+        "file": "lib.rs",
+        "length": 95,
+        "line": 15,
+        "offset": 441
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 119,
+        "endOffset": 2743,
+        "file": "crosstl-out/vulkan/lib.spvasm",
+        "length": 20,
+        "line": 118,
+        "offset": 2723
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 536,
+        "file": "lib.rs",
+        "length": 95,
+        "line": 15,
+        "offset": 441
+      }
+    }
+  ],
+  "schemaVersion": 1
+}
