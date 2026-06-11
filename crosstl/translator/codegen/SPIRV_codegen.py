@@ -311,6 +311,7 @@ class VulkanSPIRVCodeGen:
         self.next_resource_bindings = {}
         self.reserved_resource_bindings = set()
         self.used_resource_bindings = set()
+        self.entry_point_resource_binding_baseline = None
 
         self.is_vertex_shader = False
         self.bound_id = 0
@@ -12231,8 +12232,9 @@ class VulkanSPIRVCodeGen:
             return {
                 **structured_info,
                 "declared_type_name": type_name,
-                "resource_class": structured_info.get("buffer_kind")
-                or "storage buffer",
+                "resource_class": (
+                    structured_info.get("buffer_kind") or "storage buffer"
+                ),
                 "array_dimensions": dimensions,
             }
 
@@ -14042,6 +14044,12 @@ class VulkanSPIRVCodeGen:
             function_node, stage
         )
         is_entry_point = self.function_is_entry_point(function_node, stage)
+        previous_entry_resource_binding_state = None
+        if is_entry_point and self.entry_point_resource_binding_baseline is not None:
+            previous_entry_resource_binding_state = self.resource_binding_state()
+            self.restore_resource_binding_state(
+                self.entry_point_resource_binding_baseline
+            )
         if execution_model_hint is None and is_entry_point and stage is None:
             execution_model_hint = self.spirv_execution_model(
                 self.get_function_qualifier(function_node)
@@ -14331,6 +14339,8 @@ class VulkanSPIRVCodeGen:
         self.current_generic_function_substitutions = (
             previous_generic_function_substitutions
         )
+        if previous_entry_resource_binding_state is not None:
+            self.restore_resource_binding_state(previous_entry_resource_binding_state)
         self.local_variables.clear()
         self.precise_local_variables.clear()
         self.resource_alias_variables.clear()
@@ -15019,6 +15029,25 @@ class VulkanSPIRVCodeGen:
         if descriptor_set == 0:
             self.next_resource_binding = binding + 1
         return binding
+
+    def resource_binding_state(self):
+        return (
+            self.next_resource_binding,
+            dict(self.next_resource_bindings),
+            set(self.reserved_resource_bindings),
+            set(self.used_resource_bindings),
+        )
+
+    def restore_resource_binding_state(self, state):
+        (
+            self.next_resource_binding,
+            next_resource_bindings,
+            reserved_resource_bindings,
+            used_resource_bindings,
+        ) = state
+        self.next_resource_bindings = dict(next_resource_bindings)
+        self.reserved_resource_bindings = set(reserved_resource_bindings)
+        self.used_resource_bindings = set(used_resource_bindings)
 
     def reserve_explicit_resource_bindings(self, ast: ShaderNode):
         for node in self.global_descriptor_binding_nodes(ast):
@@ -18434,7 +18463,9 @@ class VulkanSPIRVCodeGen:
         type_info = self.storage_buffer_resource_type_info(
             metadata.get("declared_type_name")
         )
-        return type_info is not None and type_info.get("kind") == "storage_buffer_pointer"
+        return (
+            type_info is not None and type_info.get("kind") == "storage_buffer_pointer"
+        )
 
     def record_storage_buffer_pointer_offset_alias(
         self, source_pointer: SpirvId, alias_pointer: SpirvId, index: SpirvId
@@ -19576,8 +19607,9 @@ class VulkanSPIRVCodeGen:
             return self.create_member_access_pointer(base_pointer, expr.member)
         elif isinstance(expr, BinaryOpNode) and expr.op == "+":
             left_pointer = self.variable_pointer_from_expression(expr.left)
-            if left_pointer is not None and self.is_storage_buffer_pointer_arithmetic_base(
-                left_pointer
+            if (
+                left_pointer is not None
+                and self.is_storage_buffer_pointer_arithmetic_base(left_pointer)
             ):
                 index = self.process_expression(expr.right)
                 if index is None:
@@ -19592,8 +19624,9 @@ class VulkanSPIRVCodeGen:
                 return access
 
             right_pointer = self.variable_pointer_from_expression(expr.right)
-            if right_pointer is not None and self.is_storage_buffer_pointer_arithmetic_base(
-                right_pointer
+            if (
+                right_pointer is not None
+                and self.is_storage_buffer_pointer_arithmetic_base(right_pointer)
             ):
                 index = self.process_expression(expr.left)
                 if index is None:
@@ -23749,6 +23782,8 @@ class VulkanSPIRVCodeGen:
                     self.current_execution_model = previous_execution_model
                     self.current_stage = previous_stage
 
+            self.entry_point_resource_binding_baseline = self.resource_binding_state()
+
             processed_local_functions = set()
             for stage in ast.stages.values():
                 local_functions = [
@@ -23783,6 +23818,7 @@ class VulkanSPIRVCodeGen:
                     (execution_model, function_id, entry_function.name, stage)
                 )
         else:
+            self.entry_point_resource_binding_baseline = self.resource_binding_state()
             for func, qualifier in top_level_entries:
                 function_id = self.process_function_node(func)
                 execution_model = self.spirv_execution_model(qualifier)
