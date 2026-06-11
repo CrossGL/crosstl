@@ -9927,6 +9927,271 @@ def test_translate_project_opengl_materializes_mlx_auxiliary_template_default(
     assert_compute_glsl_validates_if_available(output, tmp_path)
 
 
+def test_translate_project_opengl_materializes_quantized_local_template_alias(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "affine_quantize.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_quantized(name, type, group_size, bits) \\
+                instantiate_kernel(#name "_" #type "_gs_" #group_size "_b_" #bits, name, type, group_size, bits)
+
+            template <int bits, int wsize = 8>
+            inline constexpr short get_pack_factor() {
+                return wsize / bits;
+            }
+
+            template <typename T, int bits>
+            struct QuantizedScale {
+                T value;
+                uint packed;
+            };
+
+            template <typename T, const int group_size, const int bits>
+            [[kernel]] void affine_quantize(
+                const device T* w [[buffer(0)]],
+                device T* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                constexpr int pack_factor = get_pack_factor<bits, 8>();
+                using scale_t = QuantizedScale<T, bits>;
+                scale_t scale = scale_t{T(group_size + pack_factor), uint(bits)};
+                out[gid] = w[gid] + scale.value;
+            }
+
+            instantiate_quantized(affine_quantize, float, 16, 4)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["specializations"] == [
+        {
+            "name": "affine_quantize",
+            "materializedName": "affine_quantize_float_gs_16_b_4",
+            "parameters": {"T": "float", "bits": "4", "group_size": "16"},
+            "parameterSources": {
+                "T": "source-instantiation",
+                "bits": "source-instantiation",
+                "group_size": "source-instantiation",
+            },
+            "source": "source-instantiation",
+        },
+        {
+            "name": "get_pack_factor",
+            "materializedName": "get_pack_factor_4_8",
+            "parameters": {"bits": "4", "wsize": "8"},
+            "parameterSources": {"bits": "call-site", "wsize": "call-site"},
+            "source": "call-site",
+        },
+    ]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "struct QuantizedScale_float_4" in output
+    assert (
+        "QuantizedScale_float_4 scale = "
+        "QuantizedScale_float_4(float((16 + pack_factor)), uint(4));"
+    ) in output
+    assert "int get_pack_factor_4_8()" in output
+    assert "scale_t" not in output
+    assert "QuantizedScale<" not in output
+    assert not re.search(r"\b(?:T|group_size|bits)\b", output)
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_opengl_materializes_fft_auxiliary_template_alias(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "fft.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_fft(tg_mem_size, in_T, out_T, step, real) \\
+                instantiate_kernel("four_step_mem_" #tg_mem_size "_" #in_T "_" #out_T, four_step_fft, tg_mem_size, in_T, out_T, step, real)
+
+            template <typename In, typename Out, int Step, bool Real>
+            struct ReadWriter {
+                Out value;
+                uint step;
+            };
+
+            template <int tg_mem_size, typename in_T, typename out_T, int step, bool real = false>
+            [[kernel]] void four_step_fft(
+                const device in_T* in [[buffer(0)]],
+                device out_T* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                using read_writer_t = ReadWriter<in_T, out_T, step, real>;
+                read_writer_t read_writer = read_writer_t{out_T(tg_mem_size), uint(step)};
+                out[gid] = read_writer.value + out_T(read_writer.step);
+            }
+
+            instantiate_fft(256, float, float, 1, false)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["specializations"] == [
+        {
+            "name": "four_step_fft",
+            "materializedName": "four_step_mem_256_float_float",
+            "parameters": {
+                "in_T": "float",
+                "out_T": "float",
+                "real": "false",
+                "step": "1",
+                "tg_mem_size": "256",
+            },
+            "parameterSources": {
+                "in_T": "source-instantiation",
+                "out_T": "source-instantiation",
+                "real": "source-instantiation",
+                "step": "source-instantiation",
+                "tg_mem_size": "source-instantiation",
+            },
+            "source": "source-instantiation",
+        }
+    ]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "struct ReadWriter_float_float_1_false" in output
+    assert (
+        "ReadWriter_float_float_1_false read_writer = "
+        "ReadWriter_float_float_1_false(float(256), uint(1));"
+    ) in output
+    assert "read_writer_t" not in output
+    assert "ReadWriter<" not in output
+    assert not re.search(r"\b(?:in_T|out_T|tg_mem_size|real)\b", output)
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_opengl_materializes_masked_gemv_local_kernel_alias(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "gemv_masked.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_gemv(name, type, out_mask_t, op_mask_t, bm, bn) \\
+                instantiate_kernel(#name "_" #type "_" #out_mask_t "_" #op_mask_t, name, type, out_mask_t, op_mask_t, bm, bn)
+
+            template <typename T, typename out_mask_t, typename op_mask_t, const int BM, const int BN>
+            struct GEMVKernel {
+                T scale;
+                uint threads;
+            };
+
+            template <typename T, typename out_mask_t, typename op_mask_t, const int BM, const int BN>
+            [[kernel]] void gemv_masked(
+                const device T* in_vec [[buffer(0)]],
+                device T* out_vec [[buffer(1)]],
+                const device out_mask_t* out_mask [[buffer(2)]],
+                const device op_mask_t* op_mask [[buffer(3)]],
+                uint gid [[thread_position_in_grid]]) {
+                using gemv_kernel = GEMVKernel<T, out_mask_t, op_mask_t, BM, BN>;
+                gemv_kernel kernel = gemv_kernel{T(BN), uint(BM * BN)};
+                if (gid < kernel.threads && bool(out_mask[0]) && bool(op_mask[0])) {
+                    out_vec[gid] = in_vec[gid] + kernel.scale;
+                }
+            }
+
+            instantiate_gemv(gemv_masked, float, bool, uint, 2, 3)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["specializations"] == [
+        {
+            "name": "gemv_masked",
+            "materializedName": "gemv_masked_float_bool_uint",
+            "parameters": {
+                "BM": "2",
+                "BN": "3",
+                "T": "float",
+                "op_mask_t": "uint",
+                "out_mask_t": "bool",
+            },
+            "parameterSources": {
+                "BM": "source-instantiation",
+                "BN": "source-instantiation",
+                "T": "source-instantiation",
+                "op_mask_t": "source-instantiation",
+                "out_mask_t": "source-instantiation",
+            },
+            "source": "source-instantiation",
+        }
+    ]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "struct GEMVKernel_float_bool_uint_2_3" in output
+    assert (
+        "GEMVKernel_float_bool_uint_2_3 kernel = "
+        "GEMVKernel_float_bool_uint_2_3(float(3), uint((2 * 3)));"
+    ) in output
+    assert "gemv_kernel" not in output
+    assert "GEMVKernel<" not in output
+    assert not re.search(r"\b(?:T|out_mask_t|op_mask_t|BM|BN)\b", output)
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
 def test_translate_project_opengl_missing_accumulator_template_diagnostic(
     tmp_path,
 ):

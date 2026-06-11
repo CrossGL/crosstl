@@ -9671,6 +9671,12 @@ class GLSLCodeGen:
             "dmat4x4",
         }:
             return constructor
+        if constructor in getattr(self, "structs_by_name", {}):
+            return constructor
+        if constructor in getattr(self, "struct_member_types", {}):
+            return constructor
+        if constructor in getattr(self, "enum_struct_type_names", set()):
+            return constructor
         return None
 
     def expression_result_type(self, expr):
@@ -17842,9 +17848,16 @@ class GLSLCodeGen:
             return f"{referenced_type}&"
         generic_args = getattr(type_node, "generic_args", [])
         if hasattr(type_node, "name") and generic_args:
-            args = ", ".join(
-                self.convert_type_node_to_string(arg) for arg in generic_args
-            )
+            converted_args = []
+            for arg in generic_args:
+                converted = self.convert_type_node_to_string(arg)
+                if converted is None:
+                    if hasattr(arg, "value"):
+                        converted = str(arg.value)
+                    else:
+                        converted = str(arg)
+                converted_args.append(converted)
+            args = ", ".join(converted_args)
             return f"{type_node.name}<{args}>"
         if hasattr(type_node, "name"):
             return type_node.name
