@@ -1,4 +1,6 @@
 import re
+import shutil
+import subprocess
 from typing import List
 
 import pytest
@@ -350,6 +352,37 @@ def test_codegen_xhalf_vectors_lower_before_opengl_generation():
     assert "out vec3 viewDir;" in glsl
     assert "xhalf" not in glsl
     assert "f16vec3" not in glsl
+
+
+def test_codegen_stage_input_reference_struct_lowers_to_flat_opengl_inputs(tmp_path):
+    code = """
+    struct VertexInput {
+        float3 position [[attribute(0)]];
+        float3 normal [[attribute(1)]];
+    };
+
+    vertex float4 main_vertex(const VertexInput& input [[stage_in]]) {
+        return float4(input.position + input.normal, 1.0);
+    }
+    """
+
+    crossgl = convert(code)
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "in VertexInput" not in glsl
+    assert "in struct" not in glsl
+    assert "struct VertexInput" not in glsl
+    assert "layout(location = 0) in vec3 position;" in glsl
+    assert "layout(location = 1) in vec3 normal;" in glsl
+    assert "gl_Position = vec4((position + normal), 1.0);" in glsl
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "metal_stage_input_reference.vert"
+    source.write_text(glsl, encoding="utf-8")
+    subprocess.run([glslang, "-S", "vert", str(source)], check=True)
 
 
 def test_codegen_packed_integer_vertex_storage_types_do_not_leak_metal_names():

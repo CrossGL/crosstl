@@ -6246,6 +6246,16 @@ class GLSLCodeGen:
             return False
         if self.type_node_name(type_node) == struct_name:
             return True
+        referenced_type = getattr(type_node, "referenced_type", None)
+        if referenced_type is not None and self.type_node_references_name(
+            referenced_type, struct_name
+        ):
+            return True
+        pointee_type = getattr(type_node, "pointee_type", None)
+        if pointee_type is not None and self.type_node_references_name(
+            pointee_type, struct_name
+        ):
+            return True
         element_type = getattr(type_node, "element_type", None)
         if element_type is not None and self.type_node_references_name(
             element_type, struct_name
@@ -7469,9 +7479,19 @@ class GLSLCodeGen:
     def type_node_name(self, type_node):
         if type_node is None:
             return None
+        referenced_type = getattr(type_node, "referenced_type", None)
+        if referenced_type is not None:
+            return self.type_node_name(referenced_type)
+        pointee_type = getattr(type_node, "pointee_type", None)
+        if pointee_type is not None:
+            return self.type_node_name(pointee_type)
         if hasattr(type_node, "name"):
             return type_node.name
-        return str(type_node)
+        type_name = str(type_node)
+        for suffix in ("&", "*"):
+            if type_name.endswith(suffix):
+                return type_name[: -len(suffix)].strip()
+        return type_name
 
     def generate_stage_input_declarations(self, node):
         code = ""
