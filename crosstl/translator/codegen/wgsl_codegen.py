@@ -225,6 +225,38 @@ class WGSLCodeGen:
     WRITABLE_STRUCTURED_BUFFER_TYPE_NAMES = {
         "rwstructuredbuffer",
     }
+    UNSUPPORTED_STORAGE_BUFFER_TYPE_NAMES = {
+        "appendstructuredbuffer",
+        "byteaddressbuffer",
+        "consumestructuredbuffer",
+        "rwbyteaddressbuffer",
+    }
+    STRUCTURED_BUFFER_FREE_HELPERS = {
+        "buffer_load",
+        "buffer_store",
+    }
+    UNSUPPORTED_STORAGE_BUFFER_FREE_HELPERS = {
+        "buffer_append",
+        "buffer_consume",
+        "buffer_dimensions",
+    }
+    STRUCTURED_BUFFER_MEMBER_HELPERS = {
+        "load",
+        "store",
+    }
+    UNSUPPORTED_STRUCTURED_BUFFER_MEMBER_HELPERS = {
+        "append",
+        "consume",
+        "decrementcounter",
+        "getdimensions",
+        "incrementcounter",
+        "load2",
+        "load3",
+        "load4",
+        "store2",
+        "store3",
+        "store4",
+    }
     SAMPLED_TEXTURE_TYPE_MAP = {
         "sampler1d": "texture_1d<f32>",
         "sampler2d": "texture_2d<f32>",
@@ -538,6 +570,14 @@ class WGSLCodeGen:
     def generate_parameter(self, node):
         attributes = self.wgsl_attributes(node.attributes, direction="in")
         prefix = f"{attributes} " if attributes else ""
+        unsupported_storage_type = self.unsupported_storage_buffer_type_name(
+            node.param_type
+        )
+        if unsupported_storage_type is not None:
+            raise ValueError(
+                "WGSL target does not support "
+                f"{unsupported_storage_type} resources yet"
+            )
         if self.structured_buffer_element_type(node.param_type) is not None:
             raise ValueError(
                 "WGSL target does not support StructuredBuffer parameters yet; "
@@ -753,6 +793,14 @@ class WGSLCodeGen:
         address_space = "private"
         access = ""
         attributes = ""
+        unsupported_storage_type = self.unsupported_storage_buffer_type_name(
+            node.var_type
+        )
+        if unsupported_storage_type is not None:
+            raise ValueError(
+                "WGSL target does not support "
+                f"{unsupported_storage_type} resources yet"
+            )
         storage_buffer_access = self.structured_buffer_access(node.var_type)
         if storage_buffer_access:
             address_space = "storage"
@@ -1128,6 +1176,28 @@ class WGSLCodeGen:
     def generate_function_call(self, node):
         function_name = self.expression_name(node.function)
         normalized_name = self.semantic_key(function_name)
+        if normalized_name in self.STRUCTURED_BUFFER_FREE_HELPERS:
+            return self.generate_structured_buffer_free_helper_call(
+                node, normalized_name
+            )
+        if normalized_name in self.UNSUPPORTED_STORAGE_BUFFER_FREE_HELPERS:
+            raise ValueError(
+                "WGSL target does not support storage buffer helper "
+                f"{function_name} yet"
+            )
+        if isinstance(node.function, MemberAccessNode):
+            member_name = self.semantic_key(node.function.member)
+            if member_name in self.STRUCTURED_BUFFER_MEMBER_HELPERS:
+                return self.generate_structured_buffer_member_helper_call(
+                    node, member_name
+                )
+            if member_name in self.UNSUPPORTED_STRUCTURED_BUFFER_MEMBER_HELPERS:
+                receiver_type = self.expression_type(node.function.object_expr)
+                if self.storage_buffer_like_type_name(receiver_type) is not None:
+                    raise ValueError(
+                        "WGSL target does not support storage buffer member helper "
+                        f"{node.function.member} yet"
+                    )
         if normalized_name in self.TEXTURE_FUNCTION_NAMES:
             return self.generate_texture_function_call(node, function_name)
         if normalized_name in self.BARRIER_FUNCTION_NAMES:
@@ -1140,6 +1210,80 @@ class WGSLCodeGen:
             return f"{self.type_name_string(function_name)}({args})"
         mapped_name = self.FUNCTION_NAME_MAP.get(function_name, function_name)
         return f"{mapped_name}({args})"
+
+    def generate_structured_buffer_free_helper_call(self, node, helper_name):
+        if helper_name == "buffer_load":
+            if len(node.arguments) != 2:
+                raise ValueError(
+                    "WGSL target supports buffer_load() with exactly 2 arguments; "
+                    f"got {len(node.arguments)}"
+                )
+            resource, index = node.arguments
+            self.require_structured_buffer_resource(resource, "buffer_load")
+            return self.structured_buffer_index_expression(resource, index)
+
+        if len(node.arguments) != 3:
+            raise ValueError(
+                "WGSL target supports buffer_store() with exactly 3 arguments; "
+                f"got {len(node.arguments)}"
+            )
+        resource, index, value = node.arguments
+        self.require_writable_structured_buffer_resource(resource, "buffer_store")
+        return (
+            f"{self.structured_buffer_index_expression(resource, index)} = "
+            f"{self.generate_expression(value)}"
+        )
+
+    def generate_structured_buffer_member_helper_call(self, node, helper_name):
+        receiver = node.function.object_expr
+        if helper_name == "load":
+            if len(node.arguments) != 1:
+                raise ValueError(
+                    "WGSL target supports StructuredBuffer.Load() with exactly "
+                    f"1 argument; got {len(node.arguments)}"
+                )
+            self.require_structured_buffer_resource(receiver, "Load")
+            return self.structured_buffer_index_expression(receiver, node.arguments[0])
+
+        if len(node.arguments) != 2:
+            raise ValueError(
+                "WGSL target supports RWStructuredBuffer.Store() with exactly "
+                f"2 arguments; got {len(node.arguments)}"
+            )
+        self.require_writable_structured_buffer_resource(receiver, "Store")
+        return (
+            f"{self.structured_buffer_index_expression(receiver, node.arguments[0])} = "
+            f"{self.generate_expression(node.arguments[1])}"
+        )
+
+    def structured_buffer_index_expression(self, resource, index):
+        if isinstance(resource, IdentifierNode) and self.is_pointer_identifier(
+            resource.name
+        ):
+            return f"(*{resource.name})[{self.generate_expression(index)}]"
+        return f"{self.generate_expression(resource)}[{self.generate_expression(index)}]"
+
+    def require_structured_buffer_resource(self, resource, helper_name):
+        resource_type = self.expression_type(resource)
+        if self.structured_buffer_element_type(resource_type) is None and not (
+            isinstance(resource, IdentifierNode)
+            and self.is_pointer_identifier(resource.name)
+        ):
+            raise ValueError(
+                "WGSL target requires "
+                f"{helper_name}() to use a StructuredBuffer or RWStructuredBuffer "
+                "resource"
+            )
+
+    def require_writable_structured_buffer_resource(self, resource, helper_name):
+        self.require_structured_buffer_resource(resource, helper_name)
+        resource_type = self.expression_type(resource)
+        access = self.structured_buffer_access(resource_type)
+        if access == "read":
+            raise ValueError(
+                "WGSL target cannot store through read-only StructuredBuffer "
+                f"resource in {helper_name}()"
+            )
 
     def generate_mod_call(self, node):
         if len(node.arguments) != 2:
@@ -1391,6 +1535,25 @@ class WGSLCodeGen:
         if base_name in self.WRITABLE_STRUCTURED_BUFFER_TYPE_NAMES:
             return "read_write"
         return "read"
+
+    def unsupported_storage_buffer_type_name(self, vtype):
+        if not isinstance(vtype, NamedType):
+            return None
+        base_name = str(vtype.name).lower()
+        if base_name not in self.UNSUPPORTED_STORAGE_BUFFER_TYPE_NAMES:
+            return None
+        return str(vtype.name)
+
+    def storage_buffer_like_type_name(self, vtype):
+        if not isinstance(vtype, NamedType):
+            return None
+        base_name = str(vtype.name).lower()
+        if (
+            base_name in self.STRUCTURED_BUFFER_TYPE_NAMES
+            or base_name in self.UNSUPPORTED_STORAGE_BUFFER_TYPE_NAMES
+        ):
+            return str(vtype.name)
+        return None
 
     def is_buffer_pointer_type(self, vtype, qualifiers=()):
         if not isinstance(vtype, PointerType):

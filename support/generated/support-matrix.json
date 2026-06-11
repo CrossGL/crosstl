@@ -399,11 +399,23 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 34,
+        "unsupported_marker_count": 54,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
             "text": "UNSUPPORTED_STAGE_NAMES = {"
+          },
+          {
+            "path": "crosstl/translator/codegen/wgsl_codegen.py",
+            "text": "UNSUPPORTED_STORAGE_BUFFER_TYPE_NAMES = {"
+          },
+          {
+            "path": "crosstl/translator/codegen/wgsl_codegen.py",
+            "text": "UNSUPPORTED_STORAGE_BUFFER_FREE_HELPERS = {"
+          },
+          {
+            "path": "crosstl/translator/codegen/wgsl_codegen.py",
+            "text": "UNSUPPORTED_STRUCTURED_BUFFER_MEMBER_HELPERS = {"
           },
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
@@ -431,6 +443,22 @@
           },
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
+            "text": "unsupported_storage_type = self.unsupported_storage_buffer_type_name("
+          },
+          {
+            "path": "crosstl/translator/codegen/wgsl_codegen.py",
+            "text": "if unsupported_storage_type is not None:"
+          },
+          {
+            "path": "crosstl/translator/codegen/wgsl_codegen.py",
+            "text": "\"WGSL target does not support \""
+          },
+          {
+            "path": "crosstl/translator/codegen/wgsl_codegen.py",
+            "text": "f\"{unsupported_storage_type} resources yet\""
+          },
+          {
+            "path": "crosstl/translator/codegen/wgsl_codegen.py",
             "text": "\"WGSL target does not support StructuredBuffer parameters yet; \""
           },
           {
@@ -452,34 +480,6 @@
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
             "text": "+ \", \".join(unsupported)"
-          },
-          {
-            "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "\"WGSL target does not support implicit builtin identifier(s) \""
-          },
-          {
-            "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "\"WGSL target does not support direct builtin identifier(s) \""
-          },
-          {
-            "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "\"WGSL target does not support gl_WorkGroupSize inside helper \""
-          },
-          {
-            "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "\"WGSL target does not support barrier() inside helper function \""
-          },
-          {
-            "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "raise ValueError(\"WGSL target does not support generic structs yet\")"
-          },
-          {
-            "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "\"WGSL target does not support resource member \""
-          },
-          {
-            "path": "crosstl/translator/codegen/wgsl_codegen.py",
-            "text": "\"WGSL target does not support initializers for sampled texture \""
           }
         ]
       },
@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 44
+        "test_count": 48
       },
       "translator_codegen": {
         "exists": true,
@@ -737,7 +737,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 995
+        "test_count": 996
       },
       "translator_codegen": {
         "exists": true,
@@ -1338,15 +1338,6 @@
       "feature": "Constant/uniform buffers",
       "feature_id": "resources.constant_buffers",
       "notes": "StructuredBuffer and RWStructuredBuffer declarations lower to WGSL storage-buffer arrays with read/read_write access modes and deterministic binding allocation. Append/consume buffers, byte-address buffers, helper methods, and richer storage-resource layouts remain future work or deterministic diagnostics.",
-      "status": "partial"
-    },
-    {
-      "backend": "WebGPU / WGSL",
-      "backend_id": "wgsl",
-      "category": "resources",
-      "feature": "Structured/storage buffers",
-      "feature_id": "resources.structured_buffers",
-      "notes": "CrossGL sampled texture globals lower to WGSL texture bindings plus companion sampler bindings, standalone sampler globals lower to sampler bindings, stage-local resource declarations are emitted at module scope, and texture parameters receive companion sampler parameters with call-site sampler injection. Resource arrays, texture handles inside user structs, comparison samplers, storage images, and duplicate binding diagnostics remain deterministic diagnostics or future work.",
       "status": "partial"
     },
     {
@@ -3288,13 +3279,16 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_sampled_texture_resources_and_calls",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_explicit_sampler_texture_calls",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_emits_stage_local_resource_declarations",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_structured_buffers_to_storage_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_structured_buffer_access_helpers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_readonly_structured_buffer_stores",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsupported_storage_buffer_resource_forms",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsupported_structured_buffer_helpers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_structured_buffers_inside_user_structs",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_structured_buffer_parameters"
           ],
-          "notes": "CrossGL sampled texture globals lower to WGSL texture bindings plus companion sampler bindings, standalone sampler globals lower to sampler bindings, stage-local resource declarations are emitted at module scope, and texture parameters receive companion sampler parameters with call-site sampler injection. Resource arrays, texture handles inside user structs, comparison samplers, storage images, and duplicate binding diagnostics remain deterministic diagnostics or future work.",
-          "status": "partial"
+          "notes": "StructuredBuffer and RWStructuredBuffer globals lower to WGSL storage-buffer arrays with read/read_write access modes, explicit and automatic binding allocation, direct indexed access, buffer_load/buffer_store helper lowering, and HLSL Load/Store member helper lowering. Append/consume buffers, byte-address buffers, dimensions/counter helpers, read-only stores, parameters, and user-struct storage-resource fields produce deterministic diagnostics.",
+          "status": "supported"
         }
       }
     },
@@ -15124,7 +15118,7 @@
   },
   "summary": {
     "backend_count": 11,
-    "backlog_count": 5,
+    "backlog_count": 4,
     "feature_count": 66,
     "status_counts": {
       "cuda": {
@@ -15209,8 +15203,8 @@
       },
       "wgsl": {
         "diagnostic": 19,
-        "partial": 5,
-        "supported": 35,
+        "partial": 4,
+        "supported": 36,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 7

@@ -292,6 +292,122 @@ class RuntimeAdapterContract:
 
 
 @dataclass(frozen=True)
+class RuntimeExecutionStep:
+    """A planned compile, load, or adapter action for a translated artifact."""
+
+    phase: str
+    action: str
+    status: str = "planned"
+    command: tuple[str, ...] = field(default_factory=tuple)
+    artifact_path: str | None = None
+    details: Mapping[str, Any] = field(default_factory=dict)
+    diagnostics: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "phase": self.phase,
+            "action": self.action,
+            "status": self.status,
+        }
+        if self.command:
+            payload["command"] = list(self.command)
+        if self.artifact_path is not None:
+            payload["artifactPath"] = self.artifact_path
+        if self.details:
+            payload["details"] = dict(self.details)
+        if self.diagnostics:
+            payload["diagnostics"] = [
+                dict(diagnostic) for diagnostic in self.diagnostics
+            ]
+        return payload
+
+
+@dataclass(frozen=True)
+class RuntimeBoundResource:
+    """Fixture value selected for a resource binding before adapter execution."""
+
+    binding: RuntimeResourceBinding
+    value: RuntimeValue | None = None
+    source: str | None = None
+    status: str = "bound"
+    diagnostics: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "binding": self.binding.to_json(),
+            "status": self.status,
+        }
+        if self.value is not None:
+            payload["value"] = _runtime_value_reference(self.value)
+        if self.source is not None:
+            payload["source"] = self.source
+        if self.diagnostics:
+            payload["diagnostics"] = [
+                dict(diagnostic) for diagnostic in self.diagnostics
+            ]
+        return payload
+
+
+@dataclass(frozen=True)
+class RuntimeBoundConstant:
+    """Specialization or function constant value selected for execution."""
+
+    constant: RuntimeSpecializationConstant
+    value: Any = None
+    source: str | None = None
+    status: str = "bound"
+    diagnostics: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "constant": self.constant.to_json(),
+            "status": self.status,
+        }
+        if self.value is not None:
+            payload["value"] = self.value
+        if self.source is not None:
+            payload["source"] = self.source
+        if self.diagnostics:
+            payload["diagnostics"] = [
+                dict(diagnostic) for diagnostic in self.diagnostics
+            ]
+        return payload
+
+
+@dataclass(frozen=True)
+class RuntimeExecutionPlan:
+    """Prepared backend-neutral execution data derived from artifact metadata."""
+
+    artifact: Mapping[str, Any]
+    artifact_path: Path | None
+    compile_steps: tuple[RuntimeExecutionStep, ...] = field(default_factory=tuple)
+    load_steps: tuple[RuntimeExecutionStep, ...] = field(default_factory=tuple)
+    resource_bindings: tuple[RuntimeBoundResource, ...] = field(default_factory=tuple)
+    constant_bindings: tuple[RuntimeBoundConstant, ...] = field(default_factory=tuple)
+    dispatch: RuntimeDispatchGeometry | None = None
+    diagnostics: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "artifact": _artifact_result_payload(self.artifact),
+            "compileSteps": [step.to_json() for step in self.compile_steps],
+            "loadSteps": [step.to_json() for step in self.load_steps],
+            "resourceBindings": [
+                binding.to_json() for binding in self.resource_bindings
+            ],
+            "constantBindings": [
+                binding.to_json() for binding in self.constant_bindings
+            ],
+            "diagnostics": [dict(diagnostic) for diagnostic in self.diagnostics],
+        }
+        if self.artifact_path is not None:
+            payload["artifactPath"] = str(self.artifact_path)
+        if self.dispatch is not None:
+            payload["dispatch"] = self.dispatch.to_json()
+        return payload
+
+
+@dataclass(frozen=True)
 class RuntimeFixture:
     """A runtime verification fixture bound to one translated artifact."""
 
@@ -334,6 +450,7 @@ class RuntimeExecutionRequest:
     adapter_contract: RuntimeAdapterContract = field(
         default_factory=RuntimeAdapterContract
     )
+    execution_plan: RuntimeExecutionPlan | None = None
 
 
 @dataclass(frozen=True)
@@ -353,6 +470,44 @@ class RuntimeExecutorResult:
     outputs: Any = field(default_factory=dict)
     message: str | None = None
     details: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class RuntimeExecutionState:
+    """Mutable state used by RuntimeExecutionAdapter phase hooks."""
+
+    request: RuntimeExecutionRequest
+    plan: RuntimeExecutionPlan
+    compiled_artifact: Any = None
+    loaded_artifact: Any = None
+    resource_values: dict[str, Any] = field(default_factory=dict)
+    constant_values: dict[str, Any] = field(default_factory=dict)
+    outputs: Any = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
+    diagnostics: list[Mapping[str, Any]] = field(default_factory=list)
+    adapter_steps: list[RuntimeExecutionStep] = field(default_factory=list)
+
+    def record_step(
+        self,
+        phase: str,
+        action: str,
+        *,
+        status: str = PASSED,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.adapter_steps.append(
+            RuntimeExecutionStep(
+                phase=phase,
+                action=action,
+                status=status,
+                artifact_path=(
+                    str(self.plan.artifact_path)
+                    if self.plan.artifact_path is not None
+                    else None
+                ),
+                details=dict(details or {}),
+            )
+        )
 
 
 @runtime_checkable
@@ -383,6 +538,102 @@ class RuntimeExecutor:
             "No runtime execution implementation is configured for "
             f"{request.artifact.get('target')}"
         )
+
+
+class RuntimeExecutionAdapter(RuntimeExecutor):
+    """Reusable adapter pipeline for executing prepared runtime fixtures."""
+
+    name = "runtime-execution-adapter"
+
+    def run(self, request: RuntimeExecutionRequest) -> RuntimeExecutorResult:
+        plan = request.execution_plan or prepare_runtime_execution(request)
+        if _runtime_diagnostics_have_errors(plan.diagnostics):
+            raise RuntimeExecutionError(
+                "Runtime execution plan contains setup errors."
+            )
+
+        state = RuntimeExecutionState(request=request, plan=plan)
+        state.compiled_artifact = self.compile_artifact(state)
+        state.loaded_artifact = self.load_artifact(state)
+        state.resource_values = self.bind_resources(state)
+        state.constant_values = self.bind_constants(state)
+        dispatched_outputs = self.dispatch_fixture(state)
+        if dispatched_outputs is not None:
+            state.outputs = dispatched_outputs
+        outputs = self.collect_outputs(state)
+        return RuntimeExecutorResult(
+            outputs=outputs,
+            details={
+                "runtimeExecution": plan.to_json(),
+                "adapterSteps": [
+                    step.to_json() for step in state.adapter_steps
+                ],
+                "adapterDiagnostics": [
+                    dict(diagnostic) for diagnostic in state.diagnostics
+                ],
+                **state.details,
+            },
+        )
+
+    def compile_artifact(self, state: RuntimeExecutionState) -> Any:
+        state.record_step(
+            "compile",
+            "prepare-translated-artifact",
+            details={"stepCount": len(state.plan.compile_steps)},
+        )
+        return state.plan.artifact_path
+
+    def load_artifact(self, state: RuntimeExecutionState) -> Any:
+        state.record_step(
+            "load",
+            "load-translated-artifact",
+            details={"stepCount": len(state.plan.load_steps)},
+        )
+        return state.compiled_artifact
+
+    def bind_resources(self, state: RuntimeExecutionState) -> dict[str, Any]:
+        values: dict[str, Any] = {}
+        for resource in state.plan.resource_bindings:
+            if resource.value is None:
+                continue
+            binding = resource.binding
+            key = binding.name or binding.binding_id or str(binding.binding)
+            values[key] = (
+                None
+                if resource.source == "expectedOutput"
+                else resource.value.values
+            )
+        state.record_step(
+            "bind",
+            "bind-fixture-resources",
+            details={"resourceCount": len(values)},
+        )
+        return values
+
+    def bind_constants(self, state: RuntimeExecutionState) -> dict[str, Any]:
+        values: dict[str, Any] = {}
+        for constant in state.plan.constant_bindings:
+            key = constant.constant.name
+            if key is None and constant.constant.constant_id is not None:
+                key = str(constant.constant.constant_id)
+            if key is not None and constant.value is not None:
+                values[key] = constant.value
+        state.record_step(
+            "bind",
+            "bind-runtime-constants",
+            details={"constantCount": len(values)},
+        )
+        return values
+
+    def dispatch_fixture(self, state: RuntimeExecutionState) -> Any:
+        state.record_step("dispatch", "dispatch-fixture", status=UNAVAILABLE)
+        raise RuntimeExecutorUnavailable(
+            "Runtime execution adapter must implement dispatch_fixture."
+        )
+
+    def collect_outputs(self, state: RuntimeExecutionState) -> Any:
+        state.record_step("collect", "collect-fixture-outputs")
+        return state.outputs
 
 
 def load_runtime_verification_fixtures(
@@ -455,6 +706,46 @@ def compare_runtime_outputs(
         )
         for expected_value in expected
     ]
+
+
+def prepare_runtime_execution(
+    request: RuntimeExecutionRequest,
+) -> RuntimeExecutionPlan:
+    """Prepare backend-neutral runtime execution data for one fixture."""
+
+    artifact = request.artifact
+    artifact_path = request.artifact_path
+    contract = request.adapter_contract
+    dispatch = _complete_runtime_dispatch_geometry(contract)
+    resource_bindings, resource_diagnostics = _runtime_bound_resources(
+        request.fixture, contract, artifact
+    )
+    constant_bindings, constant_diagnostics = _runtime_bound_constants(
+        contract, artifact
+    )
+    diagnostics = tuple(resource_diagnostics + constant_diagnostics)
+    return RuntimeExecutionPlan(
+        artifact=artifact,
+        artifact_path=artifact_path,
+        compile_steps=_runtime_execution_steps_from_artifact(
+            artifact,
+            artifact_path=artifact_path,
+            phase="compile",
+            keys=("compileSteps", "compilerRequests", "buildSteps"),
+            fallback_action="use-translated-artifact",
+        ),
+        load_steps=_runtime_execution_steps_from_artifact(
+            artifact,
+            artifact_path=artifact_path,
+            phase="load",
+            keys=("loadSteps", "loaderSteps", "runtimeLoadSteps"),
+            fallback_action="load-translated-artifact",
+        ),
+        resource_bindings=resource_bindings,
+        constant_bindings=constant_bindings,
+        dispatch=dispatch,
+        diagnostics=diagnostics,
+    )
 
 
 def verify_runtime_fixtures(
@@ -768,6 +1059,13 @@ def _parse_runtime_resource_binding(
         raise RuntimeVerificationError(
             f"{field_name} must identify a resource by id, name, or binding."
         )
+    metadata = _parse_runtime_metadata(
+        value.get("metadata", {}), field_name=f"{field_name}.metadata"
+    )
+    if "required" in value:
+        metadata["required"] = _optional_bool(
+            value.get("required"), field_name=f"{field_name}.required"
+        )
     return RuntimeResourceBinding(
         binding_id=binding_id,
         name=name,
@@ -778,9 +1076,7 @@ def _parse_runtime_resource_binding(
         index=index,
         access=_optional_string(value.get("access"), field_name=f"{field_name}.access"),
         value=_optional_string(value.get("value"), field_name=f"{field_name}.value"),
-        metadata=_parse_runtime_metadata(
-            value.get("metadata", {}), field_name=f"{field_name}.metadata"
-        ),
+        metadata=metadata,
     )
 
 
@@ -1170,6 +1466,26 @@ def _verify_runtime_fixture(
     artifact = selected["artifact"]
     artifact_path = _runtime_artifact_path(artifact, root_path=root_path)
     adapter_contract = _runtime_adapter_contract(fixture, artifact)
+    initial_request = RuntimeExecutionRequest(
+        fixture=fixture,
+        artifact=artifact,
+        artifact_path=artifact_path,
+        project_root=root_path,
+        adapter_contract=adapter_contract,
+    )
+    execution_plan = prepare_runtime_execution(initial_request)
+    setup_diagnostics = list(execution_plan.diagnostics)
+    if _runtime_diagnostics_have_errors(setup_diagnostics):
+        return _fixture_result(
+            fixture,
+            status=RUNTIME_FAILED,
+            failure_phase="runtime-setup",
+            artifact=artifact,
+            adapter_contract=adapter_contract,
+            runtime_execution=execution_plan,
+            diagnostics=setup_diagnostics,
+        )
+
     target = _normalize_target(
         str(artifact.get("target", fixture.selector.target or ""))
     )
@@ -1182,8 +1498,10 @@ def _verify_runtime_fixture(
             failure_phase="runtime",
             artifact=artifact,
             adapter_contract=adapter_contract,
+            runtime_execution=execution_plan,
             executor={"key": executor_key, "status": UNAVAILABLE},
-            diagnostics=[
+            diagnostics=setup_diagnostics
+            + [
                 _diagnostic(
                     "note",
                     "project.runtime-verification.executor-unavailable",
@@ -1199,6 +1517,7 @@ def _verify_runtime_fixture(
         artifact_path=artifact_path,
         project_root=root_path,
         adapter_contract=adapter_contract,
+        execution_plan=execution_plan,
     )
     executor_name = getattr(executor, "name", executor.__class__.__name__)
     availability = _executor_availability(executor, request)
@@ -1209,6 +1528,7 @@ def _verify_runtime_fixture(
             failure_phase="runtime",
             artifact=artifact,
             adapter_contract=adapter_contract,
+            runtime_execution=execution_plan,
             executor={
                 "key": executor_key,
                 "name": executor_name,
@@ -1216,7 +1536,8 @@ def _verify_runtime_fixture(
                 "message": availability.reason,
                 "details": dict(availability.details),
             },
-            diagnostics=[
+            diagnostics=setup_diagnostics
+            + [
                 _diagnostic(
                     "note",
                     "project.runtime-verification.executor-unavailable",
@@ -1236,12 +1557,14 @@ def _verify_runtime_fixture(
             failure_phase="runtime",
             artifact=artifact,
             adapter_contract=adapter_contract,
+            runtime_execution=execution_plan,
             executor={
                 "key": executor_key,
                 "name": executor_name,
                 "status": UNAVAILABLE,
             },
-            diagnostics=[
+            diagnostics=setup_diagnostics
+            + [
                 _diagnostic(
                     "note",
                     "project.runtime-verification.executor-unavailable",
@@ -1256,8 +1579,10 @@ def _verify_runtime_fixture(
             status=SKIPPED,
             artifact=artifact,
             adapter_contract=adapter_contract,
+            runtime_execution=execution_plan,
             executor={"key": executor_key, "name": executor_name, "status": SKIPPED},
-            diagnostics=[
+            diagnostics=setup_diagnostics
+            + [
                 _diagnostic(
                     "note",
                     "project.runtime-verification.fixture-skipped",
@@ -1273,12 +1598,14 @@ def _verify_runtime_fixture(
             failure_phase="runtime",
             artifact=artifact,
             adapter_contract=adapter_contract,
+            runtime_execution=execution_plan,
             executor={
                 "key": executor_key,
                 "name": executor_name,
                 "status": RUNTIME_FAILED,
             },
-            diagnostics=[
+            diagnostics=setup_diagnostics
+            + [
                 _diagnostic(
                     "error",
                     "project.runtime-verification.executor-failed",
@@ -1294,12 +1621,14 @@ def _verify_runtime_fixture(
             failure_phase="runtime",
             artifact=artifact,
             adapter_contract=adapter_contract,
+            runtime_execution=execution_plan,
             executor={
                 "key": executor_key,
                 "name": executor_name,
                 "status": RUNTIME_FAILED,
             },
-            diagnostics=[
+            diagnostics=setup_diagnostics
+            + [
                 _diagnostic(
                     "error",
                     "project.runtime-verification.executor-exception",
@@ -1326,7 +1655,9 @@ def _verify_runtime_fixture(
             status=SKIPPED,
             artifact=artifact,
             adapter_contract=adapter_contract,
+            runtime_execution=execution_plan,
             executor=executor_payload,
+            diagnostics=setup_diagnostics,
         )
     if normalized_status in EXECUTOR_UNAVAILABLE_STATUSES:
         return _fixture_result(
@@ -1335,7 +1666,9 @@ def _verify_runtime_fixture(
             failure_phase="runtime",
             artifact=artifact,
             adapter_contract=adapter_contract,
+            runtime_execution=execution_plan,
             executor=executor_payload,
+            diagnostics=setup_diagnostics,
         )
     if normalized_status in EXECUTOR_FAILED_STATUSES:
         return _fixture_result(
@@ -1344,7 +1677,9 @@ def _verify_runtime_fixture(
             failure_phase="runtime",
             artifact=artifact,
             adapter_contract=adapter_contract,
+            runtime_execution=execution_plan,
             executor=executor_payload,
+            diagnostics=setup_diagnostics,
         )
     if normalized_status not in EXECUTOR_OK_STATUSES:
         return _fixture_result(
@@ -1353,8 +1688,10 @@ def _verify_runtime_fixture(
             failure_phase="runtime",
             artifact=artifact,
             adapter_contract=adapter_contract,
+            runtime_execution=execution_plan,
             executor=executor_payload,
-            diagnostics=[
+            diagnostics=setup_diagnostics
+            + [
                 _diagnostic(
                     "error",
                     "project.runtime-verification.executor-status-invalid",
@@ -1372,14 +1709,21 @@ def _verify_runtime_fixture(
     comparison_failed = any(
         comparison["status"] != PASSED for comparison in comparisons
     )
+    comparison_diagnostics = (
+        _runtime_comparison_diagnostics(comparisons, artifact)
+        if comparison_failed
+        else []
+    )
     return _fixture_result(
         fixture,
         status=COMPARISON_FAILED if comparison_failed else PASSED,
         failure_phase="comparison" if comparison_failed else None,
         artifact=artifact,
         adapter_contract=adapter_contract,
+        runtime_execution=execution_plan,
         executor=executor_payload,
         comparisons=comparisons,
+        diagnostics=setup_diagnostics + comparison_diagnostics,
     )
 
 
@@ -1662,6 +2006,385 @@ def _runtime_artifact_path(
     if not path.is_absolute() and root_path is not None:
         path = root_path / path
     return path.resolve()
+
+
+def _runtime_execution_steps_from_artifact(
+    artifact: Mapping[str, Any],
+    *,
+    artifact_path: Path | None,
+    phase: str,
+    keys: Sequence[str],
+    fallback_action: str,
+) -> tuple[RuntimeExecutionStep, ...]:
+    steps: list[RuntimeExecutionStep] = []
+    for key in keys:
+        for index, record in enumerate(_runtime_record_sequence(artifact.get(key))):
+            if not isinstance(record, Mapping):
+                continue
+            steps.append(
+                _runtime_execution_step_from_record(
+                    record,
+                    phase=phase,
+                    fallback_action=key,
+                    artifact_path=artifact_path,
+                    index=index,
+                )
+            )
+    if steps:
+        return tuple(steps)
+    return (
+        RuntimeExecutionStep(
+            phase=phase,
+            action=fallback_action,
+            artifact_path=str(artifact_path) if artifact_path is not None else None,
+            details=_runtime_step_fallback_details(artifact),
+        ),
+    )
+
+
+def _runtime_execution_step_from_record(
+    record: Mapping[str, Any],
+    *,
+    phase: str,
+    fallback_action: str,
+    artifact_path: Path | None,
+    index: int,
+) -> RuntimeExecutionStep:
+    action = (
+        _optional_runtime_step_text(record.get("action"))
+        or _optional_runtime_step_text(record.get("kind"))
+        or _optional_runtime_step_text(record.get("tool"))
+        or fallback_action
+    )
+    command = record.get("command")
+    command_items: tuple[str, ...] = ()
+    if isinstance(command, Sequence) and not isinstance(command, (str, bytes, bytearray)):
+        command_items = tuple(str(item) for item in command)
+    elif command is not None:
+        command_items = (str(command),)
+    details = {
+        key: value
+        for key, value in record.items()
+        if key not in {"action", "kind", "tool", "command", "status", "diagnostics"}
+    }
+    details.setdefault("index", index)
+    status = (
+        _optional_runtime_step_text(record.get("status"))
+        or "planned"
+    )
+    diagnostics = tuple(
+        dict(diagnostic)
+        for diagnostic in _runtime_record_sequence(record.get("diagnostics"))
+        if isinstance(diagnostic, Mapping)
+    )
+    return RuntimeExecutionStep(
+        phase=phase,
+        action=action,
+        status=status,
+        command=command_items,
+        artifact_path=str(artifact_path) if artifact_path is not None else None,
+        details=details,
+        diagnostics=diagnostics,
+    )
+
+
+def _optional_runtime_step_text(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
+def _runtime_step_fallback_details(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    for key in ("id", "source", "target", "stage", "variant", "path", "packagePath"):
+        if key in artifact:
+            details[key] = artifact[key]
+    return details
+
+
+def _runtime_bound_resources(
+    fixture: RuntimeFixture,
+    contract: RuntimeAdapterContract,
+    artifact: Mapping[str, Any],
+) -> tuple[tuple[RuntimeBoundResource, ...], list[dict[str, Any]]]:
+    values_by_name = _runtime_fixture_values_by_name(fixture)
+    bindings: list[RuntimeBoundResource] = []
+    diagnostics: list[dict[str, Any]] = []
+    for binding in contract.resource_bindings:
+        value, source = _runtime_resource_value(binding, values_by_name)
+        if value is not None:
+            bindings.append(
+                RuntimeBoundResource(binding=binding, value=value, source=source)
+            )
+            continue
+        diagnostic = _runtime_execution_diagnostic(
+            "error" if _runtime_resource_required(binding) else "warning",
+            "project.runtime-verification.resource-unbound",
+            "Runtime fixture does not provide a value for a required resource binding.",
+            artifact,
+            resource=_runtime_resource_binding_name(binding),
+            binding=binding.to_json(),
+        )
+        diagnostics.append(diagnostic)
+        bindings.append(
+            RuntimeBoundResource(
+                binding=binding,
+                status="missing",
+                diagnostics=(diagnostic,),
+            )
+        )
+    return tuple(bindings), diagnostics
+
+
+def _runtime_fixture_values_by_name(
+    fixture: RuntimeFixture,
+) -> dict[str, tuple[RuntimeValue, str]]:
+    values: dict[str, tuple[RuntimeValue, str]] = {}
+    for value in fixture.inputs:
+        values[value.name] = (value, "input")
+    for value in fixture.expected_outputs:
+        values.setdefault(value.name, (value, "expectedOutput"))
+    return values
+
+
+def _runtime_resource_value(
+    binding: RuntimeResourceBinding,
+    values_by_name: Mapping[str, tuple[RuntimeValue, str]],
+) -> tuple[RuntimeValue | None, str | None]:
+    candidate_names = []
+    for value in (binding.value, binding.name, binding.binding_id):
+        if isinstance(value, str) and value not in candidate_names:
+            candidate_names.append(value)
+    for candidate in candidate_names:
+        match = values_by_name.get(candidate)
+        if match is not None:
+            return match
+    return None, None
+
+
+def _runtime_resource_required(binding: RuntimeResourceBinding) -> bool:
+    required = binding.metadata.get("required")
+    return required if isinstance(required, bool) else True
+
+
+def _runtime_resource_binding_name(binding: RuntimeResourceBinding) -> str | None:
+    if binding.name is not None:
+        return binding.name
+    if binding.binding_id is not None:
+        return binding.binding_id
+    if binding.binding is not None:
+        return str(binding.binding)
+    return None
+
+
+def _runtime_bound_constants(
+    contract: RuntimeAdapterContract,
+    artifact: Mapping[str, Any],
+) -> tuple[tuple[RuntimeBoundConstant, ...], list[dict[str, Any]]]:
+    bindings: list[RuntimeBoundConstant] = []
+    diagnostics: list[dict[str, Any]] = []
+    for constant in contract.specialization_constants:
+        if constant.value is not None:
+            bindings.append(
+                RuntimeBoundConstant(
+                    constant=constant,
+                    value=constant.value,
+                    source="value",
+                )
+            )
+            continue
+        if constant.default is not None:
+            bindings.append(
+                RuntimeBoundConstant(
+                    constant=constant,
+                    value=constant.default,
+                    source="default",
+                )
+            )
+            continue
+        if constant.required:
+            diagnostic = _runtime_execution_diagnostic(
+                "error",
+                "project.runtime-verification.constant-unbound",
+                "Runtime fixture does not provide a value for a required constant.",
+                artifact,
+                constant=_runtime_constant_name(constant),
+            )
+            diagnostics.append(diagnostic)
+            bindings.append(
+                RuntimeBoundConstant(
+                    constant=constant,
+                    status="missing",
+                    diagnostics=(diagnostic,),
+                )
+            )
+            continue
+        bindings.append(
+            RuntimeBoundConstant(
+                constant=constant,
+                source="optional",
+                status="unbound",
+            )
+        )
+    return tuple(bindings), diagnostics
+
+
+def _runtime_constant_name(constant: RuntimeSpecializationConstant) -> Any:
+    return constant.name if constant.name is not None else constant.constant_id
+
+
+def _complete_runtime_dispatch_geometry(
+    contract: RuntimeAdapterContract,
+) -> RuntimeDispatchGeometry | None:
+    dispatch = contract.dispatch
+    entry_point = _runtime_dispatch_entry_point(contract, dispatch)
+    if dispatch is None:
+        if entry_point is None:
+            return None
+        dispatch = RuntimeDispatchGeometry(
+            entry_point=entry_point.name,
+            workgroup_size=entry_point.workgroup_size,
+        )
+    workgroup_size = dispatch.workgroup_size
+    if not workgroup_size and entry_point is not None:
+        workgroup_size = entry_point.workgroup_size
+    global_size = dispatch.global_size or dispatch.grid_size
+    workgroup_count = dispatch.workgroup_count
+    if not workgroup_count and global_size and workgroup_size:
+        workgroup_count = _runtime_workgroup_count(global_size, workgroup_size)
+    if not global_size and workgroup_count and workgroup_size:
+        global_size = _runtime_global_size(workgroup_count, workgroup_size)
+    return RuntimeDispatchGeometry(
+        entry_point=dispatch.entry_point or (entry_point.name if entry_point else None),
+        workgroup_size=workgroup_size,
+        workgroup_count=workgroup_count,
+        global_size=global_size,
+        grid_size=dispatch.grid_size,
+        metadata=dispatch.metadata,
+    )
+
+
+def _runtime_dispatch_entry_point(
+    contract: RuntimeAdapterContract, dispatch: RuntimeDispatchGeometry | None
+) -> RuntimeEntryPoint | None:
+    if not contract.entry_points:
+        return None
+    if dispatch is not None and dispatch.entry_point is not None:
+        for entry_point in contract.entry_points:
+            if entry_point.name == dispatch.entry_point:
+                return entry_point
+    return contract.entry_points[0]
+
+
+def _runtime_workgroup_count(
+    global_size: Sequence[Any], workgroup_size: Sequence[Any]
+) -> tuple[int, ...]:
+    counts: list[int] = []
+    for global_item, workgroup_item in zip(global_size, workgroup_size):
+        if not _is_positive_int_like(global_item) or not _is_positive_int_like(
+            workgroup_item
+        ):
+            return ()
+        counts.append(math.ceil(int(global_item) / int(workgroup_item)))
+    return tuple(counts)
+
+
+def _runtime_global_size(
+    workgroup_count: Sequence[Any], workgroup_size: Sequence[Any]
+) -> tuple[int, ...]:
+    sizes: list[int] = []
+    for count_item, workgroup_item in zip(workgroup_count, workgroup_size):
+        if not _is_positive_int_like(count_item) or not _is_positive_int_like(
+            workgroup_item
+        ):
+            return ()
+        sizes.append(int(count_item) * int(workgroup_item))
+    return tuple(sizes)
+
+
+def _is_positive_int_like(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _runtime_value_reference(value: RuntimeValue) -> dict[str, Any]:
+    payload: dict[str, Any] = {"name": value.name, "kind": value.kind}
+    if value.dtype is not None:
+        payload["dtype"] = value.dtype
+    shape = value.shape or _infer_shape(value.values)
+    if shape:
+        payload["shape"] = list(shape)
+    if value.metadata:
+        payload["metadata"] = dict(value.metadata)
+    return payload
+
+
+def _runtime_diagnostics_have_errors(
+    diagnostics: Sequence[Mapping[str, Any]],
+) -> bool:
+    return any(diagnostic.get("severity") == "error" for diagnostic in diagnostics)
+
+
+def _runtime_comparison_diagnostics(
+    comparisons: Sequence[Mapping[str, Any]], artifact: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    for comparison in comparisons:
+        if comparison.get("status") == PASSED:
+            continue
+        diagnostics.append(
+            _runtime_execution_diagnostic(
+                "error",
+                "project.runtime-verification.output-mismatch",
+                str(comparison.get("message") or "Runtime output comparison failed."),
+                artifact,
+                output=comparison.get("name"),
+                comparison={
+                    key: comparison[key]
+                    for key in (
+                        "name",
+                        "kind",
+                        "mismatchCount",
+                        "maxAbsoluteError",
+                        "maxRelativeError",
+                    )
+                    if key in comparison
+                },
+            )
+        )
+    return diagnostics
+
+
+def _runtime_execution_diagnostic(
+    severity: str,
+    code: str,
+    message: str,
+    artifact: Mapping[str, Any],
+    **context: Any,
+) -> dict[str, Any]:
+    return _diagnostic(
+        severity,
+        code,
+        message,
+        artifact=_artifact_result_payload(artifact),
+        **_runtime_artifact_span_context(artifact),
+        **context,
+    )
+
+
+def _runtime_artifact_span_context(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    context: dict[str, Any] = {}
+    source_span = artifact.get("sourceSpan")
+    generated_span = artifact.get("generatedSpan")
+    source_map = artifact.get("sourceMap")
+    if isinstance(source_map, Mapping):
+        source_span = source_span or source_map.get("source")
+        generated_span = generated_span or source_map.get("generated")
+    if isinstance(source_span, Mapping):
+        context["sourceSpan"] = dict(source_span)
+        context["location"] = dict(source_span)
+    if isinstance(generated_span, Mapping):
+        context["generatedSpan"] = dict(generated_span)
+    return context
 
 
 def _executor_availability(
@@ -1948,6 +2671,7 @@ def _fixture_result(
     failure_phase: str | None = None,
     artifact: Mapping[str, Any] | None = None,
     adapter_contract: RuntimeAdapterContract | None = None,
+    runtime_execution: RuntimeExecutionPlan | None = None,
     executor: Mapping[str, Any] | None = None,
     comparisons: Sequence[Mapping[str, Any]] = (),
     diagnostics: Sequence[Mapping[str, Any]] = (),
@@ -1965,6 +2689,8 @@ def _fixture_result(
         adapter_payload = adapter_contract.to_json()
         if adapter_payload:
             result["runtimeAdapter"] = adapter_payload
+    if runtime_execution is not None:
+        result["runtimeExecution"] = runtime_execution.to_json()
     if failure_phase is not None:
         result["failurePhase"] = failure_phase
     return result
