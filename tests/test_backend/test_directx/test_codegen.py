@@ -584,7 +584,9 @@ def test_monogame_style_vertex_semantics_generate_valid_glsl_helpers():
     assert "vec4 position layout(location = 0)" not in generated
     assert "vec4 color Color0" not in generated
     assert "vec2 texCoord layout(location = 5)" not in generated
-    assert "vec4 SpritePixelShader(VSOutput input)" in generated
+    assert "vec4 SpritePixelShader(VSOutput input_)" in generated
+    assert "return input_.Color;" in generated
+    assert "VSOutput input)" not in generated
 
 
 def test_uint_vertex_id_import_uses_glsl_builtin_cast_alias():

@@ -84,8 +84,8 @@ def test_structured_buffer_parameters_preserve_element_type_for_core_backends():
     assert "data[index] = value * 2.0;" in metal
 
     glsl = GLSLCodeGen().generate(ast)
-    assert "void scale(float data[], float input[], uint index)" in glsl
-    assert "float value = input[index];" in glsl
+    assert "void scale(float data[], float input_[], uint index)" in glsl
+    assert "float value = input_[index];" in glsl
     assert "data[index] = (value * 2.0);" in glsl
     assert "StructuredBuffer" not in glsl
 

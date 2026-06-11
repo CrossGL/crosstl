@@ -107,6 +107,22 @@ def test_glsl_codegen_drops_metal_system_includes_but_preserves_glsl_includes():
     assert "#include <shared.glsl>" in generated
 
 
+def test_glsl_reserved_parameter_name_escapes_without_colliding():
+    shader = """
+    shader ParamEscaping {
+        float combine(float input, float input_) {
+            return input + input_;
+        }
+    }
+    """
+
+    generated = generate_code(crosstl.translator.parse(shader))
+
+    assert "float combine(float input_2, float input_)" in generated
+    assert "return (input_2 + input_);" in generated
+    assert "float input, " not in generated
+
+
 def test_glsl_tile_image_ext_importer_attribute_roundtrips():
     # Reduced from the backend GLSL importer output for glslang's
     # Test/spv.ext.ShaderTileImage.overlap.frag fixture.
@@ -5894,10 +5910,10 @@ def test_glsl_hlsl_matrix_aliases_map_to_glsl_names():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "mat3 makeTransform(mat3 input)" in generated_code
+    assert "mat3 makeTransform(mat3 input_)" in generated_code
     assert "mat3 m = mat3(1.0);" in generated_code
     assert "mat2x3 n = mat2x3(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
-    assert "return (input * m);" in generated_code
+    assert "return (input_ * m);" in generated_code
     assert "float3x3" not in generated_code
     assert "float3x2" not in generated_code
 
@@ -6011,11 +6027,11 @@ def test_glsl_hlsl_double_aliases_map_to_glsl_names():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "dmat2 makePrecise(dvec2 uv, dmat2 input)" in generated_code
+    assert "dmat2 makePrecise(dvec2 uv, dmat2 input_)" in generated_code
     assert "dvec2 p = dvec2(1.0, 2.0);" in generated_code
     assert "dmat3x4 jacobian = dmat3x4(1.0);" in generated_code
     assert "dmat2 m = dmat2(1.0, 0.0, 0.0, 1.0);" in generated_code
-    assert "return (input * m);" in generated_code
+    assert "return (input_ * m);" in generated_code
     assert "double2" not in generated_code
     assert "double2x2" not in generated_code
     assert "double4x3" not in generated_code
@@ -6043,13 +6059,13 @@ def test_glsl_hlsl_integer_bool_vector_aliases_map_to_glsl_names():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "ivec2 offset(ivec2 input)" in generated_code
+    assert "ivec2 offset(ivec2 input_)" in generated_code
     assert "ivec2 delta = ivec2(1, 2);" in generated_code
-    assert "return (input + delta);" in generated_code
-    assert "uvec3 grow(uvec3 input)" in generated_code
+    assert "return (input_ + delta);" in generated_code
+    assert "uvec3 grow(uvec3 input_)" in generated_code
     assert "uvec3 inc = uvec3(1u, 2u, 3u);" in generated_code
-    assert "return (input + inc);" in generated_code
-    assert "bvec4 flags(bvec4 input)" in generated_code
+    assert "return (input_ + inc);" in generated_code
+    assert "bvec4 flags(bvec4 input_)" in generated_code
     assert "bvec4 mask = bvec4(true, false, true, false);" in generated_code
     assert "int2" not in generated_code
     assert "uint3" not in generated_code
@@ -6136,17 +6152,17 @@ def test_glsl_precision_aliases_lower_to_standard_glsl_types():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "float tone(float input)" in generated_code
+    assert "float tone(float input_)" in generated_code
     assert "float bias = float(0.5);" in generated_code
-    assert "vec2 pair(vec2 input)" in generated_code
+    assert "vec2 pair(vec2 input_)" in generated_code
     assert "vec2 scale = vec2(1.0, 2.0);" in generated_code
-    assert "vec3 tint(vec3 input)" in generated_code
+    assert "vec3 tint(vec3 input_)" in generated_code
     assert "vec3 offset = vec3(1.0, 2.0, 3.0);" in generated_code
-    assert "uvec2 bump(uvec2 input)" in generated_code
+    assert "uvec2 bump(uvec2 input_)" in generated_code
     assert "uvec2 inc = uvec2(1u, 2u);" in generated_code
-    assert "int clampInt(int input)" in generated_code
+    assert "int clampInt(int input_)" in generated_code
     assert "int one = int(1);" in generated_code
-    assert "mat2x3 passMatrix(mat2x3 input)" in generated_code
+    assert "mat2x3 passMatrix(mat2x3 input_)" in generated_code
     assert "mat2x3 m = mat2x3(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
     for invalid_token in ("half", "min16float", "min16uint", "min12int"):
         assert invalid_token not in generated_code
@@ -6169,9 +6185,9 @@ def test_glsl_float16_ir_aliases_lower_to_standard_glsl_types():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "float tone(float input)" in generated_code
+    assert "float tone(float input_)" in generated_code
     assert "float bias = float(0.5);" in generated_code
-    assert "vec2 pair(vec2 input)" in generated_code
+    assert "vec2 pair(vec2 input_)" in generated_code
     assert "vec2 scale = vec2(1.0, 2.0);" in generated_code
     assert "float16" not in generated_code
     assert "f16vec2" not in generated_code
@@ -6194,11 +6210,11 @@ def test_glsl_float16_matrix_ir_aliases_lower_to_standard_glsl_matrices():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "mat3x2 passMatrix(mat3x2 input)" in generated_code
+    assert "mat3x2 passMatrix(mat3x2 input_)" in generated_code
     assert "mat3x2 m = mat3x2(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
-    assert "mat3 passSquare(mat3 input)" in generated_code
+    assert "mat3 passSquare(mat3 input_)" in generated_code
     assert "mat3 m = mat3(1.0);" in generated_code
-    assert "return (input * m);" in generated_code
+    assert "return (input_ * m);" in generated_code
     assert "f16mat3x2" not in generated_code
     assert "f16mat3" not in generated_code
 
@@ -6250,18 +6266,18 @@ def test_glsl_narrow_integer_aliases_lower_to_standard_glsl_integer_types():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "int signedScalar(int input)" in generated_code
+    assert "int signedScalar(int input_)" in generated_code
     assert "int one = int(1);" in generated_code
-    assert "uint unsignedScalar(uint input)" in generated_code
+    assert "uint unsignedScalar(uint input_)" in generated_code
     assert "uint one = uint(1u);" in generated_code
-    assert "ivec2 signedPair(ivec2 input)" in generated_code
+    assert "ivec2 signedPair(ivec2 input_)" in generated_code
     assert "ivec2 inc = ivec2(1, 2);" in generated_code
-    assert "uvec3 unsignedTriple(uvec3 input)" in generated_code
+    assert "uvec3 unsignedTriple(uvec3 input_)" in generated_code
     assert "uvec3 inc = uvec3(1u, 2u, 3u);" in generated_code
-    assert "ivec2 signedShort(ivec2 input)" in generated_code
-    assert "uvec3 unsignedShort(uvec3 input)" in generated_code
-    assert "ivec4 signedChar(ivec4 input)" in generated_code
-    assert "uvec2 unsignedChar(uvec2 input)" in generated_code
+    assert "ivec2 signedShort(ivec2 input_)" in generated_code
+    assert "uvec3 unsignedShort(uvec3 input_)" in generated_code
+    assert "ivec4 signedChar(ivec4 input_)" in generated_code
+    assert "uvec2 unsignedChar(uvec2 input_)" in generated_code
     for invalid_token in (
         "int8",
         "uint8",
@@ -6302,13 +6318,13 @@ def test_glsl_packed_vector_aliases_lower_to_standard_glsl_vectors():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "vec4 color(vec4 input)" in generated_code
+    assert "vec4 color(vec4 input_)" in generated_code
     assert "vec4 bias = vec4(1.0, 2.0, 3.0, 4.0);" in generated_code
-    assert "vec2 halfPair(vec2 input)" in generated_code
+    assert "vec2 halfPair(vec2 input_)" in generated_code
     assert "vec2 scale = vec2(1.0, 2.0);" in generated_code
-    assert "ivec3 signedTriple(ivec3 input)" in generated_code
+    assert "ivec3 signedTriple(ivec3 input_)" in generated_code
     assert "ivec3 inc = ivec3(1, 2, 3);" in generated_code
-    assert "uvec4 unsignedQuad(uvec4 input)" in generated_code
+    assert "uvec4 unsignedQuad(uvec4 input_)" in generated_code
     assert "uvec4 inc = uvec4(1u, 2u, 3u, 4u);" in generated_code
     assert "packed_" not in generated_code
 
@@ -6345,15 +6361,15 @@ def test_glsl_simd_aliases_lower_to_standard_glsl_types():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "vec4 color(vec4 input)" in generated_code
+    assert "vec4 color(vec4 input_)" in generated_code
     assert "vec4 bias = vec4(1.0, 2.0, 3.0, 4.0);" in generated_code
-    assert "ivec3 signedTriple(ivec3 input)" in generated_code
+    assert "ivec3 signedTriple(ivec3 input_)" in generated_code
     assert "ivec3 inc = ivec3(1, 2, 3);" in generated_code
-    assert "uvec2 unsignedPair(uvec2 input)" in generated_code
+    assert "uvec2 unsignedPair(uvec2 input_)" in generated_code
     assert "uvec2 inc = uvec2(1u, 2u);" in generated_code
-    assert "mat4 passSquare(mat4 input)" in generated_code
+    assert "mat4 passSquare(mat4 input_)" in generated_code
     assert "mat4 m = mat4(1.0);" in generated_code
-    assert "mat2x3 passMatrix(mat2x3 input)" in generated_code
+    assert "mat2x3 passMatrix(mat2x3 input_)" in generated_code
     assert "mat2x3 m = mat2x3(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
     assert "simd_" not in generated_code
 
@@ -6435,20 +6451,20 @@ def test_glsl_fixed_width_scalar_aliases_lower_to_standard_glsl_scalars():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "int signedByte(int input)" in generated_code
-    assert "uint unsignedByte(uint input)" in generated_code
-    assert "int signedShortScalar(int input)" in generated_code
-    assert "uint unsignedShortScalar(uint input)" in generated_code
-    assert "int signedWord(int input)" in generated_code
-    assert "uint unsignedWord(uint input)" in generated_code
-    assert "int signedLong(int input)" in generated_code
-    assert "uint unsignedLong(uint input)" in generated_code
-    assert "int signedLongT(int input)" in generated_code
-    assert "uint unsignedLongT(uint input)" in generated_code
-    assert "uint sizeValue(uint input)" in generated_code
-    assert "int ptrDiff(int input)" in generated_code
-    assert "int longValue(int input)" in generated_code
-    assert "uint ulongValue(uint input)" in generated_code
+    assert "int signedByte(int input_)" in generated_code
+    assert "uint unsignedByte(uint input_)" in generated_code
+    assert "int signedShortScalar(int input_)" in generated_code
+    assert "uint unsignedShortScalar(uint input_)" in generated_code
+    assert "int signedWord(int input_)" in generated_code
+    assert "uint unsignedWord(uint input_)" in generated_code
+    assert "int signedLong(int input_)" in generated_code
+    assert "uint unsignedLong(uint input_)" in generated_code
+    assert "int signedLongT(int input_)" in generated_code
+    assert "uint unsignedLongT(uint input_)" in generated_code
+    assert "uint sizeValue(uint input_)" in generated_code
+    assert "int ptrDiff(int input_)" in generated_code
+    assert "int longValue(int input_)" in generated_code
+    assert "uint ulongValue(uint input_)" in generated_code
     assert "int one = int(1);" in generated_code
     assert "uint one = uint(1u);" in generated_code
     for invalid_token in (
