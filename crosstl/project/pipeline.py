@@ -8865,6 +8865,12 @@ def _materialize_inherited_source_template_helpers(
             materialized,
             call_replacements,
         )
+    else:
+        return _InheritedTemplateMaterialization(
+            text=materialized,
+            specializations=[],
+            template_names=set(),
+        )
 
     generated_sources = [
         str(generated[key]["source"]).rstrip()
@@ -8880,6 +8886,333 @@ def _materialize_inherited_source_template_helpers(
         text=materialized,
         specializations=specialization_records,
         template_names=inherited_template_names,
+    )
+
+
+def _metal_function_parameter_types(preprocessor: Any, header: str) -> dict[str, str]:
+    paren_start = header.find("(")
+    if paren_start == -1:
+        return {}
+    paren_end = preprocessor._find_matching_delimiter(header, paren_start, "(", ")")
+    if paren_end is None:
+        return {}
+
+    parameters: dict[str, str] = {}
+    for parameter in preprocessor._split_top_level_commas(
+        header[paren_start + 1 : paren_end]
+    ):
+        parameter = re.sub(r"\[\[.*?\]\]", "", parameter, flags=re.DOTALL).strip()
+        if not parameter or parameter == "void":
+            continue
+        match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\])?\s*$", parameter)
+        if match is None:
+            continue
+        name = match.group(1)
+        type_text = parameter[: match.start(1)].strip()
+        type_text = re.sub(
+            r"\b(?:const|device|thread|threadgroup|constant|volatile|restrict)\b",
+            "",
+            type_text,
+        )
+        type_text = re.sub(r"\s+", " ", type_text).strip()
+        if type_text:
+            parameters[name] = type_text
+    return parameters
+
+
+def _metal_collect_local_value_types(
+    preprocessor: Any,
+    source: str,
+    body_start: int,
+    body_end: int,
+    seed_types: Mapping[str, str],
+) -> dict[str, str]:
+    types = dict(seed_types)
+    body = source[body_start:body_end]
+    type_name = r"[A-Za-z_][A-Za-z0-9_:]*(?:\s*<[^;=(){}]+>)?"
+    declaration_re = re.compile(
+        rf"(?:^|[;{{}}\n])\s*"
+        rf"(?:const\s+|constexpr\s+|static\s+|thread\s+|threadgroup\s+|"
+        rf"device\s+|constant\s+|volatile\s+|restrict\s+)*"
+        rf"(?P<type>{type_name})\s*(?P<pointer>[*&]?)\s+"
+        rf"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<array>\[[^\]]*\])?"
+        rf"\s*(?:[=;,\[])",
+        re.DOTALL,
+    )
+    for match in declaration_re.finditer(body):
+        value_type = re.sub(r"\s+", " ", match.group("type")).strip()
+        if not value_type:
+            continue
+        if match.group("pointer"):
+            value_type = f"{value_type}{match.group('pointer')}"
+        types[match.group("name")] = value_type
+    return types
+
+
+def _metal_base_value_type(type_text: str) -> str:
+    value = str(type_text or "").strip()
+    value = re.sub(r"\b(?:const|device|thread|threadgroup|constant)\b", "", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    while value.endswith(("*", "&")):
+        value = value[:-1].strip()
+    return value
+
+
+def _metal_expression_value_type(
+    preprocessor: Any,
+    expression: str,
+    value_types: Mapping[str, str],
+) -> str | None:
+    text = str(expression or "").strip()
+    while text.startswith("(") and text.endswith(")"):
+        end = preprocessor._find_matching_delimiter(text, 0, "(", ")")
+        if end != len(text) - 1:
+            break
+        text = text[1:-1].strip()
+    cast_match = re.match(r"(?P<type>[A-Za-z_][A-Za-z0-9_:]*)\s*\(", text)
+    if cast_match and cast_match.group("type") not in {"if", "for", "while", "return"}:
+        return cast_match.group("type")
+    ident_match = re.match(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:\[|$)", text)
+    if ident_match:
+        value_type = value_types.get(ident_match.group("name"))
+        if value_type:
+            return _metal_base_value_type(value_type)
+    for operator_text in ("+", "-", "*", "/"):
+        depth = {"<": 0, "(": 0, "[": 0, "{": 0}
+        for index, character in enumerate(text):
+            if character in depth:
+                depth[character] += 1
+            elif character == ">" and depth["<"] > 0:
+                depth["<"] -= 1
+            elif character == ")" and depth["("] > 0:
+                depth["("] -= 1
+            elif character == "]" and depth["["] > 0:
+                depth["["] -= 1
+            elif character == "}" and depth["{"] > 0:
+                depth["{"] -= 1
+            elif character == operator_text and not any(depth.values()):
+                for part in (text[:index], text[index + 1 :]):
+                    value_type = _metal_expression_value_type(
+                        preprocessor,
+                        part,
+                        value_types,
+                    )
+                    if value_type is not None:
+                        return value_type
+    if re.fullmatch(r"\d+u?", text):
+        return "uint" if text.endswith("u") else "int"
+    if re.fullmatch(r"\d+\.\d*f?", text):
+        return "float"
+    return None
+
+
+def _metal_template_function_parameter_types(
+    preprocessor: Any,
+    template: Any,
+) -> list[str]:
+    header = _metal_template_header(template)
+    paren_start = header.find("(")
+    if paren_start == -1:
+        return []
+    paren_end = preprocessor._find_matching_delimiter(header, paren_start, "(", ")")
+    if paren_end is None:
+        return []
+    parameter_types: list[str] = []
+    for parameter in preprocessor._split_top_level_commas(
+        header[paren_start + 1 : paren_end]
+    ):
+        parameter = re.sub(r"\[\[.*?\]\]", "", parameter, flags=re.DOTALL).strip()
+        match = re.search(r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\[[^\]]*\])?\s*$", parameter)
+        if match is None:
+            parameter_types.append("")
+            continue
+        parameter_types.append(parameter[: match.start()].strip())
+    return parameter_types
+
+
+def _metal_find_implicit_template_function_calls(
+    preprocessor: Any,
+    source: str,
+    templates_by_name: Mapping[str, Any],
+    excluded_spans: Sequence[tuple[int, int]],
+    included_spans: Sequence[tuple[int, int]] | None,
+) -> list[tuple[str, list[str], tuple[int, int]]]:
+    calls: list[tuple[str, list[str], tuple[int, int]]] = []
+    functions = preprocessor._find_non_template_function_definitions(
+        source,
+        list(excluded_spans),
+    )
+    included = list(included_spans) if included_spans is not None else None
+    for function in functions:
+        if included is not None and preprocessor._containing_span(
+            function.span[0], included
+        ) is None:
+            continue
+        header = source[function.span[0] : function.body_span[0]]
+        value_types = _metal_collect_local_value_types(
+            preprocessor,
+            source,
+            function.body_span[0],
+            function.body_span[1],
+            _metal_function_parameter_types(preprocessor, header),
+        )
+        body = source[function.body_span[0] : function.body_span[1]]
+        body_offset = function.body_span[0]
+        i = 0
+        while i < len(body):
+            if body[i] in "\"'":
+                _literal, consumed = preprocessor._read_string(body, i)
+                i += consumed
+                continue
+            if body.startswith("//", i):
+                end = body.find("\n", i)
+                if end == -1:
+                    break
+                i = end + 1
+                continue
+            if body.startswith("/*", i):
+                end = body.find("*/", i + 2)
+                if end == -1:
+                    break
+                i = end + 2
+                continue
+            if not (body[i].isalpha() or body[i] == "_"):
+                i += 1
+                continue
+            ident, consumed = preprocessor._read_identifier(body, i)
+            template = templates_by_name.get(ident)
+            j = i + consumed
+            while j < len(body) and body[j].isspace():
+                j += 1
+            if template is None or j >= len(body) or body[j] != "(":
+                i += consumed
+                continue
+            paren_end = preprocessor._find_matching_delimiter(body, j, "(", ")")
+            if paren_end is None:
+                i += consumed
+                continue
+            arguments = preprocessor._split_top_level_commas(body[j + 1 : paren_end])
+            parameter_types = _metal_template_function_parameter_types(
+                preprocessor,
+                template,
+            )
+            if len(arguments) != len(parameter_types):
+                i = paren_end + 1
+                continue
+            bindings: dict[str, str] = {}
+            for parameter_type, argument in zip(parameter_types, arguments):
+                value_type = _metal_expression_value_type(
+                    preprocessor,
+                    argument,
+                    value_types,
+                )
+                if value_type is None:
+                    continue
+                for template_parameter in template.template_parameters:
+                    if re.search(rf"\b{re.escape(template_parameter)}\b", parameter_type):
+                        existing = bindings.get(template_parameter)
+                        if existing is None:
+                            bindings[template_parameter] = value_type
+                        elif existing != value_type:
+                            bindings.pop(template_parameter, None)
+            if all(parameter in bindings for parameter in template.template_parameters):
+                calls.append(
+                    (
+                        ident,
+                        _template_argument_values_from_parameters(
+                            preprocessor,
+                            template,
+                            bindings,
+                        ),
+                        (body_offset + i, body_offset + i + consumed),
+                    )
+                )
+            i = paren_end + 1
+    return calls
+
+
+@dataclass
+class _ImplicitTemplateMaterialization:
+    text: str
+    specializations: list[dict[str, Any]]
+
+
+def _materialize_implicit_template_function_calls(
+    *,
+    preprocessor: Any,
+    materialized: str,
+) -> _ImplicitTemplateMaterialization:
+    templates = preprocessor._find_template_functions(materialized)
+    templates_by_name = {template.name: template for template in templates}
+    template_spans = preprocessor._find_template_declaration_spans(materialized)
+    reachable_function_spans = preprocessor._reachable_function_spans(
+        materialized,
+        template_spans,
+    )
+    implicit_calls = _metal_find_implicit_template_function_calls(
+        preprocessor,
+        materialized,
+        templates_by_name,
+        template_spans,
+        reachable_function_spans,
+    )
+    implicit_replacements: list[tuple[int, int, str]] = []
+    implicit_materializations: list[tuple[str, tuple[str, ...], str]] = []
+    specializations: list[dict[str, Any]] = []
+    seen_implicit_specializations: set[tuple[str, tuple[str, ...]]] = set()
+    for function_name, arguments, span in implicit_calls:
+        template = templates_by_name.get(function_name)
+        if template is None or not preprocessor._template_arguments_satisfy_parameters(
+            template,
+            arguments,
+        ):
+            continue
+        key = preprocessor._template_specialization_key(function_name, arguments)
+        materialized_name = preprocessor._template_specialization_identifier(
+            function_name,
+            list(key[1]),
+        )
+        implicit_replacements.append((span[0], span[1], materialized_name))
+        if key in seen_implicit_specializations:
+            continue
+        seen_implicit_specializations.add(key)
+        materialized_source = preprocessor._materialize_template_function_with_name(
+            template,
+            arguments,
+            materialized_name,
+            host_name=None,
+        )
+        if materialized_source:
+            implicit_materializations.append(
+                (function_name, tuple(key[1]), materialized_source)
+            )
+            parameters = _template_parameter_values_from_arguments(
+                preprocessor,
+                template,
+                list(key[1]),
+            )
+            specializations.append(
+                _materialized_template_specialization_record(
+                    name=function_name,
+                    materialized_name=materialized_name,
+                    parameters=parameters,
+                    parameter_sources={
+                        parameter: "call-site" for parameter in parameters
+                    },
+                    source="call-site",
+                )
+            )
+    if implicit_replacements or implicit_materializations:
+        replacements = list(implicit_replacements)
+        for function_name, _arguments, materialized_source in implicit_materializations:
+            template = templates_by_name.get(function_name)
+            if template is None:
+                continue
+            replacements.append((template.span[0], template.span[1], materialized_source))
+        materialized = preprocessor._apply_text_replacements(materialized, replacements)
+    return _ImplicitTemplateMaterialization(
+        text=materialized,
+        specializations=specializations,
     )
 
 
@@ -9158,12 +9491,111 @@ def _metal_concrete_using_alias_type(alias_type: str) -> str | None:
     return alias_type
 
 
+def _metal_template_struct_members(
+    preprocessor: Any,
+    source: str,
+) -> dict[str, dict[str, Any]]:
+    structs: dict[str, dict[str, Any]] = {}
+    pos = 0
+    while True:
+        match = re.search(r"\btemplate\s*<", source[pos:])
+        if match is None:
+            break
+        start = pos + match.start()
+        angle_start = source.find("<", start)
+        angle_end = preprocessor._find_matching_angle(source, angle_start)
+        if angle_end is None:
+            pos = start + len("template")
+            continue
+        parameter_text = source[angle_start + 1 : angle_end]
+        parameters = preprocessor._template_parameter_names(parameter_text)
+        struct_match = re.match(
+            r"\s*struct\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{",
+            source[angle_end + 1 :],
+        )
+        if struct_match is None:
+            pos = angle_end + 1
+            continue
+        name = struct_match.group(1)
+        body_start = angle_end + 1 + struct_match.end() - 1
+        body_end = preprocessor._find_matching_brace(source, body_start)
+        if body_end is None:
+            pos = body_start + 1
+            continue
+        body = source[body_start + 1 : body_end]
+        aliases = {
+            alias_match.group("name"): alias_match.group("type").strip()
+            for alias_match in re.finditer(
+                r"\busing\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*="
+                r"\s*(?P<type>[^;]+);",
+                body,
+                re.DOTALL,
+            )
+        }
+        constants = {
+            constant_match.group("name"): constant_match.group("value").strip()
+            for constant_match in re.finditer(
+                r"\b(?:static\s+)?(?:constexpr\s+)?(?:constant\s+)?"
+                r"(?:const\s+)?[A-Za-z_][A-Za-z0-9_:]*\s+"
+                r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*="
+                r"\s*(?P<value>[^;]+);",
+                body,
+                re.DOTALL,
+            )
+        }
+        structs[name] = {
+            "parameters": parameters,
+            "aliases": aliases,
+            "constants": constants,
+        }
+        pos = body_end + 1
+    return structs
+
+
+def _metal_concrete_template_struct_members(
+    preprocessor: Any,
+    template_structs: Mapping[str, Mapping[str, Any]],
+    concrete_type: str,
+) -> dict[str, str]:
+    text = str(concrete_type or "").strip()
+    if "<" not in text:
+        return {}
+    name = text.split("<", 1)[0].strip()
+    struct = template_structs.get(name)
+    if not isinstance(struct, Mapping):
+        return {}
+    angle_start = text.find("<")
+    angle_end = preprocessor._find_matching_angle(text, angle_start)
+    if angle_end is None:
+        return {}
+    arguments = preprocessor._split_top_level_commas(text[angle_start + 1 : angle_end])
+    parameters = list(struct.get("parameters") or [])
+    substitutions = {
+        parameter: arguments[index]
+        for index, parameter in enumerate(parameters)
+        if index < len(arguments)
+    }
+    members: dict[str, str] = {}
+    for member, value in dict(struct.get("aliases") or {}).items():
+        members[str(member)] = preprocessor._replace_identifiers(
+            str(value),
+            substitutions,
+        )
+    for member, value in dict(struct.get("constants") or {}).items():
+        members[str(member)] = preprocessor._replace_identifiers(
+            str(value),
+            substitutions,
+        )
+    return members
+
+
 def _inline_metal_concrete_using_template_aliases(
     preprocessor: Any,
     source: str,
     excluded_spans: Sequence[tuple[int, int]],
 ) -> str:
     block_spans = _metal_block_spans(preprocessor, source)
+    template_structs = _metal_template_struct_members(preprocessor, source)
     aliases: list[dict[str, Any]] = []
     alias_spans: list[tuple[int, int]] = []
     excluded = list(excluded_spans)
@@ -9215,15 +9647,36 @@ def _inline_metal_concrete_using_template_aliases(
         if semicolon is None:
             i += consumed
             continue
-        alias_type = _metal_concrete_using_alias_type(source[j + 1 : semicolon])
+        raw_alias_type = source[j + 1 : semicolon]
+        alias_type = _metal_concrete_using_alias_type(raw_alias_type)
+        if alias_type is None:
+            dependent_match = re.fullmatch(
+                r"\s*typename\s+([A-Za-z_][A-Za-z0-9_]*)::"
+                r"([A-Za-z_][A-Za-z0-9_]*)\s*",
+                raw_alias_type,
+                re.DOTALL,
+            )
+            if dependent_match is not None:
+                owner, member = dependent_match.groups()
+                for candidate in reversed(aliases):
+                    if candidate["name"] != owner:
+                        continue
+                    alias_type = (candidate.get("members") or {}).get(member)
+                    break
         scope_end = _metal_enclosing_block_end(block_spans, i)
         if alias_type is None or scope_end is None:
             i = semicolon + 1
             continue
+        members = _metal_concrete_template_struct_members(
+            preprocessor,
+            template_structs,
+            alias_type,
+        )
         aliases.append(
             {
                 "name": alias_name,
                 "type": alias_type,
+                "members": members,
                 "start": i,
                 "end": semicolon + 1,
                 "scope_end": scope_end,
@@ -9265,13 +9718,34 @@ def _inline_metal_concrete_using_template_aliases(
             i += 1
             continue
         ident, consumed = preprocessor._read_identifier(source, i)
-        candidates = [
+        qualified_candidates = [
             alias
             for alias in aliases
             if alias["name"] == ident
             and alias["end"] <= i
             and i < alias["scope_end"]
         ]
+        qualified = None
+        if qualified_candidates and source[i + consumed : i + consumed + 2] == "::":
+            member_start = i + consumed + 2
+            if member_start < len(source) and (
+                source[member_start].isalpha() or source[member_start] == "_"
+            ):
+                member, member_consumed = preprocessor._read_identifier(
+                    source,
+                    member_start,
+                )
+                for candidate in reversed(qualified_candidates):
+                    qualified = (candidate.get("members") or {}).get(member)
+                    if qualified is not None:
+                        replacements.append(
+                            (i, member_start + member_consumed, str(qualified))
+                        )
+                        i = member_start + member_consumed
+                        break
+                if qualified is not None:
+                    continue
+        candidates = qualified_candidates
         if candidates:
             alias = max(candidates, key=lambda item: int(item["end"]))
             replacements.append((i, i + consumed, str(alias["type"])))
@@ -9658,6 +10132,13 @@ def _project_template_materialization_for_artifact(
         raise
     except Exception:  # noqa: BLE001
         return None
+
+    implicit_materialization = _materialize_implicit_template_function_calls(
+        preprocessor=preprocessor,
+        materialized=materialized,
+    )
+    materialized = implicit_materialization.text
+    specializations.extend(implicit_materialization.specializations)
 
     inherited_materialization = _materialize_inherited_source_template_helpers(
         preprocessor=preprocessor,
