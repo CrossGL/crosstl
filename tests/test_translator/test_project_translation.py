@@ -10356,6 +10356,48 @@ def test_plain_metal_helper_call_scan_uses_indexed_excluded_spans(monkeypatch):
     ]
 
 
+def test_plain_metal_helper_call_scan_starts_at_included_body_span():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    class CountingSource(str):
+        index_reads = 0
+
+        def __getitem__(self, key):
+            if isinstance(key, int):
+                type(self).index_reads += 1
+            return super().__getitem__(key)
+
+    preprocessor = MetalPreprocessor()
+    prefix = "\n".join(f"float ignored_{index};" for index in range(6000))
+    function_source = textwrap.dedent("""
+        uint call_plain(uint value) {
+            return plain_helper(value);
+        }
+        """)
+    source = CountingSource(prefix + "\n" + function_source)
+    function_start = source.find("uint call_plain")
+    body_start = source.find("{", function_start) + 1
+    body_end = source.find("}", body_start)
+
+    calls = project_pipeline._plain_template_helper_call_sites(
+        preprocessor,
+        source,
+        {"plain_helper": [object()]},
+        [],
+        [(body_start, body_end)],
+    )
+
+    helper_start = source.find("plain_helper")
+    assert calls == [
+        (
+            "plain_helper",
+            ["value"],
+            (helper_start, helper_start + len("plain_helper")),
+        )
+    ]
+    assert CountingSource.index_reads < len(function_source) * 4
+
+
 def test_translate_project_bounds_mlx_like_plain_helper_scan_across_targets(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
@@ -10428,6 +10470,86 @@ def test_translate_project_bounds_mlx_like_plain_helper_scan_across_targets(tmp_
             and record["materializedName"] == "dequantize_plain_float"
             for record in materialization["specializations"]
         )
+
+
+def test_translate_project_bounds_mlx_like_large_plain_helper_graph(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    helper_count = 96
+    helper_sources = []
+    for index in range(helper_count):
+        next_call = (
+            f"return graph_helper_{index + 1}(value) + T({index % 7});"
+            if index + 1 < helper_count
+            else "return value + T(1);"
+        )
+        helper_sources.append(
+            textwrap.dedent(f"""
+                template <typename T>
+                T graph_helper_{index}(T value) {{
+                    {next_call}
+                }}
+                """).strip()
+        )
+    helper_graph = "\n\n".join(helper_sources)
+    excluded_structs = "\n\n".join(
+        textwrap.dedent(f"""
+            template <typename T>
+            struct QuantizedBlock{index} {{
+                T scales[8];
+                T values[8];
+            }};
+            """).strip()
+        for index in range(500)
+    )
+    (shader_dir / "fp_quantized_nax_graph.metal").write_text(
+        textwrap.dedent(f"""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            {excluded_structs}
+
+            {helper_graph}
+
+            [[kernel]] void fp_quantized_nax(
+                device const float* in [[buffer(0)]],
+                device float* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {{
+                float value = in[gid];
+                out[gid] = graph_helper_0(value);
+            }}
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx", "opengl", "vulkan"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    for artifact in payload["artifacts"]:
+        materialization = artifact["templateMaterialization"]
+        assert materialization["status"] == "materialized"
+        assert materialization["unsupported"] == []
+        helper_records = [
+            record
+            for record in materialization["specializations"]
+            if record["source"] == "call-site"
+        ]
+        assert len(helper_records) == helper_count
+        assert helper_records[-1]["materializedName"] == "graph_helper_95_float"
 
 
 def test_translate_project_opengl_uses_metal_default_template_helper_type(

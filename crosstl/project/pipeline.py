@@ -10266,61 +10266,67 @@ def _plain_template_helper_call_sites(
 ) -> list[tuple[str, list[str], tuple[int, int]]]:
     calls: list[tuple[str, list[str], tuple[int, int]]] = []
     excluded = _SpanLookup(excluded_spans)
-    included = _SpanLookup(included_spans)
-    i = 0
-    while i < len(source):
-        if source[i] in "\"'":
-            _literal, consumed = preprocessor._read_string(source, i)
-            i += consumed
-            continue
-        if source.startswith("//", i):
-            end = source.find("\n", i)
-            if end == -1:
-                break
-            i = end + 1
-            continue
-        if source.startswith("/*", i):
-            end = source.find("*/", i + 2)
-            if end == -1:
-                break
-            i = end + 2
-            continue
-        span = excluded.containing(i)
-        if span is not None:
-            i = span[1]
-            continue
-        if included.containing(i) is None:
-            i += 1
-            continue
-        if source[i].isalpha() or source[i] == "_":
-            ident, consumed = preprocessor._read_identifier(source, i)
-            if ident not in templates_by_name or preprocessor._is_member_identifier_context(
-                source,
-                i,
-            ):
+    for span_start, span_end in _SpanLookup(included_spans)._spans:
+        i = span_start
+        scan_end = min(span_end, len(source))
+        while i < scan_end:
+            if source[i] in "\"'":
+                _literal, consumed = preprocessor._read_string(source, i)
                 i += consumed
                 continue
-            j = i + consumed
-            while j < len(source) and source[j].isspace():
-                j += 1
-            if j >= len(source) or source[j] != "(":
-                i += consumed
+            if source.startswith("//", i):
+                end = source.find("\n", i, scan_end)
+                if end == -1:
+                    break
+                i = end + 1
                 continue
-            paren_end = preprocessor._find_matching_delimiter(source, j, "(", ")")
-            if paren_end is None:
-                i += consumed
+            if source.startswith("/*", i):
+                end = source.find("*/", i + 2, scan_end)
+                if end == -1:
+                    break
+                i = end + 2
                 continue
-            arguments = preprocessor._split_top_level_commas(source[j + 1 : paren_end])
-            calls.append(
-                (
-                    ident,
-                    arguments,
-                    (preprocessor._scoped_identifier_start(source, i), i + consumed),
+            span = excluded.containing(i)
+            if span is not None:
+                i = min(span[1], scan_end)
+                continue
+            if source[i].isalpha() or source[i] == "_":
+                ident, consumed = preprocessor._read_identifier(source, i)
+                if (
+                    ident not in templates_by_name
+                    or preprocessor._is_member_identifier_context(
+                        source,
+                        i,
+                    )
+                ):
+                    i += consumed
+                    continue
+                j = i + consumed
+                while j < scan_end and source[j].isspace():
+                    j += 1
+                if j >= scan_end or source[j] != "(":
+                    i += consumed
+                    continue
+                paren_end = preprocessor._find_matching_delimiter(source, j, "(", ")")
+                if paren_end is None:
+                    i += consumed
+                    continue
+                arguments = preprocessor._split_top_level_commas(
+                    source[j + 1 : paren_end]
                 )
-            )
-            i = paren_end + 1
-            continue
-        i += 1
+                calls.append(
+                    (
+                        ident,
+                        arguments,
+                        (
+                            preprocessor._scoped_identifier_start(source, i),
+                            i + consumed,
+                        ),
+                    )
+                )
+                i = paren_end + 1
+                continue
+            i += 1
     return calls
 
 
@@ -10496,6 +10502,198 @@ def _materialize_plain_template_helper_calls(
         reachable = set(reachable_function_spans)
         replacements: list[tuple[int, int, str]] = []
         new_materializations: list[str] = []
+
+        active_materializations: set[
+            tuple[str, tuple[str, ...], tuple[str, ...]]
+        ] = set()
+
+        def ensure_plain_helper(
+            function_name: str,
+            template: Any,
+            arguments: Sequence[str],
+            parameter_declarations: Sequence[tuple[str, str, bool]],
+        ) -> str:
+            specialization_key = preprocessor._template_specialization_key(
+                function_name,
+                arguments,
+            )
+            signature_key = tuple(
+                _normalize_metal_type_text(type_text)
+                for type_text, _name, _variadic in parameter_declarations
+            )
+            key = (specialization_key[0], specialization_key[1], signature_key)
+            materialized_name = materialized_names.get(key)
+            if materialized_name is not None:
+                return materialized_name
+
+            unique_count = len(materialized_names) + 1
+            if len(materialized_names) >= preprocessor.max_template_specializations:
+                from crosstl.backend.Metal.preprocessor import (
+                    MetalTemplateSpecializationError,
+                )
+
+                requested_signature = preprocessor._template_specialization_signature(
+                    function_name,
+                    arguments,
+                )
+                suggested_action = (
+                    "raise max_template_specializations for this source "
+                    "pattern or backend, or reduce inferred template "
+                    "helper instantiations"
+                )
+                raise MetalTemplateSpecializationError(
+                    "Metal template specialization limit exceeded while "
+                    f"materializing '{requested_signature}'; "
+                    f"{unique_count} unique concrete signatures requested, "
+                    f"limit {preprocessor.max_template_specializations} "
+                    f"from {preprocessor.template_specialization_limit_source}. "
+                    f"Suggested action: {suggested_action}.",
+                    limit=preprocessor.max_template_specializations,
+                    limit_source=(preprocessor.template_specialization_limit_source),
+                    unique_specialization_count=unique_count,
+                    requested_signature=requested_signature,
+                    suggested_action=suggested_action,
+                )
+
+            materialized_name = _metal_template_materialized_name(
+                preprocessor,
+                function_name,
+                list(key[1]),
+                parameter_declarations,
+                materialized_names,
+            )
+            materialized_names[key] = materialized_name
+            parameters = _template_parameter_values_from_arguments(
+                preprocessor,
+                template,
+                list(key[1]),
+            )
+            specialization_records.append(
+                _materialized_template_specialization_record(
+                    name=function_name,
+                    materialized_name=materialized_name,
+                    parameters=parameters,
+                    parameter_sources={
+                        parameter: "call-site" for parameter in parameters
+                    },
+                    source="call-site",
+                )
+            )
+            materialized_template_names.add(function_name)
+
+            materialized = preprocessor._materialize_template_function_with_name(
+                template,
+                list(key[1]),
+                materialized_name,
+                host_name=None,
+            )
+            if not materialized:
+                return materialized_name
+
+            if key not in active_materializations:
+                active_materializations.add(key)
+                child_replacements: list[tuple[int, int, str]] = []
+                materialized_template_spans = (
+                    preprocessor._find_template_declaration_spans(materialized)
+                )
+                materialized_functions = (
+                    preprocessor._find_non_template_function_definitions(
+                        materialized,
+                        materialized_template_spans,
+                    )
+                )
+                materialized_return_types = {
+                    function.name: return_type
+                    for function in materialized_functions
+                    if (
+                        return_type := _metal_function_return_type(
+                            preprocessor,
+                            _metal_function_header(materialized, function),
+                            function.name,
+                        )
+                    )
+                }
+                for function in materialized_functions:
+                    if function.name != materialized_name:
+                        continue
+                    type_environment = _metal_function_type_environment(
+                        preprocessor,
+                        materialized,
+                        function,
+                        materialized_return_types,
+                    )
+                    child_calls = _plain_template_helper_call_sites(
+                        preprocessor,
+                        materialized,
+                        templates_by_name,
+                        materialized_template_spans,
+                        [function.body_span],
+                    )
+                    for child_name, child_arguments, child_span in child_calls:
+                        inferred_matches: list[
+                            tuple[Any, list[str], list[tuple[str, str, bool]]]
+                        ] = []
+                        for child_template in templates_by_name.get(child_name, []):
+                            inferred_arguments = (
+                                _infer_plain_template_helper_arguments(
+                                    preprocessor,
+                                    child_template,
+                                    child_arguments,
+                                    type_environment,
+                                    materialized_return_types,
+                                )
+                            )
+                            if (
+                                not inferred_arguments
+                                or not preprocessor._template_arguments_satisfy_parameters(
+                                    child_template,
+                                    inferred_arguments,
+                                )
+                            ):
+                                continue
+                            child_parameter_declarations = (
+                                _metal_function_parameter_declarations(
+                                    preprocessor,
+                                    _metal_template_header(child_template),
+                                )
+                            )
+                            inferred_matches.append(
+                                (
+                                    child_template,
+                                    inferred_arguments,
+                                    child_parameter_declarations,
+                                )
+                            )
+                        if len(inferred_matches) != 1:
+                            continue
+                        (
+                            child_template,
+                            child_arguments,
+                            child_parameter_declarations,
+                        ) = inferred_matches[0]
+                        child_materialized_name = ensure_plain_helper(
+                            child_name,
+                            child_template,
+                            child_arguments,
+                            child_parameter_declarations,
+                        )
+                        child_replacements.append(
+                            (
+                                child_span[0],
+                                child_span[1],
+                                child_materialized_name,
+                            )
+                        )
+                if child_replacements:
+                    materialized = preprocessor._apply_text_replacements(
+                        materialized,
+                        child_replacements,
+                    )
+                active_materializations.remove(key)
+
+            new_materializations.append(materialized)
+            return materialized_name
+
         for function in functions:
             if function.span not in reachable:
                 continue
@@ -10538,82 +10736,12 @@ def _materialize_plain_template_helper_calls(
                 if len(inferred_matches) != 1:
                     continue
                 template, arguments, parameter_declarations = inferred_matches[0]
-                specialization_key = preprocessor._template_specialization_key(
+                materialized_name = ensure_plain_helper(
                     function_name,
+                    template,
                     arguments,
+                    parameter_declarations,
                 )
-                signature_key = tuple(
-                    _normalize_metal_type_text(type_text)
-                    for type_text, _name, _variadic in parameter_declarations
-                )
-                key = (specialization_key[0], specialization_key[1], signature_key)
-                materialized_name = materialized_names.get(key)
-                if materialized_name is None:
-                    unique_count = len(materialized_names) + 1
-                    if len(materialized_names) >= preprocessor.max_template_specializations:
-                        from crosstl.backend.Metal.preprocessor import (
-                            MetalTemplateSpecializationError,
-                        )
-
-                        requested_signature = (
-                            preprocessor._template_specialization_signature(
-                                function_name,
-                                arguments,
-                            )
-                        )
-                        suggested_action = (
-                            "raise max_template_specializations for this source "
-                            "pattern or backend, or reduce inferred template "
-                            "helper instantiations"
-                        )
-                        raise MetalTemplateSpecializationError(
-                            "Metal template specialization limit exceeded while "
-                            f"materializing '{requested_signature}'; "
-                            f"{unique_count} unique concrete signatures requested, "
-                            f"limit {preprocessor.max_template_specializations} "
-                            f"from {preprocessor.template_specialization_limit_source}. "
-                            f"Suggested action: {suggested_action}.",
-                            limit=preprocessor.max_template_specializations,
-                            limit_source=(
-                                preprocessor.template_specialization_limit_source
-                            ),
-                            unique_specialization_count=unique_count,
-                            requested_signature=requested_signature,
-                            suggested_action=suggested_action,
-                        )
-                    materialized_name = _metal_template_materialized_name(
-                        preprocessor,
-                        function_name,
-                        list(key[1]),
-                        parameter_declarations,
-                        materialized_names,
-                    )
-                    materialized_names[key] = materialized_name
-                    materialized = preprocessor._materialize_template_function_with_name(
-                        template,
-                        list(key[1]),
-                        materialized_name,
-                        host_name=None,
-                    )
-                    if materialized:
-                        new_materializations.append(materialized)
-                    parameters = _template_parameter_values_from_arguments(
-                        preprocessor,
-                        template,
-                        list(key[1]),
-                    )
-                    specialization_records.append(
-                        _materialized_template_specialization_record(
-                            name=function_name,
-                            materialized_name=materialized_name,
-                            parameters=parameters,
-                            parameter_sources={
-                                parameter: "call-site" for parameter in parameters
-                            },
-                            source="call-site",
-                        )
-                    )
-                    materialized_template_names.add(function_name)
                 replacements.append((span[0], span[1], materialized_name))
 
         if not replacements and not new_materializations:
