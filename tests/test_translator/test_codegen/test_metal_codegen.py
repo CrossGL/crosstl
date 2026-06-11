@@ -2611,6 +2611,43 @@ def test_metal_stage_local_shared_variables_emit_inside_kernel():
     assert "active[tid.x] = true;" in generated_code
 
 
+def test_metal_hlsl_program_scope_groupshared_scalar_lowers_to_kernel_threadgroup(
+    tmp_path,
+):
+    shader_path = tmp_path / "SplatGroupSharedScalar.hlsl"
+    shader_path.write_text(
+        """
+groupshared int a;
+[numthreads(64, 1, 1)]
+void main() {
+  a = 123;
+  int4 x = (a).xxxx;
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+    )
+
+    assert "constant int a = int(0)" not in generated_code
+    assert "unsupported Metal program-scope groupshared" not in generated_code
+    assert "kernel void kernel_main() {" in generated_code
+    assert "threadgroup int a;" in generated_code
+    assert generated_code.index("threadgroup int a;") > generated_code.index(
+        "kernel void kernel_main"
+    )
+    assert generated_code.index("threadgroup int a;") < generated_code.index(
+        "a = 123;"
+    )
+    assert "a = 123;" in generated_code
+    assert "int4 x = int4(a);" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_compute_entry_points_reject_non_void_returns():
     shader = """
     shader BadComputeReturn {

@@ -654,6 +654,8 @@ class MetalCodeGen:
         self.metal_source_binding_stage_by_id = {}
         self.metal_program_scope_value_globals = set()
         self.metal_program_scope_groupshared_globals = set()
+        self.metal_lowered_program_scope_groupshared_globals_by_function = {}
+        self.metal_lowered_program_scope_groupshared_global_ids = set()
         self.metal_program_scope_value_global_types = {}
         self.cbuffer_variables = []
         self.cbuffer_binding_indices = {}
@@ -1239,6 +1241,8 @@ class MetalCodeGen:
         self.metal_resource_binding_indices_by_id = {}
         self.metal_program_scope_value_globals = set()
         self.metal_program_scope_groupshared_globals = set()
+        self.metal_lowered_program_scope_groupshared_globals_by_function = {}
+        self.metal_lowered_program_scope_groupshared_global_ids = set()
         self.metal_program_scope_value_global_types = {}
         self.glsl_buffer_block_variables = []
         self.lowered_glsl_buffer_blocks = {}
@@ -1449,6 +1453,18 @@ class MetalCodeGen:
             + stage_local_resource_variables,
             "Metal resource",
         )
+        self.metal_lowered_program_scope_groupshared_globals_by_function = (
+            self.collect_metal_lowered_program_scope_groupshared_globals(
+                ast, target_stage, global_vars, all_functions
+            )
+        )
+        self.metal_lowered_program_scope_groupshared_global_ids = {
+            id(node)
+            for nodes in (
+                self.metal_lowered_program_scope_groupshared_globals_by_function.values()
+            )
+            for node in nodes
+        }
         self.metal_spirv_interface_variables = [
             node for node in global_vars if self.is_spirv_stage_interface_layout(node)
         ]
@@ -1747,6 +1763,8 @@ class MetalCodeGen:
 
             var_name = getattr(node, "name", getattr(node, "variable_name", None))
             if id(node) in self.hlsl_program_constant_global_ids:
+                continue
+            if id(node) in self.metal_lowered_program_scope_groupshared_global_ids:
                 continue
             if self.is_metal_function_constant_variable(node):
                 continue
@@ -2218,6 +2236,9 @@ class MetalCodeGen:
                     func,
                     shader_type="compute",
                     entry_name=stage_entry_names.get(id(func)),
+                    stage_local_variables=self.metal_stage_local_variables_with_lowered_program_groupshared(
+                        func
+                    ),
                 )
             else:
                 functions_code += self.generate_function(func)
@@ -2250,7 +2271,10 @@ class MetalCodeGen:
                         shader_type=stage_name,
                         execution_config=getattr(stage, "execution_config", None),
                         entry_name=stage_entry_names.get(id(stage.entry_point)),
-                        stage_local_variables=getattr(stage, "local_variables", []),
+                        stage_local_variables=self.metal_stage_local_variables_with_lowered_program_groupshared(
+                            stage.entry_point,
+                            getattr(stage, "local_variables", []),
+                        ),
                     )
 
         code += self.generate_image_atomic_compare_helpers()
@@ -6742,6 +6766,120 @@ class MetalCodeGen:
         mapped_type = self.map_type(type_name)
         local_name = self.metal_local_identifier_name(name)
         return f"{qualifier} {mapped_type}& {local_name} = {rhs}"
+
+    def collect_metal_lowered_program_scope_groupshared_globals(
+        self, ast, target_stage, global_vars, all_functions
+    ):
+        groupshared_globals = [
+            node
+            for node in global_vars or []
+            if self.is_program_scope_groupshared_global(node)
+        ]
+        if not groupshared_globals:
+            return {}
+
+        entries = self.metal_program_scope_groupshared_stage_entries(
+            ast, target_stage
+        )
+        entry_ids = {id(func) for _stage_name, func, _stage_locals in entries}
+        lowered_by_function = {}
+
+        for node in groupshared_globals:
+            name = self.metal_variable_name(node)
+            if not name or self.program_scope_groupshared_initializer(node) is not None:
+                continue
+
+            referenced_by_helper = any(
+                id(func) not in entry_ids
+                and self.node_uses_identifier(getattr(func, "body", []), name)
+                for func in all_functions or []
+            )
+            if referenced_by_helper:
+                continue
+
+            used_entries = []
+            blocked_entry_reference = False
+            for stage_name, func, stage_locals in entries:
+                if not self.node_uses_identifier(getattr(func, "body", []), name):
+                    continue
+                if stage_name != "compute" or name in self.metal_entry_local_names(
+                    func, stage_locals
+                ):
+                    blocked_entry_reference = True
+                    break
+                used_entries.append(func)
+
+            if blocked_entry_reference:
+                continue
+            for func in used_entries:
+                lowered_by_function.setdefault(id(func), []).append(node)
+
+        return lowered_by_function
+
+    def metal_program_scope_groupshared_stage_entries(self, ast, target_stage):
+        entries = []
+        seen = set()
+
+        def add(stage_name, func, stage_local_variables=None):
+            if func is None or id(func) in seen:
+                return
+            normalized_stage_name = normalize_stage_name(stage_name)
+            if not normalized_stage_name:
+                return
+            if not stage_matches(target_stage, normalized_stage_name):
+                return
+            seen.add(id(func))
+            entries.append(
+                (normalized_stage_name, func, list(stage_local_variables or []))
+            )
+
+        for func in getattr(ast, "functions", []) or []:
+            stage_name = function_stage_name(func)
+            if stage_name in self.stage_entry_types():
+                add(stage_name, func)
+
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            add(
+                normalize_stage_name(stage_type),
+                getattr(stage, "entry_point", None),
+                getattr(stage, "local_variables", []),
+            )
+
+        return entries
+
+    def metal_stage_local_variables_with_lowered_program_groupshared(
+        self, func, stage_local_variables=None
+    ):
+        lowered_globals = (
+            self.metal_lowered_program_scope_groupshared_globals_by_function.get(
+                id(func), []
+            )
+        )
+        if not lowered_globals:
+            return stage_local_variables
+        return list(lowered_globals) + list(stage_local_variables or [])
+
+    def metal_entry_local_names(self, func, stage_local_variables=None):
+        names = {
+            getattr(variable, "name", None)
+            for variable in stage_local_variables or []
+            if getattr(variable, "name", None)
+        }
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if isinstance(node, (VariableNode, BackendVariableNode)):
+                name = getattr(node, "name", None)
+                if name:
+                    names.add(name)
+        return names
+
+    def metal_variable_name(self, node):
+        return getattr(node, "name", getattr(node, "variable_name", None))
+
+    def program_scope_groupshared_initializer(self, node):
+        initial_value = getattr(node, "initial_value", None)
+        if initial_value is not None:
+            return initial_value
+        return getattr(node, "value", None)
 
     def global_variable_qualifier(self, node):
         qualifiers = {

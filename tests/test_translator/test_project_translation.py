@@ -7034,6 +7034,64 @@ def test_translate_project_lowers_hlsl_struct_main_vsh_psh_pair_to_native_entrie
     assert_spirv_asm_validates_if_available(fragment_vulkan, tmp_path)
 
 
+def test_translate_project_hlsl_groupshared_scalar_lowers_to_metal_threadgroup(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "SplatGroupSharedScalar.hlsl").write_text(
+        textwrap.dedent("""
+            groupshared int a;
+            [numthreads(64, 1, 1)]
+            void main() {
+              a = 123;
+              int4 x = (a).xxxx;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["."]
+            include = ["SplatGroupSharedScalar.hlsl"]
+            targets = ["cgl", "metal", "vulkan"]
+            output_dir = "crosstl-out"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        load_project_config(repo),
+        format_output=False,
+        validate=True,
+    )
+    payload = report.to_json()
+    artifacts_by_target = {
+        artifact["target"]: artifact for artifact in payload["artifacts"]
+    }
+    metal = (repo / artifacts_by_target["metal"]["path"]).read_text(
+        encoding="utf-8"
+    )
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert artifacts_by_target["metal"]["status"] == "translated"
+    assert "constant int a = int(0)" not in metal
+    assert "unsupported Metal program-scope groupshared" not in metal
+    assert "threadgroup int a;" in metal
+    assert metal.index("threadgroup int a;") > metal.index("kernel void kernel_main")
+    assert metal.index("threadgroup int a;") < metal.index("a = 123;")
+    assert "a = 123;" in metal
+    assert "int4 x = int4(a);" in metal
+    assert not any(
+        diagnostic["code"] == project_pipeline.GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE
+        and diagnostic.get("target") == "metal"
+        for diagnostic in payload["diagnostics"]
+    )
+    assert_metal_validates_if_available(metal, tmp_path)
+
+
 def test_translate_project_wgsl_hlsl_texture_sampler_register_pair(
     tmp_path,
 ):
