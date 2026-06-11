@@ -107,6 +107,9 @@ class SpirvId:
 class VulkanSPIRVCodeGen:
     """Generates SPIR-V code from a CrossGL shader AST."""
 
+    SIGNED_INT32_MAX = (1 << 31) - 1
+    UNSIGNED_INT32_MAX = (1 << 32) - 1
+
     def __init__(self, *, include_resource_interface_variables: bool = False):
         """Initialize an empty SPIR-V module-generation state."""
         self.include_resource_interface_variables = include_resource_interface_variables
@@ -184,6 +187,9 @@ class VulkanSPIRVCodeGen:
         self.function_storage_buffer_access_requirements = {}
         self.inline_storage_buffer_functions = {}
         self.stage_local_inline_storage_buffer_functions = {}
+        self.spirv_skipped_function_parameter_indices = {}
+        self.function_stage_input_dependencies = {}
+        self.function_stage_output_dependencies = {}
         self.function_resource_array_params = {}
         self.stage_local_function_resource_array_params = {}
         self.function_resource_array_type_hints = {}
@@ -639,6 +645,17 @@ class VulkanSPIRVCodeGen:
         self.value_types[id_value] = type_id
         self.constants[key] = spirv_id
         return spirv_id
+
+    def integer_literal_type_for_value(
+        self, primitive_type_name: str, value: int
+    ) -> str:
+        """Return a SPIR-V scalar integer type that can encode a literal value."""
+        if (
+            primitive_type_name == "int"
+            and self.SIGNED_INT32_MAX < value <= self.UNSIGNED_INT32_MAX
+        ):
+            return "uint"
+        return primitive_type_name
 
     def register_specialization_constant(
         self, value: Union[bool, int, float], type_id: SpirvId, spec_id: int
@@ -2553,13 +2570,15 @@ class VulkanSPIRVCodeGen:
     ) -> SpirvId:
         """Create a unary operation."""
         result_type = self.ensure_registered_type(result_type)
-        id_value = self.get_id()
 
         if op == "+":
             spv_op = None
         elif op == "-":
             component_type = self.scalar_or_vector_component_type(result_type.type)
-            spv_op = "OpSNegate" if component_type in {"int", "uint"} else "OpFNegate"
+            if component_type == "uint":
+                zero = self.default_value_for_type(result_type)
+                return self.binary_operation("-", result_type, zero, operand)
+            spv_op = "OpSNegate" if component_type == "int" else "OpFNegate"
         elif op == "!":
             bool_type = self.register_primitive_type("bool")
             operand_vector = self.vector_component_type_and_count(
@@ -2587,6 +2606,7 @@ class VulkanSPIRVCodeGen:
         if spv_op is None:
             return operand
 
+        id_value = self.get_id()
         self.emit(f"%{id_value} = {spv_op} %{result_type.id} %{operand.id}")
         self.decorate_no_contraction_result(id_value, spv_op, result_type)
 
@@ -10341,6 +10361,31 @@ class VulkanSPIRVCodeGen:
         if compact in direct_aliases:
             return direct_aliases[compact]
 
+        resource_match = re.fullmatch(
+            r"([iu]?(?:sampler|image)|texture)"
+            r"(1d|2d|3d|cube|buffer)"
+            r"(ms)?(array)?(shadow)?",
+            compact,
+            re.IGNORECASE,
+        )
+        if resource_match:
+            prefix, dim, ms_suffix, array_suffix, shadow_suffix = (
+                resource_match.groups()
+            )
+            dim = {
+                "1d": "1D",
+                "2d": "2D",
+                "3d": "3D",
+                "cube": "Cube",
+                "buffer": "Buffer",
+            }[dim.lower()]
+            return (
+                f"{prefix.lower()}{dim}"
+                f"{'MS' if ms_suffix else ''}"
+                f"{'Array' if array_suffix else ''}"
+                f"{'Shadow' if shadow_suffix else ''}"
+            )
+
         texture_match = re.fullmatch(
             r"Texture(1D|2D|3D|Cube)(MS)?(Array)?<([^>]+)>", compact
         )
@@ -10566,6 +10611,32 @@ class VulkanSPIRVCodeGen:
 
         if self.is_acceleration_structure_type_name(type_str):
             return {"kind": "acceleration_structure"}
+
+        sampled_image_match = re.fullmatch(
+            r"([iu]?sampler)(1D|2D|3D|Cube|Buffer)(MS)?(Array)?(?:Shadow)?",
+            type_str,
+        )
+        if sampled_image_match:
+            prefix, dim, ms_suffix, array_suffix = sampled_image_match.groups()
+            if ms_suffix and dim != "2D":
+                return None
+            if dim == "Buffer" and (ms_suffix or array_suffix):
+                return None
+            component_type = {
+                "sampler": "float",
+                "isampler": "int",
+                "usampler": "uint",
+            }[prefix]
+            return {
+                "kind": "sampled_image",
+                "component_type": component_type,
+                "dim": dim,
+                "depth": 1 if type_str.endswith("Shadow") else 0,
+                "arrayed": 1 if array_suffix else 0,
+                "multisampled": 1 if ms_suffix else 0,
+                "sampled": 1,
+                "format": "Unknown",
+            }
 
         image_match = re.fullmatch(
             r"([iu]?image)(1D|2D|3D|Cube)(MS)?(Array)?", type_str
@@ -12983,12 +13054,18 @@ class VulkanSPIRVCodeGen:
         self, node: VariableNode, var_id: SpirvId, type_id: SpirvId
     ):
         metadata = self.resource_metadata_for_declared_type(type_id)
-        if metadata is None or metadata.get("kind") != "storage_image":
+        if metadata is None or metadata.get("kind") not in {
+            "sampled_image",
+            "storage_image",
+            "texture",
+            "sampler",
+        }:
             return
 
         metadata = self.metadata_with_resource_memory_qualifiers(metadata, node)
         self.resource_type_metadata[var_id.id] = metadata
-        self.decorate_resource_variable_memory_qualifiers(var_id, metadata)
+        if metadata.get("kind") == "storage_image":
+            self.decorate_resource_variable_memory_qualifiers(var_id, metadata)
 
     def decorate_cbuffer_type(
         self, cbuffer_type: SpirvId, members: List[Tuple[SpirvId, str]]
@@ -13496,6 +13573,33 @@ class VulkanSPIRVCodeGen:
         parameters = getattr(
             function_node, "parameters", getattr(function_node, "params", [])
         )
+        parameters = list(parameters or [])
+        skipped_parameter_indices = (
+            set()
+            if is_entry_point
+            else self.skipped_function_parameter_indices(function_node.name)
+        )
+        if skipped_parameter_indices:
+            parameters = [
+                param
+                for index, param in enumerate(parameters)
+                if index not in skipped_parameter_indices
+            ]
+        if not is_entry_point:
+            required_stage_input = self.required_function_stage_input_type(
+                function_node.name
+            )
+            required_stage_output = self.required_function_stage_output_type(
+                function_node.name
+            )
+            if required_stage_input is not None:
+                parameters.append(
+                    self.stage_object_pointer_parameter("input", required_stage_input)
+                )
+            if required_stage_output is not None:
+                parameters.append(
+                    self.stage_object_pointer_parameter("output", required_stage_output)
+                )
         has_mesh_output_parameters = any(
             self.is_mesh_output_parameter(param) for param in parameters
         )
@@ -13541,6 +13645,9 @@ class VulkanSPIRVCodeGen:
 
             param_value_types.append(param_type)
             param_resource_metadata = self.resource_type_metadata.get(param_type.id)
+            is_stage_object_pointer_param = bool(
+                getattr(param, "_spirv_stage_object_pointer", False)
+            )
             is_storage_image_param = (
                 param_resource_metadata is not None
                 and param_resource_metadata.get("kind") == "storage_image"
@@ -13553,10 +13660,13 @@ class VulkanSPIRVCodeGen:
                 self.is_resource_array_type(param_type)
                 or is_storage_image_param
                 or is_value_array_param
+                or is_stage_object_pointer_param
             ):
                 resource_array_param_indices.add(len(param_types))
                 if is_value_array_param and not (
-                    self.is_resource_array_type(param_type) or is_storage_image_param
+                    self.is_resource_array_type(param_type)
+                    or is_storage_image_param
+                    or is_stage_object_pointer_param
                 ):
                     value_array_param_indices.add(len(param_types))
                 storage_class = (
@@ -14037,6 +14147,15 @@ class VulkanSPIRVCodeGen:
             return self.map_crossgl_type(stage_info[0])
 
         return None
+
+    def glsl_builtin_limit_constant(self, name: str) -> Optional[SpirvId]:
+        limits = {
+            "gl_MaxImageUnits": 8,
+        }
+        value = limits.get(name)
+        if value is None:
+            return None
+        return self.register_constant(value, self.register_primitive_type("int"))
 
     def infer_match_expression_result_type(self, node: MatchNode) -> Optional[SpirvId]:
         for arm in getattr(node, "arms", []) or []:
@@ -16582,6 +16701,167 @@ class VulkanSPIRVCodeGen:
             for function_name, models in execution_models.items()
             if models
         }
+
+    def collect_unused_array_parameter_indices(self, functions):
+        skipped = {}
+        for func in functions or []:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            indices = set()
+            body = getattr(func, "body", [])
+            for index, param in enumerate(
+                getattr(func, "parameters", getattr(func, "params", [])) or []
+            ):
+                param_name = getattr(param, "name", None)
+                if not param_name:
+                    continue
+                param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+                type_name = str(self.type_name_from_value(param_type) or "")
+                if "[" not in type_name:
+                    continue
+                if self.is_resource_type_name(self.array_base_type_name(type_name)):
+                    continue
+                if not self.function_body_uses_identifier(body, param_name):
+                    indices.add(index)
+            if indices:
+                skipped[func_name] = indices
+        return skipped
+
+    def function_body_uses_identifier(self, body, name):
+        for node in self.walk_ast_nodes(body):
+            if getattr(node, "name", None) == name:
+                return True
+        return False
+
+    def skipped_function_parameter_indices(self, func_name):
+        return self.spirv_skipped_function_parameter_indices.get(func_name, set())
+
+    def collect_function_stage_object_dependencies(
+        self, ast, target_stage, object_name
+    ):
+        direct_dependencies = {}
+        function_calls = {}
+        object_types = {}
+
+        for func in self.collect_ast_functions(ast):
+            func_name = getattr(func, "name", None)
+            if func_name:
+                direct_dependencies.setdefault(func_name, None)
+                function_calls.setdefault(
+                    func_name, self.called_user_function_names(func)
+                )
+
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            stage_name = self.stage_key(stage_type)
+            if target_stage is not None and stage_name != self.stage_key(target_stage):
+                continue
+            entry_point = getattr(stage, "entry_point", None)
+            if object_name == "output":
+                object_type = getattr(entry_point, "return_type", None)
+                if (
+                    object_type is None
+                    or self.type_name_from_value(object_type) == "void"
+                ):
+                    continue
+            else:
+                object_type = None
+                for param in (
+                    getattr(
+                        entry_point, "parameters", getattr(entry_point, "params", [])
+                    )
+                    or []
+                ):
+                    if getattr(param, "name", None) == object_name:
+                        object_type = getattr(
+                            param, "param_type", getattr(param, "vtype", None)
+                        )
+                        break
+                if object_type is None:
+                    continue
+
+            stage_functions = list(getattr(stage, "local_functions", []) or [])
+            if entry_point is not None:
+                stage_functions.append(entry_point)
+            for func in stage_functions:
+                func_name = getattr(func, "name", None)
+                if not func_name:
+                    continue
+                object_types[func_name] = object_type
+                if self.direct_stage_object_dependency(func, object_name):
+                    direct_dependencies[func_name] = object_type
+                function_calls[func_name] = self.called_user_function_names(func)
+
+        dependencies = dict(direct_dependencies)
+        changed = True
+        while changed:
+            changed = False
+            for func_name, calls in function_calls.items():
+                if dependencies.get(func_name) is not None:
+                    continue
+                for called_name in calls:
+                    if dependencies.get(called_name) is not None:
+                        dependencies[func_name] = object_types.get(
+                            func_name
+                        ) or dependencies.get(called_name)
+                        changed = True
+                        break
+
+        return {
+            func_name: object_type
+            for func_name, object_type in dependencies.items()
+            if object_type is not None
+        }
+
+    def direct_stage_object_dependency(self, func, object_name):
+        parameter_names = {
+            getattr(param, "name", None)
+            for param in getattr(func, "parameters", getattr(func, "params", [])) or []
+        }
+        if object_name in parameter_names:
+            return False
+        local_names = set(parameter_names)
+        for node in self.walk_ast_nodes(getattr(func, "body", [])):
+            if isinstance(node, VariableNode) and getattr(node, "name", None):
+                local_names.add(node.name)
+        if object_name in local_names:
+            return False
+        for node in self.walk_ast_nodes(getattr(func, "body", [])):
+            if isinstance(node, MemberAccessNode):
+                if self.expression_name(getattr(node, "object", None)) == object_name:
+                    return True
+            if getattr(node, "name", None) == object_name:
+                return True
+        return False
+
+    def called_user_function_names(self, func):
+        names = set()
+        for node in self.walk_ast_nodes(getattr(func, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            name = self.function_call_name(node)
+            if name:
+                names.add(name)
+        return names
+
+    def required_function_stage_input_type(self, func_name):
+        return self.function_stage_input_dependencies.get(func_name)
+
+    def required_function_stage_output_type(self, func_name):
+        return self.function_stage_output_dependencies.get(func_name)
+
+    def required_function_stage_object_argument_names(self, func_name):
+        names = []
+        if self.required_function_stage_input_type(func_name) is not None:
+            names.append("input")
+        if self.required_function_stage_output_type(func_name) is not None:
+            names.append("output")
+        return names
+
+    def stage_object_pointer_parameter(self, name, type_source):
+        parameter = VariableNode(name, type_source)
+        parameter._spirv_stage_object_pointer = True
+        return parameter
 
     def collect_storage_image_pointer_parameters_for_functions(self, function_nodes):
         functions = {getattr(func, "name", None): func for func in function_nodes}
@@ -20055,6 +20335,7 @@ class VulkanSPIRVCodeGen:
                 if self.expected_primitive_type_name() == "uint" and expr >= 0
                 else "int"
             )
+            primitive_type = self.integer_literal_type_for_value(primitive_type, expr)
             int_type = self.register_primitive_type(primitive_type)
             return self.register_constant(expr, int_type)
         elif isinstance(expr, float):
@@ -20105,6 +20386,10 @@ class VulkanSPIRVCodeGen:
                 if builtin is not None:
                     return self.get_variable_value(builtin)
 
+                builtin_limit = self.glsl_builtin_limit_constant(expr)
+                if builtin_limit is not None:
+                    return builtin_limit
+
                 # Create a default float constant for missing variables in examples
                 # This is to make the SPIR-V code valid even if we can't find the variable
                 if expr.replace(".", "", 1).isdigit():  # Check if it's a numeric string
@@ -20126,14 +20411,18 @@ class VulkanSPIRVCodeGen:
                 literal_type_id = self.register_primitive_type(primitive_type_name)
                 return self.register_constant(float(expr.value), literal_type_id)
             if primitive_type_name in {"int", "uint"}:
+                literal_value = int(expr.value)
                 if (
                     primitive_type_name == "int"
                     and self.expected_primitive_type_name() == "uint"
-                    and int(expr.value) >= 0
+                    and literal_value >= 0
                 ):
                     primitive_type_name = "uint"
+                primitive_type_name = self.integer_literal_type_for_value(
+                    primitive_type_name, literal_value
+                )
                 literal_type_id = self.register_primitive_type(primitive_type_name)
-                return self.register_constant(int(expr.value), literal_type_id)
+                return self.register_constant(literal_value, literal_type_id)
             if primitive_type_name == "bool":
                 literal_type_id = self.register_primitive_type("bool")
                 if isinstance(expr.value, str):
@@ -20171,6 +20460,10 @@ class VulkanSPIRVCodeGen:
                 builtin = self.ensure_builtin_variable(expr.name)
                 if builtin is not None:
                     return self.get_variable_value(builtin)
+
+                builtin_limit = self.glsl_builtin_limit_constant(expr.name)
+                if builtin_limit is not None:
+                    return builtin_limit
 
                 self.emit(f"; WARNING: Unknown variable {expr.name}")
                 float_type = self.register_primitive_type("float")
@@ -20370,10 +20663,13 @@ class VulkanSPIRVCodeGen:
 
             args = []
             has_errors = False
+            skipped_arg_indices = self.skipped_function_parameter_indices(callee_name)
             mesh_output_arg_indices = (
                 self.resolve_function_mesh_output_parameter_indices(callee_name)
             )
             for arg_index, arg in enumerate(expr.args):
+                if arg_index in skipped_arg_indices:
+                    continue
                 if arg_index in mesh_output_arg_indices:
                     continue
                 arg_value = self.process_call_argument(callee_name, arg, arg_index)
@@ -20385,6 +20681,19 @@ class VulkanSPIRVCodeGen:
                     float_type = self.register_primitive_type("float")
                     arg_value = self.register_constant(0.0, float_type)
                 args.append(arg_value)
+
+            for stage_object_name in self.required_function_stage_object_argument_names(
+                callee_name
+            ):
+                stage_object = self.local_variables.get(stage_object_name)
+                if stage_object is None:
+                    self.emit(
+                        "; WARNING: Failed to evaluate stage object argument "
+                        f"{stage_object_name} for {callee_name or callee_expr}"
+                    )
+                    has_errors = True
+                    continue
+                args.append(stage_object)
 
             if has_errors and callee_name == "vec2":
                 float_type = self.register_primitive_type("float")
@@ -22021,6 +22330,16 @@ class VulkanSPIRVCodeGen:
             self.collect_inline_storage_buffer_functions(ast)
         )
         self.function_execution_models = self.collect_function_execution_models(ast)
+        all_functions = self.collect_ast_functions(ast)
+        self.spirv_skipped_function_parameter_indices = (
+            self.collect_unused_array_parameter_indices(all_functions)
+        )
+        self.function_stage_input_dependencies = (
+            self.collect_function_stage_object_dependencies(ast, None, "input")
+        )
+        self.function_stage_output_dependencies = (
+            self.collect_function_stage_object_dependencies(ast, None, "output")
+        )
         self.function_storage_image_pointer_params = (
             self.collect_storage_image_pointer_parameters(ast)
         )
@@ -22040,6 +22359,8 @@ class VulkanSPIRVCodeGen:
         top_level_entries = []
         helper_functions = []
         for func in ast.functions:
+            if getattr(func, "body", None) is None:
+                continue
             qualifier = self.get_function_qualifier(func)
 
             if func.name == "main" or qualifier in [
@@ -22099,6 +22420,7 @@ class VulkanSPIRVCodeGen:
                     func
                     for func in getattr(stage, "local_functions", [])
                     if id(func) not in processed_local_functions
+                    and getattr(func, "body", None) is not None
                 ]
                 for func in self.order_functions_by_dependencies(local_functions):
                     if id(func) not in processed_local_functions:

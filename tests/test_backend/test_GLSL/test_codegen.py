@@ -406,6 +406,26 @@ def test_codegen_fragment_roundtrip():
         assert name in output
 
 
+def test_codegen_glsl_150_fragment_output_bumps_version_for_layout_location():
+    code = textwrap.dedent("""
+        #version 150
+
+        out vec4 outputColor;
+
+        void main() {
+            outputColor = vec4(1.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+    glsl = GLSLCodeGen().generate_stage(parse_crossgl(crossgl), "fragment")
+
+    assert glsl.lstrip().startswith("#version 330 core\n")
+    assert "#version 150" not in glsl
+    assert "layout(location = 0) out vec4 fragColor;" in glsl
+    assert "fragColor = outputColor;" in glsl
+
+
 @pytest.mark.parametrize("keyword", ["vertex", "fragment", "compute"])
 def test_codegen_fragment_output_named_crossgl_stage_keyword_roundtrips(keyword):
     code = textwrap.dedent(f"""

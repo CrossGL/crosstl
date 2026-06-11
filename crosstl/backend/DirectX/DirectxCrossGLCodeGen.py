@@ -445,13 +445,17 @@ class HLSLToCrossGLConverter:
         self.code = []
         self.shadow_texture_names = set()
         self.shadow_texture_declaration_ids = set()
+        self.hlsl_program_constant_global_ids = set()
         self.global_variable_types = {}
         self.global_resource_array_dims = {}
         self.current_variable_types = {}
         self.current_resource_array_dims = {}
         self.current_identifier_renames = {}
+        self.current_stage_struct_parameter_member_aliases = {}
         self.struct_member_types = {}
         self.struct_member_array_dims = {}
+        self.structs_by_name = {}
+        self.flattened_stage_struct_names = set()
         self.integer_constant_values = {}
         self.suppress_storage_image_index_lowering = False
         self.function_identifier_renames = {}
@@ -3089,12 +3093,20 @@ class HLSLToCrossGLConverter:
         ) = self.collect_legacy_sampler_bindings(ast)
         self.legacy_bound_texture_types = self.collect_legacy_bound_texture_types(ast)
         self.shadow_texture_names = self.collect_shadow_texture_names(ast)
+        self.hlsl_program_constant_global_ids = (
+            self.collect_hlsl_program_constant_global_ids(ast)
+        )
         self.struct_type_names = {
             node.name
             for node in getattr(ast, "structs", []) or []
             if isinstance(node, StructNode)
             and not getattr(node, "is_forward_declaration", False)
             and getattr(node, "name", None)
+        }
+        self.structs_by_name = {
+            struct.name: struct
+            for struct in ast.structs
+            if isinstance(struct, StructNode) and getattr(struct, "name", None)
         }
         self.global_variable_types = {}
         self.global_resource_array_dims = {}
@@ -3106,6 +3118,9 @@ class HLSLToCrossGLConverter:
         )
         self.type_identifier_renames = self.collect_type_identifier_renames(ast)
         self.global_identifier_renames = self.collect_global_identifier_renames(ast)
+        self.flattened_stage_struct_names = self.collect_flattened_stage_struct_names(
+            ast
+        )
         code = "shader main {\n"
         typedefs = getattr(ast, "typedefs", []) or []
         enums = getattr(ast, "enums", []) or []
@@ -3126,6 +3141,8 @@ class HLSLToCrossGLConverter:
         # Generate structs
         for node in ast.structs:
             if getattr(node, "is_forward_declaration", False):
+                continue
+            if getattr(node, "name", None) in self.flattened_stage_struct_names:
                 continue
             if isinstance(node, StructNode):
                 code += f"    struct {self.render_type_identifier(node.name)} {{\n"
@@ -3175,11 +3192,6 @@ class HLSLToCrossGLConverter:
             "ray_callable": "ray_callable",
         }
         functions_by_name = {func.name: func for func in ast.functions}
-        structs_by_name = {
-            struct.name: struct
-            for struct in ast.structs
-            if isinstance(struct, StructNode) and getattr(struct, "name", None)
-        }
         for func in ast.functions:
             stage_name = stage_map.get(func.qualifier)
             if stage_name:
@@ -3187,7 +3199,7 @@ class HLSLToCrossGLConverter:
                 code += f"    {stage_name} {{\n"
                 if stage_name == "tessellation_control":
                     code += self.generate_patch_constant_interface_outputs(
-                        func, functions_by_name, structs_by_name
+                        func, functions_by_name, self.structs_by_name
                     )
                 entry_name = "main" if stage_name.startswith("ray_") else None
                 code += self.generate_function(
@@ -3212,6 +3224,38 @@ class HLSLToCrossGLConverter:
 
         code += "}\n"
         return code
+
+    def collect_flattened_stage_struct_names(self, ast):
+        flattened = set()
+        used_elsewhere = set()
+        for func in getattr(ast, "functions", []) or []:
+            stage_name = str(getattr(func, "qualifier", "") or "").lower()
+            params = getattr(func, "params", []) or []
+            flattens_entry_structs = stage_name in {
+                "vertex",
+                "fragment",
+            } and self.has_stage_struct_output_parameter(params)
+            for param in params:
+                type_name = self.raw_type_base(getattr(param, "vtype", None))
+                if type_name not in self.struct_type_names:
+                    continue
+                if flattens_entry_structs:
+                    flattened.add(type_name)
+                else:
+                    used_elsewhere.add(type_name)
+            return_type = self.raw_type_base(getattr(func, "return_type", None))
+            if return_type in self.struct_type_names:
+                used_elsewhere.add(return_type)
+            for node in self.iter_ast_children(getattr(func, "body", []) or []):
+                if isinstance(node, VariableNode):
+                    type_name = self.raw_type_base(getattr(node, "vtype", None))
+                    if type_name in self.struct_type_names:
+                        used_elsewhere.add(type_name)
+        for node in getattr(ast, "global_variables", []) or []:
+            type_name = self.raw_type_base(getattr(node, "vtype", None))
+            if type_name in self.struct_type_names:
+                used_elsewhere.add(type_name)
+        return flattened - used_elsewhere
 
     def generate_patch_constant_interface_outputs(
         self, func, functions_by_name, structs_by_name, indent=2
@@ -3437,6 +3481,8 @@ class HLSLToCrossGLConverter:
             )
         else:
             code = self.format_attributes(getattr(node, "attributes", []), 1)
+        if id(node) in self.hlsl_program_constant_global_ids:
+            code += "    @ hlsl_program_constant\n"
         code += self.format_resource_qualifier_attributes(node, 1)
         code += self.format_binding_attributes(node, 1)
         code += self.format_matrix_layout_attributes(node, 1)
@@ -3468,6 +3514,77 @@ class HLSLToCrossGLConverter:
             code + f"    {declaration_prefix}{variable_type} "
             f"{variable_name}{array_suffix}{initializer};\n"
         )
+
+    def is_hlsl_program_constant_global(self, node):
+        if getattr(node, "value", None) is not None:
+            return False
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        if getattr(node, "is_const", False) or qualifiers & {
+            "const",
+            "groupshared",
+            "static",
+            "shared",
+        }:
+            return False
+
+        type_name = getattr(node, "vtype", None)
+        base_type = self.raw_type_base(type_name)
+        if not base_type:
+            return False
+        if (
+            self.is_uav_resource_type(type_name)
+            or self.is_buffer_resource_type(type_name)
+            or base_type.startswith(("Texture", "FeedbackTexture"))
+            or base_type
+            in {
+                "Sampler",
+                "SamplerState",
+                "SamplerComparisonState",
+                "sampler",
+                "sampler_state",
+                "RaytracingAccelerationStructure",
+                "RayQuery",
+                "InputPatch",
+                "OutputPatch",
+                "PointStream",
+                "LineStream",
+                "TriangleStream",
+                "SubpassInput",
+            }
+        ):
+            return False
+        return True
+
+    def collect_hlsl_program_constant_global_ids(self, ast):
+        candidates = {
+            getattr(node, "name", None): node
+            for node in getattr(ast, "global_variables", []) or []
+            if self.is_hlsl_program_constant_global(node)
+            and getattr(node, "name", None)
+        }
+        if not candidates:
+            return set()
+
+        referenced_names = set()
+
+        def visit(node):
+            if node is None or isinstance(node, (int, float, bool)):
+                return
+            if isinstance(node, str):
+                if node in candidates:
+                    referenced_names.add(node)
+                return
+            if isinstance(node, VariableNode):
+                name = getattr(node, "name", None)
+                if name in candidates:
+                    referenced_names.add(name)
+            for child in self.iter_ast_children(node):
+                visit(child)
+
+        for func in getattr(ast, "functions", []) or []:
+            visit(getattr(func, "body", []))
+
+        return {id(candidates[name]) for name in referenced_names}
 
     def generate_cbuffers(self, ast):
         code = ""
@@ -3521,15 +3638,24 @@ class HLSLToCrossGLConverter:
         previous_variable_types = self.current_variable_types
         previous_resource_array_dims = self.current_resource_array_dims
         previous_identifier_renames = self.current_identifier_renames
+        previous_stage_struct_parameter_member_aliases = (
+            self.current_stage_struct_parameter_member_aliases
+        )
         self.current_variable_types = dict(self.global_variable_types)
         self.current_resource_array_dims = dict(self.global_resource_array_dims)
-        self.current_identifier_renames = self.function_parameter_renames(func.params)
-        for param in func.params:
-            self.record_variable_type(param)
         qualifier = getattr(func, "qualifier", None)
+        emitted_params, member_aliases = self.flatten_stage_struct_parameters(
+            func.params, qualifier
+        )
+        self.current_stage_struct_parameter_member_aliases = member_aliases
+        self.current_identifier_renames = self.function_parameter_renames(
+            emitted_params
+        )
+        for param in emitted_params:
+            self.record_variable_type(param)
         params = ", ".join(
             self.format_parameter(p, qualifier, index)
-            for index, p in enumerate(func.params)
+            for index, p in enumerate(emitted_params)
         )
         semantic = self.map_semantic(func.semantic)
         semantic = f" {semantic}" if semantic else ""
@@ -3551,7 +3677,88 @@ class HLSLToCrossGLConverter:
         self.current_variable_types = previous_variable_types
         self.current_resource_array_dims = previous_resource_array_dims
         self.current_identifier_renames = previous_identifier_renames
+        self.current_stage_struct_parameter_member_aliases = (
+            previous_stage_struct_parameter_member_aliases
+        )
         return code
+
+    def flatten_stage_struct_parameters(self, params, function_qualifier=None):
+        """Expose HLSL struct in/out entry parameters as scalar stage fields."""
+        stage_name = str(function_qualifier or "").lower()
+        if stage_name not in {"vertex", "fragment"}:
+            return params, {}
+        if not self.has_stage_struct_output_parameter(params):
+            return params, {}
+
+        flattened_params = []
+        member_aliases = {}
+        used_names = {getattr(param, "name", None) for param in params or []}
+        for param_index, param in enumerate(params or []):
+            struct_type = self.raw_type_base(getattr(param, "vtype", None))
+            struct_node = self.structs_by_name.get(struct_type)
+            if struct_node is None:
+                flattened_params.append(param)
+                continue
+
+            direction_qualifiers = [
+                qualifier
+                for qualifier in getattr(param, "qualifiers", []) or []
+                if str(qualifier).lower() in {"in", "out", "inout"}
+            ]
+            if not direction_qualifiers:
+                direction_qualifiers = ["in"]
+
+            param_name = getattr(param, "name", "") or f"_param{param_index}"
+            for member in getattr(struct_node, "members", []) or []:
+                if not isinstance(member, VariableNode):
+                    continue
+                alias_name = self.unique_flattened_stage_parameter_name(
+                    param_name, member.name, used_names
+                )
+                used_names.add(alias_name)
+                flattened = VariableNode(
+                    getattr(member, "vtype", None),
+                    alias_name,
+                    qualifiers=direction_qualifiers
+                    + [
+                        qualifier
+                        for qualifier in getattr(member, "qualifiers", []) or []
+                        if str(qualifier).lower()
+                        not in {"in", "out", "inout", "static", "const"}
+                    ],
+                    attributes=list(getattr(member, "attributes", []) or []),
+                    is_const=getattr(member, "is_const", False),
+                    semantic=getattr(member, "semantic", None),
+                )
+                flattened.array_sizes = list(getattr(member, "array_sizes", []) or [])
+                member_aliases[(param_name, member.name)] = alias_name
+                flattened_params.append(flattened)
+
+        return flattened_params, member_aliases
+
+    def has_stage_struct_output_parameter(self, params):
+        for param in params or []:
+            type_name = self.raw_type_base(getattr(param, "vtype", None))
+            if type_name not in self.structs_by_name:
+                continue
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(param, "qualifiers", []) or []
+            }
+            if qualifiers & {"out", "inout"}:
+                return True
+        return False
+
+    def unique_flattened_stage_parameter_name(
+        self, param_name, member_name, used_names
+    ):
+        base = f"{param_name}_{member_name}"
+        candidate = base
+        suffix = 2
+        while candidate in used_names:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        return candidate
 
     def generate_function_body(self, body, indent=0, is_main=False):
         code = ""
@@ -4383,6 +4590,9 @@ class HLSLToCrossGLConverter:
             func_name = self.render_function_identifier(func_name)
             return f"{func_name}({args})"
         elif isinstance(expr, MemberAccessNode):
+            alias = self.stage_struct_parameter_member_alias(expr)
+            if alias is not None:
+                return self.render_identifier(alias)
             obj = self.generate_expression(expr.object, is_main)
             scalar_splat = self.scalar_splat_swizzle_expression(
                 expr, obj, expected_type
@@ -4443,6 +4653,20 @@ class HLSLToCrossGLConverter:
             return str(expr)
         else:
             return str(expr)
+
+    def stage_struct_parameter_member_alias(self, expr):
+        if not self.current_stage_struct_parameter_member_aliases:
+            return None
+        obj = getattr(expr, "object", None)
+        if isinstance(obj, VariableNode):
+            obj_name = getattr(obj, "name", None)
+        elif isinstance(obj, str):
+            obj_name = obj
+        else:
+            return None
+        return self.current_stage_struct_parameter_member_aliases.get(
+            (obj_name, getattr(expr, "member", None))
+        )
 
     def map_type(self, hlsl_type):
         """Map an HLSL type name to the closest CrossGL type name."""
