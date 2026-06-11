@@ -10022,6 +10022,7 @@ def test_translate_project_opengl_materializes_mlx_accumulator_template_default(
                 "T": "source-instantiation",
             },
             "source": "source-instantiation",
+            "hostName": "softmaxfloat32",
         },
         {
             "name": "reduce_acc",
@@ -10105,6 +10106,7 @@ def test_translate_project_opengl_materializes_mlx_auxiliary_template_default(
                 "U": "source-default",
             },
             "source": "source-instantiation",
+            "hostName": "attentionfloat32",
         },
         {
             "name": "read_aux",
@@ -10194,6 +10196,7 @@ def test_translate_project_opengl_materializes_quantized_local_template_alias(
                 "group_size": "source-instantiation",
             },
             "source": "source-instantiation",
+            "hostName": "affine_quantize_float_gs_16_b_4",
         },
         {
             "name": "get_pack_factor",
@@ -10287,6 +10290,7 @@ def test_translate_project_opengl_materializes_fft_auxiliary_template_alias(
                 "tg_mem_size": "source-instantiation",
             },
             "source": "source-instantiation",
+            "hostName": "four_step_mem_256_float_float",
         }
     ]
     output = (repo / artifact["path"]).read_text(encoding="utf-8")
@@ -10376,6 +10380,7 @@ def test_translate_project_opengl_materializes_masked_gemv_local_kernel_alias(
                 "out_mask_t": "source-instantiation",
             },
             "source": "source-instantiation",
+            "hostName": "gemv_masked_float_bool_uint",
         }
     ]
     output = (repo / artifact["path"]).read_text(encoding="utf-8")
@@ -36563,6 +36568,179 @@ def test_translate_project_metal_reduction_source_instantiation_records_nontype_
         assert re.search(r"\\b(?:T|Op|N_READS)\\b", output) is None
 
 
+def test_translate_project_metal_reduction_materializes_shared_helper_templates(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "arg_reduce.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_arg_reduce(name, type, op, reads) \\
+                instantiate_kernel("arg_reduce" #name, arg_reduce_general, type, op, reads)
+
+            struct AddOp {};
+
+            template <typename T, typename U>
+            T ceildiv(T N, U M) {
+                return (N + T(M) - T(1)) / T(M);
+            }
+
+            template <typename U>
+            U simd_shuffle_down(U value, uint offset) {
+                return value + U(offset);
+            }
+
+            template <typename T, typename Op, int N_READS>
+            kernel void arg_reduce_general(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                T acc = ceildiv(T(gid + N_READS), 2u);
+                out[gid] = simd_shuffle_down(acc, 1u);
+            }
+
+            instantiate_arg_reduce(_add_f32_4, float, AddOp, 4)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl", "directx", "vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    expected_materialization = {
+        "status": "materialized",
+        "specializationCount": 3,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "configuredParameterSources": {},
+        "specializations": [
+            {
+                "name": "arg_reduce_general",
+                "materializedName": "arg_reduce_add_f32_4",
+                "parameters": {
+                    "N_READS": "4",
+                    "Op": "AddOp",
+                    "T": "float",
+                },
+                "parameterSources": {
+                    "N_READS": "source-instantiation",
+                    "Op": "source-instantiation",
+                    "T": "source-instantiation",
+                },
+                "source": "source-instantiation",
+                "hostName": "arg_reduce_add_f32_4",
+            },
+            {
+                "name": "ceildiv",
+                "materializedName": "ceildiv_float_uint",
+                "parameters": {"T": "float", "U": "uint"},
+                "parameterSources": {"T": "call-site", "U": "call-site"},
+                "source": "call-site",
+            },
+            {
+                "name": "simd_shuffle_down",
+                "materializedName": "simd_shuffle_down_float",
+                "parameters": {"U": "float"},
+                "parameterSources": {"U": "call-site"},
+                "source": "call-site",
+            },
+        ],
+        "unsupported": [],
+    }
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    for artifact in payload["artifacts"]:
+        assert artifact["status"] == "translated"
+        assert artifact["templateMaterialization"] == expected_materialization
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        assert "ceildiv<" not in output
+        assert "simd_shuffle_down<" not in output
+        assert not re.search(r"\\b(?:T|U|Op|N_READS)\\b", output)
+
+
+def test_translate_project_metal_norm_materializes_variadic_shared_helper(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "layer_norm.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_norm(name, type, reads) \\
+                instantiate_kernel("layer_norm" #name, layer_norm_single_row, type, reads)
+
+            template <typename T, typename... Args>
+            T pick_first(T value, Args... rest) {
+                return value;
+            }
+
+            template <typename T, int N_READS>
+            kernel void layer_norm_single_row(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                T acc = T(N_READS);
+                out[gid] = pick_first(acc, gid, 1u);
+            }
+
+            instantiate_norm(_f32_8, float, 8)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"] == {
+        "status": "materialized",
+        "specializationCount": 2,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "configuredParameterSources": {},
+        "specializations": [
+            {
+                "name": "layer_norm_single_row",
+                "materializedName": "layer_norm_f32_8",
+                "parameters": {"N_READS": "8", "T": "float"},
+                "parameterSources": {
+                    "N_READS": "source-instantiation",
+                    "T": "source-instantiation",
+                },
+                "source": "source-instantiation",
+                "hostName": "layer_norm_f32_8",
+            },
+            {
+                "name": "pick_first",
+                "materializedName": "pick_first_float_uint_uint",
+                "parameters": {"Args": "uint, uint", "T": "float"},
+                "parameterSources": {"Args": "call-site", "T": "call-site"},
+                "source": "call-site",
+            },
+        ],
+        "unsupported": [],
+    }
+
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "float pick_first_float_uint_uint(" in output
+    assert "out_[gid] = pick_first_float_uint_uint(acc, gid, 1u);" in output
+    assert "pick_first<" not in output
+    assert not re.search(r"\\b(?:T|Args|N_READS)\\b", output)
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
 def test_translate_project_metal_norm_variant_records_config_and_nontype_sources(
     tmp_path,
 ):
@@ -36747,12 +36925,12 @@ def test_translate_project_metal_variadic_debug_helper_noops_for_opengl(
     assert artifact["templateMaterialization"] == {
         "status": "materialized",
         "specializationCount": 0,
-            "configuredParameterCount": 0,
-            "configuredParameters": {},
-            "configuredParameterSources": {},
-            "specializations": [],
-            "unsupported": [],
-        }
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "configuredParameterSources": {},
+        "specializations": [],
+        "unsupported": [],
+    }
 
     output = (repo / artifact["path"]).read_text(encoding="utf-8")
     assert "log_debug" not in output
