@@ -4,40 +4,46 @@
   "commit": "968d264f2903d578e699c4452a4dbf48633921aa",
   "tracked_issues": [
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/888",
-      "scope": "opengl-template-element-types",
+      "issue": "https://github.com/CrossGL/crosstl/issues/939",
+      "scope": "opengl-template-specialization",
       "status": "open",
-      "summary": "Specialize template element types in generated OpenGL project artifacts."
+      "summary": "Scale Metal template specialization for project OpenGL translation."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/889",
-      "scope": "opengl-metal-simd-intrinsics",
+      "issue": "https://github.com/CrossGL/crosstl/issues/940",
+      "scope": "spirv-generic-helper-specialization",
       "status": "open",
-      "summary": "Lower Metal SIMD-group helper intrinsics for OpenGL validation."
+      "summary": "Specialize generic helper functions for SPIR-V project translation."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/915",
-      "scope": "directx-steel-source-types",
+      "issue": "https://github.com/CrossGL/crosstl/issues/941",
+      "scope": "metal-numeric-template-parsing",
       "status": "open",
-      "summary": "Resolve MLX Steel source type metadata for DirectX project translation."
+      "summary": "Parse dependent numeric template arguments in Metal project kernels."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/916",
-      "scope": "vulkan-storage-buffer-overloads",
+      "issue": "https://github.com/CrossGL/crosstl/issues/943",
+      "scope": "directx-source-type-metadata",
       "status": "open",
-      "summary": "Resolve the remaining MLX sort storage-buffer overload in SPIR-V project translation."
+      "summary": "Resolve project source-type metadata failures in DirectX codegen."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/894",
-      "scope": "runtime-integration-manifest",
+      "issue": "https://github.com/CrossGL/crosstl/issues/944",
+      "scope": "spirv-storage-buffer-overloads",
       "status": "open",
-      "summary": "Define backend-agnostic runtime integration manifest for project translations."
+      "summary": "Resolve overloaded storage-buffer helper calls in SPIR-V project translation."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/895",
-      "scope": "runtime-verification-harness",
+      "issue": "https://github.com/CrossGL/crosstl/issues/945",
+      "scope": "spirv-bool-function-constants",
       "status": "open",
-      "summary": "Add cross-backend runtime verification harness for project translations."
+      "summary": "Lower Metal function constants and boolean inputs for SPIR-V compute translation."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/946",
+      "scope": "runtime-adapter-contracts",
+      "status": "open",
+      "summary": "Define runtime adapter contracts for executing translated project kernels."
     }
   ]
 }

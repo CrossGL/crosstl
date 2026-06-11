@@ -257,10 +257,13 @@ RUNTIME_ARTIFACT_MANIFEST_FIELDS = frozenset(
         "project",
         "summary",
         "targets",
+        "artifactGroups",
         "artifacts",
         "runtimePlan",
         "diagnosticCounts",
         "diagnostics",
+        "runtimeDiagnosticCounts",
+        "runtimeDiagnostics",
     )
 )
 RUNTIME_ARTIFACT_MANIFEST_TARGET_FIELDS = frozenset(
@@ -270,6 +273,12 @@ RUNTIME_ARTIFACT_MANIFEST_TARGET_FIELDS = frozenset(
         "translatedArtifactCount",
         "failedArtifactCount",
         "runtimeReferenceCount",
+        "sourceCount",
+        "variantCount",
+        "entryPointCount",
+        "resourceBindingCount",
+        "parameterBlockCount",
+        "dispatchMetadataCount",
         "artifacts",
     )
 )
@@ -291,6 +300,15 @@ RUNTIME_ARTIFACT_MANIFEST_ARTIFACT_FIELDS = frozenset(
         "sourceMap",
         "sourceRemap",
         "hostInterface",
+        "entryPoints",
+        "resourceBindings",
+        "parameterBlocks",
+        "dispatch",
+        "validation",
+        "toolchain",
+        "toolchainRuns",
+        "runtimeDataStatus",
+        "diagnostics",
     )
 )
 RUNTIME_ARTIFACT_MANIFEST_RUNTIME_PLAN_FIELDS = frozenset(
@@ -9058,9 +9076,589 @@ def _runtime_manifest_source_host_interface(
     return host_interface
 
 
-def _runtime_manifest_artifact(
-    artifact: Mapping[str, Any], *, root_path: Path | None = None
+def _runtime_manifest_group_key(value: Any) -> str:
+    if value is None:
+        return "default"
+    if isinstance(value, str):
+        return value if value else "default"
+    return str(value)
+
+
+def _runtime_manifest_variant_count(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> int:
+    return len(
+        {
+            artifact.get("variant")
+            for artifact in artifacts
+            if _is_non_empty_string(artifact.get("variant"))
+        }
+    )
+
+
+def _runtime_manifest_artifact_counter(
+    artifacts: Sequence[Mapping[str, Any]],
+    field_name: str,
+) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for artifact in artifacts:
+        value = artifact.get(field_name)
+        if _is_non_empty_string(value):
+            counts[str(value)] += 1
+    return dict(sorted(counts.items()))
+
+
+def _runtime_manifest_status_counts(
+    artifacts: Sequence[Mapping[str, Any]],
+    field_name: str,
+) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for artifact in artifacts:
+        record = artifact.get(field_name)
+        if not isinstance(record, Mapping):
+            counts["not-recorded"] += 1
+            continue
+        status = record.get("status")
+        counts[str(status) if _is_non_empty_string(status) else "not-recorded"] += 1
+    return dict(sorted(counts.items()))
+
+
+def _runtime_manifest_data_status_counts(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, Counter[str]] = {}
+    for artifact in artifacts:
+        status = artifact.get("runtimeDataStatus")
+        if not isinstance(status, Mapping):
+            continue
+        for field_name, value in status.items():
+            counts.setdefault(str(field_name), Counter())[str(value)] += 1
+    return {
+        field_name: dict(sorted(field_counts.items()))
+        for field_name, field_counts in sorted(counts.items())
+    }
+
+
+def _runtime_manifest_artifact_groups(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, dict[str, list[Mapping[str, Any]]]] = {
+        "source": {},
+        "target": {},
+        "variant": {},
+    }
+    for artifact in artifacts:
+        for field_name in grouped:
+            key = _runtime_manifest_group_key(artifact.get(field_name))
+            grouped[field_name].setdefault(key, []).append(artifact)
+
+    def group_payload(
+        field_name: str, key: str, records: Sequence[Mapping[str, Any]]
+    ) -> dict[str, Any]:
+        payload = {
+            field_name: None if field_name == "variant" and key == "default" else key,
+            "artifactCount": len(records),
+            "targets": sorted(
+                {
+                    str(record.get("target"))
+                    for record in records
+                    if _is_non_empty_string(record.get("target"))
+                }
+            ),
+            "sources": sorted(
+                {
+                    str(record.get("source"))
+                    for record in records
+                    if _is_non_empty_string(record.get("source"))
+                }
+            ),
+            "variants": sorted(
+                {
+                    str(record.get("variant"))
+                    for record in records
+                    if _is_non_empty_string(record.get("variant"))
+                }
+            ),
+            "artifacts": [str(record.get("id", "")) for record in records],
+        }
+        if field_name == "variant":
+            payload["variantLabel"] = key
+        return payload
+
+    return {
+        "bySource": [
+            group_payload("source", key, grouped["source"][key])
+            for key in sorted(grouped["source"])
+        ],
+        "byTarget": [
+            group_payload("target", key, grouped["target"][key])
+            for key in sorted(grouped["target"])
+        ],
+        "byVariant": [
+            group_payload("variant", key, grouped["variant"][key])
+            for key in sorted(grouped["variant"])
+        ],
+    }
+
+
+def _runtime_manifest_runtime_diagnostics(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    diagnostics = []
+    for artifact in artifacts:
+        for diagnostic in _record_sequence(artifact.get("diagnostics")):
+            if isinstance(diagnostic, Mapping):
+                diagnostics.append(dict(diagnostic))
+    return diagnostics
+
+
+def _runtime_manifest_runtime_diagnostic_counts(
+    diagnostics: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    return _diagnostic_payload_counts(diagnostics)
+
+
+def _runtime_manifest_summary(
+    *,
+    targets: Sequence[str],
+    artifacts: Sequence[Mapping[str, Any]],
+    translated_artifacts: Sequence[Mapping[str, Any]],
+    failed_artifact_count: int,
+    source_map_rollups: Mapping[str, Any],
+    runtime_reference_count: int,
+    compiler_request_count: int,
+    runtime_diagnostics: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    return {
+        "targetCount": len(targets),
+        "sourceCount": len(
+            {
+                artifact.get("source")
+                for artifact in artifacts
+                if _is_non_empty_string(artifact.get("source"))
+            }
+        ),
+        "variantCount": _runtime_manifest_variant_count(artifacts),
+        "artifactCount": len(artifacts),
+        "translatedArtifactCount": len(translated_artifacts),
+        "failedArtifactCount": failed_artifact_count,
+        "sourceMapCount": source_map_rollups["sourceMapCount"],
+        "sourceRemapCount": source_map_rollups["sourceRemapCount"],
+        "runtimeReferenceCount": runtime_reference_count,
+        "compilerRequestCount": compiler_request_count,
+        "entryPointCount": sum(
+            len(_record_sequence(artifact.get("entryPoints"))) for artifact in artifacts
+        ),
+        "resourceBindingCount": sum(
+            len(_record_sequence(artifact.get("resourceBindings")))
+            for artifact in artifacts
+        ),
+        "parameterBlockCount": sum(
+            len(_record_sequence(artifact.get("parameterBlocks")))
+            for artifact in artifacts
+        ),
+        "dispatchMetadataCount": sum(
+            artifact.get("dispatch", {}).get("workgroupCount", 0)
+            for artifact in artifacts
+            if isinstance(artifact.get("dispatch"), Mapping)
+        ),
+        "artifactsBySource": _runtime_manifest_artifact_counter(artifacts, "source"),
+        "artifactsByTarget": _runtime_manifest_artifact_counter(artifacts, "target"),
+        "artifactsByVariant": _runtime_manifest_artifact_counter(artifacts, "variant"),
+        "validationStatusCounts": _runtime_manifest_status_counts(
+            artifacts, "validation"
+        ),
+        "toolchainStatusCounts": _runtime_manifest_status_counts(
+            artifacts, "toolchain"
+        ),
+        "runtimeDataStatusCounts": _runtime_manifest_data_status_counts(artifacts),
+        "runtimeDiagnosticCount": len(runtime_diagnostics),
+    }
+
+
+def _runtime_manifest_artifact_key(artifact: Mapping[str, Any]) -> tuple[Any, ...]:
+    return (
+        artifact.get("source"),
+        artifact.get("target"),
+        artifact.get("variant"),
+        artifact.get("path"),
+    )
+
+
+def _runtime_manifest_validation_artifacts(
+    validation_report: Mapping[str, Any],
+) -> dict[tuple[Any, ...], dict[str, Any]]:
+    validation = validation_report.get("validation")
+    validation = validation if isinstance(validation, Mapping) else {}
+    records: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for artifact in _record_sequence(validation.get("artifacts")):
+        if isinstance(artifact, Mapping):
+            records[_runtime_manifest_artifact_key(artifact)] = dict(artifact)
+    return records
+
+
+def _runtime_manifest_toolchains(
+    validation_report: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    validation = validation_report.get("validation")
+    validation = validation if isinstance(validation, Mapping) else {}
+    toolchains: dict[str, dict[str, Any]] = {}
+    for toolchain in _record_sequence(validation.get("toolchains")):
+        if not isinstance(toolchain, Mapping):
+            continue
+        target = toolchain.get("target")
+        if isinstance(target, str) and target:
+            toolchains[target] = dict(toolchain)
+    return toolchains
+
+
+def _runtime_manifest_toolchain_runs(
+    validation_report: Mapping[str, Any],
+) -> dict[tuple[Any, ...], list[dict[str, Any]]]:
+    validation = validation_report.get("validation")
+    validation = validation if isinstance(validation, Mapping) else {}
+    runs: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for run in _record_sequence(validation.get("toolchainRuns")):
+        if not isinstance(run, Mapping):
+            continue
+        runs.setdefault(_runtime_manifest_artifact_key(run), []).append(dict(run))
+    return runs
+
+
+def _runtime_manifest_entry_points(
+    host_interface: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not isinstance(host_interface, Mapping):
+        return []
+    return [
+        dict(entry_point)
+        for entry_point in _record_sequence(host_interface.get("entryPoints"))
+        if isinstance(entry_point, Mapping)
+    ]
+
+
+def _runtime_manifest_resources(
+    host_interface: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not isinstance(host_interface, Mapping):
+        return []
+    return [
+        dict(resource)
+        for resource in _record_sequence(host_interface.get("resources"))
+        if isinstance(resource, Mapping)
+    ]
+
+
+def _runtime_manifest_binding_status(resource: Mapping[str, Any]) -> str:
+    has_set = resource.get("set") is not None
+    has_binding = resource.get("binding") is not None
+    if has_set and has_binding:
+        return "bound"
+    if has_set or has_binding:
+        return "layout-partial"
+    return "layout-missing"
+
+
+def _runtime_manifest_resource_bindings(
+    host_interface: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    bindings = []
+    for index, resource in enumerate(_runtime_manifest_resources(host_interface)):
+        name = resource.get("name")
+        kind = resource.get("kind")
+        set_number = resource.get("set")
+        binding_number = resource.get("binding")
+        binding = {
+            "id": "|".join(
+                str(part)
+                for part in (
+                    _runtime_manifest_group_key(kind),
+                    _runtime_manifest_group_key(set_number),
+                    _runtime_manifest_group_key(binding_number),
+                    _runtime_manifest_group_key(name),
+                    index,
+                )
+            ),
+            "name": name,
+            "kind": kind,
+            "type": resource.get("type"),
+            "set": set_number,
+            "binding": binding_number,
+            "access": resource.get("access"),
+            "status": _runtime_manifest_binding_status(resource),
+            "source": "hostInterface.resources",
+        }
+        bindings.append(binding)
+    return bindings
+
+
+def _runtime_manifest_parameter_blocks(
+    resource_bindings: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    blocks = []
+    for binding in resource_bindings:
+        if binding.get("kind") not in {
+            "constant-buffer",
+            "uniform",
+            "push-constant",
+            "parameter-block",
+        }:
+            continue
+        blocks.append(
+            {
+                "name": binding.get("name"),
+                "kind": binding.get("kind"),
+                "type": binding.get("type"),
+                "set": binding.get("set"),
+                "binding": binding.get("binding"),
+                "access": binding.get("access"),
+                "resourceBinding": binding.get("id"),
+                "status": (
+                    "layout-ready"
+                    if binding.get("status") == "bound"
+                    else "layout-incomplete"
+                ),
+                "fields": [],
+                "fieldLayoutStatus": "unavailable",
+            }
+        )
+    return blocks
+
+
+def _runtime_manifest_json_scalar(value: Any) -> Any:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return int(stripped) if stripped.isdigit() else stripped
+    return _runtime_host_interface_json_value(value)
+
+
+def _runtime_manifest_sequence_workgroup_size(value: Any) -> list[Any] | None:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        values = [_runtime_manifest_json_scalar(item) for item in value]
+        return values if values else None
+    return None
+
+
+def _runtime_manifest_execution_workgroup_size(
+    execution_config: Mapping[str, Any],
+) -> tuple[list[Any] | None, str | None]:
+    for field_name in ("numthreads", "workgroup_size", "workgroupSize", "local_size"):
+        if field_name not in execution_config:
+            continue
+        values = _runtime_manifest_sequence_workgroup_size(
+            execution_config.get(field_name)
+        )
+        if values is not None:
+            return values, field_name
+    local_size_fields = ("local_size_x", "local_size_y", "local_size_z")
+    if any(field_name in execution_config for field_name in local_size_fields):
+        return (
+            [
+                _runtime_manifest_json_scalar(execution_config.get(field_name, 1))
+                for field_name in local_size_fields
+            ],
+            "local_size",
+        )
+    return None, None
+
+
+def _runtime_manifest_dispatch(
+    entry_points: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    compute_entry_points = [
+        entry_point
+        for entry_point in entry_points
+        if entry_point.get("stage") == "compute"
+    ]
+    workgroups = []
+    for entry_point in compute_entry_points:
+        execution_config = entry_point.get("executionConfig")
+        execution_config = (
+            dict(execution_config) if isinstance(execution_config, Mapping) else {}
+        )
+        workgroup_size, source = _runtime_manifest_execution_workgroup_size(
+            execution_config
+        )
+        if workgroup_size is None:
+            continue
+        workgroups.append(
+            {
+                "entryPoint": entry_point.get("name"),
+                "stage": entry_point.get("stage"),
+                "workgroupSize": workgroup_size,
+                "source": f"entryPoint.executionConfig.{source}",
+                "executionConfig": execution_config,
+            }
+        )
+    diagnostics = []
+    if workgroups:
+        status = "available"
+    elif compute_entry_points:
+        status = "unavailable"
+        diagnostics.append("project.runtime-manifest.dispatch-metadata-unavailable")
+    else:
+        status = "not-applicable"
+    return {
+        "status": status,
+        "workgroupCount": len(workgroups),
+        "workgroups": workgroups,
+        "diagnostics": diagnostics,
+    }
+
+
+def _runtime_manifest_diagnostic(
+    *,
+    artifact: Mapping[str, Any],
+    code: str,
+    message: str,
+) -> dict[str, Any]:
+    return ProjectDiagnostic(
+        severity="note",
+        code=code,
+        message=message,
+        location=SourceLocation(file=str(artifact.get("source", "<unknown>"))),
+        target=(
+            str(artifact.get("target"))
+            if _is_non_empty_string(artifact.get("target"))
+            else None
+        ),
+        source_backend=(
+            str(artifact.get("sourceBackend"))
+            if _is_non_empty_string(artifact.get("sourceBackend"))
+            else None
+        ),
+        variant=(
+            str(artifact.get("variant"))
+            if _is_non_empty_string(artifact.get("variant"))
+            else None
+        ),
+        check_kind="runtime-manifest",
+        missing_capabilities=["runtime.integration.metadata"],
+    ).to_json()
+
+
+def _runtime_manifest_artifact_diagnostics(
+    artifact: Mapping[str, Any],
+    host_interface: Mapping[str, Any] | None,
+    entry_points: Sequence[Mapping[str, Any]],
+    resource_bindings: Sequence[Mapping[str, Any]],
+    dispatch: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    if not isinstance(host_interface, Mapping):
+        diagnostics.append(
+            _runtime_manifest_diagnostic(
+                artifact=artifact,
+                code="project.runtime-manifest.host-interface-unavailable",
+                message=(
+                    "Runtime host interface metadata could not be inferred for "
+                    f"{artifact.get('path')}."
+                ),
+            )
+        )
+        return diagnostics
+    if not entry_points:
+        diagnostics.append(
+            _runtime_manifest_diagnostic(
+                artifact=artifact,
+                code="project.runtime-manifest.entry-points-unavailable",
+                message=(
+                    "No runtime entry point metadata was inferred for "
+                    f"{artifact.get('path')}."
+                ),
+            )
+        )
+    if any(binding.get("status") != "bound" for binding in resource_bindings):
+        diagnostics.append(
+            _runtime_manifest_diagnostic(
+                artifact=artifact,
+                code="project.runtime-manifest.resource-binding-layout-incomplete",
+                message=(
+                    "One or more reflected resources are missing complete "
+                    f"set/binding metadata for {artifact.get('path')}."
+                ),
+            )
+        )
+    for diagnostic in _record_sequence(dispatch.get("diagnostics")):
+        if not isinstance(diagnostic, str) or not diagnostic:
+            continue
+        diagnostics.append(
+            _runtime_manifest_diagnostic(
+                artifact=artifact,
+                code=diagnostic,
+                message=(
+                    "Compute dispatch/workgroup metadata could not be inferred "
+                    f"for {artifact.get('path')}."
+                ),
+            )
+        )
+    return diagnostics
+
+
+def _runtime_manifest_status(
+    *,
+    host_interface: Mapping[str, Any] | None,
+    entry_points: Sequence[Mapping[str, Any]],
+    resource_bindings: Sequence[Mapping[str, Any]],
+    parameter_blocks: Sequence[Mapping[str, Any]],
+    dispatch: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(host_interface, Mapping):
+        return {
+            "hostInterface": "unavailable",
+            "entryPoints": "unavailable",
+            "resourceBindings": "unavailable",
+            "parameterBlocks": "unavailable",
+            "dispatch": dispatch.get("status", "unavailable"),
+        }
+    resource_binding_status = "not-applicable"
+    if resource_bindings:
+        resource_binding_status = (
+            "available"
+            if all(binding.get("status") == "bound" for binding in resource_bindings)
+            else "partial"
+        )
+    parameter_block_status = "not-applicable"
+    if parameter_blocks:
+        parameter_block_status = (
+            "available"
+            if all(block.get("status") == "layout-ready" for block in parameter_blocks)
+            else "partial"
+        )
+    return {
+        "hostInterface": host_interface.get("status", "unavailable"),
+        "entryPoints": "available" if entry_points else "unavailable",
+        "resourceBindings": resource_binding_status,
+        "parameterBlocks": parameter_block_status,
+        "dispatch": dispatch.get("status", "unavailable"),
+    }
+
+
+def _runtime_manifest_artifact(
+    artifact: Mapping[str, Any],
+    *,
+    root_path: Path | None = None,
+    validation_artifacts: Mapping[tuple[Any, ...], Mapping[str, Any]] | None = None,
+    toolchains: Mapping[str, Mapping[str, Any]] | None = None,
+    toolchain_runs: Mapping[tuple[Any, ...], Sequence[Mapping[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    host_interface = _runtime_manifest_source_host_interface(root_path, artifact)
+    entry_points = _runtime_manifest_entry_points(host_interface)
+    resource_bindings = _runtime_manifest_resource_bindings(host_interface)
+    parameter_blocks = _runtime_manifest_parameter_blocks(resource_bindings)
+    dispatch = _runtime_manifest_dispatch(entry_points)
+    diagnostics = _runtime_manifest_artifact_diagnostics(
+        artifact, host_interface, entry_points, resource_bindings, dispatch
+    )
+    key = _runtime_manifest_artifact_key(artifact)
+    validation = dict((validation_artifacts or {}).get(key, {}))
+    target = artifact.get("target")
+    toolchain = (
+        dict((toolchains or {}).get(str(target), {}))
+        if _is_non_empty_string(target)
+        else {}
+    )
+    runs = [dict(run) for run in (toolchain_runs or {}).get(key, [])]
     payload = {
         "id": _runtime_manifest_artifact_id(artifact),
         "source": artifact.get("source"),
@@ -9093,7 +9691,22 @@ def _runtime_manifest_artifact(
             if isinstance(artifact.get("sourceRemap"), Mapping)
             else None
         ),
-        "hostInterface": _runtime_manifest_source_host_interface(root_path, artifact),
+        "hostInterface": host_interface,
+        "entryPoints": entry_points,
+        "resourceBindings": resource_bindings,
+        "parameterBlocks": parameter_blocks,
+        "dispatch": dispatch,
+        "validation": validation,
+        "toolchain": toolchain,
+        "toolchainRuns": runs,
+        "runtimeDataStatus": _runtime_manifest_status(
+            host_interface=host_interface,
+            entry_points=entry_points,
+            resource_bindings=resource_bindings,
+            parameter_blocks=parameter_blocks,
+            dispatch=dispatch,
+        ),
+        "diagnostics": diagnostics,
     }
     return payload
 
@@ -9101,6 +9714,7 @@ def _runtime_manifest_artifact(
 def _runtime_manifest_target(
     target: str,
     artifacts: Sequence[Mapping[str, Any]],
+    manifest_artifacts: Sequence[Mapping[str, Any]],
     runtime_reference_count: int,
 ) -> dict[str, Any]:
     target_artifacts = [
@@ -9114,14 +9728,42 @@ def _runtime_manifest_target(
     failed_artifact_count = sum(
         1 for artifact in target_artifacts if artifact.get("status") == "failed"
     )
+    target_manifest_artifacts = [
+        artifact for artifact in manifest_artifacts if artifact.get("target") == target
+    ]
     return {
         "target": target,
         "artifactCount": len(target_artifacts),
         "translatedArtifactCount": len(translated_artifacts),
         "failedArtifactCount": failed_artifact_count,
         "runtimeReferenceCount": runtime_reference_count,
+        "sourceCount": len(
+            {
+                artifact.get("source")
+                for artifact in target_manifest_artifacts
+                if _is_non_empty_string(artifact.get("source"))
+            }
+        ),
+        "variantCount": _runtime_manifest_variant_count(target_manifest_artifacts),
+        "entryPointCount": sum(
+            len(_record_sequence(artifact.get("entryPoints")))
+            for artifact in target_manifest_artifacts
+        ),
+        "resourceBindingCount": sum(
+            len(_record_sequence(artifact.get("resourceBindings")))
+            for artifact in target_manifest_artifacts
+        ),
+        "parameterBlockCount": sum(
+            len(_record_sequence(artifact.get("parameterBlocks")))
+            for artifact in target_manifest_artifacts
+        ),
+        "dispatchMetadataCount": sum(
+            artifact.get("dispatch", {}).get("workgroupCount", 0)
+            for artifact in target_manifest_artifacts
+            if isinstance(artifact.get("dispatch"), Mapping)
+        ),
         "artifacts": [
-            _runtime_manifest_artifact_id(artifact) for artifact in translated_artifacts
+            str(artifact.get("id", "")) for artifact in target_manifest_artifacts
         ],
     }
 
@@ -9203,10 +9845,20 @@ def build_runtime_artifact_manifest(
     root_path = None
     if _is_non_empty_string(project_payload.get("root")):
         root_path = Path(str(project_payload["root"])).resolve()
+    validation_artifacts = _runtime_manifest_validation_artifacts(validation_report)
+    toolchains = _runtime_manifest_toolchains(validation_report)
+    toolchain_runs = _runtime_manifest_toolchain_runs(validation_report)
     manifest_artifacts = [
-        _runtime_manifest_artifact(artifact, root_path=root_path)
+        _runtime_manifest_artifact(
+            artifact,
+            root_path=root_path,
+            validation_artifacts=validation_artifacts,
+            toolchains=toolchains,
+            toolchain_runs=toolchain_runs,
+        )
         for artifact in translated_artifacts
     ]
+    runtime_diagnostics = _runtime_manifest_runtime_diagnostics(manifest_artifacts)
     return {
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": RUNTIME_ARTIFACT_MANIFEST_KIND,
@@ -9217,24 +9869,34 @@ def build_runtime_artifact_manifest(
         "scope": RUNTIME_ARTIFACT_MANIFEST_SCOPE,
         "nonGoals": list(RUNTIME_ARTIFACT_MANIFEST_NON_GOALS),
         "project": project_payload,
-        "summary": {
-            "targetCount": len(targets),
-            "artifactCount": len(manifest_artifacts),
-            "translatedArtifactCount": len(translated_artifacts),
-            "failedArtifactCount": failed_artifact_count,
-            "sourceMapCount": source_map_rollups["sourceMapCount"],
-            "sourceRemapCount": source_map_rollups["sourceRemapCount"],
-            "runtimeReferenceCount": runtime_reference_count,
-            "compilerRequestCount": len(runtime_plan_payload["compilerRequests"]),
-        },
+        "summary": _runtime_manifest_summary(
+            targets=targets,
+            artifacts=manifest_artifacts,
+            translated_artifacts=translated_artifacts,
+            failed_artifact_count=failed_artifact_count,
+            source_map_rollups=source_map_rollups,
+            runtime_reference_count=runtime_reference_count,
+            compiler_request_count=len(runtime_plan_payload["compilerRequests"]),
+            runtime_diagnostics=runtime_diagnostics,
+        ),
         "targets": [
-            _runtime_manifest_target(target, artifacts, runtime_reference_count)
+            _runtime_manifest_target(
+                target,
+                artifacts,
+                manifest_artifacts,
+                runtime_reference_count,
+            )
             for target in targets
         ],
+        "artifactGroups": _runtime_manifest_artifact_groups(manifest_artifacts),
         "artifacts": manifest_artifacts,
         "runtimePlan": runtime_plan_payload,
         "diagnosticCounts": validation_report.get("diagnosticCounts", {}),
         "diagnostics": validation_report.get("diagnostics", []),
+        "runtimeDiagnosticCounts": _runtime_manifest_runtime_diagnostic_counts(
+            runtime_diagnostics
+        ),
+        "runtimeDiagnostics": runtime_diagnostics,
     }
 
 

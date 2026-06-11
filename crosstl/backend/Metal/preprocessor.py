@@ -32,7 +32,8 @@ IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 MLX_INSTANTIATE_KERNEL_RE = re.compile(r"\binstantiate_kernel\s*\(")
 MLX_HOST_NAME_DECL_RE = re.compile(
     r"\btemplate\s+\[\[\s*host_name\s*\(\s*(?P<host>"
-    r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')\s*\)\s*\]\]\s*"
+    r"(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')"
+    r"(?:\s*(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'))*)\s*\)\s*\]\]\s*"
     r"\[\[\s*kernel\s*\]\]\s*decltype\s*\(\s*(?P<function>"
     r"[A-Za-z_][A-Za-z0-9_:]*)\s*<",
     re.DOTALL,
@@ -66,12 +67,16 @@ class MetalPreprocessor(HLSLPreprocessor):
         defines: Optional[Dict[str, str]] = None,
         strict: bool = False,
         max_expansion_depth: int = 64,
+        max_materialized_template_instantiations: int = 512,
     ):
         super().__init__(
             include_paths=include_paths,
             defines=defines,
             strict=strict,
             max_expansion_depth=max_expansion_depth,
+        )
+        self.max_materialized_template_instantiations = (
+            max_materialized_template_instantiations
         )
         self.macros.setdefault(
             "TARGET_OS_SIMULATOR",
@@ -113,6 +118,8 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _materialize_mlx_instantiate_kernels(self, code: str) -> str:
         instantiations = self._find_mlx_kernel_instantiations(code)
         if not instantiations:
+            return code
+        if len(instantiations) > self.max_materialized_template_instantiations:
             return code
 
         templates = self._find_template_functions(code)

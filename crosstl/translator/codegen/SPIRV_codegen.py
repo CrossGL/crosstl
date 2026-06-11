@@ -58,10 +58,9 @@ from .enum_utils import (
     generic_enum_specialized_variant_fields,
     generic_type_parts,
     resolve_generic_enum_specialization,
+    substitute_generic_type_name,
 )
-from .generic_function_utils import (
-    reject_unsupported_generic_functions as reject_generic_functions_for_target,
-)
+from .generic_function_utils import generic_function_parameters
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -200,6 +199,7 @@ class VulkanSPIRVCodeGen:
 
         self.functions = {}
         self.function_nodes = {}
+        self.function_nodes_by_name = {}
         self.function_signatures = {}
         self.stage_local_functions = {}
         self.stage_local_function_signatures = {}
@@ -207,8 +207,10 @@ class VulkanSPIRVCodeGen:
         self.stage_local_function_image_access_requirements = {}
         self.stage_local_function_storage_buffer_access_requirements = {}
         self.function_parameter_names = {}
+        self.function_parameter_names_by_id = {}
         self.function_image_access_requirements = {}
         self.function_storage_buffer_access_requirements = {}
+        self.function_storage_buffer_access_requirements_by_id = {}
         self.inline_storage_buffer_functions = {}
         self.stage_local_inline_storage_buffer_functions = {}
         self.inline_storage_buffer_call_stack = []
@@ -231,6 +233,7 @@ class VulkanSPIRVCodeGen:
         self.current_return_semantic_output = None
         self.current_entry_point_return_outputs = None
         self.current_expression_expected_type = None
+        self.current_generic_type_substitutions = {}
         self.mesh_output_counts_by_function = {}
         self.mesh_vertex_output_variable = None
         self.mesh_vertex_output_limit = None
@@ -1927,13 +1930,70 @@ class VulkanSPIRVCodeGen:
             and parameter_names[arg_index] in pointer_param_names
         )
 
-    def resolve_inline_storage_buffer_function(self, function_name: str):
-        function_node = self.stage_local_metadata(
+    def resolve_inline_storage_buffer_function(self, function_name: str, call_args):
+        stage_candidates = self.stage_local_metadata(
             self.stage_local_inline_storage_buffer_functions, function_name
         )
-        if function_node is not None:
-            return function_node
-        return self.inline_storage_buffer_functions.get(function_name)
+        if stage_candidates is not None:
+            candidates = list(stage_candidates)
+        else:
+            candidates = list(
+                self.inline_storage_buffer_functions.get(function_name, [])
+            )
+
+        if not candidates:
+            return None
+
+        arity_matches = [
+            candidate
+            for candidate in candidates
+            if len(self.function_parameters(candidate)) == len(call_args)
+        ]
+        if not arity_matches:
+            if self.has_matching_non_storage_function_candidate(
+                function_name, call_args
+            ):
+                return None
+            raise self.storage_buffer_overload_diagnostic(
+                function_name,
+                call_args,
+                candidates,
+                "no candidate has matching arity",
+            )
+
+        scored_matches = []
+        for candidate in arity_matches:
+            score = self.storage_buffer_candidate_match_score(candidate, call_args)
+            if score is not None:
+                scored_matches.append((score, candidate))
+
+        if not scored_matches:
+            if len(arity_matches) == 1:
+                return arity_matches[0]
+            if self.has_matching_non_storage_function_candidate(
+                function_name, call_args
+            ):
+                return None
+            raise self.storage_buffer_overload_diagnostic(
+                function_name,
+                call_args,
+                candidates,
+                "no candidate has compatible argument types",
+            )
+
+        scored_matches.sort(key=lambda item: item[0], reverse=True)
+        best_score, best_candidate = scored_matches[0]
+        tied_candidates = [
+            candidate for score, candidate in scored_matches if score == best_score
+        ]
+        if len(tied_candidates) > 1:
+            raise self.storage_buffer_overload_diagnostic(
+                function_name,
+                call_args,
+                tied_candidates,
+                "multiple candidates have compatible argument types",
+            )
+        return best_candidate
 
     def create_function_parameter(
         self, param_type: SpirvId, name: Optional[str] = None
@@ -11591,8 +11651,6 @@ class VulkanSPIRVCodeGen:
     ) -> bool:
         if execution_model != "GLCompute":
             return False
-        if self.explicit_interface_integer_attribute(param, "binding") is None:
-            return False
         qualifiers = self.parameter_qualifier_names(param)
         qualifiers.update(self.resource_parameter_qualifier_names(param))
         if not qualifiers & {"uniform", "constant"}:
@@ -11600,20 +11658,35 @@ class VulkanSPIRVCodeGen:
 
         param_type = getattr(param, "param_type", getattr(param, "vtype", None))
         type_name = self.type_name_from_value(param_type)
+        if type_name and type_name.startswith("&"):
+            type_name = type_name[1:].strip()
+        if self.pointer_pointee_type_name_from_string(type_name) is not None:
+            return False
         return self.normalize_primitive_name(type_name) in {
             "float",
             "double",
             "int",
             "uint",
+            "i64",
+            "u64",
+            "bool",
         }
 
     def is_storage_resource_parameter(self, param) -> bool:
-        qualifiers = self.resource_parameter_qualifier_names(param)
-        if "storage" not in qualifiers:
-            return False
-
         param_type = getattr(param, "param_type", getattr(param, "vtype", None))
         if param_type is None:
+            return False
+        type_name = self.type_name_from_value(param_type)
+
+        qualifiers = self.resource_parameter_qualifier_names(param)
+        parameter_qualifiers = self.parameter_qualifier_names(param)
+        if self.pointer_pointee_type_name_from_string(type_name) is not None:
+            return bool(
+                qualifiers & {"storage", "buffer"}
+                or parameter_qualifiers & {"device", "constant", "storage", "buffer"}
+            )
+
+        if "storage" not in qualifiers:
             return False
         param_type_id = self.map_crossgl_type(param_type)
         return self.array_type_info_from_type(param_type_id) is not None
@@ -11973,7 +12046,7 @@ class VulkanSPIRVCodeGen:
         return None
 
     def map_resource_type_with_format(self, type_name, node=None) -> SpirvId:
-        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+        if self.is_type_node_like(type_name):
             type_str = self.convert_type_node_to_string(type_name)
         else:
             type_str = str(type_name)
@@ -12042,6 +12115,8 @@ class VulkanSPIRVCodeGen:
                     return array_type[0]
 
         pointer = self.variable_pointer_from_expression(expr)
+        if pointer is None:
+            return None
         metadata = self.structured_buffer_metadata_for_pointer(pointer)
         if metadata is None:
             return None
@@ -12174,6 +12249,8 @@ class VulkanSPIRVCodeGen:
 
         type_str = self.normalize_generic_vector_type(type_str)
         type_str = self.normalize_hlsl_matrix_type(type_str)
+        if type_str.startswith("&"):
+            return self.map_crossgl_type(type_str[1:].strip())
 
         array_type = self.split_outer_array_type(type_str)
         if array_type is not None:
@@ -14462,6 +14539,8 @@ class VulkanSPIRVCodeGen:
     def process_variable_declaration(self, node: VariableNode):
         """Process a local CrossGL variable declaration."""
         var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
+        if self.type_name_from_value(var_type_source) == "auto":
+            var_type_source = None
         var_type_name = self.type_name_from_value(var_type_source)
         if self.process_local_resource_alias_declaration(
             node, var_type_source, var_type_name
@@ -15713,8 +15792,24 @@ class VulkanSPIRVCodeGen:
         if type_value is None:
             return None
         if self.is_type_node_like(type_value):
-            return self.convert_type_node_to_string(type_value)
-        return str(type_value)
+            type_name = self.convert_type_node_to_string(type_value)
+        else:
+            type_name = str(type_value)
+
+        substitutions = getattr(self, "current_generic_type_substitutions", {}) or {}
+        if substitutions:
+            if type_name.startswith("&"):
+                referenced = substitute_generic_type_name(
+                    type_name[1:].strip(), substitutions
+                )
+                return f"&{referenced}"
+            if type_name.endswith("*"):
+                pointee = substitute_generic_type_name(
+                    type_name[:-1].strip(), substitutions
+                )
+                return f"{pointee}*"
+            return substitute_generic_type_name(type_name, substitutions)
+        return type_name
 
     def type_name_string(self, type_value) -> str:
         return self.type_name_from_value(type_value)
@@ -15811,6 +15906,218 @@ class VulkanSPIRVCodeGen:
 
         walk(root)
         return functions
+
+    def collect_functions_by_name(self, functions):
+        functions_by_name = {}
+        for function_node in functions:
+            function_name = getattr(function_node, "name", None)
+            if not function_name:
+                continue
+            functions_by_name.setdefault(function_name, []).append(function_node)
+        return functions_by_name
+
+    def function_parameters(self, function_node):
+        return list(
+            getattr(function_node, "parameters", getattr(function_node, "params", []))
+            or []
+        )
+
+    def function_parameter_type_name(self, param) -> Optional[str]:
+        param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+        return self.type_name_from_value(param_type)
+
+    def function_parameter_type_names(self, function_node):
+        return [
+            self.function_parameter_type_name(param) or "unknown"
+            for param in self.function_parameters(function_node)
+        ]
+
+    def format_function_candidate_signature(self, function_node) -> str:
+        function_name = getattr(function_node, "name", "unknown")
+        params = ", ".join(self.function_parameter_type_names(function_node))
+        return f"{function_name}({params})"
+
+    def normalize_signature_type_name(self, type_name) -> Optional[str]:
+        if type_name is None:
+            return None
+        type_name = self.type_name_from_value(type_name)
+        if type_name is None:
+            return None
+        type_name = self.normalize_generic_vector_type(type_name)
+        type_name = self.normalize_hlsl_matrix_type(type_name)
+        return re.sub(r"\s+", "", str(type_name))
+
+    def call_argument_type_name(self, arg) -> Optional[str]:
+        storage_buffer_type = self.storage_buffer_expression_type_name(arg)
+        if storage_buffer_type is not None:
+            return storage_buffer_type
+        inferred_type = self.infer_expression_result_type(arg)
+        if inferred_type is None:
+            return None
+        return inferred_type.type.base_type
+
+    def call_argument_type_names(self, args):
+        return [self.call_argument_type_name(arg) or "unknown" for arg in args]
+
+    def scalar_or_vector_type_compatible(
+        self, declared_type: Optional[str], actual_type: Optional[str]
+    ) -> bool:
+        declared_type = self.normalize_signature_type_name(declared_type)
+        actual_type = self.normalize_signature_type_name(actual_type)
+        if declared_type is None or actual_type is None:
+            return True
+        if declared_type == actual_type:
+            return True
+
+        numeric_types = {"float", "double", "int", "uint", "i64", "u64", "bool"}
+        if declared_type in numeric_types and actual_type in numeric_types:
+            return True
+
+        declared_vector = self.vector_component_type_and_count(declared_type)
+        actual_vector = self.vector_component_type_and_count(actual_type)
+        if declared_vector is not None or actual_vector is not None:
+            return declared_vector == actual_vector
+
+        return False
+
+    def collect_generic_type_bindings(
+        self, expected_type, actual_type, generic_params, substitutions
+    ) -> None:
+        if expected_type is None or actual_type is None:
+            return
+
+        expected_type = self.normalize_signature_type_name(expected_type)
+        actual_type = self.normalize_signature_type_name(actual_type)
+        if expected_type is None or actual_type is None:
+            return
+
+        if expected_type in generic_params:
+            substitutions.setdefault(expected_type, actual_type)
+            return
+
+        expected_base, expected_args = generic_type_parts(expected_type)
+        actual_base, actual_args = generic_type_parts(actual_type)
+        if expected_base != actual_base or len(expected_args) != len(actual_args):
+            return
+
+        for expected_arg, actual_arg in zip(expected_args, actual_args):
+            self.collect_generic_type_bindings(
+                expected_arg, actual_arg, generic_params, substitutions
+            )
+
+    def generic_storage_function_type_bindings(self, function_node, call_args):
+        generic_params = set(generic_function_parameters(function_node))
+        if not generic_params:
+            return {}
+
+        substitutions = {}
+        for param, arg in zip(self.function_parameters(function_node), call_args):
+            declared_type_name = self.function_parameter_type_name(param)
+            actual_type_name = self.call_argument_type_name(arg)
+            self.collect_generic_type_bindings(
+                declared_type_name, actual_type_name, generic_params, substitutions
+            )
+
+        if any(param not in substitutions for param in generic_params):
+            return None
+        return substitutions
+
+    def substitute_generic_signature_type(self, type_name, substitutions):
+        if not substitutions:
+            return type_name
+        type_name = self.type_name_from_value(type_name)
+        if type_name is None:
+            return None
+        if type_name.startswith("&"):
+            referenced = substitute_generic_type_name(
+                type_name[1:].strip(), substitutions
+            )
+            return f"&{referenced}"
+        if type_name.endswith("*"):
+            pointee = substitute_generic_type_name(
+                type_name[:-1].strip(), substitutions
+            )
+            return f"{pointee}*"
+        return substitute_generic_type_name(type_name, substitutions)
+
+    def storage_buffer_candidate_match_score(self, function_node, call_args):
+        parameters = self.function_parameters(function_node)
+        if len(parameters) != len(call_args):
+            return None
+
+        substitutions = self.generic_storage_function_type_bindings(
+            function_node, call_args
+        )
+        if substitutions is None:
+            return None
+
+        score = 0
+        for param, arg in zip(parameters, call_args):
+            storage_buffer_type_name = self.storage_buffer_parameter_type_name(param)
+            storage_buffer_type_name = self.substitute_generic_signature_type(
+                storage_buffer_type_name, substitutions
+            )
+            if storage_buffer_type_name is not None:
+                actual_type_name = self.storage_buffer_expression_type_name(arg)
+                if actual_type_name is None:
+                    continue
+                if not self.storage_buffer_parameter_type_is_compatible(
+                    storage_buffer_type_name, actual_type_name
+                ):
+                    return None
+                score += 4
+                if self.normalize_signature_type_name(
+                    storage_buffer_type_name
+                ) == self.normalize_signature_type_name(actual_type_name):
+                    score += 1
+                continue
+
+            declared_type_name = self.function_parameter_type_name(param)
+            declared_type_name = self.substitute_generic_signature_type(
+                declared_type_name, substitutions
+            )
+            actual_type_name = self.call_argument_type_name(arg)
+            if not self.scalar_or_vector_type_compatible(
+                declared_type_name, actual_type_name
+            ):
+                return None
+            if actual_type_name is not None:
+                score += 1
+                if self.normalize_signature_type_name(
+                    declared_type_name
+                ) == self.normalize_signature_type_name(actual_type_name):
+                    score += 1
+
+        return score
+
+    def has_matching_non_storage_function_candidate(self, function_name, call_args):
+        for function_node in self.function_nodes_by_name.get(function_name, []):
+            if self.function_has_storage_buffer_parameters(function_node):
+                continue
+            if len(self.function_parameters(function_node)) != len(call_args):
+                continue
+            return True
+        return False
+
+    def storage_buffer_overload_diagnostic(
+        self, function_name, call_args, candidates, reason
+    ):
+        actual_types = ", ".join(self.call_argument_type_names(call_args))
+        actual_signature = f"{function_name}({actual_types})"
+        candidate_signatures = ", ".join(
+            self.format_function_candidate_signature(candidate)
+            for candidate in candidates
+        )
+        if not candidate_signatures:
+            candidate_signatures = "<none>"
+        return UnsupportedSPIRVFeatureError(
+            "storage-buffer-function-overload",
+            "SPIR-V storage-buffer function inlining could not resolve "
+            f"overloaded call '{function_name}': {reason}; actual call "
+            f"arity/types: {len(call_args)} ({actual_signature}); candidate "
+            f"signatures: {candidate_signatures}",
+            missing_capabilities=("spirv.storage_buffer_function_overload",),
+        )
 
     def order_functions_by_dependencies(self, functions):
         ordered = []
@@ -16567,38 +16874,47 @@ class VulkanSPIRVCodeGen:
         self, functions
     ):
         functions = list(functions)
-        function_parameter_names = collect_function_parameter_names(functions)
+        functions_by_name = self.collect_functions_by_name(functions)
+        function_parameter_names_by_id = {
+            id(func): [
+                getattr(param, "name", None)
+                for param in self.function_parameters(func)
+                if getattr(param, "name", None)
+            ]
+            for func in functions
+            if getattr(func, "name", None)
+        }
         parameter_sets = {
-            func_name: set(param_names)
-            for func_name, param_names in function_parameter_names.items()
+            func_key: set(param_names)
+            for func_key, param_names in function_parameter_names_by_id.items()
         }
         requirements = {
-            getattr(func, "name", None): {}
-            for func in functions
-            if getattr(func, "name", None)
+            id(func): {} for func in functions if getattr(func, "name", None)
         }
         storage_buffer_parameter_sets = {
-            getattr(func, "name", None): self.function_storage_buffer_parameters(func)
+            id(func): self.function_storage_buffer_parameters(func)
             for func in functions
             if getattr(func, "name", None)
         }
-        storage_buffer_parameter_indices = {
-            getattr(func, "name", None): self.function_storage_buffer_parameter_indices(
-                func
+        storage_buffer_parameter_indices = {}
+        for func in functions:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            storage_buffer_parameter_indices.setdefault(func_name, set()).update(
+                self.function_storage_buffer_parameter_indices(func)
             )
-            for func in functions
-            if getattr(func, "name", None)
-        }
 
         for func in functions:
             func_name = getattr(func, "name", None)
             if not func_name:
                 continue
+            func_key = id(func)
 
             self.scan_storage_buffer_requirement_node(
                 getattr(func, "body", []),
-                func_name,
-                storage_buffer_parameter_sets.get(func_name, set()),
+                func_key,
+                storage_buffer_parameter_sets.get(func_key, set()),
                 storage_buffer_parameter_indices,
                 requirements,
                 set(),
@@ -16611,8 +16927,9 @@ class VulkanSPIRVCodeGen:
                 func_name = getattr(func, "name", None)
                 if not func_name:
                     continue
+                func_key = id(func)
 
-                parameter_set = parameter_sets.get(func_name, set())
+                parameter_set = parameter_sets.get(func_key, set())
                 if not parameter_set:
                     continue
 
@@ -16621,33 +16938,67 @@ class VulkanSPIRVCodeGen:
                         continue
 
                     callee_name = self.function_call_name(node)
-                    callee_requirements = requirements.get(callee_name)
-                    if not callee_requirements:
+                    args = getattr(node, "arguments", getattr(node, "args", []))
+                    callee_candidates = [
+                        candidate
+                        for candidate in functions_by_name.get(callee_name, [])
+                        if len(self.function_parameters(candidate)) == len(args)
+                    ]
+                    if not callee_candidates:
                         continue
 
-                    callee_parameters = function_parameter_names.get(callee_name, [])
-                    args = getattr(node, "arguments", getattr(node, "args", []))
-                    for callee_param, required_access in callee_requirements.items():
-                        try:
-                            index = callee_parameters.index(callee_param)
-                        except ValueError:
+                    for callee_candidate in callee_candidates:
+                        callee_key = id(callee_candidate)
+                        callee_requirements = requirements.get(callee_key)
+                        if not callee_requirements:
                             continue
-                        if index >= len(args):
-                            continue
-
-                        target_name = self.expression_name(args[index])
-                        if target_name not in parameter_set:
-                            continue
-
-                        current = requirements[func_name].get(target_name)
-                        merged = self.merge_resource_access_requirement(
-                            current, required_access
+                        callee_parameters = function_parameter_names_by_id.get(
+                            callee_key, []
                         )
-                        if merged != current:
-                            requirements[func_name][target_name] = merged
-                            changed = True
+                        for (
+                            callee_param,
+                            required_access,
+                        ) in callee_requirements.items():
+                            try:
+                                index = callee_parameters.index(callee_param)
+                            except ValueError:
+                                continue
+                            if index >= len(args):
+                                continue
 
-        return {name: reqs for name, reqs in requirements.items() if reqs}
+                            target_name = self.expression_name(args[index])
+                            if target_name not in parameter_set:
+                                continue
+
+                            current = requirements[func_key].get(target_name)
+                            merged = self.merge_resource_access_requirement(
+                                current, required_access
+                            )
+                            if merged != current:
+                                requirements[func_key][target_name] = merged
+                                changed = True
+
+        self.function_parameter_names_by_id.update(function_parameter_names_by_id)
+        filtered_requirements = {
+            func_key: reqs for func_key, reqs in requirements.items() if reqs
+        }
+        self.function_storage_buffer_access_requirements_by_id.update(
+            filtered_requirements
+        )
+        legacy_requirements = {}
+        for func in functions:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            for param_name, required_access in filtered_requirements.get(
+                id(func), {}
+            ).items():
+                legacy_requirements.setdefault(func_name, {})
+                current = legacy_requirements[func_name].get(param_name)
+                legacy_requirements[func_name][param_name] = (
+                    self.merge_resource_access_requirement(current, required_access)
+                )
+        return legacy_requirements
 
     def collect_function_storage_buffer_access_requirements_for_ast(self, ast):
         return self.collect_function_storage_buffer_access_requirements_for_functions(
@@ -16690,8 +17041,9 @@ class VulkanSPIRVCodeGen:
                 self.stage_local_function_storage_buffer_access_requirements[key] = (
                     requirements.get(function_name, {})
                 )
+                self.stage_local_inline_storage_buffer_functions.setdefault(key, [])
                 if self.function_has_storage_buffer_parameters(function_node):
-                    self.stage_local_inline_storage_buffer_functions[key] = (
+                    self.stage_local_inline_storage_buffer_functions[key].append(
                         function_node
                     )
 
@@ -16778,15 +17130,24 @@ class VulkanSPIRVCodeGen:
         return True
 
     def validate_function_storage_buffer_access_arguments(
-        self, func_name, args
+        self, function_node, args
     ) -> bool:
-        callee_requirements = self.resolve_function_storage_buffer_access_requirements(
-            func_name
+        func_name = getattr(function_node, "name", "unknown")
+        callee_requirements = (
+            self.function_storage_buffer_access_requirements_by_id.get(
+                id(function_node), {}
+            )
         )
         if not callee_requirements:
             return True
 
-        param_names = self.resolve_function_parameter_names(func_name)
+        param_names = self.function_parameter_names_by_id.get(
+            id(function_node),
+            [
+                getattr(param, "name", None)
+                for param in self.function_parameters(function_node)
+            ],
+        )
         for index, param_name in enumerate(param_names):
             required_access = callee_requirements.get(param_name)
             if required_access is None or index >= len(args):
@@ -16809,12 +17170,14 @@ class VulkanSPIRVCodeGen:
         return True
 
     def collect_inline_storage_buffer_functions(self, ast):
-        return {
-            func.name: func
-            for func in self.collect_ast_functions(ast)
-            if getattr(func, "name", None)
-            and self.function_has_storage_buffer_parameters(func)
-        }
+        functions = {}
+        for func in self.collect_ast_functions(ast):
+            if not getattr(func, "name", None):
+                continue
+            if not self.function_has_storage_buffer_parameters(func):
+                continue
+            functions.setdefault(func.name, []).append(func)
+        return functions
 
     def default_value_for_function(self, function_node) -> Optional[SpirvId]:
         return_type = self.map_crossgl_type(function_node.return_type)
@@ -16825,7 +17188,7 @@ class VulkanSPIRVCodeGen:
     def inline_storage_buffer_function_call(self, function_node, call_args):
         func_name = getattr(function_node, "name", "unknown")
         if not self.validate_function_storage_buffer_access_arguments(
-            func_name, call_args
+            function_node, call_args
         ):
             return self.default_value_for_function(function_node)
 
@@ -16833,13 +17196,11 @@ class VulkanSPIRVCodeGen:
             function_node, "parameters", getattr(function_node, "params", [])
         )
         if len(call_args) > len(parameters):
-            raise UnsupportedSPIRVFeatureError(
-                "storage-buffer-function-overload",
-                "SPIR-V storage-buffer function inlining resolved call "
-                f"'{func_name}' to a signature with {len(parameters)} parameters, "
-                f"but the call supplies {len(call_args)} arguments; overloaded "
-                "storage-buffer helper calls are not supported",
-                missing_capabilities=("spirv.storage_buffer_function_overload",),
+            raise self.storage_buffer_overload_diagnostic(
+                func_name,
+                call_args,
+                [function_node],
+                "selected candidate has too few parameters",
             )
         if len(call_args) < len(parameters):
             self.emit(
@@ -16868,6 +17229,13 @@ class VulkanSPIRVCodeGen:
         previous_locals = self.local_variables.copy()
         previous_precise_locals = set(self.precise_local_variables)
         previous_return_type = self.current_return_type
+        previous_generic_type_substitutions = self.current_generic_type_substitutions
+        generic_type_substitutions = self.generic_storage_function_type_bindings(
+            function_node, call_args
+        )
+        if generic_type_substitutions is None:
+            generic_type_substitutions = {}
+        self.current_generic_type_substitutions = generic_type_substitutions
         self.current_return_type = self.map_crossgl_type(function_node.return_type)
         self.inline_storage_buffer_call_stack.append((function_key, func_name))
 
@@ -16923,6 +17291,9 @@ class VulkanSPIRVCodeGen:
             self.local_variables = previous_locals
             self.precise_local_variables = previous_precise_locals
             self.current_return_type = previous_return_type
+            self.current_generic_type_substitutions = (
+                previous_generic_type_substitutions
+            )
 
     def inline_function_body(self, function_node) -> Optional[SpirvId]:
         body = getattr(function_node, "body", [])
@@ -21003,7 +21374,7 @@ class VulkanSPIRVCodeGen:
                 )
 
             inline_storage_buffer_function = (
-                self.resolve_inline_storage_buffer_function(callee_name)
+                self.resolve_inline_storage_buffer_function(callee_name, expr.args)
             )
             if inline_storage_buffer_function is not None:
                 return self.inline_storage_buffer_function_call(
@@ -22575,8 +22946,46 @@ class VulkanSPIRVCodeGen:
         return ordered
 
     def reject_unsupported_generic_functions(self, ast_node):
-        """Reject generic functions before emitting non-specialized SPIR-V."""
-        reject_generic_functions_for_target(ast_node, "SPIR-V")
+        """Reject generic functions that SPIR-V would need to emit."""
+        called_function_names = set()
+        functions = self.collect_ast_functions(ast_node)
+        for function_node in functions:
+            if generic_function_parameters(function_node):
+                continue
+            called_function_names.update(
+                self.function_call_name(node)
+                for node in self.walk_ast_nodes(getattr(function_node, "body", None))
+                if isinstance(node, FunctionCallNode) and self.function_call_name(node)
+            )
+        top_level_functions = {
+            id(func) for func in getattr(ast_node, "functions", []) or []
+        }
+        for func in functions:
+            generic_params = generic_function_parameters(func)
+            if not generic_params:
+                continue
+            if id(func) in top_level_functions and (
+                func.name not in called_function_names
+                or self.has_concrete_function_overload(func, functions)
+                or self.function_has_storage_buffer_parameters(func)
+            ):
+                continue
+            suffix = f" ({', '.join(generic_params)})"
+            raise ValueError(
+                f"SPIR-V codegen does not support generic functions{suffix}; "
+                "specialize the function before SPIR-V generation"
+            )
+
+    def has_concrete_function_overload(self, function_node, functions):
+        function_name = getattr(function_node, "name", None)
+        if not function_name:
+            return False
+        return any(
+            other is not function_node
+            and getattr(other, "name", None) == function_name
+            and not generic_function_parameters(other)
+            for other in functions
+        )
 
     def generate(self, ast):
         """Generate SPIR-V code from a CrossGL AST."""
@@ -22663,6 +23072,9 @@ class VulkanSPIRVCodeGen:
             if isinstance(constant, ConstantNode):
                 self.process_named_constant_declaration(constant)
 
+        all_functions = self.collect_ast_functions(ast)
+        self.function_nodes_by_name = self.collect_functions_by_name(all_functions)
+
         self.function_resource_array_type_hints = (
             self.collect_resource_array_parameter_type_hints(ast)
         )
@@ -22679,7 +23091,6 @@ class VulkanSPIRVCodeGen:
             self.collect_inline_storage_buffer_functions(ast)
         )
         self.function_execution_models = self.collect_function_execution_models(ast)
-        all_functions = self.collect_ast_functions(ast)
         self.spirv_skipped_function_parameter_indices = (
             self.collect_unused_array_parameter_indices(all_functions)
         )
@@ -22741,7 +23152,7 @@ class VulkanSPIRVCodeGen:
                     break
 
         for func in self.order_functions_by_dependencies(helper_functions):
-            if func.name in self.inline_storage_buffer_functions:
+            if self.function_has_storage_buffer_parameters(func):
                 continue
             self.process_function_node(func)
 
@@ -22773,7 +23184,7 @@ class VulkanSPIRVCodeGen:
                 ]
                 for func in self.order_functions_by_dependencies(local_functions):
                     if id(func) not in processed_local_functions:
-                        if func.name in self.inline_storage_buffer_functions:
+                        if self.function_has_storage_buffer_parameters(func):
                             processed_local_functions.add(id(func))
                             continue
                         self.process_function_node(func, stage=stage)

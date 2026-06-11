@@ -3,12 +3,13 @@ name: MLX Project Porting
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   MLX_COMMIT: "968d264f2903d578e699c4452a4dbf48633921aa"
-  MLX_OPENGL_TEMPLATE_TYPES_ISSUE: "https://github.com/CrossGL/crosstl/issues/888"
-  MLX_OPENGL_SIMD_INTRINSICS_ISSUE: "https://github.com/CrossGL/crosstl/issues/889"
-  MLX_DIRECTX_STEEL_SOURCE_TYPES_ISSUE: "https://github.com/CrossGL/crosstl/issues/915"
-  MLX_VULKAN_SORT_OVERLOADS_ISSUE: "https://github.com/CrossGL/crosstl/issues/916"
-  PROJECT_RUNTIME_MANIFEST_ISSUE: "https://github.com/CrossGL/crosstl/issues/894"
-  PROJECT_RUNTIME_VERIFICATION_ISSUE: "https://github.com/CrossGL/crosstl/issues/895"
+  MLX_OPENGL_TEMPLATE_SPECIALIZATION_ISSUE: "https://github.com/CrossGL/crosstl/issues/939"
+  MLX_SPIRV_GENERIC_HELPERS_ISSUE: "https://github.com/CrossGL/crosstl/issues/940"
+  MLX_METAL_NUMERIC_TEMPLATES_ISSUE: "https://github.com/CrossGL/crosstl/issues/941"
+  MLX_DIRECTX_SOURCE_TYPE_METADATA_ISSUE: "https://github.com/CrossGL/crosstl/issues/943"
+  MLX_SPIRV_STORAGE_BUFFER_OVERLOADS_ISSUE: "https://github.com/CrossGL/crosstl/issues/944"
+  MLX_SPIRV_BOOL_FUNCTION_CONSTANTS_ISSUE: "https://github.com/CrossGL/crosstl/issues/945"
+  PROJECT_RUNTIME_ADAPTERS_ISSUE: "https://github.com/CrossGL/crosstl/issues/946"
 
 on:
   push:

@@ -1642,7 +1642,15 @@ class MetalToCrossGLConverter:
             suffix = f" {fn_semantic}" if fn_semantic else ""
             function_name = self.sanitize_identifier(self.function_output_name(func))
             return_type = self.map_function_return_type(func.return_type)
-            code += f"{return_type} {function_name}({params}){suffix} {{\n"
+            generic_prefix = (
+                ""
+                if getattr(func, "qualifier", None)
+                else self.format_generic_prefix(func)
+            )
+            code += (
+                f"{generic_prefix}{return_type} {function_name}({params})"
+                f"{suffix} {{\n"
+            )
             code += self.generate_function_body(func.body, indent=indent + 1)
             code += "    }\n\n"
         finally:

@@ -29,12 +29,13 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/unary.metal",
 )
 EXPECTED_METAL_KERNEL_COUNT = 40
-ISSUE_OPENGL_TEMPLATE_TYPES = "https://github.com/CrossGL/crosstl/issues/888"
-ISSUE_OPENGL_SIMD_INTRINSICS = "https://github.com/CrossGL/crosstl/issues/889"
-ISSUE_DIRECTX_STEEL_SOURCE_TYPES = "https://github.com/CrossGL/crosstl/issues/915"
-ISSUE_VULKAN_SORT_OVERLOADS = "https://github.com/CrossGL/crosstl/issues/916"
-ISSUE_RUNTIME_MANIFEST = "https://github.com/CrossGL/crosstl/issues/894"
-ISSUE_RUNTIME_VERIFICATION = "https://github.com/CrossGL/crosstl/issues/895"
+ISSUE_OPENGL_TEMPLATE_SPECIALIZATION = "https://github.com/CrossGL/crosstl/issues/939"
+ISSUE_SPIRV_GENERIC_HELPERS = "https://github.com/CrossGL/crosstl/issues/940"
+ISSUE_METAL_NUMERIC_TEMPLATES = "https://github.com/CrossGL/crosstl/issues/941"
+ISSUE_DIRECTX_SOURCE_TYPE_METADATA = "https://github.com/CrossGL/crosstl/issues/943"
+ISSUE_SPIRV_STORAGE_BUFFER_OVERLOADS = "https://github.com/CrossGL/crosstl/issues/944"
+ISSUE_SPIRV_BOOL_FUNCTION_CONSTANTS = "https://github.com/CrossGL/crosstl/issues/945"
+ISSUE_RUNTIME_ADAPTERS = "https://github.com/CrossGL/crosstl/issues/946"
 
 
 class PortingCheckError(RuntimeError):
@@ -492,12 +493,13 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "runtimeIntegrationIncluded": False,
         },
         "trackedIssues": [
-            ISSUE_OPENGL_TEMPLATE_TYPES,
-            ISSUE_OPENGL_SIMD_INTRINSICS,
-            ISSUE_DIRECTX_STEEL_SOURCE_TYPES,
-            ISSUE_VULKAN_SORT_OVERLOADS,
-            ISSUE_RUNTIME_MANIFEST,
-            ISSUE_RUNTIME_VERIFICATION,
+            ISSUE_OPENGL_TEMPLATE_SPECIALIZATION,
+            ISSUE_SPIRV_GENERIC_HELPERS,
+            ISSUE_METAL_NUMERIC_TEMPLATES,
+            ISSUE_DIRECTX_SOURCE_TYPE_METADATA,
+            ISSUE_SPIRV_STORAGE_BUFFER_OVERLOADS,
+            ISSUE_SPIRV_BOOL_FUNCTION_CONSTANTS,
+            ISSUE_RUNTIME_ADAPTERS,
         ],
         "checks": checks,
         "status": "passed",

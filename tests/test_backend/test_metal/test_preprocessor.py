@@ -128,6 +128,54 @@ def test_preprocessor_materializes_mlx_decltype_instantiation_entries():
     assert "out[gid] = float(gid);" in output
 
 
+def test_preprocessor_materializes_decltype_instantiation_with_joined_host_name():
+    code = """
+    template <typename T>
+    [[kernel]] void arange(
+        device T* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        out[gid] = T(gid);
+    }
+
+    template [[host_name("arange" "uint32")]] [[kernel]]
+    decltype(arange<uint>) arange<uint>;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "decltype(arange<uint>)" not in output
+    assert '[[host_name("arangeuint32")]]' in output
+    assert "void arangeuint32(" in output
+    assert "device uint* out" in output
+    assert "out[gid] = uint(gid);" in output
+
+
+def test_preprocessor_leaves_large_decltype_instantiation_families_bounded():
+    declarations = "\n".join(
+        f'template [[host_name("kernel" "{index}")]] [[kernel]] '
+        f"decltype(arange<uint>) arange<uint>;"
+        for index in range(4)
+    )
+    code = f"""
+    template <typename T>
+    [[kernel]] void arange(
+        device T* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {{
+        out[gid] = T(gid);
+    }}
+
+    {declarations}
+    """
+
+    output = MetalPreprocessor(max_materialized_template_instantiations=3).preprocess(
+        code
+    )
+
+    assert "decltype(arange<uint>)" in output
+    assert "void kernel0(" not in output
+    assert "template <typename T>" in output
+
+
 def test_preprocessor_preserves_incomplete_multiline_function_macro_invocation():
     code = """
     #define DECLARE_TYPED(name, type) type name;
