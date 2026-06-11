@@ -1255,6 +1255,68 @@ def test_project_runtime_host_integration_handoff_inspection_is_first_class_supp
         ) in backend_support["evidence"]
 
 
+def test_project_runtime_host_integration_execution_plan_is_first_class_support_feature():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.runtime_host_integration_execution_plan"]
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Runtime host integration execution plan"
+    assert set(feature["support"]) == {backend["id"] for backend in matrix["backends"]}
+    for backend_support in feature["support"].values():
+        assert backend_support["status"] == "supported"
+        assert "crosstl-runtime-host-integration-execution-plan" in (
+            backend_support["notes"]
+        )
+        assert "plan-host-integration-execution" in backend_support["notes"]
+        assert "host integration handoff manifest" in backend_support["notes"]
+        assert "runs handoff inspection before planning" in backend_support["notes"]
+        assert "host-root readiness" in backend_support["notes"]
+        assert "stable phase-ordered execution steps" in backend_support["notes"]
+        assert "prepare-tools" in backend_support["notes"]
+        assert "consume-loader" in backend_support["notes"]
+        assert "load-artifact" in backend_support["notes"]
+        assert "satisfy-host-responsibility" in backend_support["notes"]
+        assert "resolve-blockers" in backend_support["notes"]
+        assert "requiredTools" in backend_support["notes"]
+        assert "hostResponsibilities" in backend_support["notes"]
+        assert "blocked-step records" in backend_support["notes"]
+        assert "failed handoff inspection" in backend_support["notes"]
+        assert "host-root diagnostics" in backend_support["notes"]
+        assert "does not rewrite host application code" in backend_support["notes"]
+        assert "execute device code" in backend_support["notes"]
+        assert "install target SDKs" in backend_support["notes"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_plan_runtime_host_integration_execution_reports_ready_steps"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_plan_runtime_host_integration_execution_carries_blocked_steps"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_plan_runtime_host_integration_execution_rejects_failed_"
+            "handoff_inspection"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_plan_runtime_host_integration_execution_rejects_missing_host_root"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_plan_host_integration_execution_text_outputs_steps"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_plan_host_integration_execution_json_writes_output"
+        ) in backend_support["evidence"]
+
+
 def test_project_include_resolution_documents_status_reporting():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(

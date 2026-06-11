@@ -255,8 +255,8 @@ class RuntimeAdapterContract:
     contract_id: str | None = None
     entry_points: tuple[RuntimeEntryPoint, ...] = field(default_factory=tuple)
     resource_bindings: tuple[RuntimeResourceBinding, ...] = field(default_factory=tuple)
-    specialization_constants: tuple[RuntimeSpecializationConstant, ...] = (
-        field(default_factory=tuple)
+    specialization_constants: tuple[RuntimeSpecializationConstant, ...] = field(
+        default_factory=tuple
     )
     dispatch: RuntimeDispatchGeometry | None = None
     validation_hooks: tuple[RuntimeValidationHook, ...] = field(default_factory=tuple)
@@ -518,11 +518,9 @@ class RuntimeAdapter(Protocol):
 
     def is_available(
         self, request: RuntimeExecutionRequest
-    ) -> RuntimeExecutorAvailability:
-        ...
+    ) -> RuntimeExecutorAvailability: ...
 
-    def run(self, request: RuntimeExecutionRequest) -> RuntimeExecutorResult:
-        ...
+    def run(self, request: RuntimeExecutionRequest) -> RuntimeExecutorResult: ...
 
 
 class RuntimeExecutor:
@@ -550,9 +548,7 @@ class RuntimeExecutionAdapter(RuntimeExecutor):
     def run(self, request: RuntimeExecutionRequest) -> RuntimeExecutorResult:
         plan = request.execution_plan or prepare_runtime_execution(request)
         if _runtime_diagnostics_have_errors(plan.diagnostics):
-            raise RuntimeExecutionError(
-                "Runtime execution plan contains setup errors."
-            )
+            raise RuntimeExecutionError("Runtime execution plan contains setup errors.")
 
         state = RuntimeExecutionState(request=request, plan=plan)
         state.compiled_artifact = self.compile_artifact(state)
@@ -567,9 +563,7 @@ class RuntimeExecutionAdapter(RuntimeExecutor):
             outputs=outputs,
             details={
                 "runtimeExecution": plan.to_json(),
-                "adapterSteps": [
-                    step.to_json() for step in state.adapter_steps
-                ],
+                "adapterSteps": [step.to_json() for step in state.adapter_steps],
                 "adapterDiagnostics": [
                     dict(diagnostic) for diagnostic in state.diagnostics
                 ],
@@ -601,9 +595,7 @@ class RuntimeExecutionAdapter(RuntimeExecutor):
             binding = resource.binding
             key = binding.name or binding.binding_id or str(binding.binding)
             values[key] = (
-                None
-                if resource.source == "expectedOutput"
-                else resource.value.values
+                None if resource.source == "expectedOutput" else resource.value.values
             )
         state.record_step(
             "bind",
@@ -1012,7 +1004,9 @@ def _parse_runtime_entry_point(value: Any, *, field_name: str) -> RuntimeEntryPo
     if execution_config is None:
         execution_config = {}
     if not isinstance(execution_config, Mapping):
-        raise RuntimeVerificationError(f"{field_name}.executionConfig must be an object.")
+        raise RuntimeVerificationError(
+            f"{field_name}.executionConfig must be an object."
+        )
     return RuntimeEntryPoint(
         name=_required_string(value.get("name"), field_name=f"{field_name}.name"),
         stage=_optional_string(value.get("stage"), field_name=f"{field_name}.stage"),
@@ -1881,7 +1875,9 @@ def _runtime_dispatch_geometry_from_artifact(
     dispatch = artifact.get("dispatch")
     if not isinstance(dispatch, Mapping):
         return None
-    for index, workgroup in enumerate(_runtime_record_sequence(dispatch.get("workgroups"))):
+    for index, workgroup in enumerate(
+        _runtime_record_sequence(dispatch.get("workgroups"))
+    ):
         if not isinstance(workgroup, Mapping):
             continue
         metadata = {}
@@ -2056,7 +2052,9 @@ def _runtime_execution_step_from_record(
     )
     command = record.get("command")
     command_items: tuple[str, ...] = ()
-    if isinstance(command, Sequence) and not isinstance(command, (str, bytes, bytearray)):
+    if isinstance(command, Sequence) and not isinstance(
+        command, (str, bytes, bytearray)
+    ):
         command_items = tuple(str(item) for item in command)
     elif command is not None:
         command_items = (str(command),)
@@ -2066,10 +2064,7 @@ def _runtime_execution_step_from_record(
         if key not in {"action", "kind", "tool", "command", "status", "diagnostics"}
     }
     details.setdefault("index", index)
-    status = (
-        _optional_runtime_step_text(record.get("status"))
-        or "planned"
-    )
+    status = _optional_runtime_step_text(record.get("status")) or "planned"
     diagnostics = tuple(
         dict(diagnostic)
         for diagnostic in _runtime_record_sequence(record.get("diagnostics"))

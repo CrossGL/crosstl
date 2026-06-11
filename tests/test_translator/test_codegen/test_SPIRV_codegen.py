@@ -318,9 +318,7 @@ class TestVulkanSPIRVCodeGen:
         self.assert_uint_int_min_literal_lowering(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_metal_bool_function_constant_lowers_to_spirv_spec_constant(
-        self, tmp_path
-    ):
+    def test_metal_bool_function_constant_lowers_to_spirv_spec_constant(self, tmp_path):
         source_path = tmp_path / "conv.metal"
         source_path.write_text(
             """
@@ -344,9 +342,7 @@ class TestVulkanSPIRVCodeGen:
         assert bool_type is not None
         do_flip = spirv_named_id(spv_code, "do_flip")
 
-        assert (
-            f"{do_flip} = OpSpecConstantFalse {bool_type.group(1)}" in spv_code
-        )
+        assert f"{do_flip} = OpSpecConstantFalse {bool_type.group(1)}" in spv_code
         assert f"OpDecorate {do_flip} SpecId 200" in spv_code
         assert not re.search(rf"{re.escape(do_flip)} = OpVariable\b", spv_code)
         assert not re.search(
@@ -446,9 +442,7 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_compute_bool_vector_input_lowers_to_uint_vector_interface(
-        self, tmp_path
-    ):
+    def test_compute_bool_vector_input_lowers_to_uint_vector_interface(self, tmp_path):
         source_code = """
         shader BoolVectorInputLowering {
             compute {

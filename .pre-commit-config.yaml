@@ -5,6 +5,7 @@ fail_fast: false
 
 ci:
   skip:
+    - black
     - crosstl-support-automation-tests
     - crosstl-ci-workflow-tests
     - crosstl-pr-issue-link-tests

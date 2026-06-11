@@ -390,15 +390,11 @@ def test_wgsl_codegen_lowers_uniform_blocks_to_uniform_struct_bindings():
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
     assert (
-        "struct Camera {\n"
-        "    viewProj: mat4x4<f32>,\n"
-        "    tint: vec4<f32>,\n"
-        "};"
+        "struct Camera {\n" "    viewProj: mat4x4<f32>,\n" "    tint: vec4<f32>,\n" "};"
     ) in generated
     assert "@group(2) @binding(3)\nvar<uniform> _Camera: Camera;" in generated
     assert (
-        "var projected: vec4<f32> = "
-        "(_Camera.viewProj * vec4<f32>(position, 1.0));"
+        "var projected: vec4<f32> = " "(_Camera.viewProj * vec4<f32>(position, 1.0));"
     ) in generated
     assert "return (projected + _Camera.tint);" in generated
 
