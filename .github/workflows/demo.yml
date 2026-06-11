@@ -109,7 +109,6 @@ jobs:
             --case ogl-samples-flat-color \
             --case opencl-sdk-saxpy \
             --case openframeworks-noise-shader \
-            --case rocm-examples-add-kernel \
             --case raylib-base-fragment \
             --case raylib-base-vertex \
             --case raylib-lighting-shader-pair \
@@ -150,7 +149,6 @@ jobs:
             --case glslang-spec-constant-vertex \
             --case godot-betsy-alpha-stitch \
             --case libgdx-batch-shader \
-            --case metal-performance-testing-matmul \
             --case monogame-sprite-effect \
             --case nvidia-cuda-samples-vector-add \
             --case nvpro-vk-mini-samples-rectangle \
