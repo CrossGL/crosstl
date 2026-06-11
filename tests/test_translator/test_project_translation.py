@@ -14,6 +14,8 @@ import pytest
 import crosstl._crosstl as crosstl_cli
 import crosstl.project as project_api
 import crosstl.project.pipeline as project_pipeline
+from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
+from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
 from crosstl.backend.Metal.MetalLexer import MetalLexer
@@ -13829,6 +13831,153 @@ def test_translate_project_rust_option_helpers_lower_to_opengl_compute(tmp_path)
     assert "== None" not in opengl_output
     assert "auto value" not in opengl_output
     assert_compute_glsl_validates_if_available(opengl_output, tmp_path)
+
+
+def test_translate_project_rust_gpu_storage_buffer_declares_opengl_ssbo(tmp_path):
+    repo = tmp_path / "repo"
+    source_dir = repo / "src"
+    source_dir.mkdir(parents=True)
+    (source_dir / "lib.rs").write_text(
+        textwrap.dedent("""
+            use glam::UVec3;
+            use spirv_std::{glam, spirv};
+
+            pub fn collatz(mut n: u32) -> Option<u32> {
+                let mut i = 0;
+                if n == 0 {
+                    return None;
+                }
+                while n != 1 {
+                    n = if n.is_multiple_of(2) {
+                        n / 2
+                    } else {
+                        if n >= 0x5555_5555 {
+                            return None;
+                        }
+                        3 * n + 1
+                    };
+                    i += 1;
+                }
+                Some(i)
+            }
+
+            #[spirv(compute(threads(64)))]
+            pub fn main_cs(
+                #[spirv(global_invocation_id)] id: UVec3,
+                #[spirv(storage_buffer, descriptor_set = 0, binding = 0)]
+                prime_indices: &mut [u32],
+            ) {
+                let index = id.x as usize;
+                prime_indices[index] =
+                    collatz(prime_indices[index]).unwrap_or(u32::MAX);
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["src"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    opengl_output = (repo / "translated" / "opengl" / "src" / "lib.glsl").read_text(
+        encoding="utf-8"
+    )
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert (
+        "layout(std430, binding = 0) buffer prime_indicesBuffer "
+        "{ uint prime_indices[]; };" in opengl_output
+    )
+    assert "void main()" in opengl_output
+    assert (
+        "prime_indices[index] = "
+        "collatz_unwrap_or(prime_indices[index], 4294967295u);"
+    ) in opengl_output
+    assert "prime_indices[" in opengl_output
+    assert "uint prime_indices[]" not in opengl_output.split("void main()", 1)[1]
+    assert_compute_glsl_validates_if_available(opengl_output, tmp_path)
+
+
+def test_translate_project_rust_gpu_storage_buffer_declares_directx_resource(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    source_dir = repo / "src"
+    source_dir.mkdir(parents=True)
+    (source_dir / "lib.rs").write_text(
+        textwrap.dedent("""
+            use glam::UVec3;
+            use spirv_std::{glam, spirv};
+
+            pub fn collatz(mut n: u32) -> Option<u32> {
+                let mut i = 0;
+                if n == 0 {
+                    return None;
+                }
+                while n != 1 {
+                    n = if n.is_multiple_of(2) {
+                        n / 2
+                    } else {
+                        if n >= 0x5555_5555 {
+                            return None;
+                        }
+                        3 * n + 1
+                    };
+                    i += 1;
+                }
+                Some(i)
+            }
+
+            #[spirv(compute(threads(64)))]
+            pub fn main_cs(
+                #[spirv(global_invocation_id)] id: UVec3,
+                #[spirv(storage_buffer, descriptor_set = 0, binding = 0)]
+                prime_indices: &mut [u32],
+            ) {
+                let index = id.x as usize;
+                prime_indices[index] =
+                    collatz(prime_indices[index]).unwrap_or(u32::MAX);
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["src"]
+            targets = ["directx"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    directx_output = (repo / "translated" / "directx" / "src" / "lib.hlsl").read_text(
+        encoding="utf-8"
+    )
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    assert "RWStructuredBuffer<uint> prime_indices : register(u0);" in directx_output
+    assert "void CSMain(uint3 id : SV_DispatchThreadID)" in directx_output
+    assert (
+        "prime_indices[index] = "
+        "collatz_unwrap_or(prime_indices[index], 4294967295u);"
+    ) in directx_output
+    assert "uint prime_indices[]" not in directx_output
+    assert re.search(r"void CSMain\([^)]*prime_indices", directx_output) is None
+    HLSLParser(HLSLLexer(directx_output).tokenize()).parse()
+    assert_directx_compute_validates_if_available(directx_output, tmp_path)
 
 
 def test_translate_project_rust_option_helpers_lower_to_directx_compute(tmp_path):
@@ -37768,6 +37917,65 @@ def test_translate_project_hip_pointer_parameters_lower_to_directx_resources(
     assert_directx_compute_validates_if_available(output, tmp_path)
 
 
+def test_translate_project_hip_bridge_cgl_storage_arrays_lower_to_directx_resources(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.cgl").write_text(
+        textwrap.dedent("""
+            // HIP to CrossGL conversion
+            // Kernel: AddKernel
+            @compute
+            @stage_entry
+            @workgroup_size(1, 1, 1)
+            fn AddKernel(
+                @group(0) @binding(0) var<storage, read_write> a: array<f32>,
+                @group(0) @binding(1) var<storage, read> b: array<f32>
+            ) {
+                var global_idx: i32 = (
+                    gl_LocalInvocationID.x + (gl_WorkGroupID.x * gl_WorkGroupSize.x)
+                );
+                a[global_idx] += b[global_idx];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        validate=True,
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+    assert payload["diagnosticCounts"]["error"] == 0
+
+    artifact = payload["artifacts"][0]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+
+    assert "RWStructuredBuffer<float> a : register(u0);" in output
+    assert "StructuredBuffer<float> b : register(t1);" in output
+    assert (
+        "void CSMain(uint3 groupThreadID : SV_GroupThreadID, "
+        "uint3 groupID : SV_GroupID)"
+    ) in output
+    assert "a[global_idx] += b[global_idx];" in output
+    assert ": group" not in output
+    assert "float a[]" not in output
+    assert "float b[]" not in output
+    assert re.search(r"void CSMain\([^)]*StructuredBuffer", output) is None
+    assert re.search(r"void CSMain\([^)]*float\s+[ab]\[\]", output) is None
+    assert "gl_LocalInvocationID" not in output
+    assert "gl_WorkGroupID" not in output
+    assert "gl_WorkGroupSize" not in output
+
+    assert_directx_compute_validates_if_available(output, tmp_path)
+
+
 def test_translate_project_opencl_directx_allocates_generated_parameter_bindings(
     tmp_path,
 ):
@@ -39091,6 +39299,79 @@ def test_translate_project_metal_call_site_template_limit_blocks_opengl_material
         "limit 1 from project.source_options.metal.max_template_specializations"
         in diagnostic["message"]
     )
+
+
+def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_materialization(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "out"
+
+            [project.source_options.metal]
+            max_template_specializations = 4
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "bounded_source_instantiations.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            T adjust_value(T value) {
+                return value + T(1);
+            }
+
+            template <typename T>
+            [[kernel]] void launch(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = adjust_value(T(gid));
+            }
+
+            instantiate_kernel("launch_f32_a", launch, float)
+            instantiate_kernel("launch_f32_b", launch, float)
+            instantiate_kernel("launch_f32_c", launch, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert "templateMaterialization" not in artifact
+    assert not (repo / artifact["path"]).exists()
+    assert "work limit exceeded before GLSL codegen" in artifact["error"]
+    assert "6 source-instantiation/template work items requested" in artifact["error"]
+    assert (
+        "limit 4 from project.source_options.metal.max_template_specializations"
+        in artifact["error"]
+    )
+    assert "First source declaration: bounded_source_instantiations.metal:9:1" in (
+        artifact["error"]
+    )
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-template-specialization": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.metal-template-specialization"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert diagnostic["location"]["file"] == "bounded_source_instantiations.metal"
+    assert diagnostic["location"]["line"] == 9
+    assert diagnostic["location"]["column"] == 1
+    assert "work limit exceeded before GLSL codegen" in diagnostic["message"]
 
 
 def test_translate_project_metal_variant_template_materializes_for_opengl(
@@ -41328,6 +41609,41 @@ def test_translate_project_opencl_to_opengl_casts_signed_global_id_local(
     assert "int gid = int(gl_GlobalInvocationID.x);" in output
     assert "uint gid = gl_GlobalInvocationID.x;" not in output
     GLSLParser(GLSLLexer(output).tokenize(), "compute").parse()
+
+
+def test_translate_project_opencl_saxpy_fma_to_directx_lowers_to_mad(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "saxpy.cl").write_text(
+        textwrap.dedent("""
+            kernel void saxpy(global float *dst,
+                              global const float *x,
+                              const float a) {
+                const uint gid = get_global_id(0);
+                dst[gid] = fma(a, x[gid], dst[gid]);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["diagnosticCounts"]["error"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "dst[gid] = mad(a, x[gid], dst[gid]);" in output
+    assert "fma(" not in output
+    HLSLParser(HLSLLexer(output).tokenize()).parse()
 
 
 def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(

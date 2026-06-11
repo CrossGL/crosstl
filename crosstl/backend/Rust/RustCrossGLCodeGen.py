@@ -1098,7 +1098,11 @@ class RustToCrossGLConverter:
             qualifier = self.get_parameter_qualifier_from_attributes(
                 getattr(param, "attributes", [])
             )
-            param_type = self.normalize_parameter_type(param.vtype, struct_name)
+            param_type = self.normalize_parameter_type(
+                param.vtype,
+                struct_name,
+                attributes=getattr(param, "attributes", []),
+            )
             if self.is_graphics_mutable_output_parameter(
                 param, shader_type, qualifier, semantic
             ):
@@ -1473,7 +1477,7 @@ class RustToCrossGLConverter:
             return struct_name
         return type_name
 
-    def normalize_parameter_type(self, type_name, struct_name=None):
+    def normalize_parameter_type(self, type_name, struct_name=None, attributes=None):
         typed_buffer_type = self.map_typed_buffer_parameter_type(type_name)
         if typed_buffer_type is not None:
             return typed_buffer_type
@@ -1482,6 +1486,12 @@ class RustToCrossGLConverter:
         )
         if byte_addressable_type is not None:
             return byte_addressable_type
+        storage_buffer_type = self.map_rust_gpu_storage_buffer_parameter_type(
+            type_name,
+            attributes,
+        )
+        if storage_buffer_type is not None:
+            return storage_buffer_type
         tuple_type = self.map_tuple_type(type_name)
         if tuple_type is not None:
             return tuple_type
@@ -11114,6 +11124,60 @@ class RustToCrossGLConverter:
                 rust_type[1:].strip(),
                 writable=False,
             )
+        return None
+
+    def map_rust_gpu_storage_buffer_parameter_type(self, rust_type, attributes):
+        if not isinstance(rust_type, str):
+            return None
+        if not self.has_rust_gpu_storage_buffer_attribute(attributes):
+            return None
+
+        rust_type = self.strip_lifetime_type_syntax(rust_type.strip())
+        writable = False
+        if rust_type.startswith("&mut "):
+            writable = True
+            rust_type = rust_type[5:].strip()
+        elif rust_type.startswith("&"):
+            rust_type = rust_type[1:].strip()
+        else:
+            return None
+
+        element_type = self.rust_gpu_storage_buffer_element_type(rust_type)
+        if element_type is None:
+            return None
+
+        buffer_kind = "RWStructuredBuffer" if writable else "StructuredBuffer"
+        return self.format_typed_buffer_resource_type(element_type, buffer_kind)
+
+    def has_rust_gpu_storage_buffer_attribute(self, attributes):
+        for attr in self.effective_attributes(attributes):
+            if not isinstance(attr, AttributeNode) or attr.name != "spirv":
+                continue
+            if "storage_buffer" in getattr(attr, "args", []):
+                return True
+        return False
+
+    def rust_gpu_storage_buffer_element_type(self, rust_type):
+        stripped = rust_type.strip()
+        if stripped.endswith("[]"):
+            element_type = stripped[:-2].strip()
+            return element_type or None
+        if "[" in stripped and stripped.endswith("]"):
+            base_type, _array_size = stripped.rsplit("[", 1)
+            if _array_size[:-1].strip():
+                return base_type.strip() or None
+        if stripped.startswith("[") and stripped.endswith("]"):
+            body = stripped[1:-1].strip()
+            if ";" in body:
+                body = body.split(";", 1)[0].strip()
+            return body or None
+
+        generic = self.parse_generic_type(stripped)
+        if generic is not None:
+            base_name, args = generic
+            if base_name in {"RuntimeArray", "Slice"} and args:
+                return args[0]
+
         return None
 
     def map_byte_addressable_buffer_type(self, rust_type, writable=False):

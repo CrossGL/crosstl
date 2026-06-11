@@ -11920,6 +11920,58 @@ def _project_template_materialization_for_artifact(
     source_instantiations = preprocessor._find_project_template_instantiations(
         preprocessed
     )
+    if target == "opengl" and source_instantiations:
+        materialization_work_items = len(source_instantiations) * max(
+            1,
+            len(templates),
+        )
+        if materialization_work_items > preprocessor.max_template_specializations:
+            first_instantiation = source_instantiations[0]
+            first_template = template_lookup.get(first_instantiation.function_name)
+            if first_template is not None:
+                location = _source_location_at_offset(
+                    unit,
+                    preprocessed,
+                    int(first_template.span[0]),
+                    max(int(first_template.span[1]) - int(first_template.span[0]), 0),
+                )
+                location_kind = "source declaration"
+            else:
+                location = _source_location_at_offset(
+                    unit,
+                    preprocessed,
+                    int(first_instantiation.span[0]),
+                    max(
+                        int(first_instantiation.span[1])
+                        - int(first_instantiation.span[0]),
+                        0,
+                    ),
+                )
+                location_kind = "source instantiation"
+            requested_signature = (
+                f"{len(source_instantiations)} source instantiations x "
+                f"{len(templates)} templates"
+            )
+            suggested_action = (
+                "raise max_template_specializations for this source pattern "
+                "or OpenGL target, or reduce MLX/source template instantiations"
+            )
+            raise MetalTemplateSpecializationError(
+                "OpenGL Metal template materialization work limit exceeded before "
+                f"GLSL codegen for '{unit.relative_path}'; "
+                f"{materialization_work_items} source-instantiation/template work "
+                f"items requested ({requested_signature}), limit "
+                f"{preprocessor.max_template_specializations} from "
+                f"{preprocessor.template_specialization_limit_source}. "
+                f"First {location_kind}: "
+                f"{location.file}:{location.line}:{location.column}. "
+                f"Suggested action: {suggested_action}.",
+                limit=preprocessor.max_template_specializations,
+                limit_source=preprocessor.template_specialization_limit_source,
+                requested_signature=requested_signature,
+                suggested_action=suggested_action,
+                source_location=location,
+            )
     source_instantiation_contexts: list[_SourceInstantiationTemplateContext] = []
     source_instantiation_materialized_names: dict[tuple[str, tuple[str, ...]], str] = {}
     seen_source_instantiations: set[tuple[str, tuple[str, ...], str]] = set()
