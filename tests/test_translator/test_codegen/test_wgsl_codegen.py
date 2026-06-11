@@ -493,6 +493,171 @@ def test_wgsl_codegen_rejects_unsized_array_members_in_uniform_buffers():
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+def test_wgsl_codegen_lowers_glsl_buffer_blocks_to_storage_struct_bindings():
+    shader = """
+    shader WGSLBufferBlocks {
+        layout(std430, set = 1, binding = 2) readonly buffer InputBlock {
+            float values[];
+        } inputBlock;
+        layout(std430, binding = 3) buffer OutputBlock {
+            float values[];
+        } outputBlock;
+        compute {
+            void main(uint3 gid @ gl_GlobalInvocationID) {
+                outputBlock.values[gid.x] = inputBlock.values[gid.x];
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "struct InputBlock {\n"
+        "    values: array<f32>,\n"
+        "};"
+    ) in generated
+    assert (
+        "struct OutputBlock {\n"
+        "    values: array<f32>,\n"
+        "};"
+    ) in generated
+    assert "@group(1) @binding(2)\nvar<storage, read> inputBlock: InputBlock;" in generated
+    assert (
+        "@group(0) @binding(3)\nvar<storage, read_write> outputBlock: OutputBlock;"
+        in generated
+    )
+    assert "outputBlock.values[gid.x] = inputBlock.values[gid.x];" in generated
+
+
+def test_wgsl_codegen_lowers_layoutless_buffer_blocks_as_std430_storage():
+    shader = """
+    shader WGSLImplicitBufferBlock {
+        struct ParticleBuffer {
+            float positions[];
+        }
+        buffer ParticleBuffer particleBuffer;
+        compute {
+            void main(uint3 gid @ gl_GlobalInvocationID) {
+                particleBuffer.positions[gid.x] = 1.0;
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "struct ParticleBuffer {\n"
+        "    positions: array<f32>,\n"
+        "};"
+    ) in generated
+    assert (
+        "@group(0) @binding(0)\n"
+        "var<storage, read_write> particleBuffer: ParticleBuffer;"
+    ) in generated
+    assert "particleBuffer.positions[gid.x] = 1.0;" in generated
+
+
+def test_wgsl_codegen_rejects_glsl_buffer_block_parameters():
+    shader = """
+    shader WGSLBufferBlockParameters {
+        struct InputBlock {
+            float values[];
+        };
+        float readFirst(InputBlock block @glsl_buffer_block(std430) @readonly) {
+            return block.values[0];
+        }
+        InputBlock inputBlock @glsl_buffer_block(std430) @binding(0) @readonly;
+        InputBlock outputBlock @glsl_buffer_block(std430) @binding(1);
+        compute {
+            void main() {
+                outputBlock.values[0] = readFirst(inputBlock);
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="does not support GLSL buffer block parameters yet",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "expected"),
+    [
+        (
+            """
+            layout(std140, binding = 0) buffer BadBlock {
+                vec4 value;
+            } badBlock;
+            """,
+            "only supports std430 GLSL buffer block layout",
+        ),
+        (
+            """
+            struct BadBlock {
+                float values[];
+            };
+            BadBlock badBlocks[2] @glsl_buffer_block(std430) @binding(0);
+            """,
+            "does not support GLSL buffer block arrays yet",
+        ),
+        (
+            """
+            layout(std430, binding = 0) buffer BadBlock {
+                sampler2D colorTex;
+            } badBlock;
+            """,
+            r"does not support resource member BadBlock\.colorTex",
+        ),
+    ],
+)
+def test_wgsl_codegen_rejects_unsupported_glsl_buffer_block_shapes(
+    declaration, expected
+):
+    shader = f"""
+    shader WGSLUnsupportedBufferBlocks {{
+        {declaration}
+        compute {{
+            void main() {{
+                return;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_writes_to_readonly_glsl_buffer_blocks():
+    shader = """
+    shader WGSLReadonlyBufferBlockWrite {
+        layout(std430, binding = 0) readonly buffer ReadBlock {
+            float values[];
+        } readBlock;
+        compute {
+            void main() {
+                readBlock.values[0] = 1.0;
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"cannot write read-only GLSL buffer block resource readBlock",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_lowers_structured_buffers_to_storage_bindings():
     shader = """
     shader WGSLStructuredBuffers {

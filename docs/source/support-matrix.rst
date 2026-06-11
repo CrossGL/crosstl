@@ -25,7 +25,7 @@ implicitly supported.
    "DirectX / HLSL", "dx11, dx12, d3d11, d3d12", "directx-11, directx-12", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "native", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "1093", "292", "Microsoft Learn HLSL reference; HLSL specification project"
    "OpenGL / GLSL", "", "", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "native", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "1184", "186", "GLSL 4.60 specification; OpenGL registry"
    "WebGL / GLSL ES", "webgl2, essl, glsl-es", "", ".webgl.glsl", "crosstl/translator/codegen/webgl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_webgl_codegen.py", "37", "23", "WebGL 2.0 specification; OpenGL ES Shading Language 3.00 specification"
-   "WebGPU / WGSL", "webgpu", "", ".wgsl", "crosstl/translator/codegen/wgsl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_wgsl_codegen.py", "58", "58", "WGSL specification; WebGPU specification"
+   "WebGPU / WGSL", "webgpu", "", ".wgsl", "crosstl/translator/codegen/wgsl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_wgsl_codegen.py", "63", "63", "WGSL specification; WebGPU specification"
    "Metal", "", "", ".metal", "crosstl/translator/codegen/metal_codegen.py", "native", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "996", "496", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", "", "", ".spvasm", "crosstl/translator/codegen/SPIRV_codegen.py", "native", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "997", "46", "SPIR-V unified grammar; Khronos SPIR-V headers"
    "CUDA", "", "", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "native", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "778", "194", "CUDA C++ programming guide"
@@ -40,7 +40,7 @@ implicitly supported.
    "DirectX / HLSL", "65", "0", "2", "0", "0", "0"
    "OpenGL / GLSL", "65", "0", "2", "0", "0", "0"
    "WebGL / GLSL ES", "36", "0", "22", "9", "0", "0"
-   "WebGPU / WGSL", "39", "1", "20", "7", "0", "0"
+   "WebGPU / WGSL", "40", "0", "20", "7", "0", "0"
    "Metal", "64", "0", "3", "0", "0", "0"
    "Vulkan SPIR-V", "65", "0", "2", "0", "0", "0"
    "CUDA", "60", "0", "7", "0", "0", "0"
@@ -134,7 +134,7 @@ Each category below uses the status codes from the legend.
    "Structured/storage buffers", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Resource arrays", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Texture and sampler object model", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "GLSL buffer block lowering", "Y", "Y", "D", "P", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "GLSL buffer block lowering", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Resource memory qualifiers", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: textures
@@ -216,7 +216,6 @@ implementation work can be scoped accurately.
 .. csv-table:: Actionable backlog rows
    :header: "Backend", "Category", "Feature", "Status", "Current gap", "Next scope", "Notes"
 
-   "WebGPU / WGSL", "resources", "GLSL buffer block lowering", "partial", "textureSize calls lower to WGSL textureDimensions for sampled texture resources with optional mip-level operands. LOD queries, level-count queries, sample-count queries, storage-image queries, multisample resources, and array/cube-array coordinate-specialization edge cases remain deterministic diagnostics or future work.", "", "textureSize calls lower to WGSL textureDimensions for sampled texture resources with optional mip-level operands. LOD queries, level-count queries, sample-count queries, storage-image queries, multisample resources, and array/cube-array coordinate-specialization edge cases remain deterministic diagnostics or future work."
 
 Documentation Sources
 ---------------------
