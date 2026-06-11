@@ -2841,6 +2841,7 @@ def test_scan_report_records_native_webgpu_dawn_runtime_references(tmp_path):
         textwrap.dedent("""
             find_package(Dawn REQUIRED)
             target_link_libraries(app PRIVATE dawn::webgpu_dawn)
+            target_link_libraries(app PRIVATE webgpu_cpp webgpu_glfw)
             """).strip(),
         encoding="utf-8",
     )
@@ -2863,6 +2864,23 @@ def test_scan_report_records_native_webgpu_dawn_runtime_references(tmp_path):
                   wgpuCommandEncoderBeginRenderPass(encoder, nullptr);
               wgpuRenderPassEncoderSetPipeline(pass, pipeline);
               wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
+            }
+
+            void encode_dawn_cpp(
+              wgpu::Device device,
+              wgpu::RenderPipeline pipeline,
+              wgpu::Queue queue
+            ) {
+              wgpu::ShaderSourceWGSL source{};
+              wgpu::ShaderModuleDescriptor moduleDesc{};
+              auto module = device.CreateShaderModule(&moduleDesc);
+              auto encoder = device.CreateCommandEncoder();
+              auto pass = encoder.BeginRenderPass(&renderPassDesc);
+              pass.SetPipeline(pipeline);
+              pass.Draw(3);
+              pass.End();
+              auto commands = encoder.Finish();
+              queue.Submit(1, &commands);
             }
             """).strip(),
         encoding="utf-8",
@@ -2891,22 +2909,24 @@ def test_scan_report_records_native_webgpu_dawn_runtime_references(tmp_path):
 
     payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
 
-    assert payload["migration"]["runtimeReferenceCount"] == 14
-    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 14}
+    assert payload["migration"]["runtimeReferenceCount"] == 26
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 26}
     assert payload["migration"]["runtimeReferencesByKind"] == {
-        "build-system": 5,
-        "runtime-api": 9,
+        "build-system": 7,
+        "runtime-api": 19,
     }
     assert payload["migration"]["runtimeReferencesByPath"] == {
-        "CMakeLists.txt": 2,
+        "CMakeLists.txt": 4,
         "Cargo.toml": 1,
-        "host.cpp": 9,
+        "host.cpp": 19,
         "package.json": 2,
     }
     assert [
         (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
         for ref in payload["migration"]["actions"][0]["runtimeReferences"]
     ] == [
+        ("CMakeLists.txt", "wgsl", "build-system", "wgsl-build-system"),
+        ("CMakeLists.txt", "wgsl", "build-system", "wgsl-build-system"),
         ("CMakeLists.txt", "wgsl", "build-system", "wgsl-build-system"),
         ("CMakeLists.txt", "wgsl", "build-system", "wgsl-build-system"),
         ("Cargo.toml", "wgsl", "build-system", "wgsl-build-system"),
@@ -2919,6 +2939,16 @@ def test_scan_report_records_native_webgpu_dawn_runtime_references(tmp_path):
         ("host.cpp", "wgsl", "runtime-api", "wgpuCommandEncoderBeginRenderPass"),
         ("host.cpp", "wgsl", "runtime-api", "wgpuRenderPassEncoderSetPipeline"),
         ("host.cpp", "wgsl", "runtime-api", "wgpuRenderPassEncoderDraw"),
+        ("host.cpp", "wgsl", "runtime-api", "wgpu::ShaderSourceWGSL"),
+        ("host.cpp", "wgsl", "runtime-api", "wgpu::ShaderModuleDescriptor"),
+        ("host.cpp", "wgsl", "runtime-api", "CreateShaderModule"),
+        ("host.cpp", "wgsl", "runtime-api", "CreateCommandEncoder"),
+        ("host.cpp", "wgsl", "runtime-api", "BeginRenderPass"),
+        ("host.cpp", "wgsl", "runtime-api", "SetPipeline"),
+        ("host.cpp", "wgsl", "runtime-api", "Draw"),
+        ("host.cpp", "wgsl", "runtime-api", "End"),
+        ("host.cpp", "wgsl", "runtime-api", "Finish"),
+        ("host.cpp", "wgsl", "runtime-api", "Submit"),
         ("package.json", "wgsl", "build-system", "wgsl-build-system"),
         ("package.json", "wgsl", "build-system", "wgsl-build-system"),
     ]

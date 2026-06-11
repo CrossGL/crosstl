@@ -1641,7 +1641,7 @@ RUNTIME_REFERENCE_RULES = (
             r"RenderPipeline|ShaderModule)|create(?:BindGroup(?:Layout)?|"
             r"PipelineLayout|ShaderModule)|setBindGroup|wgpu::(?:BindGroup"
             r"(?:Layout)?Descriptor|PipelineLayoutDescriptor|ShaderModuleDescriptor|"
-            r"include_wgsl!)|(?<=\.)set_bind_group)(?!\w)"
+            r"ShaderSourceWGSL|include_wgsl!)|(?<=\.)set_bind_group)(?!\w)"
         ),
         None,
     ),
@@ -1650,6 +1650,21 @@ RUNTIME_REFERENCE_RULES = (
         "runtime-api",
         re.compile(
             r"(?<=navigator\.gpu\.)(getPreferredCanvasFormat|requestAdapter)(?=\s*\()"
+        ),
+        None,
+    ),
+    (
+        "wgsl",
+        "runtime-api",
+        re.compile(
+            r"\b(?:adapter|gpuAdapter|instance|device|gpuDevice|queue|gpuQueue|"
+            r"encoder|commandEncoder|pass|passEncoder|renderPass|"
+            r"renderPassEncoder|computePass|computePassEncoder)\s*(?:->|\.)"
+            r"(Request(?:Adapter|Device)|GetQueue|Create(?:BindGroup(?:Layout)?|"
+            r"PipelineLayout|ShaderModule|Buffer|Texture|Sampler|CommandEncoder|"
+            r"RenderPipeline|ComputePipeline)|Begin(?:RenderPass|ComputePass)|"
+            r"Set(?:BindGroup|Pipeline|VertexBuffer|IndexBuffer)|Draw(?:Indexed)?|"
+            r"DispatchWorkgroups|End|Finish|Submit)(?=\s*\()"
         ),
         None,
     ),
@@ -1730,7 +1745,7 @@ RUNTIME_REFERENCE_RULES = (
         re.compile(
             r"(?<![\w@/-])(?:\"(?:@webgpu/[^\"]+|gpuweb|webgpu(?:-[^\"]+)?|"
             r"wgpu)\"|^\s*wgpu\s*=|find_package\s*\(\s*Dawn\b|"
-            r"(?:dawn::)?webgpu_dawn\b)"
+            r"(?:dawn::)?webgpu_dawn\b|webgpu_(?:cpp|glfw)\b)"
         ),
         "wgsl-build-system",
     ),

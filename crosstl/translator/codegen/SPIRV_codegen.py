@@ -2038,11 +2038,16 @@ class VulkanSPIRVCodeGen:
                 "|": "OpBitwiseOr",
                 "^": "OpBitwiseXor",
             }[op]
-        else:
+        elif op in {"<<", ">>"}:
+            result_type, left, right = self.align_binary_shift_operands(
+                result_type, left, right
+            )
             spv_op = {
                 "<<": "OpShiftLeftLogical",
                 ">>": "OpShiftRightLogical",
-            }.get(op, f"Op{op}")
+            }[op]
+        else:
+            spv_op = f"Op{op}"
 
         id_value = self.get_id()
         self.emit(f"%{id_value} = {spv_op} %{result_type.id} %{left.id} %{right.id}")
@@ -2059,6 +2064,31 @@ class VulkanSPIRVCodeGen:
         result_type = self.ensure_registered_type(result_type)
         left = self.convert_value_to_type(left, result_type)
         right = self.convert_value_to_type(right, result_type)
+        return result_type, left, right
+
+    def align_binary_shift_operands(
+        self, result_type: SpirvId, left: SpirvId, right: SpirvId
+    ) -> Tuple[SpirvId, SpirvId, SpirvId]:
+        """Match SPIR-V shift count shape to the left/result operand shape."""
+        result_type = self.ensure_registered_type(result_type)
+        result_vector = self.vector_component_type_and_count(result_type.type.base_type)
+
+        left = self.convert_value_to_type(left, result_type)
+        if result_vector is None:
+            right = self.convert_value_to_type(right, result_type)
+            return result_type, left, right
+
+        component_type_name, component_count = result_vector
+        component_type = self.register_primitive_type(component_type_name)
+        right_vector = self.vector_component_type_and_count(right.type.base_type)
+
+        if right_vector is None:
+            right = self.convert_scalar_to_type(right, component_type)
+            if self.scalar_or_vector_component_type(right.type) == component_type_name:
+                right = self.splat_scalar_to_vector(right, result_type)
+        elif right_vector[1] == component_count:
+            right = self.convert_value_to_type(right, result_type)
+
         return result_type, left, right
 
     def matrix_binary_operation(

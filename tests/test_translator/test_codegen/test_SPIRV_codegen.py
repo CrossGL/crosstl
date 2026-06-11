@@ -2435,6 +2435,51 @@ class TestVulkanSPIRVCodeGen:
         assert any(f"OpStore {right_var} {rid}" in spv_code for rid in shr_ids)
         assert "WARNING" not in spv_code
 
+    def test_vector_shift_by_scalar_splats_shift_count_for_spirv(self, tmp_path):
+        source_code = """
+        shader VectorScalarShift {
+            compute {
+                void main() {
+                    ivec2 lanes = ivec2(1, 2);
+                    ivec2 shiftedLeft = lanes << 1;
+                    ivec2 shiftedRight = lanes >> 1;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1\b", spv_code)
+        assert int_type is not None
+        ivec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(int_type.group(1))} 2\b",
+            spv_code,
+        )
+        assert ivec2_type is not None
+
+        shift_count_vectors = re.findall(
+            rf"(%\d+) = OpCompositeConstruct {re.escape(ivec2_type.group(1))} "
+            rf"(?P<count>%\d+) (?P=count)\b",
+            spv_code,
+        )
+        assert len(shift_count_vectors) >= 2
+
+        assert re.search(
+            rf"%\d+ = OpShiftLeftLogical {re.escape(ivec2_type.group(1))} "
+            rf"%\d+ {re.escape(shift_count_vectors[0][0])}\b",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpShiftRightLogical {re.escape(ivec2_type.group(1))} "
+            rf"%\d+ {re.escape(shift_count_vectors[1][0])}\b",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_vector_composite_construct_emits_scalar_components(self):
         source_code = """
         shader VectorConstruct {
