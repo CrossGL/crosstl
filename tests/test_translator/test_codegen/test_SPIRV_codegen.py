@@ -1955,6 +1955,44 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "WARNING" not in spv_code
 
+    def test_complex_helper_call_converts_scalar_argument_to_parameter_struct(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ComplexScalarHelperCall {
+            struct complex64_t {
+                float real;
+                float imag;
+            }
+
+            compute {
+                complex64_t passComplex(complex64_t value) {
+                    return value;
+                }
+
+                void main() {
+                    float real = 1.0;
+                    complex64_t result = passComplex(real);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        complex_type = spirv_named_id(spv_code, "complex64_t")
+        assert re.search(
+            rf"(?P<arg>%\d+) = OpCompositeConstruct "
+            rf"{re.escape(complex_type)} %\d+ %\d+\n"
+            rf"%\d+ = OpFunctionCall {re.escape(complex_type)} %\d+ "
+            rf"(?P=arg)",
+            spv_code,
+        )
+        assert_spirv_function_calls_use_declared_parameter_types(spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_complex_helper_call_converts_vector_argument_to_parameter_struct(
         self, tmp_path
     ):
