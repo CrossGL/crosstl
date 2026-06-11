@@ -1551,9 +1551,19 @@ class GLSLToCrossGLConverter:
             var
         ) + self.variable_qualifier_attribute_suffix(var)
 
-    def fragment_return_attribute_suffix(self, var):
+    def fragment_output_location_attribute(self, var, index=0):
+        layout = getattr(var, "layout", None) or {}
+        if layout.get("location") is not None:
+            return ""
+        return f" @location({index})"
+
+    def fragment_return_attribute_suffix(self, var, index=0):
+        semantic = self.semantic_attribute_suffix(getattr(var, "semantic", None))
+        if semantic:
+            return semantic
         return (
             self.variable_layout_attribute_suffix(var)
+            + self.fragment_output_location_attribute(var, index)
             + self.interface_qualifier_attribute_suffix(var)
             + self.variable_qualifier_attribute_suffix(var)
         )
@@ -2681,20 +2691,17 @@ class GLSLToCrossGLConverter:
                     result += self.indent() + f"void main({input_parameter})"
                 else:
                     output_type = "vec4"
-                    output_name = "gl_FragColor"
                     output_attributes = ""
                     if self.outputs:
                         output_var = self.outputs[0]
                         output_type = self.convert_type(output_var.vtype)
-                        output_name = output_var.name
                         output_attributes = self.fragment_return_attribute_suffix(
-                            output_var
+                            output_var, 0
                         )
                     result += (
                         self.indent()
                         + f"{output_type} main({input_parameter})"
-                        + f"{output_attributes} "
-                        + self.crossgl_attribute_reference(output_name)
+                        + output_attributes
                     )
             elif self.shader_type in self.NON_STRUCT_STAGE_TYPES:
                 result += self.indent() + "void main()"

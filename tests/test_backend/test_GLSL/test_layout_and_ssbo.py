@@ -50,7 +50,7 @@ def test_parse_layout_locations_and_components():
     assert "flat centroid vec4 color @location(1) @component(2) @highp;" in crossgl
     assert (
         "vec4 main(FragmentInput input) @location(0) @index(1) "
-        "@noperspective @sample @invariant @precise @mediump @ fragColor"
+        "@noperspective @sample @invariant @precise @mediump"
     ) in crossgl
 
     glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
@@ -473,7 +473,8 @@ def test_parse_fragment_sample_builtin_without_user_inputs_roundtrip():
 
     crossgl = generate_crossgl(code, "fragment")
 
-    assert "vec4 main() @location(0) @ color" in crossgl
+    assert "vec4 main() @location(0)" in crossgl
+    assert "@ color" not in crossgl
     assert "FragmentInput input" not in crossgl
 
     glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))

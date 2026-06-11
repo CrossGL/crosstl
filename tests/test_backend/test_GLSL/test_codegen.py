@@ -443,7 +443,8 @@ def test_codegen_fragment_output_named_crossgl_stage_keyword_roundtrips(keyword)
 
     crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
 
-    assert f"@{keyword}" in crossgl
+    assert "vec4 main(FragmentInput input) @location(0)" in crossgl
+    assert f"@{keyword}" not in crossgl
     assert f"@ {keyword}" not in crossgl
     assert f"vec4 {keyword};" in crossgl
     assert f"{keyword} = vec4(input.color, 1.0);" in crossgl
