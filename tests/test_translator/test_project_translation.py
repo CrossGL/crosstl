@@ -9696,7 +9696,12 @@ def test_translate_project_opengl_materializes_mlx_pointer_and_value_bindings(
             "name": "scale_values",
             "materializedName": "scalefloat32",
             "parameters": {"T": "float", "U": "float"},
+            "parameterSources": {
+                "T": "source-instantiation",
+                "U": "source-instantiation",
+            },
             "source": "source-instantiation",
+            "hostName": "scalefloat32",
         }
     ]
     assert "layout(std430, binding = 0) readonly buffer srcBuffer" in output
@@ -9705,6 +9710,199 @@ def test_translate_project_opengl_materializes_mlx_pointer_and_value_bindings(
     assert "float factor;" in output
     assert "dst[gid] = (float(src[gid]) * factor);" in output
     assert not re.search(r"\b(?:T|U)\b", output)
+
+
+def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "rope.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, typename IdxT, int N = 4>
+            T rope_impl(device const T* src, IdxT index) {
+                return src[index] + T(N);
+            }
+
+            template <typename T, typename IdxT, int N = 4>
+            [[kernel]] void rope(
+                device const T* src [[buffer(0)]],
+                device T* dst [[buffer(1)]],
+                device const IdxT* positions [[buffer(2)]],
+                uint gid [[thread_position_in_grid]]) {
+                IdxT pos = positions[gid];
+                dst[gid] = rope_impl<T, IdxT, N>(src, pos);
+            }
+
+            template <typename T, typename IdxT, int N = 4>
+            [[kernel]] void rope_freqs(
+                device const T* freqs [[buffer(0)]],
+                device T* dst [[buffer(1)]],
+                device const IdxT* positions [[buffer(2)]],
+                uint gid [[thread_position_in_grid]]) {
+                IdxT pos = positions[gid];
+                dst[gid] = freqs[gid] + T(N) + T(pos);
+            }
+
+            instantiate_kernel("rope_float32", rope, float, uint)
+            instantiate_kernel("rope_freqs_float32", rope_freqs, float, uint)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx", "opengl", "vulkan"]
+            output_dir = "translated"
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+
+    for artifact in payload["artifacts"]:
+        materialization = artifact["templateMaterialization"]
+        assert materialization["status"] == "materialized"
+        assert materialization["configuredParameters"] == {}
+        assert materialization["configuredParameterSources"] == {}
+        assert materialization["unsupported"] == []
+        assert materialization["specializationCount"] == 3
+        specializations = {
+            (record["name"], record["source"]): record
+            for record in materialization["specializations"]
+        }
+        assert specializations[("rope", "source-instantiation")] == {
+            "name": "rope",
+            "materializedName": "rope_float32",
+            "parameters": {"T": "float", "IdxT": "uint", "N": "4"},
+            "parameterSources": {
+                "T": "source-instantiation",
+                "IdxT": "source-instantiation",
+                "N": "source-default",
+            },
+            "source": "source-instantiation",
+            "hostName": "rope_float32",
+        }
+        assert specializations[("rope_freqs", "source-instantiation")] == {
+            "name": "rope_freqs",
+            "materializedName": "rope_freqs_float32",
+            "parameters": {"T": "float", "IdxT": "uint", "N": "4"},
+            "parameterSources": {
+                "T": "source-instantiation",
+                "IdxT": "source-instantiation",
+                "N": "source-default",
+            },
+            "source": "source-instantiation",
+            "hostName": "rope_freqs_float32",
+        }
+        assert specializations[("rope_impl", "call-site")] == {
+            "name": "rope_impl",
+            "materializedName": "rope_impl_float_uint_4",
+            "parameters": {"T": "float", "IdxT": "uint", "N": "4"},
+            "parameterSources": {
+                "T": "call-site",
+                "IdxT": "call-site",
+                "N": "call-site",
+            },
+            "source": "call-site",
+        }
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        assert not re.search(r"\b(?:T|IdxT|N)\b", output)
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+
+
+def test_translate_project_metal_rope_missing_variant_data_reports_template_diagnostic(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "rope.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, typename IdxT, int N = 4>
+            [[kernel]] void rope(
+                device const T* src [[buffer(0)]],
+                device T* dst [[buffer(1)]],
+                device const IdxT* positions [[buffer(2)]],
+                uint gid [[thread_position_in_grid]]) {
+                IdxT pos = positions[gid];
+                dst[gid] = src[pos] + T(N);
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.template-materialization-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "template.specialization": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert "rope missing T, IdxT" in diagnostic["message"]
+    assert "rope missing T, IdxT, N" not in diagnostic["message"]
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["templateMaterialization"]["unsupported"] == [
+        {
+            "name": "rope",
+            "parameters": ["T", "IdxT", "N"],
+            "missingParameters": ["T", "IdxT"],
+            "reason": "missing-template-arguments",
+            "sourceDeclaration": {
+                "file": "shaders/rope.metal",
+                "line": 4,
+                "column": 1,
+                "name": "rope",
+            },
+            "target": "opengl",
+            "requiredSignature": "rope<T, IdxT, 4>",
+        }
+    ]
+    assert "project.translate.failed" not in payload["summary"]["diagnosticsByCode"]
 
 
 def test_translate_project_opengl_uses_metal_default_template_helper_type(
@@ -36241,6 +36439,7 @@ def test_translate_project_metal_reduction_source_instantiation_records_nontype_
                     "T": "source-instantiation",
                 },
                 "source": "source-instantiation",
+                "hostName": "arg_reduce_add_f32_4",
             }
         ],
         "unsupported": [],
@@ -36446,11 +36645,12 @@ def test_translate_project_metal_variadic_debug_helper_noops_for_opengl(
     assert artifact["templateMaterialization"] == {
         "status": "materialized",
         "specializationCount": 0,
-        "configuredParameterCount": 0,
-        "configuredParameters": {},
-        "specializations": [],
-        "unsupported": [],
-    }
+            "configuredParameterCount": 0,
+            "configuredParameters": {},
+            "configuredParameterSources": {},
+            "specializations": [],
+            "unsupported": [],
+        }
 
     output = (repo / artifact["path"]).read_text(encoding="utf-8")
     assert "log_debug" not in output
@@ -36655,6 +36855,7 @@ def test_translate_project_explicit_template_instantiation_materializes_for_open
             "parameters": {"T": "float"},
             "parameterSources": {"T": "source-instantiation"},
             "source": "source-instantiation",
+            "hostName": "write_value",
         }
     ]
     output = (repo / artifact["path"]).read_text(encoding="utf-8")
@@ -36707,6 +36908,7 @@ def test_translate_project_explicit_utility_template_instantiation_materializes_
             "parameters": {"T": "float"},
             "parameterSources": {"T": "source-instantiation"},
             "source": "source-instantiation",
+            "hostName": "offset_value",
         }
     ]
     output = (repo / artifact["path"]).read_text(encoding="utf-8")

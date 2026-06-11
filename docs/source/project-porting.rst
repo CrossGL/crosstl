@@ -1016,6 +1016,13 @@ Project reports are JSON documents with:
   Inspection samples include failed validation
   status, existence, hash, source-map, and source-remap status metadata when the
   validated artifact no longer matches the report.
+  Metal artifacts that are materialized before translation can include
+  ``templateMaterialization`` metadata. That metadata records whether
+  materialization succeeded, configured template parameters, unsupported
+  templates with missing parameter names, and concrete specializations with the
+  original template name, materialized function name, parameter map,
+  specialization source, and optional ``hostName`` for source-instantiated
+  kernels.
   Full reports require failed artifacts to carry an actionable error string and
   reject failed artifacts that claim
   generated hashes or source-map records. Full reports also reject translated
