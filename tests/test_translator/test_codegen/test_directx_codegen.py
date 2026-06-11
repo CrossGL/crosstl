@@ -12,6 +12,8 @@ from crosstl.translator.ast import (
     BlockNode,
     ExecutionModel,
     FunctionNode,
+    GenericParameterNode,
+    IdentifierNode,
     LiteralNode,
     NamedType,
     PrimitiveType,
@@ -988,7 +990,7 @@ def test_hlsl_diagnostic_vector_zero_fallbacks_expand_for_dxc():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "float2 uv = float2(0.0, 0.0) /* unsupported HLSL" in generated_code
-    assert "double2 precise = double2(0.0, 0.0) /* unsupported HLSL" in generated_code
+    assert "double2 precise_ = double2(0.0, 0.0) /* unsupported HLSL" in generated_code
     assert "float3 normal = float3(0.0, 0.0, 0.0) /* unsupported HLSL" in generated_code
     assert (
         "float4 color = float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL"
@@ -6536,6 +6538,55 @@ def test_generic_struct_concrete_constructor_and_member_access():
     assert "ConstructorNode(" not in generated_code
 
 
+def test_hlsl_generic_struct_value_expression_type_arguments_render():
+    shader_ast = ShaderNode(
+        "GenericValueExpressionTypeArgument",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Tile",
+                [StructMemberNode("value", NamedType("T"))],
+                generic_params=[
+                    GenericParameterNode("T"),
+                    GenericParameterNode("N"),
+                ],
+            ),
+            StructNode(
+                "Wrapper",
+                [
+                    StructMemberNode(
+                        "tile",
+                        NamedType(
+                            "Tile",
+                            [
+                                PrimitiveType("float"),
+                                UnaryOpNode(
+                                    "-",
+                                    LiteralNode(1, PrimitiveType("int")),
+                                ),
+                            ],
+                        ),
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = HLSLCodeGen().generate(shader_ast)
+
+    assert "struct Tile_float_1" in generated_code
+    assert "float value;" in generated_code
+    assert "Tile_float_1 tile;" in generated_code
+    assert "UnaryOpNode" not in generated_code
+
+
+def test_hlsl_buffer_call_ignores_unresolved_non_helper_callee():
+    codegen = HLSLCodeGen()
+    codegen.local_variable_types["payload"] = "RWByteAddressBuffer"
+
+    assert codegen.generate_buffer_call(None, [IdentifierNode("payload")]) is None
+
+
 def test_hlsl_orders_generic_specialized_struct_dependencies_before_users():
     shader = """
     shader HlslGenericOrder {
@@ -6779,6 +6830,28 @@ def test_hlsl_reserved_linear_parameter_is_renamed_consistently():
     assert "float linearToSrgb(float linear_)" in generated_code
     assert "return (linear_ + (linear_ * linear_));" in generated_code
     assert re.search(r"\blinear\b", generated_code) is None
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_reserved_line_local_is_renamed_consistently():
+    shader = """
+    shader HlslReservedLineLocal {
+        vertex {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_Position {
+                float line = uv.x;
+                line = line + 1.0;
+                return vec4(line, line, line, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float line_ = uv.x;" in generated_code
+    assert "line_ = (line_ + 1.0);" in generated_code
+    assert "return float4(line_, line_, line_, 1.0);" in generated_code
+    assert re.search(r"\bline\b", generated_code) is None
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 

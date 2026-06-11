@@ -8073,6 +8073,8 @@ class RustCodeGen:
         if components is None or len(components) <= 1:
             return None
 
+        self.validate_swizzle_assignment_target(target, components)
+
         target_type = self.expression_result_type(target)
         rhs = self.generate_expression_with_type(value, target_type)
         rhs = self.normalize_assignment_rhs(target_type, value, rhs, operator)
@@ -8090,15 +8092,40 @@ class RustCodeGen:
 
         rhs_name = self.next_swizzle_temp_name()
         assignments = []
-        if self.vector_type_info(self.expression_result_type(value)) is not None:
-            for component in components:
+        if rhs_info is not None:
+            rhs_components = ("x", "y", "z", "w")
+            for index, component in enumerate(components):
                 assignments.append(
-                    f"{obj}.{component} {operator} {rhs_name}.{component}"
+                    f"{obj}.{component} {operator} "
+                    f"{rhs_name}.{rhs_components[index]}"
                 )
         else:
             for component in components:
                 assignments.append(f"{obj}.{component} {operator} {rhs_name}")
         return f"{{ let {rhs_name} = {rhs}; {'; '.join(assignments)}; }}"
+
+    def validate_swizzle_assignment_target(self, target, components):
+        if len(components) > 4:
+            raise ValueError(
+                "Rust swizzle assignment target cannot exceed 4 components"
+            )
+        if len(set(components)) != len(components):
+            raise ValueError("Rust swizzle assignment target cannot repeat components")
+
+        object_expr = getattr(target, "object_expr", getattr(target, "object", None))
+        object_type = self.expression_result_type(object_expr)
+        vector_info = self.vector_type_info(object_type)
+        if vector_info is None:
+            return
+
+        component_indices = {"x": 0, "y": 1, "z": 2, "w": 3}
+        for component in components:
+            if component_indices[component] >= vector_info["size"]:
+                raise ValueError(
+                    "Rust swizzle assignment target component "
+                    f"'{component}' is not available on "
+                    f"{self.map_type(object_type)}"
+                )
 
     def generate_pointer_index_assignment(self, target, value, operator):
         if not isinstance(target, ArrayAccessNode):

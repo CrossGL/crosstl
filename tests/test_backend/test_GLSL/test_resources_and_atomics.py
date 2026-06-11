@@ -4997,8 +4997,8 @@ def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types
         "access msBlock: no target-side fallback declaration emitted */].read("
         "uint2(int2(0) /* unsupported Metal GLSL buffer block access msBlock: "
         "no target-side fallback declaration emitted */), uint(0 /* unsupported "
-        "Metal GLSL buffer block access msBlock: no target-side fallback "
-        "declaration emitted */));" in metal
+        "Metal GLSL buffer block access msBlock: no target-side fallback declaration "
+        "emitted */));" in metal
     )
     assert (
         "int inlineSamples = int(msArrays[0 /* unsupported Metal GLSL buffer "
@@ -15622,8 +15622,8 @@ def test_codegen_mixed_ssbo_unsupported_sampling_vectors_are_typed_diagnostics()
     )
     assert (
         "float4 fetchedCall = textures[0].read(uint2(int2(0) /* unsupported "
-        "Metal GLSL buffer block function call readPixel: target function "
-        "omitted */), uint(0));" in metal
+        "Metal GLSL buffer block function call readPixel: target function omitted "
+        "*/), uint(0));" in metal
     )
     assert ".sample(samplers[0], 0 /* unsupported Metal GLSL buffer" not in metal
     assert ".gather(samplers[0], 0 /* unsupported Metal GLSL buffer" not in metal
@@ -15825,9 +15825,9 @@ def test_codegen_mixed_ssbo_unsupported_sampling_offsets_are_typed_diagnostics()
     )
     assert (
         "float4 fetchedCall = textures[0].read(uint2((int2(0) /* unsupported "
-        "Metal GLSL buffer block function call readPixel: target function "
-        "omitted */ + int2(0) /* unsupported Metal GLSL buffer block function "
-        "call readOffset: target function omitted */)), uint(0));" in metal
+        "Metal GLSL buffer block function call readPixel: target function omitted */ "
+        "+ int2(0) /* unsupported Metal GLSL buffer block function call readOffset: "
+        "target function omitted */)), uint(0));" in metal
     )
     assert ".sample(samplers[0], 0 /* unsupported Metal GLSL buffer" not in metal
     assert ".gather(samplers[0], 0 /* unsupported Metal GLSL buffer" not in metal

@@ -1579,8 +1579,22 @@ def test_project_macro_variants_document_artifact_define_maps():
     features = {feature["id"]: feature for feature in matrix["features"]}
     feature = features["project.macro_variants"]
 
-    for backend_support in feature["support"].values():
-        assert backend_support["status"] == "partial"
+    source_backend_ids = {
+        "cuda",
+        "directx",
+        "hip",
+        "metal",
+        "mojo",
+        "opengl",
+        "rust",
+        "slang",
+        "vulkan",
+    }
+    for backend_id, backend_support in feature["support"].items():
+        if backend_id in source_backend_ids:
+            assert backend_support["status"] == "supported"
+        else:
+            assert backend_support["status"] in {"partial", "supported"}
         assert "records each artifact applied define map" in backend_support["notes"]
         assert "define-processing status" in backend_support["notes"]
         assert "applies CLI define overrides" in backend_support["notes"]
@@ -1680,6 +1694,17 @@ def test_project_macro_variants_document_artifact_define_maps():
             "Vulkan native preprocessing during project translation"
             in backend_support["notes"]
         )
+        if backend_id in source_backend_ids:
+            assert (
+                "Project scanning classifies backend-native macro semantics"
+                in backend_support["notes"]
+            )
+            assert "project.scan.unsupported-macro-form diagnostics" in (
+                backend_support["notes"]
+            )
+            assert "macro.native missing-capability metadata" in (
+                backend_support["notes"]
+            )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_artifact_define_mismatches"
@@ -1769,6 +1794,17 @@ def test_project_macro_variants_document_artifact_define_maps():
             "test_translate_project_records_define_processing_without_frontend_"
             "support"
         ) in backend_support["evidence"]
+        if backend_id in source_backend_ids:
+            assert (
+                "tests/test_translator/test_project_translation.py::def "
+                "test_scan_project_accepts_supported_native_macro_forms_across_"
+                "source_frontends"
+            ) in backend_support["evidence"]
+            assert (
+                "tests/test_translator/test_project_translation.py::def "
+                "test_scan_project_reports_unsupported_macro_forms_across_source_"
+                "frontends"
+            ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_limits_named_variants_to_selected"

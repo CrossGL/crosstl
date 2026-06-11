@@ -458,6 +458,45 @@ def test_metal_uint2_dispatch_id_promotes_to_directx_uint3(tmp_path):
     assert "uint2 id : SV_DispatchThreadID" not in generated
 
 
+def test_metal_scalar_vector_constructor_lowers_to_directx_splat(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "metal-scalar-vector-constructor.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        struct Input {
+            float3 position [[attribute(0)]];
+        };
+
+        struct Output {
+            half3 viewDir [[user(TEXCOORD0)]];
+        };
+
+        vertex Output VSMain(Input in [[stage_in]]) {
+            half scalar = half(0);
+            Output literalValue = Output(half3(0));
+            Output scalarValue = Output(half3(scalar));
+            Output nestedValue = Output(half3(half(0)));
+            return scalarValue;
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="directx", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "Output literalValue = Output(half3(0, 0, 0));" in generated
+    assert "Output scalarValue = Output(half3(scalar, scalar, scalar));" in generated
+    assert "Output nestedValue = Output(half3(half(0), half(0), half(0)));" in generated
+    assert "half3(0))" not in generated
+    assert "half3(scalar))" not in generated
+    assert "half3(half(0)))" not in generated
+
+
 def test_metal_threadgroup_scratch_lowers_to_directx_groupshared(tmp_path):
     source_path = _write_source(
         tmp_path,
@@ -1059,6 +1098,32 @@ def test_hlsl_legacy_sampler_register_lowers_to_opengl_binding(tmp_path):
     assert "fragColor = texture(Texture, uv);" in generated
 
 
+def test_hlsl_pixel_shader_user_semantic_input_lowers_to_metal_stage_in(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "neg1.hlsl",
+        """
+        float4 main(float4 a : A) : SV_Target
+        {
+            int4 x = int4(a);
+            return float4(x);
+        }
+        """,
+    )
+
+    metal = crosstl.translate(str(source_path), backend="metal", format_output=False)
+
+    assert "struct fragment_main_Input" in metal
+    assert "float4 a [[attribute(0)]];" in metal
+    assert (
+        "fragment float4 fragment_main("
+        "fragment_main_Input _crossglInput [[stage_in]])"
+    ) in metal
+    assert "float4 a = _crossglInput.a;" in metal
+    assert "[[A]]" not in metal
+    _compile_with_metal_if_available(metal, tmp_path)
+
+
 def test_hlsl_fx_macro_texture_resource_survives_metal_translation(tmp_path):
     _write_source(
         tmp_path,
@@ -1102,6 +1167,7 @@ def test_hlsl_fx_macro_texture_resource_survives_metal_translation(tmp_path):
         "Texture.sample(sampler(mag_filter::linear, min_filter::linear), input.texCoord)"
         in metal
     )
+    assert "[[gl_FragData]]" not in metal
     _compile_with_metal_if_available(metal, tmp_path)
 
 

@@ -14171,6 +14171,33 @@ def test_function_return_semantics_lower_to_output_structs_when_required():
     assert "return fragment_main_Return{0.5};" in depth_output
 
 
+def test_legacy_glsl_fragment_output_semantic_is_not_emitted_on_metal_helper():
+    code = """
+    shader HelperLegacyOutputSemanticForMetal {
+        fragment {
+            vec4 shade() @ gl_FragData[0] {
+                return vec4(1.0);
+            }
+
+            vec4 main() @ gl_FragColor1 {
+                return shade();
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "float4 shade() {" in generated
+    assert "[[gl_FragData]]" not in generated
+    assert "struct fragment_main_Return" in generated
+    assert "float4 color [[color(1)]];" in generated
+    assert "fragment fragment_main_Return fragment_main()" in generated
+    assert "return fragment_main_Return{shade()};" in generated
+
+
 def test_function_return_semantic_ignores_stage_control_attributes():
     code = """
     shader ReturnSemanticWithStageControls {

@@ -549,6 +549,44 @@ def test_root_signature_metadata_does_not_become_glsl_return_semantic():
     assert "RootSignature" not in generated
 
 
+def test_monogame_style_vertex_semantics_generate_valid_glsl_helpers():
+    hlsl = textwrap.dedent("""
+        struct VSOutput {
+            float4 Position : SV_Position;
+            float4 Color : COLOR0;
+            float2 TextureCoordinate : TEXCOORD0;
+        };
+
+        VSOutput SpriteVertexShader(
+            float4 position : POSITION,
+            float4 color : COLOR0,
+            float2 texCoord : TEXCOORD0
+        ) {
+            VSOutput output;
+            output.Position = position;
+            output.Color = color;
+            output.TextureCoordinate = texCoord;
+            return output;
+        }
+
+        float4 SpritePixelShader(VSOutput input) : SV_Target0 {
+            return input.Color;
+        }
+    """).strip()
+
+    generated = GLSLCodeGen().generate(parse_crossgl(generate_crossgl(hlsl)))
+
+    assert "struct VSOutput" in generated
+    assert (
+        "VSOutput SpriteVertexShader(vec4 position, vec4 color, vec2 texCoord)"
+        in generated
+    )
+    assert "vec4 position layout(location = 0)" not in generated
+    assert "vec4 color Color0" not in generated
+    assert "vec2 texCoord layout(location = 5)" not in generated
+    assert "vec4 SpritePixelShader(VSOutput input)" in generated
+
+
 def test_uint_vertex_id_import_uses_glsl_builtin_cast_alias():
     hlsl = textwrap.dedent("""
             void VSMain(in uint VertID : SV_VertexID, out float4 Pos : SV_Position) {
@@ -4896,7 +4934,7 @@ def test_codegen_tiled_resource_status_only_loads_roundtrip_without_offsets():
 
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
 
-    assert "float4 line = ramp.Load(int2(x, lod));" in hlsl
+    assert "float4 line_ = ramp.Load(int2(x, lod));" in hlsl
     assert "float4 color = colorMap.Load(int3(pixel, lod));" in hlsl
     assert "float4 layer = layers.Load(int4(pixelLayer, lod));" in hlsl
     assert "float4 volumeColor = volume.Load(int4(voxel, lod));" in hlsl
