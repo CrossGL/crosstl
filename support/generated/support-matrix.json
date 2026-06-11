@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 138
+        "test_count": 140
       },
       "translator_codegen": {
         "exists": true,
@@ -4088,10 +4088,14 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_texture_query_lod",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_split_sampler_lod_grad_and_offset_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_non_const_texture_offsets",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_out_of_range_texture_offsets"
           ],
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
-          "status": "diagnostic"
+          "notes": "Covers explicit LOD, gradient, bias, and offset sampling with implicit and explicit sampler threading, helper-parameter forwarding, and deterministic diagnostics for non-const or out-of-range texture offset operands required by WebGPU/WGSL.",
+          "status": "supported"
         }
       }
     },
@@ -4321,7 +4325,7 @@
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_plain_sampler_for_texture_gather_compare",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_invalid_texture_gather_compare_arity"
           ],
-          "notes": "Covers regular gather, explicit-sampler gather, component selection, depth gather-compare, single-offset gather, and gather-compare offset lowering with implicit and explicit sampler threading, plus deterministic diagnostics for textureGatherOffsets and invalid compare sampler/arity forms.",
+          "notes": "Covers regular gather, explicit-sampler gather, component selection, depth gather-compare, const single-offset gather, and const gather-compare offset lowering with implicit and explicit sampler threading, plus deterministic diagnostics for textureGatherOffsets, non-const or out-of-range offsets, and invalid compare sampler/arity forms.",
           "status": "supported"
         }
       }
@@ -15520,9 +15524,9 @@
         "validated_rejection": 9
       },
       "wgsl": {
-        "diagnostic": 11,
+        "diagnostic": 10,
         "partial": 0,
-        "supported": 50,
+        "supported": 51,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 7

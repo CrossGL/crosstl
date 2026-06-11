@@ -3750,6 +3750,7 @@ class WGSLCodeGen:
         )
 
     def generate_texture_call_args(self, args, *, function_name, implicit, explicit):
+        self.require_texture_offset_operand(args, function_name)
         if len(args) == implicit:
             texture = args[0]
             return [
@@ -3967,6 +3968,7 @@ class WGSLCodeGen:
                 f"{len(args)} argument(s) for {function_name}"
             )
 
+        self.require_texture_offset_operand(args, function_name)
         sampler_expression = (
             self.generate_expression(sampler)
             if sampler is not None
@@ -4023,6 +4025,7 @@ class WGSLCodeGen:
                 return self.generate_texture_builtin_call(
                     "textureSample", function_name, args, implicit=3, explicit=4
                 )
+            self.require_texture_offset_operand(args, function_name)
             texture, coords, offset, bias = (
                 self.generate_expression(arg) for arg in args
             )
@@ -4081,6 +4084,118 @@ class WGSLCodeGen:
         call_args.pop()
         call_args.append(offset)
         return "textureSampleCompareLevel(" + ", ".join(call_args) + ")"
+
+    def require_texture_offset_operand(self, args, function_name):
+        offset_index = self.texture_offset_argument_index(function_name, args)
+        if offset_index is None:
+            return
+        offset = args[offset_index]
+        components = self.resolve_texture_offset_components(offset)
+        if components is None:
+            raise ValueError(
+                f"WGSL target requires {function_name}() texture offset operands "
+                "to be integer const expressions with components in [-8, 7]"
+            )
+        invalid_components = [
+            component for component in components if component < -8 or component > 7
+        ]
+        if invalid_components:
+            rendered = self.generate_expression(offset)
+            raise ValueError(
+                f"WGSL target requires {function_name}() texture offset components "
+                f"to be in [-8, 7]; got {rendered}"
+            )
+
+    def texture_offset_argument_index(self, function_name, args):
+        normalized_name = self.semantic_key(function_name)
+        if normalized_name in {
+            "texturelodoffset",
+            "texturegradoffset",
+        }:
+            return len(args) - 1
+        if normalized_name == "texturegatheroffset":
+            if len(args) == 4 and not self.is_sampler_type(
+                self.expression_type(args[1])
+            ):
+                return 2
+            if len(args) == 3:
+                return 2
+            if len(args) in {4, 5}:
+                return 3
+        if normalized_name in {
+            "texturecompareoffset",
+            "texturecomparelodoffset",
+            "texturegathercompareoffset",
+        }:
+            return len(args) - 1
+        if normalized_name == "textureoffset":
+            if len(args) == 4 and not self.is_sampler_type(
+                self.expression_type(args[1])
+            ):
+                return 2
+            if len(args) == 3:
+                return 2
+            if len(args) in {4, 5}:
+                return 3
+        return None
+
+    def resolve_texture_offset_components(self, offset):
+        value = self.resolve_integer_const_expression(offset)
+        if value is not None:
+            return [value]
+        if isinstance(offset, ConstructorNode):
+            return self.resolve_texture_offset_constructor_components(
+                offset.constructor_type, offset.arguments
+            )
+        if isinstance(offset, FunctionCallNode):
+            function_name = self.expression_name(offset.function)
+            if self.is_type_constructor_name(function_name):
+                return self.resolve_texture_offset_constructor_components(
+                    function_name, offset.arguments
+                )
+        return None
+
+    def resolve_texture_offset_constructor_components(
+        self, constructor_type, arguments
+    ):
+        vector_shape = self.vector_shape(constructor_type)
+        if vector_shape is None:
+            return None
+        element_type, size = vector_shape
+        if element_type not in {"i32", "u32"}:
+            return None
+        components = [
+            self.resolve_integer_const_expression(argument) for argument in arguments
+        ]
+        if len(components) != size or any(
+            component is None for component in components
+        ):
+            return None
+        return components
+
+    def resolve_integer_const_expression(self, expr):
+        if isinstance(expr, LiteralNode):
+            if isinstance(expr.value, bool):
+                return None
+            if isinstance(expr.value, int):
+                return expr.value
+            if isinstance(expr.value, str):
+                try:
+                    return int(expr.value, 0)
+                except ValueError:
+                    return None
+            return None
+        if isinstance(expr, IdentifierNode):
+            return self._constant_values.get(expr.name)
+        if isinstance(expr, UnaryOpNode) and not expr.is_postfix:
+            value = self.resolve_integer_const_expression(expr.operand)
+            if value is None:
+                return None
+            if expr.operator == "-":
+                return -value
+            if expr.operator == "+":
+                return value
+        return None
 
     def generate_texture_dimensions_call(self, args):
         if len(args) not in {1, 2}:

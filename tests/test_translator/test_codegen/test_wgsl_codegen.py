@@ -2952,11 +2952,10 @@ def test_wgsl_codegen_lowers_texture_gather_offset_calls():
         sampler linearSampler;
         fragment {
             vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
-                ivec2 offset = ivec2(1, 0);
-                return textureGatherOffset(colorTex, uv, offset)
-                    + textureGatherOffset(colorTex, uv, offset, 2)
-                    + textureGatherOffset(colorTex, linearSampler, uv, offset)
-                    + textureGatherOffset(colorTex, linearSampler, uv, offset, 3);
+                return textureGatherOffset(colorTex, uv, ivec2(1, 0))
+                    + textureGatherOffset(colorTex, uv, ivec2(1, 0), 2)
+                    + textureGatherOffset(colorTex, linearSampler, uv, ivec2(1, 0))
+                    + textureGatherOffset(colorTex, linearSampler, uv, ivec2(1, 0), 3);
             }
         }
     }
@@ -2964,10 +2963,14 @@ def test_wgsl_codegen_lowers_texture_gather_offset_calls():
 
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
-    assert "textureGather(0, colorTex, colorTex_sampler, uv, offset)" in generated
-    assert "textureGather(2, colorTex, colorTex_sampler, uv, offset)" in generated
-    assert "textureGather(0, colorTex, linearSampler, uv, offset)" in generated
-    assert "textureGather(3, colorTex, linearSampler, uv, offset)" in generated
+    assert (
+        "textureGather(0, colorTex, colorTex_sampler, uv, vec2<i32>(1, 0))" in generated
+    )
+    assert (
+        "textureGather(2, colorTex, colorTex_sampler, uv, vec2<i32>(1, 0))" in generated
+    )
+    assert "textureGather(0, colorTex, linearSampler, uv, vec2<i32>(1, 0))" in generated
+    assert "textureGather(3, colorTex, linearSampler, uv, vec2<i32>(1, 0))" in generated
 
 
 def test_wgsl_codegen_lowers_texture_gather_compare_offset_calls():
@@ -2975,25 +2978,16 @@ def test_wgsl_codegen_lowers_texture_gather_compare_offset_calls():
     shader WGSLTextureGatherCompareOffset {
         sampler2DShadow shadowMap;
         samplerComparisonState compareSampler;
-        vec4 gatherImplicit(
-            sampler2DShadow tex,
-            vec2 uv,
-            float depth,
-            ivec2 offset
-        ) {
-            return textureGatherCompareOffset(tex, uv, depth, offset);
-        }
         fragment {
             vec4 main(vec2 uv @ TEXCOORD0, float depth @ TEXCOORD1) @ gl_FragColor {
-                ivec2 offset = ivec2(1, 0);
                 return textureGatherCompareOffset(
                         shadowMap,
                         compareSampler,
                         uv,
                         depth,
-                        offset
+                        ivec2(1, 0)
                     )
-                    + gatherImplicit(shadowMap, uv, depth, offset);
+                    + textureGatherCompareOffset(shadowMap, uv, depth, ivec2(0, 1));
             }
         }
     }
@@ -3002,18 +2996,12 @@ def test_wgsl_codegen_lowers_texture_gather_compare_offset_calls():
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
     assert (
-        "fn gatherImplicit(tex: texture_depth_2d, tex_sampler: sampler_comparison, "
-        "uv: vec2<f32>, depth: f32, offset: vec2<i32>) -> vec4<f32>"
-    ) in generated
-    assert (
-        "return textureGatherCompare(tex, tex_sampler, uv, depth, offset);" in generated
-    )
-    assert (
-        "textureGatherCompare(shadowMap, compareSampler, uv, depth, offset)"
+        "textureGatherCompare(shadowMap, compareSampler, uv, depth, vec2<i32>(1, 0))"
         in generated
     )
     assert (
-        "gatherImplicit(shadowMap, shadowMap_sampler, uv, depth, offset)" in generated
+        "textureGatherCompare(shadowMap, shadowMap_sampler, uv, depth, "
+        "vec2<i32>(0, 1))" in generated
     )
 
 
@@ -3270,13 +3258,12 @@ def test_wgsl_codegen_lowers_split_sampler_lod_grad_and_offset_calls():
             vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
                 vec2 ddx = vec2(0.1, 0.0);
                 vec2 ddy = vec2(0.0, 0.1);
-                ivec2 offset = ivec2(1, 0);
-                return textureLodOffset(colorTex, linearSampler, uv, 1.0, offset)
+                return textureLodOffset(colorTex, linearSampler, uv, 1.0, ivec2(1, 0))
                     + textureGrad(colorTex, linearSampler, uv, ddx, ddy)
-                    + textureGradOffset(colorTex, linearSampler, uv, ddx, ddy, offset)
-                    + textureOffset(colorTex, linearSampler, uv, offset)
-                    + textureOffset(colorTex, linearSampler, uv, offset, 0.25)
-                    + textureOffset(colorTex, uv, offset, 0.5);
+                    + textureGradOffset(colorTex, linearSampler, uv, ddx, ddy, ivec2(1, 0))
+                    + textureOffset(colorTex, linearSampler, uv, ivec2(1, 0))
+                    + textureOffset(colorTex, linearSampler, uv, ivec2(1, 0), 0.25)
+                    + textureOffset(colorTex, uv, ivec2(1, 0), 0.5);
             }
         }
     }
@@ -3284,14 +3271,133 @@ def test_wgsl_codegen_lowers_split_sampler_lod_grad_and_offset_calls():
 
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
-    assert "textureSampleLevel(colorTex, linearSampler, uv, 1.0, offset)" in generated
+    assert (
+        "textureSampleLevel(colorTex, linearSampler, uv, 1.0, vec2<i32>(1, 0))"
+        in generated
+    )
     assert "textureSampleGrad(colorTex, linearSampler, uv, ddx, ddy)" in generated
     assert (
-        "textureSampleGrad(colorTex, linearSampler, uv, ddx, ddy, offset)" in generated
+        "textureSampleGrad(colorTex, linearSampler, uv, ddx, ddy, vec2<i32>(1, 0))"
+        in generated
     )
-    assert "textureSample(colorTex, linearSampler, uv, offset)" in generated
-    assert "textureSampleBias(colorTex, linearSampler, uv, 0.25, offset)" in generated
-    assert "textureSampleBias(colorTex, colorTex_sampler, uv, 0.5, offset)" in generated
+    assert "textureSample(colorTex, linearSampler, uv, vec2<i32>(1, 0))" in generated
+    assert (
+        "textureSampleBias(colorTex, linearSampler, uv, 0.25, vec2<i32>(1, 0))"
+        in generated
+    )
+    assert (
+        "textureSampleBias(colorTex, colorTex_sampler, uv, 0.5, vec2<i32>(1, 0))"
+        in generated
+    )
+
+
+@pytest.mark.parametrize(
+    ("call", "match"),
+    [
+        (
+            "textureLodOffset(colorTex, linearSampler, uv, 1.0, offset)",
+            r"textureLodOffset\(\) texture offset operands to be integer const "
+            r"expressions",
+        ),
+        (
+            "textureGradOffset(colorTex, linearSampler, uv, ddx, ddy, offset)",
+            r"textureGradOffset\(\) texture offset operands to be integer const "
+            r"expressions",
+        ),
+        (
+            "textureOffset(colorTex, linearSampler, uv, offset)",
+            r"textureOffset\(\) texture offset operands to be integer const "
+            r"expressions",
+        ),
+        (
+            "textureOffset(colorTex, linearSampler, uv, offset, 0.25)",
+            r"textureOffset\(\) texture offset operands to be integer const "
+            r"expressions",
+        ),
+        (
+            "textureOffset(colorTex, linearSampler, uv, ivec2(1.5, 0))",
+            r"textureOffset\(\) texture offset operands to be integer const "
+            r"expressions",
+        ),
+        (
+            "textureGatherOffset(colorTex, linearSampler, uv, offset)",
+            r"textureGatherOffset\(\) texture offset operands to be integer const "
+            r"expressions",
+        ),
+        (
+            "textureGatherCompareOffset(shadowMap, compareSampler, uv, 0.5, offset)",
+            r"textureGatherCompareOffset\(\) texture offset operands to be "
+            r"integer const expressions",
+        ),
+        (
+            "textureCompareOffset(shadowMap, compareSampler, uv, 0.25, offset)",
+            r"textureCompareOffset\(\) texture offset operands to be integer "
+            r"const expressions",
+        ),
+        (
+            "textureCompareLodOffset(shadowMap, compareSampler, uv, 0.875, 0, offset)",
+            r"textureCompareLodOffset\(\) texture offset operands to be integer "
+            r"const expressions",
+        ),
+    ],
+)
+def test_wgsl_codegen_rejects_non_const_texture_offsets(call, match):
+    shader = f"""
+    shader WGSLNonConstTextureOffsets {{
+        sampler2D colorTex;
+        sampler2DShadow shadowMap;
+        sampler linearSampler;
+        samplerComparisonState compareSampler;
+        fragment {{
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {{
+                vec2 ddx = vec2(0.1, 0.0);
+                vec2 ddy = vec2(0.0, 0.1);
+                ivec2 offset = ivec2(1, 0);
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "match"),
+    [
+        (
+            "textureOffset(colorTex, linearSampler, uv, ivec2(8, 0))",
+            r"textureOffset\(\) texture offset components to be in \[-8, 7\]",
+        ),
+        (
+            "textureGatherOffset(colorTex, uv, ivec2(-9, 0))",
+            r"textureGatherOffset\(\) texture offset components to be in " r"\[-8, 7\]",
+        ),
+        (
+            "textureCompareOffset(shadowMap, compareSampler, uv, 0.5, ivec2(0, 8))",
+            r"textureCompareOffset\(\) texture offset components to be in "
+            r"\[-8, 7\]",
+        ),
+    ],
+)
+def test_wgsl_codegen_rejects_out_of_range_texture_offsets(call, match):
+    shader = f"""
+    shader WGSLOutOfRangeTextureOffsets {{
+        sampler2D colorTex;
+        sampler2DShadow shadowMap;
+        sampler linearSampler;
+        samplerComparisonState compareSampler;
+        fragment {{
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        WGSLCodeGen().generate(parse_shader(shader))
 
 
 def test_wgsl_codegen_lowers_shadow_textures_and_comparison_samplers():

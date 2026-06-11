@@ -2694,10 +2694,14 @@
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "supported",
+          "notes": "Covers explicit LOD, gradient, bias, and offset sampling with implicit and explicit sampler threading, helper-parameter forwarding, and deterministic diagnostics for non-const or out-of-range texture offset operands required by WebGPU/WGSL.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_texture_query_lod",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_split_sampler_lod_grad_and_offset_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_non_const_texture_offsets",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_out_of_range_texture_offsets"
           ]
         }
       }
@@ -2917,7 +2921,7 @@
         },
         "wgsl": {
           "status": "supported",
-          "notes": "Covers regular gather, explicit-sampler gather, component selection, depth gather-compare, single-offset gather, and gather-compare offset lowering with implicit and explicit sampler threading, plus deterministic diagnostics for textureGatherOffsets and invalid compare sampler/arity forms.",
+          "notes": "Covers regular gather, explicit-sampler gather, component selection, depth gather-compare, const single-offset gather, and const gather-compare offset lowering with implicit and explicit sampler threading, plus deterministic diagnostics for textureGatherOffsets, non-const or out-of-range offsets, and invalid compare sampler/arity forms.",
           "evidence": [
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_implicit_sampler_texture_gather_calls",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_explicit_sampler_texture_gather_calls",
