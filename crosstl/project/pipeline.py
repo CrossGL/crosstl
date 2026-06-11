@@ -7,6 +7,7 @@ import bisect
 import fnmatch
 import hashlib
 import json
+import math
 import operator
 import os
 import re
@@ -21,6 +22,11 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
+from crosstl.project.host_reflection import (
+    empty_host_interface_record,
+    host_interface_record,
+    reflect_target_host_interface,
+)
 from crosstl.translator.codegen import (
     backend_names,
     get_backend_extension,
@@ -542,11 +548,15 @@ RUNTIME_HOST_INTERFACE_FIELDS = frozenset(
         "status",
         "source",
         "parser",
+        "artifactFormat",
         "entryPointCount",
         "resourceCount",
+        "constantCount",
         "entryPoints",
         "resources",
+        "constants",
         "diagnostics",
+        "diagnosticRecords",
     )
 )
 RUNTIME_HOST_INTERFACE_ENTRY_POINT_FIELDS = frozenset(
@@ -1353,6 +1363,7 @@ REPORT_DIAGNOSTIC_FIELDS = frozenset(
         "variant",
         "checkKind",
         "missingCapabilities",
+        "details",
     )
 )
 REPORT_ARTIFACT_FIELDS = frozenset(
@@ -2354,11 +2365,79 @@ DIRECTX_DXC_ENTRY_PROFILES = (
     ("MSMain", "ms_6_5"),
 )
 DIRECTX_DXC_DEFAULT_ENTRY_PROFILE = ("VSMain", "vs_6_0")
+DIRECTX_DXC_PROFILE_BY_ENTRY = dict(DIRECTX_DXC_ENTRY_PROFILES)
+DIRECTX_DXC_STAGE_PROFILES = {
+    "vertex": "vs_6_0",
+    "fragment": "ps_6_0",
+    "pixel": "ps_6_0",
+    "compute": "cs_6_0",
+    "geometry": "gs_6_0",
+    "tessellation_control": "hs_6_0",
+    "hull": "hs_6_0",
+    "tessellation_evaluation": "ds_6_0",
+    "domain": "ds_6_0",
+    "task": "as_6_5",
+    "amplification": "as_6_5",
+    "mesh": "ms_6_5",
+}
+DIRECTX_DXC_STAGE_BY_ENTRY = {
+    entry: stage
+    for entry, stage in (
+        ("VSMain", "vertex"),
+        ("PSMain", "fragment"),
+        ("CSMain", "compute"),
+        ("GSMain", "geometry"),
+        ("HSMain", "tessellation_control"),
+        ("DSMain", "tessellation_evaluation"),
+        ("ASMain", "task"),
+        ("MSMain", "mesh"),
+    )
+}
+DIRECTX_DXC_STAGE_BY_SHADER_ATTRIBUTE = {
+    "vertex": "vertex",
+    "pixel": "fragment",
+    "fragment": "fragment",
+    "compute": "compute",
+    "geometry": "geometry",
+    "hull": "tessellation_control",
+    "domain": "tessellation_evaluation",
+    "amplification": "task",
+    "mesh": "mesh",
+}
+DIRECTX_DXC_LIBRARY_STAGES = frozenset(
+    (
+        "ray_generation",
+        "ray_intersection",
+        "ray_any_hit",
+        "ray_closest_hit",
+        "ray_miss",
+        "ray_callable",
+    )
+)
 DIRECTX_DXC_VRS_MIN_PROFILE_BY_STAGE = {
     "vs": "vs_6_4",
     "ps": "ps_6_4",
     "gs": "gs_6_4",
 }
+DIRECTX_HLSL_FUNCTION_RE = re.compile(
+    r"(?P<attributes>(?:\s*\[[^\]]+\]\s*)*)"
+    r"(?P<return_type>(?:[A-Za-z_][\w:<>,]*\s+)+?)"
+    r"(?P<name>[A-Za-z_]\w*)\s*"
+    r"\((?P<parameters>[^;{}]*)\)"
+    r"(?:\s*:\s*(?P<return_semantic>[A-Za-z_]\w*))?\s*\{",
+    re.MULTILINE,
+)
+DIRECTX_HLSL_STRUCT_RE = re.compile(
+    r"\bstruct\s+(?P<name>[A-Za-z_]\w*)\s*\{(?P<body>.*?)\}\s*;",
+    re.DOTALL,
+)
+DIRECTX_HLSL_SHADER_ATTR_RE = re.compile(
+    r"\[\s*shader\s*\(\s*\"([^\"]+)\"\s*\)\s*\]", re.IGNORECASE
+)
+DIRECTX_HLSL_NUMTHREADS_RE = re.compile(r"\[\s*numthreads\s*\(", re.IGNORECASE)
+DIRECTX_HLSL_SEMANTIC_RE = re.compile(
+    r":\s*(?P<semantic>[A-Za-z_]\w*)\b", re.IGNORECASE
+)
 TOOLCHAIN_SMOKE_TIMEOUT_SECONDS = 30
 TOOLCHAIN_TIMEOUT_RETURNCODE = 124
 RUNTIME_ADAPTER_CATALOG = {
@@ -4730,14 +4809,11 @@ def _external_corpus_manifest_entry_duplicate_reasons(
     entry: Mapping[str, Any],
     *,
     seen_ids: Mapping[str, int],
-    seen_paths: Mapping[str, int],
 ) -> list[str]:
-    entry_id, path = _external_corpus_manifest_entry_identity(entry)
+    entry_id, _path = _external_corpus_manifest_entry_identity(entry)
     reasons = []
     if entry_id is not None and entry_id in seen_ids:
         reasons.append(f"id duplicates entry {seen_ids[entry_id] + 1}")
-    if path is not None and path in seen_paths:
-        reasons.append(f"path duplicates entry {seen_paths[path] + 1}")
     return reasons
 
 
@@ -4746,22 +4822,18 @@ def _valid_external_corpus_manifest_entries(
 ) -> list[tuple[int, Mapping[str, Any]]]:
     entries = []
     seen_ids: dict[str, int] = {}
-    seen_paths: dict[str, int] = {}
     for index, entry in enumerate(manifest.get("entries", [])):
         if _external_corpus_manifest_entry_reasons(entry):
             continue
         duplicate_reasons = _external_corpus_manifest_entry_duplicate_reasons(
             entry,
             seen_ids=seen_ids,
-            seen_paths=seen_paths,
         )
         if duplicate_reasons:
             continue
-        entry_id, path = _external_corpus_manifest_entry_identity(entry)
+        entry_id, _path = _external_corpus_manifest_entry_identity(entry)
         if entry_id is not None:
             seen_ids[entry_id] = index
-        if path is not None:
-            seen_paths[path] = index
         entries.append((index, entry))
     return entries
 
@@ -4888,6 +4960,7 @@ def _external_corpus_report(
     manifest_entry_count = len(manifest.get("entries", []))
 
     entries = []
+    emitted_entry_ids: set[str] = set()
     for index, raw_entry in valid_manifest_entries:
         path = str(raw_entry.get("path", "")).replace("\\", "/")
         entry_targets = _manifest_entry_targets(raw_entry, targets)
@@ -4911,8 +4984,12 @@ def _external_corpus_report(
             and entry_path.exists()
         )
         discovered = unit is not None
+        entry_id = str(raw_entry.get("id") or path or f"entry-{index + 1}")
+        if entry_id in emitted_entry_ids:
+            entry_id = f"{entry_id}#entry-{index + 1}"
+        emitted_entry_ids.add(entry_id)
         entry_payload = {
-            "id": str(raw_entry.get("id") or path or f"entry-{index + 1}"),
+            "id": entry_id,
             "path": path,
             "sourceBackend": source_backend,
             "targets": entry_targets,
@@ -6744,6 +6821,32 @@ class SourceLocation:
         }
 
 
+def _diagnostic_detail_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if isinstance(value, Mapping):
+        return {
+            str(key): _diagnostic_detail_value(item)
+            for key, item in value.items()
+            if isinstance(key, str) and key.strip()
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_diagnostic_detail_value(item) for item in value]
+    return str(value)
+
+
+def _diagnostic_details_payload(details: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        str(key): _diagnostic_detail_value(value)
+        for key, value in details.items()
+        if isinstance(key, str) and key.strip() and value is not None
+    }
+
+
 @dataclass(frozen=True)
 class ProjectDiagnostic:
     """Structured project diagnostic compatible with compiler diagnostics."""
@@ -6758,6 +6861,7 @@ class ProjectDiagnostic:
     check_kind: str | None = None
     missing_capabilities: Sequence[str] = ()
     original_location: SourceLocation | None = None
+    details: Mapping[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         payload = {
@@ -6778,6 +6882,8 @@ class ProjectDiagnostic:
             payload["checkKind"] = self.check_kind
         if self.missing_capabilities:
             payload["missingCapabilities"] = list(self.missing_capabilities)
+        if self.details:
+            payload["details"] = _diagnostic_details_payload(self.details)
         return payload
 
 
@@ -6877,21 +6983,17 @@ def _external_corpus_entry_diagnostics(
     diagnostics: list[ProjectDiagnostic] = []
     location = _config_location(config)
     seen_ids: dict[str, int] = {}
-    seen_paths: dict[str, int] = {}
     for index, entry in enumerate(manifest.get("entries", [])):
         reasons = _external_corpus_manifest_entry_reasons(entry)
         if not reasons and isinstance(entry, Mapping):
             reasons = _external_corpus_manifest_entry_duplicate_reasons(
                 entry,
                 seen_ids=seen_ids,
-                seen_paths=seen_paths,
             )
         if not reasons:
-            entry_id, path = _external_corpus_manifest_entry_identity(entry)
+            entry_id, _path = _external_corpus_manifest_entry_identity(entry)
             if entry_id is not None:
                 seen_ids[entry_id] = index
-            if path is not None:
-                seen_paths[path] = index
             continue
         diagnostics.append(
             ProjectDiagnostic(
@@ -9514,6 +9616,7 @@ class _MetalTemplateMaterializationWorkBudget:
             limit=self.limit,
             limit_source=self.limit_source,
             unique_specialization_count=self.used,
+            required_work_items=self.used,
             requested_signature=requested_signature,
             suggested_action=suggested_action,
             source_location=location,
@@ -10112,7 +10215,7 @@ def _metal_function_return_type(
     open_paren = preprocessor._function_parameter_start(header)
     if open_paren is None:
         return None
-    before_params = header[:open_paren].rstrip()
+    before_params = _masked_metal_non_code_text(header[:open_paren]).rstrip()
     match = re.search(rf"\b{re.escape(function_name)}\s*$", before_params)
     if match is None:
         return None
@@ -10458,6 +10561,7 @@ def _raise_metal_type_identifier_rewrite_error(
         limit=pass_limit,
         limit_source=limit_source,
         unique_specialization_count=pass_count,
+        required_work_items=pass_count,
         requested_signature=(
             f"{pass_name}: {pass_count} type identifier rewrite passes for "
             f"'{original_text}'"
@@ -12051,8 +12155,75 @@ def _template_materialization_unsupported_message(
             )
     return (
         f"Template-hostile target '{target}' requires concrete template arguments "
-        f"before translating '{unit.relative_path}': " + "; ".join(details)
+        f"before translating '{unit.relative_path}': "
+        + "; ".join(details)
+        + ". Suggested action: "
+        + _template_materialization_suggested_remediation(target)
+        + "."
     )
+
+
+def _template_materialization_suggested_remediation(target: str) -> str:
+    return (
+        "add a concrete Metal template instantiation, supply explicit template "
+        "arguments, or configure project.source_options.metal.template_variants "
+        f"for the {target} target"
+    )
+
+
+def _template_materialization_unsupported_details(
+    target: str,
+    unit: ProjectTranslationUnit,
+    unsupported: Sequence[Mapping[str, Any]],
+    target_artifact: str | None = None,
+) -> dict[str, Any]:
+    missing_parameters: list[str] = []
+    declarations: list[dict[str, Any]] = []
+    for record in unsupported:
+        missing = [
+            str(parameter)
+            for parameter in record.get("missingParameters", [])
+            if str(parameter)
+        ]
+        for parameter in missing:
+            if parameter not in missing_parameters:
+                missing_parameters.append(parameter)
+
+        declaration = record.get("sourceDeclaration")
+        declaration_payload: dict[str, Any] = {
+            "name": str(record.get("name") or "<unknown>"),
+            "missingTemplateParameters": missing,
+            "requiredSignature": str(record.get("requiredSignature") or ""),
+            "reason": str(record.get("reason") or "missing-template-arguments"),
+            "targetBackend": target,
+        }
+        if isinstance(declaration, Mapping):
+            file_name = declaration.get("file")
+            line = declaration.get("line")
+            column = declaration.get("column")
+            if isinstance(file_name, str) and file_name:
+                location: dict[str, Any] = {"file": file_name}
+                if isinstance(line, int):
+                    location["line"] = line
+                if isinstance(column, int):
+                    location["column"] = column
+                declaration_payload["declarationLocation"] = location
+        declarations.append(declaration_payload)
+
+    details = {
+        "sourcePath": unit.relative_path,
+        "targetBackend": target,
+        "missingTemplateParameters": missing_parameters,
+        "sourceDeclarations": declarations,
+        "suggestedRemediation": _template_materialization_suggested_remediation(target),
+    }
+    if target_artifact:
+        details["targetArtifact"] = target_artifact
+        if len(missing_parameters) == 1:
+            details["unresolvedParameterName"] = missing_parameters[0]
+        elif missing_parameters:
+            details["unresolvedParameterNames"] = missing_parameters
+    return details
 
 
 def _template_materialization_unsupported_location(
@@ -12296,6 +12467,179 @@ def _unresolved_metal_template_type_records(
     return records
 
 
+def _metal_template_parameter_name_set(
+    preprocessor: Any,
+    unit: ProjectTranslationUnit,
+    source: str,
+) -> set[str]:
+    names = set(_metal_template_parameter_names(source))
+    for declaration in _metal_template_type_declarations(preprocessor, unit, source):
+        names.update(declaration.parameters)
+    return {name for name in names if name}
+
+
+def _metal_looks_like_template_placeholder_identifier(identifier: str) -> bool:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", identifier):
+        return False
+    return (
+        re.fullmatch(r"[A-Z][A-Za-z0-9_]{0,2}", identifier) is not None
+        or re.fullmatch(r"[A-Z][A-Za-z0-9_]*T", identifier) is not None
+        or re.fullmatch(r"[A-Z][A-Z0-9_]*_T", identifier) is not None
+    )
+
+
+def _unresolved_metal_template_placeholders_in_type(
+    type_text: str,
+    template_parameter_names: set[str],
+) -> list[str]:
+    normalized = _strip_metal_type_qualifiers(type_text)
+    if "." in normalized or "->" in normalized:
+        return []
+
+    missing: list[str] = []
+    for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", normalized):
+        if (
+            token in template_parameter_names
+            or _metal_looks_like_template_placeholder_identifier(token)
+        ) and token not in missing:
+            missing.append(token)
+    return missing
+
+
+def _unresolved_metal_standalone_template_type_records(
+    *,
+    preprocessor: Any,
+    unit: ProjectTranslationUnit,
+    source: str,
+    target: str,
+) -> list[dict[str, Any]]:
+    template_parameter_names = _metal_template_parameter_name_set(
+        preprocessor,
+        unit,
+        source,
+    )
+    template_spans = preprocessor._find_template_declaration_spans(source)
+    functions = preprocessor._find_non_template_function_definitions(
+        source,
+        list(template_spans),
+    )
+    records: list[dict[str, Any]] = []
+    seen_records: set[tuple[str, tuple[str, ...], str]] = set()
+    declared_template_type_names = {
+        declaration.name
+        for declaration in _metal_template_type_declarations(preprocessor, unit, source)
+    }
+    return_types = {
+        str(function.name): return_type
+        for function in functions
+        if (
+            return_type := _metal_function_return_type(
+                preprocessor,
+                _metal_function_header(source, function),
+                function.name,
+            )
+        )
+    }
+
+    def append_record(function: Any, type_text: str) -> None:
+        missing = _unresolved_metal_template_placeholders_in_type(
+            type_text,
+            template_parameter_names,
+        )
+        if not missing:
+            return
+        required_signature = _normalize_metal_type_text(type_text)
+        declared_type_check = _strip_metal_type_qualifiers(required_signature)
+        while declared_type_check.endswith(("*", "&")):
+            declared_type_check = declared_type_check[:-1].strip()
+        base_name, generic_args = _metal_generic_type_parts(
+            preprocessor,
+            declared_type_check,
+        )
+        if generic_args and base_name.split("::")[-1] in declared_template_type_names:
+            return
+        key = (str(function.name), tuple(missing), required_signature)
+        if key in seen_records:
+            return
+        seen_records.add(key)
+        location = _source_location_at_offset(
+            unit,
+            source,
+            int(function.span[0]),
+            max(int(function.span[1]) - int(function.span[0]), 0),
+        )
+        records.append(
+            {
+                "name": str(function.name),
+                "parameters": missing,
+                "missingParameters": missing,
+                "reason": "missing-template-arguments",
+                "sourceDeclaration": {
+                    "file": location.file,
+                    "line": location.line,
+                    "column": location.column,
+                    "name": str(function.name),
+                },
+                "target": target,
+                "requiredSignature": required_signature,
+            }
+        )
+
+    for function in functions:
+        header = _metal_function_header(source, function)
+        return_type = return_types.get(str(function.name))
+        if return_type:
+            append_record(function, return_type)
+        for type_text, _name, _variadic in _metal_function_parameter_declarations(
+            preprocessor,
+            header,
+        ):
+            append_record(function, type_text)
+
+        body_start, body_end = function.body_span
+        environment = _metal_function_type_environment(
+            preprocessor,
+            source,
+            function,
+            return_types,
+        )
+        for start, end in _metal_statement_spans(source, body_start, body_end):
+            declaration = _metal_local_variable_declaration(
+                preprocessor,
+                source[start:end],
+                environment,
+                return_types,
+            )
+            if declaration is None:
+                continue
+            _name, type_text = declaration
+            append_record(function, type_text)
+    return records
+
+
+def _post_materialization_unresolved_metal_template_type_records(
+    *,
+    preprocessor: Any,
+    unit: ProjectTranslationUnit,
+    source: str,
+    target: str,
+) -> list[dict[str, Any]]:
+    return [
+        *_unresolved_metal_template_type_records(
+            preprocessor=preprocessor,
+            unit=unit,
+            source=source,
+            target=target,
+        ),
+        *_unresolved_metal_standalone_template_type_records(
+            preprocessor=preprocessor,
+            unit=unit,
+            source=source,
+            target=target,
+        ),
+    ]
+
+
 def _unmaterialized_metal_template_functor_records(
     *,
     preprocessor: Any,
@@ -12387,6 +12731,7 @@ def _project_template_materialization_for_artifact(
     define_sources: Mapping[str, str] | None = None,
     include_paths: Sequence[str],
     source_options: Mapping[str, Any],
+    target_artifact: str | None = None,
 ) -> ProjectTemplateMaterializedSource | None:
     if unit.source_backend != "metal" or not _is_template_hostile_target(target):
         return None
@@ -12507,6 +12852,11 @@ def _project_template_materialization_for_artifact(
                     source_backend=unit.source_backend,
                     variant=variant,
                     missing_capabilities=["template.specialization"],
+                    details=_template_materialization_unsupported_details(
+                        target,
+                        unit,
+                        unsupported_type_records,
+                    ),
                 )
             ],
             blocked=True,
@@ -12593,6 +12943,7 @@ def _project_template_materialization_for_artifact(
                 f"Suggested action: {suggested_action}.",
                 limit=materialization_work_limit,
                 limit_source=materialization_work_limit_source,
+                required_work_items=materialization_work_items,
                 requested_signature=requested_signature,
                 suggested_action=suggested_action,
                 source_location=location,
@@ -13020,6 +13371,18 @@ def _project_template_materialization_for_artifact(
         materialized,
         preprocessor._find_template_declaration_spans(materialized),
     )
+    post_materialization_unsupported = (
+        _post_materialization_unresolved_metal_template_type_records(
+            preprocessor=preprocessor,
+            unit=unit,
+            source=materialized,
+            target=target,
+        )
+    )
+    unsupported.extend(post_materialization_unsupported)
+    unsupported_target_artifact = (
+        target_artifact if post_materialization_unsupported else None
+    )
     if not materialized.endswith("\n"):
         materialized += "\n"
 
@@ -13057,6 +13420,12 @@ def _project_template_materialization_for_artifact(
                 source_backend=unit.source_backend,
                 variant=variant,
                 missing_capabilities=["template.specialization"],
+                details=_template_materialization_unsupported_details(
+                    target,
+                    unit,
+                    unsupported,
+                    target_artifact=unsupported_target_artifact,
+                ),
             )
         ]
         return ProjectTemplateMaterializedSource(
@@ -13139,12 +13508,87 @@ def _translation_failure_missing_capabilities(
     return ["batch.translation"]
 
 
+def _template_materialization_failure_details(exc: Exception) -> dict[str, Any]:
+    limit = getattr(exc, "limit", None)
+    limit_source = getattr(exc, "limit_source", None)
+    required_work_items = getattr(exc, "required_work_items", None)
+    unique_specialization_count = getattr(exc, "unique_specialization_count", None)
+    requested_signature = getattr(exc, "requested_signature", None)
+    suggested_action = getattr(exc, "suggested_action", None)
+
+    template_materialization = {}
+    if isinstance(limit, int) and not isinstance(limit, bool):
+        template_materialization["limit"] = limit
+    if _is_non_empty_string(limit_source):
+        template_materialization["limitSource"] = limit_source
+    if isinstance(required_work_items, int) and not isinstance(
+        required_work_items, bool
+    ):
+        template_materialization["requiredWorkItems"] = required_work_items
+    if isinstance(unique_specialization_count, int) and not isinstance(
+        unique_specialization_count, bool
+    ):
+        template_materialization["requestedSpecializationCount"] = (
+            unique_specialization_count
+        )
+    if _is_non_empty_string(requested_signature):
+        template_materialization["requestedSignature"] = requested_signature
+    if _is_non_empty_string(suggested_action):
+        template_materialization["suggestedAction"] = suggested_action
+
+    if not template_materialization:
+        return {}
+    return {"templateMaterialization": template_materialization}
+
+
+def _opengl_template_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.opengl-template-type-unresolved"
+    ):
+        return {}
+
+    unresolved_parameter = getattr(exc, "unresolved_parameter", None)
+    if not _is_non_empty_string(unresolved_parameter):
+        unresolved_parameter = _metal_template_missing_binding(exc)
+    enclosing_type = getattr(exc, "enclosing_generated_type", None)
+    if not _is_non_empty_string(enclosing_type):
+        enclosing_type = _opengl_template_enclosing_type_from_message(exc)
+
+    details = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    if _is_non_empty_string(unresolved_parameter):
+        details["unresolvedParameter"] = unresolved_parameter
+    if _is_non_empty_string(enclosing_type):
+        details["enclosingGeneratedType"] = enclosing_type
+    return dict(sorted(details.items()))
+
+
+def _translation_failure_details(
+    exc: Exception,
+    target: str,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    del target
+    return {
+        **_opengl_template_failure_details(exc, unit, artifact_path),
+        **_template_materialization_failure_details(exc),
+    }
+
+
 def _translation_failure_project_diagnostics(
     exc: Exception,
     target: str,
     unit: ProjectTranslationUnit,
     variant: str | None,
     message: str,
+    artifact_path: str | None = None,
 ) -> list[ProjectDiagnostic]:
     contracts = getattr(exc, "contracts", None)
     if contracts:
@@ -13178,6 +13622,12 @@ def _translation_failure_project_diagnostics(
                     source_backend=unit.source_backend,
                     variant=variant,
                     missing_capabilities=missing_capabilities,
+                    details=_translation_failure_details(
+                        exc,
+                        target,
+                        unit,
+                        artifact_path,
+                    ),
                 )
             )
         return diagnostics
@@ -13192,8 +13642,14 @@ def _translation_failure_project_diagnostics(
             source_backend=unit.source_backend,
             variant=variant,
             missing_capabilities=_translation_failure_missing_capabilities(exc, target),
+            details=_translation_failure_details(exc, target, unit, artifact_path),
         )
     ]
+
+
+def _opengl_template_enclosing_type_from_message(exc: Exception) -> str | None:
+    match = re.search(r" from '([^']+)'", str(exc))
+    return match.group(1) if match is not None else None
 
 
 def _is_metal_template_failure(exc: Exception, unit: ProjectTranslationUnit) -> bool:
@@ -13640,6 +14096,7 @@ def translate_project(
                             define_sources=_variant_define_sources(config, variant),
                             include_paths=include_paths,
                             source_options=source_options,
+                            target_artifact=artifact.get("path"),
                         )
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -13658,6 +14115,7 @@ def translate_project(
                             unit,
                             variant,
                             failure_message,
+                            artifact.get("path"),
                         )
                     )
                     artifacts.append(artifact)
@@ -13762,6 +14220,7 @@ def translate_project(
                             unit,
                             variant,
                             failure_message,
+                            artifact.get("path"),
                         )
                     )
                 finally:
@@ -15219,6 +15678,7 @@ def _diagnostic_identity(diagnostic: Mapping[str, Any]) -> tuple[Any, ...]:
             "variant",
             "checkKind",
             "missingCapabilities",
+            "details",
         )
     )
 
@@ -16123,6 +16583,47 @@ def _runtime_manifest_source_host_interface(
     return host_interface
 
 
+def _runtime_manifest_reflected_host_interface(
+    root_path: Path | None, artifact: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    if root_path is None:
+        return None
+    target = artifact.get("target")
+    path = artifact.get("path")
+    if not (
+        _is_non_empty_string(target)
+        and _is_non_empty_string(path)
+        and _is_report_identity_path(path)
+    ):
+        return None
+    normalized_target = _normalized_targets([str(target)])[0]
+    if normalized_target not in {"directx", "opengl", "webgl", "vulkan"}:
+        return None
+    artifact_path = (root_path / str(path)).resolve()
+    if not _is_relative_to(artifact_path, root_path) or not artifact_path.is_file():
+        return None
+    catalog_entry = _runtime_adapter_catalog_entry(normalized_target)
+    return reflect_target_host_interface(
+        artifact_path,
+        target=normalized_target,
+        artifact_format=catalog_entry.get("artifactFormat"),
+        stage=(
+            str(artifact.get("stage"))
+            if _is_non_empty_string(artifact.get("stage"))
+            else None
+        ),
+    )
+
+
+def _runtime_manifest_host_interface(
+    root_path: Path | None, artifact: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    reflected = _runtime_manifest_reflected_host_interface(root_path, artifact)
+    if isinstance(reflected, Mapping):
+        return dict(reflected)
+    return _runtime_manifest_source_host_interface(root_path, artifact)
+
+
 def _runtime_manifest_group_key(value: Any) -> str:
     if value is None:
         return "default"
@@ -16689,7 +17190,7 @@ def _runtime_manifest_artifact(
     toolchains: Mapping[str, Mapping[str, Any]] | None = None,
     toolchain_runs: Mapping[tuple[Any, ...], Sequence[Mapping[str, Any]]] | None = None,
 ) -> dict[str, Any]:
-    host_interface = _runtime_manifest_source_host_interface(root_path, artifact)
+    host_interface = _runtime_manifest_host_interface(root_path, artifact)
     entry_points = _runtime_manifest_entry_points(host_interface)
     resource_bindings = _runtime_manifest_resource_bindings(host_interface)
     parameter_blocks = _runtime_manifest_parameter_blocks(resource_bindings)
@@ -17115,6 +17616,11 @@ def _runtime_binding_scalar_constants(
 ) -> list[dict[str, Any]]:
     constants = _runtime_binding_define_constants(artifact)
     constants.extend(_runtime_binding_source_scalar_constants(root_path, artifact))
+    host_interface = artifact.get("hostInterface")
+    if isinstance(host_interface, Mapping):
+        for constant in _record_sequence(host_interface.get("constants")):
+            if isinstance(constant, Mapping):
+                constants.append(dict(constant))
     return constants
 
 
@@ -18516,17 +19022,14 @@ def _runtime_host_interface_empty(
     *,
     parser: str | None = None,
     diagnostics: Sequence[str] = (),
+    artifact_format: str | None = None,
 ) -> dict[str, Any]:
-    return {
-        "status": status,
-        "source": "package-artifact",
-        "parser": parser,
-        "entryPointCount": 0,
-        "resourceCount": 0,
-        "entryPoints": [],
-        "resources": [],
-        "diagnostics": list(diagnostics),
-    }
+    return empty_host_interface_record(
+        status,
+        parser=parser,
+        artifact_format=artifact_format,
+        diagnostics=diagnostics,
+    )
 
 
 _RUNTIME_HOST_INTERFACE_STAGE_NAMES = frozenset(
@@ -18903,16 +19406,13 @@ def _runtime_host_interface_from_ast(
 ) -> dict[str, Any]:
     entry_points = _runtime_host_interface_entry_points(ast)
     resources = _runtime_host_interface_resources(ast)
-    return {
-        "status": "ready",
-        "source": source,
-        "parser": parser,
-        "entryPointCount": len(entry_points),
-        "resourceCount": len(resources),
-        "entryPoints": entry_points,
-        "resources": resources,
-        "diagnostics": [],
-    }
+    return host_interface_record(
+        status="ready",
+        source=source,
+        parser=parser,
+        entry_points=entry_points,
+        resources=resources,
+    )
 
 
 def _runtime_host_interface_for_wgsl_target(
@@ -19026,16 +19526,15 @@ def _runtime_host_interface_from_wgsl_source(
     entry_points = _runtime_wgsl_reflect_entry_points(code)
     resources = _runtime_wgsl_reflect_resources(code)
     diagnostics = _runtime_wgsl_symbolic_resource_binding_diagnostics(code)
-    return {
-        "status": "unavailable" if diagnostics else "ready",
-        "source": source,
-        "parser": parser,
-        "entryPointCount": len(entry_points),
-        "resourceCount": len(resources),
-        "entryPoints": entry_points,
-        "resources": resources,
-        "diagnostics": diagnostics,
-    }
+    return host_interface_record(
+        status="unavailable" if diagnostics else "ready",
+        source=source,
+        parser=parser,
+        artifact_format="WGSL source",
+        entry_points=entry_points,
+        resources=resources,
+        diagnostics=diagnostics,
+    )
 
 
 def _runtime_package_inspection_parser_name(target_name: str) -> str | None:
@@ -19054,28 +19553,40 @@ def _runtime_package_artifact_host_interface(
         return None
     if host_interface.get("status") != "ready":
         return None
-    return {
-        "status": host_interface.get("status"),
-        "source": host_interface.get("source"),
-        "parser": host_interface.get("parser"),
-        "entryPointCount": host_interface.get("entryPointCount", 0),
-        "resourceCount": host_interface.get("resourceCount", 0),
-        "entryPoints": [
+    return host_interface_record(
+        status=str(host_interface.get("status") or "ready"),
+        source=str(host_interface.get("source") or "package-artifact"),
+        parser=(
+            str(host_interface.get("parser"))
+            if _is_non_empty_string(host_interface.get("parser"))
+            else None
+        ),
+        artifact_format=(
+            str(host_interface.get("artifactFormat"))
+            if _is_non_empty_string(host_interface.get("artifactFormat"))
+            else None
+        ),
+        entry_points=[
             dict(entry_point)
             for entry_point in _record_sequence(host_interface.get("entryPoints"))
             if isinstance(entry_point, Mapping)
         ],
-        "resources": [
+        resources=[
             dict(resource)
             for resource in _record_sequence(host_interface.get("resources"))
             if isinstance(resource, Mapping)
         ],
-        "diagnostics": [
+        constants=[
+            dict(constant)
+            for constant in _record_sequence(host_interface.get("constants"))
+            if isinstance(constant, Mapping)
+        ],
+        diagnostics=[
             diagnostic
             for diagnostic in _record_sequence(host_interface.get("diagnostics"))
             if _is_non_empty_string(diagnostic)
         ],
-    }
+    )
 
 
 def _runtime_package_inspection_host_interface(
@@ -19095,11 +19606,14 @@ def _runtime_package_inspection_host_interface(
     except Exception:
         parser_name = None
         source_spec = None
+    catalog_entry = _runtime_adapter_catalog_entry(target_name)
+    artifact_format = catalog_entry.get("artifactFormat")
 
     if artifact_diagnostics:
         return _runtime_host_interface_empty(
             "not-inspected",
             parser=parser_name,
+            artifact_format=artifact_format,
             diagnostics=(
                 "project.runtime-package-inspection.host-interface-artifact-not-ready",
             ),
@@ -19110,6 +19624,7 @@ def _runtime_package_inspection_host_interface(
             return _runtime_host_interface_empty(
                 "not-inspected",
                 parser=RUNTIME_WGSL_REFLECTION_PARSER,
+                artifact_format="WGSL source",
                 diagnostics=(
                     "project.runtime-package-inspection.host-interface-artifact-not-ready",
                 ),
@@ -19122,6 +19637,7 @@ def _runtime_package_inspection_host_interface(
             return _runtime_host_interface_empty(
                 "not-inspected",
                 parser=RUNTIME_WGSL_REFLECTION_PARSER,
+                artifact_format="WGSL source",
                 diagnostics=(
                     "project.runtime-package-inspection.host-interface-artifact-not-ready",
                 ),
@@ -19134,6 +19650,7 @@ def _runtime_package_inspection_host_interface(
             return _runtime_host_interface_empty(
                 "not-inspected",
                 parser=RUNTIME_WGSL_REFLECTION_PARSER,
+                artifact_format="WGSL source",
                 diagnostics=(
                     "project.runtime-package-inspection.host-interface-artifact-not-ready",
                 ),
@@ -19145,17 +19662,57 @@ def _runtime_package_inspection_host_interface(
             return _runtime_host_interface_empty(
                 "unavailable",
                 parser=RUNTIME_WGSL_REFLECTION_PARSER,
+                artifact_format="WGSL source",
                 diagnostics=(
                     "project.runtime-package-inspection.host-interface-empty",
                 ),
             )
         return host_interface
+
+    reflected_targets = {"directx", "opengl", "webgl", "vulkan"}
+    if target_name in reflected_targets:
+        if not _is_non_empty_string(package_relative_path):
+            return _runtime_host_interface_empty(
+                "not-inspected",
+                parser=f"{target_name}-reflection",
+                artifact_format=artifact_format,
+                diagnostics=(
+                    "project.runtime-package-inspection.host-interface-artifact-not-ready",
+                ),
+            )
+        artifact_path = (package_root / package_relative_path).resolve()
+        if (
+            not _is_relative_to(artifact_path, package_root)
+            or not artifact_path.is_file()
+        ):
+            return _runtime_host_interface_empty(
+                "not-inspected",
+                parser=f"{target_name}-reflection",
+                artifact_format=artifact_format,
+                diagnostics=(
+                    "project.runtime-package-inspection.host-interface-artifact-not-ready",
+                ),
+            )
+        reflected_interface = reflect_target_host_interface(
+            artifact_path,
+            target=target_name,
+            artifact_format=artifact_format,
+            stage=(
+                str(artifact.get("stage"))
+                if _is_non_empty_string(artifact.get("stage"))
+                else None
+            ),
+        )
+        if isinstance(reflected_interface, Mapping):
+            return dict(reflected_interface)
+
     if source_spec is None:
         source_host_interface = _runtime_package_artifact_host_interface(artifact)
         if source_host_interface is not None:
             return source_host_interface
         return _runtime_host_interface_empty(
             "unavailable",
+            artifact_format=artifact_format,
             diagnostics=(
                 "project.runtime-package-inspection.host-interface-parser-unavailable",
             ),
@@ -19165,6 +19722,7 @@ def _runtime_package_inspection_host_interface(
         return _runtime_host_interface_empty(
             "not-inspected",
             parser=parser_name,
+            artifact_format=artifact_format,
             diagnostics=(
                 "project.runtime-package-inspection.host-interface-artifact-not-ready",
             ),
@@ -19175,6 +19733,7 @@ def _runtime_package_inspection_host_interface(
         return _runtime_host_interface_empty(
             "not-inspected",
             parser=parser_name,
+            artifact_format=artifact_format,
             diagnostics=(
                 "project.runtime-package-inspection.host-interface-artifact-not-ready",
             ),
@@ -19189,6 +19748,7 @@ def _runtime_package_inspection_host_interface(
         return _runtime_host_interface_empty(
             "failed",
             parser=parser_name,
+            artifact_format=artifact_format,
             diagnostics=(
                 "project.runtime-package-inspection.host-interface-parse-failed",
             ),
@@ -19198,6 +19758,7 @@ def _runtime_package_inspection_host_interface(
         return _runtime_host_interface_empty(
             "unavailable",
             parser=parser_name,
+            artifact_format=artifact_format,
             diagnostics=("project.runtime-package-inspection.host-interface-empty",),
         )
     return host_interface
@@ -19913,7 +20474,8 @@ def _runtime_loader_directx_entry_profiles(
     if not _is_non_empty_string(package_path):
         return (DIRECTX_DXC_DEFAULT_ENTRY_PROFILE,)
     return _directx_dxc_entry_profiles(
-        _runtime_loader_package_artifact_path(package_path, package_root)
+        _runtime_loader_package_artifact_path(package_path, package_root),
+        artifact=adapter,
     )
 
 
@@ -28757,6 +29319,35 @@ def _string_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
     return []
 
 
+def _diagnostic_detail_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return []
+    if isinstance(value, list):
+        reasons: list[str] = []
+        for index, item in enumerate(value):
+            reasons.extend(
+                _diagnostic_detail_contract_reasons(f"{prefix}[{index}]", item)
+            )
+        return reasons
+    if isinstance(value, Mapping):
+        reasons = []
+        for key, item in value.items():
+            if not _is_non_empty_string(key):
+                reasons.append(f"{prefix} keys must be non-empty strings")
+                key_prefix = prefix
+            else:
+                key_prefix = _mapping_key_path(prefix, key)
+            reasons.extend(_diagnostic_detail_contract_reasons(key_prefix, item))
+        return reasons
+    return [f"{prefix} values must be JSON scalar, array, or object values"]
+
+
+def _diagnostic_details_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    return _diagnostic_detail_contract_reasons(prefix, value)
+
+
 def _non_empty_string_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
     reasons = _string_mapping_contract_reasons(prefix, value)
     if reasons:
@@ -30929,9 +31520,6 @@ def _external_corpus_contract_reasons(
         reasons.extend(
             _duplicate_field_contract_reasons("externalCorpus.entries", entries, "id")
         )
-        reasons.extend(
-            _duplicate_path_contract_reasons("externalCorpus.entries", entries)
-        )
     reasons.extend(
         _external_corpus_summary_contract_reasons(
             external_corpus.get("summary"),
@@ -32902,6 +33490,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 reasons.append(
                     f"diagnostics[{index}].missingCapabilities must be a list of strings"
                 )
+            if "details" in diagnostic:
+                reasons.extend(
+                    _diagnostic_details_contract_reasons(
+                        f"diagnostics[{index}].details",
+                        diagnostic.get("details"),
+                    )
+                )
         if has_summary and isinstance(units, list) and isinstance(project, Mapping):
             reasons.extend(
                 _current_project_config_diagnostic_contract_reasons(
@@ -33056,7 +33651,9 @@ def _toolchain_smoke_commands(
     if target == "directx":
         return [
             (command, "artifact")
-            for command in _directx_dxc_smoke_commands(tools[0], artifact_path)
+            for command in _directx_dxc_smoke_commands(
+                tools[0], artifact_path, artifact=artifact
+            )
         ]
     if target in {"opengl", "webgl"}:
         source_stage = _glslang_source_stage(artifact)
@@ -33090,7 +33687,10 @@ def _toolchain_smoke_command(
     artifact: Mapping[str, Any] | None = None,
 ) -> tuple[list[str], str] | None:
     if target == "directx":
-        return _directx_dxc_smoke_command(tools[0], artifact_path), "artifact"
+        return (
+            _directx_dxc_smoke_command(tools[0], artifact_path, artifact=artifact),
+            "artifact",
+        )
     if target in {"opengl", "webgl"}:
         return (
             [tools[0], "--stdin", "-S", _glslang_stage(artifact_path, artifact)],
@@ -33171,12 +33771,22 @@ def _filter_glslang_guarded_stage_source(source: str, macro: str) -> str:
     return "".join(output)
 
 
-def _directx_dxc_smoke_command(tool: str, artifact_path: Path) -> list[str]:
-    return _directx_dxc_smoke_commands(tool, artifact_path)[0]
+def _directx_dxc_smoke_command(
+    tool: str,
+    artifact_path: Path,
+    *,
+    artifact: Mapping[str, Any] | None = None,
+) -> list[str]:
+    return _directx_dxc_smoke_commands(tool, artifact_path, artifact=artifact)[0]
 
 
-def _directx_dxc_smoke_commands(tool: str, artifact_path: Path) -> list[list[str]]:
-    entry_profiles = _directx_dxc_entry_profiles(artifact_path)
+def _directx_dxc_smoke_commands(
+    tool: str,
+    artifact_path: Path,
+    *,
+    artifact: Mapping[str, Any] | None = None,
+) -> list[list[str]]:
+    entry_profiles = _directx_dxc_entry_profiles(artifact_path, artifact=artifact)
     if entry_profiles is None:
         return [[tool, "-T", "lib_6_3", str(artifact_path), "-Fo", os.devnull]]
 
@@ -33210,11 +33820,13 @@ def _directx_dxc_entry_profile(artifact_path: Path) -> tuple[str, str] | None:
 
 def _directx_dxc_entry_profiles(
     artifact_path: Path,
+    *,
+    artifact: Mapping[str, Any] | None = None,
 ) -> tuple[tuple[str, str], ...] | None:
     try:
         source = artifact_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return (DIRECTX_DXC_DEFAULT_ENTRY_PROFILE,)
+        source = ""
 
     lowered = source.lower()
     if any(
@@ -33223,21 +33835,255 @@ def _directx_dxc_entry_profiles(
     ):
         return None
 
-    matches = []
-    for entry, profile in DIRECTX_DXC_ENTRY_PROFILES:
-        match = re.search(rf"\b{re.escape(entry)}\s*\(", source)
-        if match:
-            matches.append(
-                (
-                    match.start(),
-                    entry,
-                    _directx_dxc_profile_for_source(profile, source),
-                )
-            )
-    if not matches:
-        return (DIRECTX_DXC_DEFAULT_ENTRY_PROFILE,)
+    artifact_entry_profiles = _directx_dxc_entry_profiles_from_artifact(
+        artifact, source=source
+    )
+    if artifact_entry_profiles is None:
+        return None
+    if artifact_entry_profiles:
+        return artifact_entry_profiles
 
-    return tuple((entry, profile) for _position, entry, profile in sorted(matches))
+    if source:
+        source_entry_profiles = _directx_dxc_entry_profiles_from_source(source)
+        if source_entry_profiles is None:
+            return None
+        if source_entry_profiles:
+            return source_entry_profiles
+
+    return (DIRECTX_DXC_DEFAULT_ENTRY_PROFILE,)
+
+
+def _directx_dxc_entry_profiles_from_artifact(
+    artifact: Mapping[str, Any] | None,
+    *,
+    source: str,
+) -> tuple[tuple[str, str], ...] | None:
+    if not isinstance(artifact, Mapping):
+        return ()
+
+    candidates = []
+    for position, entry_point in enumerate(
+        _directx_dxc_artifact_entry_points(artifact)
+    ):
+        name = entry_point.get("name")
+        if not _is_non_empty_string(name):
+            continue
+        profile = _directx_dxc_profile_for_entry_record(entry_point)
+        if profile is None:
+            return None
+        if not _is_non_empty_string(profile):
+            continue
+        candidates.append(
+            (
+                position,
+                str(name),
+                _directx_dxc_profile_for_source(str(profile), source),
+                str(name) in DIRECTX_DXC_PROFILE_BY_ENTRY,
+            )
+        )
+
+    return _directx_dxc_preferred_entry_profiles(candidates)
+
+
+def _directx_dxc_artifact_entry_points(
+    artifact: Mapping[str, Any],
+) -> list[Mapping[str, Any]]:
+    entry_points: list[Mapping[str, Any]] = []
+
+    for entry_point in _record_sequence(artifact.get("entryPoints")):
+        if isinstance(entry_point, Mapping):
+            entry_points.append(entry_point)
+
+    for entry_profile in _record_sequence(artifact.get("entryProfiles")):
+        if not isinstance(entry_profile, Mapping):
+            continue
+        entry = entry_profile.get("entry", entry_profile.get("name"))
+        if not _is_non_empty_string(entry):
+            continue
+        entry_points.append(
+            {
+                "name": entry,
+                "profile": entry_profile.get("profile"),
+                "stage": entry_profile.get("stage"),
+            }
+        )
+
+    host_interface = artifact.get("hostInterface")
+    if isinstance(host_interface, Mapping):
+        for entry_point in _record_sequence(host_interface.get("entryPoints")):
+            if isinstance(entry_point, Mapping):
+                entry_points.append(entry_point)
+
+    return entry_points
+
+
+def _directx_dxc_profile_for_entry_record(
+    entry_point: Mapping[str, Any],
+) -> str | None:
+    profile = entry_point.get("profile", entry_point.get("shaderModel"))
+    if _is_non_empty_string(profile):
+        return str(profile)
+
+    stage = entry_point.get("stage")
+    if _is_non_empty_string(stage):
+        return _directx_dxc_profile_for_stage(str(stage))
+
+    name = entry_point.get("name")
+    if _is_non_empty_string(name):
+        generic_profile = DIRECTX_DXC_PROFILE_BY_ENTRY.get(str(name))
+        if generic_profile is not None:
+            return generic_profile
+    return ""
+
+
+def _directx_dxc_profile_for_stage(stage: str) -> str | None:
+    normalized = stage.strip().lower().replace("-", "_")
+    if normalized in DIRECTX_DXC_LIBRARY_STAGES:
+        return None
+    return DIRECTX_DXC_STAGE_PROFILES.get(normalized, "")
+
+
+def _directx_dxc_entry_profiles_from_source(
+    source: str,
+) -> tuple[tuple[str, str], ...] | None:
+    struct_semantics = _directx_hlsl_struct_semantics(source)
+    candidates = []
+    for match in DIRECTX_HLSL_FUNCTION_RE.finditer(source):
+        name = match.group("name")
+        stage = _directx_hlsl_function_stage(match, struct_semantics)
+        if stage is None:
+            continue
+        profile = _directx_dxc_profile_for_stage(stage)
+        if profile is None:
+            return None
+        if not profile:
+            continue
+        candidates.append(
+            (
+                match.start(),
+                name,
+                _directx_dxc_profile_for_source(profile, source),
+                name in DIRECTX_DXC_PROFILE_BY_ENTRY,
+            )
+        )
+
+    return _directx_dxc_preferred_entry_profiles(candidates)
+
+
+def _directx_dxc_preferred_entry_profiles(
+    candidates: Sequence[tuple[int, str, str, bool]],
+) -> tuple[tuple[str, str], ...]:
+    if not candidates:
+        return ()
+
+    concrete_stages = {
+        profile.split("_", 1)[0]
+        for _position, _entry, profile, is_generic in candidates
+        if not is_generic
+    }
+    selected = [
+        (position, entry, profile)
+        for position, entry, profile, is_generic in candidates
+        if not is_generic or profile.split("_", 1)[0] not in concrete_stages
+    ]
+
+    deduped = []
+    seen_entries: set[tuple[str, str]] = set()
+    for position, entry, profile in sorted(selected):
+        key = (entry, profile)
+        if key in seen_entries:
+            continue
+        seen_entries.add(key)
+        deduped.append((entry, profile))
+    return tuple(deduped)
+
+
+def _directx_hlsl_struct_semantics(source: str) -> dict[str, tuple[str, ...]]:
+    semantics_by_struct: dict[str, tuple[str, ...]] = {}
+    for match in DIRECTX_HLSL_STRUCT_RE.finditer(source):
+        semantics_by_struct[match.group("name")] = tuple(
+            semantic_match.group("semantic")
+            for semantic_match in DIRECTX_HLSL_SEMANTIC_RE.finditer(match.group("body"))
+        )
+    return semantics_by_struct
+
+
+def _directx_hlsl_function_stage(
+    match: re.Match[str],
+    struct_semantics: Mapping[str, Sequence[str]],
+) -> str | None:
+    attributes = match.group("attributes") or ""
+    shader_match = DIRECTX_HLSL_SHADER_ATTR_RE.search(attributes)
+    if shader_match:
+        attribute = shader_match.group(1).strip().lower()
+        if attribute in DIRECTX_DXC_LIBRARY_ATTRIBUTES:
+            return _directx_dxc_library_stage(attribute)
+        return DIRECTX_DXC_STAGE_BY_SHADER_ATTRIBUTE.get(attribute)
+
+    if DIRECTX_HLSL_NUMTHREADS_RE.search(attributes):
+        return "compute"
+
+    name = match.group("name")
+    generic_stage = DIRECTX_DXC_STAGE_BY_ENTRY.get(name)
+    if generic_stage is not None:
+        return generic_stage
+
+    semantic_stage = _directx_hlsl_return_semantic_stage(match.group("return_semantic"))
+    if semantic_stage is not None:
+        return semantic_stage
+
+    return_type = _directx_hlsl_return_type_name(match.group("return_type") or "")
+    return _directx_hlsl_struct_stage(struct_semantics.get(return_type, ()))
+
+
+def _directx_dxc_library_stage(attribute: str) -> str:
+    return {
+        "raygeneration": "ray_generation",
+        "intersection": "ray_intersection",
+        "anyhit": "ray_any_hit",
+        "closesthit": "ray_closest_hit",
+        "miss": "ray_miss",
+        "callable": "ray_callable",
+    }.get(attribute, f"ray_{attribute}")
+
+
+def _directx_hlsl_return_type_name(return_type: str) -> str:
+    qualifiers = {
+        "const",
+        "precise",
+        "static",
+        "row_major",
+        "column_major",
+        "inline",
+    }
+    tokens = [
+        token
+        for token in re.findall(r"[A-Za-z_]\w*", return_type)
+        if token not in qualifiers
+    ]
+    return tokens[-1] if tokens else ""
+
+
+def _directx_hlsl_return_semantic_stage(semantic: str | None) -> str | None:
+    if not _is_non_empty_string(semantic):
+        return None
+    normalized = str(semantic).upper()
+    if normalized.startswith(("SV_TARGET", "SV_DEPTH", "SV_COVERAGE")):
+        return "fragment"
+    if normalized == "SV_STENCILREF":
+        return "fragment"
+    if normalized == "SV_POSITION":
+        return "vertex"
+    return None
+
+
+def _directx_hlsl_struct_stage(semantics: Sequence[str]) -> str | None:
+    stages = [_directx_hlsl_return_semantic_stage(semantic) for semantic in semantics]
+    if "fragment" in stages:
+        return "fragment"
+    if "vertex" in stages:
+        return "vertex"
+    return None
 
 
 def _directx_dxc_profile_for_source(profile: str, source: str) -> str:

@@ -255,6 +255,34 @@ def test_glsl_fragment_fragcoord_lowers_to_hlsl_position_input(tmp_path):
     assert "_crossglFragCoord.y" in generated_code
 
 
+def test_glsl_input_attachment_reports_unsupported_hlsl_diagnostic(tmp_path):
+    shader = """
+    #version 450
+    layout(input_attachment_index = 0, set = 0, binding = 0)
+    uniform subpassInput sceneColor;
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        fragColor = subpassLoad(sceneColor);
+    }
+    """
+    shader_path = tmp_path / "input-attachment.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "unsupported HLSL input attachment declaration" in generated_code
+    assert "unsupported HLSL input attachment load" in generated_code
+    assert "subpassInput sceneColor" not in generated_code
+    assert "subpassLoad(sceneColor)" not in generated_code
+    assert "float4(0.0, 0.0, 0.0, 0.0)" in generated_code
+
+
 def test_glsl_fragment_input_locations_lower_to_distinct_hlsl_semantics(tmp_path):
     shader = """
     #version 450
@@ -5036,6 +5064,34 @@ def test_hlsl_output_return_semantics_still_emit():
     assert "uint PSMain(): SV_TARGET3" in integer_target_output
     assert "gl_FragData" not in integer_target_output
 
+    scalar_target_code = """
+    shader ValidScalarTargetReturnSemantic {
+        fragment {
+            float main() @ SV_Target0 {
+                return 1.0;
+            }
+        }
+    }
+    """
+    scalar_target_output = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(scalar_target_code), "fragment"
+    )
+    assert "float PSMain(): SV_Target0" in scalar_target_output
+
+    integer_vector_target_code = """
+    shader ValidIntegerVectorTargetReturnSemantic {
+        fragment {
+            ivec2 main() @ SV_Target1 {
+                return ivec2(1);
+            }
+        }
+    }
+    """
+    integer_vector_target_output = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(integer_vector_target_code), "fragment"
+    )
+    assert "int2 PSMain(): SV_Target1" in integer_vector_target_output
+
     coverage_code = """
     shader ValidCoverageReturnSemantic {
         fragment {
@@ -5054,8 +5110,8 @@ def test_hlsl_output_return_semantics_still_emit():
     location_code = """
     shader ValidLocationReturnSemantic {
         fragment {
-            vec4 main() @ location(0) {
-                return vec4(1.0);
+            uint main() @ location(0) {
+                return 1u;
             }
         }
     }
@@ -5063,7 +5119,7 @@ def test_hlsl_output_return_semantics_still_emit():
     location_output = HLSLCodeGen().generate_stage(
         crosstl.translator.parse(location_code), "fragment"
     )
-    assert "float4 PSMain(): SV_Target0" in location_output
+    assert "uint PSMain(): SV_Target0" in location_output
     assert ": location" not in location_output
 
 
@@ -5071,10 +5127,18 @@ def test_hlsl_output_return_semantics_still_emit():
     ("stage", "return_type", "semantic", "value", "hlsl_semantic", "expected_type"),
     [
         ("vertex", "float", "gl_Position", "0.0", "SV_POSITION", "float4"),
+        ("fragment", "float", "gl_FragColor", "0.0", "SV_TARGET", "float4"),
         ("fragment", "vec3", "gl_FragColor", "vec3(0.0)", "SV_TARGET", "float4"),
         ("fragment", "vec4", "gl_FragDepth", "vec4(0.0)", "SV_DEPTH", "float"),
         ("fragment", "int", "gl_SampleMask", "1", "SV_Coverage", "uint"),
-        ("fragment", "float", "SV_TARGET1", "0.0", "SV_TARGET1", "float4"),
+        (
+            "fragment",
+            "bool",
+            "SV_TARGET1",
+            "true",
+            "SV_TARGET1",
+            "scalar or vector numeric render target type",
+        ),
     ],
 )
 def test_hlsl_function_return_output_builtin_types_are_validated(
@@ -5509,7 +5573,11 @@ def test_hlsl_struct_return_output_builtin_stages_are_validated(
         ("vec3 color @ gl_FragColor", "SV_TARGET", "float4"),
         ("vec4 depth @ gl_FragDepth", "SV_DEPTH", "float"),
         ("int mask @ gl_SampleMask", "SV_Coverage", "uint"),
-        ("float rawColor @ SV_TARGET1", "SV_TARGET1", "float4"),
+        (
+            "bool rawColor @ SV_TARGET1",
+            "SV_TARGET1",
+            "scalar or vector numeric render target type",
+        ),
     ],
 )
 def test_hlsl_struct_output_builtin_types_are_validated(

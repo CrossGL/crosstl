@@ -1,5 +1,15 @@
 """Project scanning, translation, validation, and reporting APIs."""
 
+from .host_reflection import (
+    REFLECTION_AMBIGUOUS_BINDING,
+    REFLECTION_EMPTY,
+    REFLECTION_INCOMPLETE_OUTPUT,
+    REFLECTION_PARSE_FAILED,
+    REFLECTION_TOOL_UNAVAILABLE,
+    REFLECTION_UNSUPPORTED_FORMAT,
+    ReflectionDiagnostic,
+    reflect_target_host_interface,
+)
 from .pipeline import (
     ProjectConfig,
     ProjectDiagnostic,
@@ -87,6 +97,15 @@ from .runtime_verification import (
     write_runtime_test_report,
     write_runtime_verification_report,
 )
+from .test_runner import (
+    PROJECT_TEST_RUNNER_INSPECTION_KIND,
+    PROJECT_TEST_RUNNER_PLAN_KIND,
+    PROJECT_TEST_RUNNER_REPORT_KIND,
+    build_project_test_runner_plan,
+    execute_project_test_runner_plan,
+    inspect_project_test_runner_plan,
+    write_project_test_runner_report,
+)
 
 __all__ = [
     "ProjectConfig",
@@ -94,6 +113,13 @@ __all__ = [
     "ProjectPortabilityReport",
     "ProjectScan",
     "ProjectTranslationUnit",
+    "REFLECTION_AMBIGUOUS_BINDING",
+    "REFLECTION_EMPTY",
+    "REFLECTION_INCOMPLETE_OUTPUT",
+    "REFLECTION_PARSE_FAILED",
+    "REFLECTION_TOOL_UNAVAILABLE",
+    "REFLECTION_UNSUPPORTED_FORMAT",
+    "ReflectionDiagnostic",
     "DirectXRuntimeParityAdapter",
     "NativeRuntimeBufferBinding",
     "NativeRuntimeConstantBinding",
@@ -137,6 +163,9 @@ __all__ = [
     "RuntimeValidationHook",
     "RuntimeVerificationError",
     "VulkanRuntimeParityAdapter",
+    "PROJECT_TEST_RUNNER_INSPECTION_KIND",
+    "PROJECT_TEST_RUNNER_PLAN_KIND",
+    "PROJECT_TEST_RUNNER_REPORT_KIND",
     "build_runtime_artifact_manifest",
     "build_runtime_binding_manifest",
     "build_runtime_test_manifest",
@@ -144,13 +173,16 @@ __all__ = [
     "build_runtime_host_integration_handoff",
     "build_runtime_loader_manifest",
     "build_runtime_package",
+    "build_project_test_runner_plan",
     "compare_runtime_outputs",
     "default_runtime_test_adapters",
     "execute_runtime_host_integration",
+    "execute_project_test_runner_plan",
     "inspect_runtime_host_integration_handoff",
     "inspect_runtime_host_loader_scaffolds",
     "inspect_runtime_package",
     "inspect_project_report",
+    "inspect_project_test_runner_plan",
     "load_runtime_verification_fixtures",
     "load_runtime_test_manifest",
     "load_project_config",
@@ -160,6 +192,7 @@ __all__ = [
     "parse_runtime_test_manifest",
     "plan_runtime_test_manifest",
     "prepare_runtime_execution",
+    "reflect_target_host_interface",
     "plan_runtime_adapters",
     "plan_runtime_host_bindings",
     "plan_runtime_host_integration_execution",
@@ -172,4 +205,5 @@ __all__ = [
     "verify_runtime_test_manifest",
     "write_runtime_verification_report",
     "write_runtime_test_report",
+    "write_project_test_runner_report",
 ]

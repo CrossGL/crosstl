@@ -38,10 +38,12 @@ from crosstl.project import (
     plan_runtime_host_integration_execution,
     plan_runtime_host_loader_consumption,
     plan_runtime_integration,
+    reflect_target_host_interface,
     scan_project,
     translate_project,
     validate_project_report,
 )
+from crosstl.project.host_reflection import REFLECTION_TOOL_UNAVAILABLE
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 from tests.test_backend.test_SPIRV.test_codegen import (
     SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
@@ -487,6 +489,16 @@ def test_project_package_exposes_public_api_surface():
         "ProjectPortabilityReport",
         "ProjectScan",
         "ProjectTranslationUnit",
+        "PROJECT_TEST_RUNNER_INSPECTION_KIND",
+        "PROJECT_TEST_RUNNER_PLAN_KIND",
+        "PROJECT_TEST_RUNNER_REPORT_KIND",
+        "REFLECTION_AMBIGUOUS_BINDING",
+        "REFLECTION_EMPTY",
+        "REFLECTION_INCOMPLETE_OUTPUT",
+        "REFLECTION_PARSE_FAILED",
+        "REFLECTION_TOOL_UNAVAILABLE",
+        "REFLECTION_UNSUPPORTED_FORMAT",
+        "ReflectionDiagnostic",
         "DirectXRuntimeParityAdapter",
         "NativeRuntimeBufferBinding",
         "NativeRuntimeConstantBinding",
@@ -537,13 +549,16 @@ def test_project_package_exposes_public_api_surface():
         "build_runtime_loader_manifest",
         "build_runtime_package",
         "build_runtime_test_manifest",
+        "build_project_test_runner_plan",
         "compare_runtime_outputs",
         "default_runtime_test_adapters",
         "execute_runtime_host_integration",
+        "execute_project_test_runner_plan",
         "inspect_runtime_host_integration_handoff",
         "inspect_runtime_host_loader_scaffolds",
         "inspect_runtime_package",
         "inspect_project_report",
+        "inspect_project_test_runner_plan",
         "load_runtime_verification_fixtures",
         "load_runtime_test_manifest",
         "load_project_config",
@@ -553,6 +568,7 @@ def test_project_package_exposes_public_api_surface():
         "parse_runtime_test_manifest",
         "plan_runtime_test_manifest",
         "prepare_runtime_execution",
+        "reflect_target_host_interface",
         "plan_runtime_adapters",
         "plan_runtime_host_bindings",
         "plan_runtime_host_integration_execution",
@@ -565,6 +581,7 @@ def test_project_package_exposes_public_api_surface():
         "verify_runtime_test_manifest",
         "write_runtime_verification_report",
         "write_runtime_test_report",
+        "write_project_test_runner_report",
     }
     for name in project_api.__all__:
         assert hasattr(project_api, name)
@@ -7960,6 +7977,72 @@ def test_translate_project_specializes_generic_helper_for_spirv(tmp_path):
     assert "unspecialized generic helper" not in spirv
 
 
+def test_translate_project_opengl_rejects_unresolved_generic_struct_type(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "unresolved_box.cgl").write_text(
+        textwrap.dedent("""
+            shader OpenGLTemplateLeak {
+                generic<T> struct Box {
+                    T value;
+                };
+
+                struct Payload {
+                    Box<T> unresolved;
+                };
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["path"] == "translated/opengl/shaders/unresolved_box.glsl"
+    assert not (repo / artifact["path"]).exists()
+    assert "Box_T" not in artifact["error"]
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.opengl-template-type-unresolved": 1
+    }
+
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.opengl-template-type-unresolved"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert diagnostic["details"] == {
+        "enclosingGeneratedType": "Box<T>",
+        "sourcePath": "shaders/unresolved_box.cgl",
+        "targetArtifact": "translated/opengl/shaders/unresolved_box.glsl",
+        "unresolvedParameter": "T",
+    }
+    assert "unresolved template type 'T' from 'Box<T>'" in diagnostic["message"]
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
 def test_translate_project_lowers_glsl_vertex_index_for_graphics_targets(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
@@ -10761,6 +10844,51 @@ def test_translate_project_opengl_materializes_mlx_explicit_template_helpers(
     assert not re.search(r"\b(?:T|IdxT|Offset|AccT|Wtype)\b", output)
 
 
+@pytest.mark.parametrize("target", ["directx", "vulkan"])
+def test_translate_project_ignores_comment_words_before_mlx_metal_helpers(
+    tmp_path,
+    target,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "random.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_random(name, type) \\
+                instantiate_kernel("random" #name, random_values, type)
+
+            // Non templated version to handle arbitrary dims
+            METAL_FUNC float seed_to_unit_float(float seed) {
+                return seed * 0.5;
+            }
+
+            template <typename T>
+            [[kernel]] void random_values(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                out[gid] = T(seed_to_unit_float(float(gid)));
+            }
+
+            instantiate_random(float32, float)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=[target], output_dir="translated")
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["artifacts"][0]["status"] == "translated"
+    assert payload["artifacts"][0]["templateMaterialization"]["unsupported"] == []
+    assert "project.translate.template-materialization-unsupported" not in payload[
+        "summary"
+    ].get("diagnosticsByCode", {})
+
+
 def test_translate_project_opengl_materializes_mlx_pointer_and_value_bindings(
     tmp_path,
 ):
@@ -12811,6 +12939,128 @@ def test_translate_project_opengl_rejects_unresolved_metal_template_type_before_
         f"{expected_name} missing {', '.join(expected_missing)}"
         in diagnostic["message"]
     )
+
+
+def test_translate_project_opengl_rejects_post_materialization_template_type_leak(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "steel_attention_epilogue.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_attention(name, type) \\
+                instantiate_kernel("attention_" #name, attention, type)
+
+            template <typename T, typename Epilogue>
+            struct BlockMMA {
+                T value;
+            };
+
+            template <typename T>
+            [[kernel]] void attention(
+                device BlockMMA<T, Epilogue>* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                out[gid].value = T(1);
+            }
+
+            instantiate_attention(float32, float)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.template-materialization-unsupported": 1
+    }
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["path"] == "out/opengl/steel_attention_epilogue.glsl"
+    assert not (repo / artifact["path"]).exists()
+    assert (
+        "OpenGL codegen cannot emit unresolved template type" not in artifact["error"]
+    )
+    assert artifact["templateMaterialization"] == {
+        "status": "unsupported",
+        "specializationCount": 1,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "configuredParameterSources": {},
+        "specializations": [
+            {
+                "name": "attention",
+                "materializedName": "attention_float32",
+                "parameters": {"T": "float"},
+                "parameterSources": {"T": "source-instantiation"},
+                "source": "source-instantiation",
+                "hostName": "attention_float32",
+            }
+        ],
+        "unsupported": [
+            {
+                "name": "BlockMMA",
+                "parameters": ["T", "Epilogue"],
+                "missingParameters": ["Epilogue"],
+                "reason": "missing-template-arguments",
+                "sourceDeclaration": {
+                    "file": "steel_attention_epilogue.metal",
+                    "line": 5,
+                    "column": 1,
+                    "name": "BlockMMA",
+                },
+                "target": "opengl",
+                "requiredSignature": "BlockMMA<float, Epilogue>",
+            }
+        ],
+    }
+
+    diagnostic = payload["diagnostics"][0]
+    assert (
+        diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    )
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert "BlockMMA missing Epilogue" in diagnostic["message"]
+    assert "Target artifact" not in diagnostic["message"]
+    assert diagnostic["details"] == {
+        "sourcePath": "steel_attention_epilogue.metal",
+        "targetBackend": "opengl",
+        "missingTemplateParameters": ["Epilogue"],
+        "sourceDeclarations": [
+            {
+                "name": "BlockMMA",
+                "missingTemplateParameters": ["Epilogue"],
+                "requiredSignature": "BlockMMA<float, Epilogue>",
+                "reason": "missing-template-arguments",
+                "targetBackend": "opengl",
+                "declarationLocation": {
+                    "file": "steel_attention_epilogue.metal",
+                    "line": 5,
+                    "column": 1,
+                },
+            }
+        ],
+        "suggestedRemediation": (
+            "add a concrete Metal template instantiation, supply explicit "
+            "template arguments, or configure "
+            "project.source_options.metal.template_variants for the opengl target"
+        ),
+        "targetArtifact": "out/opengl/steel_attention_epilogue.glsl",
+        "unresolvedParameterName": "Epilogue",
+    }
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
 
 
 def test_translate_project_forwards_metal_template_specialization_limit(tmp_path):
@@ -16949,7 +17199,9 @@ def test_translate_project_skips_invalid_external_corpus_provenance(tmp_path):
     )
 
 
-def test_translate_project_skips_duplicate_external_corpus_entries(tmp_path):
+def test_translate_project_preserves_external_corpus_entries_with_shared_path(
+    tmp_path,
+):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
@@ -16960,19 +17212,27 @@ def test_translate_project_skips_duplicate_external_corpus_entries(tmp_path):
                 "schemaVersion": 1,
                 "entries": [
                     {
-                        "id": "repo/simple",
+                        "id": "repo/simple-a",
                         "path": "simple.cgl",
                         "sourceBackend": "cgl",
                         "targets": ["cgl"],
+                        "repository": "https://github.com/example/project",
+                        "sourceUrl": (
+                            "https://github.com/example/project/blob/main/a.cgl"
+                        ),
                     },
                     {
-                        "id": "repo/simple-path-duplicate",
+                        "id": "repo/simple-b",
                         "path": "simple.cgl",
                         "sourceBackend": "cgl",
                         "targets": ["cgl"],
+                        "repository": "https://github.com/example/project",
+                        "sourceUrl": (
+                            "https://github.com/example/project/blob/main/b.cgl"
+                        ),
                     },
                     {
-                        "id": "repo/simple",
+                        "id": "repo/simple-a",
                         "path": "other.cgl",
                         "sourceBackend": "cgl",
                         "targets": ["cgl"],
@@ -17000,19 +17260,25 @@ def test_translate_project_skips_duplicate_external_corpus_entries(tmp_path):
     assert validation["success"] is True
     external_corpus = payload["externalCorpus"]
     assert external_corpus["summary"]["manifestEntryCount"] == 3
-    assert external_corpus["summary"]["validEntryCount"] == 1
-    assert external_corpus["summary"]["invalidEntryCount"] == 2
-    assert [entry["path"] for entry in external_corpus["entries"]] == ["simple.cgl"]
-    assert payload["diagnosticCounts"] == {"note": 0, "warning": 2, "error": 0}
+    assert external_corpus["summary"]["validEntryCount"] == 2
+    assert external_corpus["summary"]["invalidEntryCount"] == 1
+    assert [entry["id"] for entry in external_corpus["entries"]] == [
+        "repo/simple-a",
+        "repo/simple-b",
+    ]
+    assert [entry["path"] for entry in external_corpus["entries"]] == [
+        "simple.cgl",
+        "simple.cgl",
+    ]
+    assert [entry["sourceUrl"] for entry in external_corpus["entries"]] == [
+        "https://github.com/example/project/blob/main/a.cgl",
+        "https://github.com/example/project/blob/main/b.cgl",
+    ]
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
     diagnostics = payload["diagnostics"]
-    assert all(
-        diagnostic["code"] == "project.config.external-corpus-entry-invalid"
-        for diagnostic in diagnostics
-    )
-    assert "entry 2" in diagnostics[0]["message"]
-    assert "path duplicates entry 1" in diagnostics[0]["message"]
-    assert "entry 3" in diagnostics[1]["message"]
-    assert "id duplicates entry 1" in diagnostics[1]["message"]
+    assert diagnostics[0]["code"] == "project.config.external-corpus-entry-invalid"
+    assert "entry 3" in diagnostics[0]["message"]
+    assert "id duplicates entry 1" in diagnostics[0]["message"]
 
 
 def test_validate_project_report_accepts_generated_source_maps(tmp_path):
@@ -17892,6 +18158,202 @@ def test_directx_toolchain_smoke_commands_compile_all_detected_entries(tmp_path)
             "artifact",
         ),
     ]
+
+
+def test_directx_toolchain_smoke_commands_use_monogame_sprite_entries(tmp_path):
+    shader = tmp_path / "SpriteEffect.hlsl"
+    shader.write_text(
+        textwrap.dedent("""
+            struct VSOutput {
+                float4 Position : SV_Position;
+                float4 Color : COLOR0;
+                float2 TextureCoordinate : TEXCOORD0;
+            };
+
+            VSOutput SpriteVertexShader(
+                float4 position : POSITION0,
+                float4 color : COLOR0,
+                float2 texCoord : TEXCOORD0
+            ) {
+                VSOutput output;
+                output.Position = position;
+                output.Color = color;
+                output.TextureCoordinate = texCoord;
+                return output;
+            }
+
+            float4 SpritePixelShader(VSOutput input) : SV_Target0 {
+                return input.Color;
+            }
+
+            float4 PSMain() : SV_Target0 {
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    commands = project_pipeline._toolchain_smoke_commands("directx", ["dxc"], shader)
+
+    assert commands == [
+        (
+            [
+                "dxc",
+                "-T",
+                "vs_6_0",
+                "-E",
+                "SpriteVertexShader",
+                str(shader),
+                "-Fo",
+                project_pipeline.os.devnull,
+            ],
+            "artifact",
+        ),
+        (
+            [
+                "dxc",
+                "-T",
+                "ps_6_0",
+                "-E",
+                "SpritePixelShader",
+                str(shader),
+                "-Fo",
+                project_pipeline.os.devnull,
+            ],
+            "artifact",
+        ),
+    ]
+    assert all("PSMain" not in command for command, _kind in commands)
+
+
+def test_directx_toolchain_smoke_commands_prefer_report_entry_profiles(tmp_path):
+    shader = tmp_path / "reflected.hlsl"
+    shader.write_text(
+        textwrap.dedent("""
+            float4 PSMain() : SV_Target0 {
+                return 1.0.xxxx;
+            }
+
+            float4 ReportPixelShader() : SV_Target0 {
+                return 0.5.xxxx;
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_commands(
+        "directx",
+        ["dxc"],
+        shader,
+        artifact={
+            "entryProfiles": [{"entry": "ReportPixelShader", "profile": "ps_6_7"}]
+        },
+    ) == [
+        (
+            [
+                "dxc",
+                "-T",
+                "ps_6_7",
+                "-E",
+                "ReportPixelShader",
+                str(shader),
+                "-Fo",
+                project_pipeline.os.devnull,
+            ],
+            "artifact",
+        )
+    ]
+
+
+def test_project_directx_smoke_runs_monogame_entries_not_empty_generic_wrapper(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    artifact = repo / "out" / "directx" / "SpriteEffect.hlsl"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(
+        textwrap.dedent("""
+            struct VSOutput {
+                float4 Position : SV_Position;
+                float4 Color : COLOR0;
+                float2 TextureCoordinate : TEXCOORD0;
+            };
+
+            VSOutput SpriteVertexShader(float4 position : POSITION0) {
+                VSOutput output;
+                output.Position = position;
+                output.Color = 1.0.xxxx;
+                output.TextureCoordinate = 0.0.xx;
+                return output;
+            }
+
+            float4 SpritePixelShader(VSOutput input) : SV_Target0 {
+                return input.Color;
+            }
+
+            float4 PSMain() : SV_Target0 {
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+    expected_commands = [
+        [
+            "dxc",
+            "-T",
+            "vs_6_0",
+            "-E",
+            "SpriteVertexShader",
+            str(artifact.resolve()),
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+        [
+            "dxc",
+            "-T",
+            "ps_6_0",
+            "-E",
+            "SpritePixelShader",
+            str(artifact.resolve()),
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+    ]
+    commands = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: "/usr/bin/dxc" if tool == "dxc" else None,
+    )
+
+    def run_toolchain(command, **kwargs):
+        commands.append(command)
+        assert command in expected_commands
+        assert kwargs["cwd"] == str(repo)
+        assert kwargs["input"] is None
+        assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    runs = project_pipeline._run_toolchain_smoke(
+        [
+            {
+                "source": (
+                    "demos/open-source-porting/cases/monogame-sprite-effect/"
+                    "SpriteEffect.fx"
+                ),
+                "sourceBackend": "directx",
+                "target": "directx",
+                "path": "out/directx/SpriteEffect.hlsl",
+                "status": "translated",
+            }
+        ],
+        repo,
+    )
+
+    assert commands == expected_commands
+    assert [run["command"] for run in runs] == expected_commands
+    assert all("PSMain" not in run["command"] for run in runs)
 
 
 def test_directx_toolchain_smoke_command_uses_vrs_capable_profile(tmp_path):
@@ -22800,7 +23262,7 @@ def test_validate_project_report_rejects_external_corpus_entry_state_mismatches(
     ) in diagnostic["message"]
 
 
-def test_validate_project_report_rejects_duplicate_external_corpus_entries(
+def test_validate_project_report_rejects_duplicate_external_corpus_entry_ids(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -22870,10 +23332,6 @@ def test_validate_project_report_rejects_duplicate_external_corpus_entries(
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
         "externalCorpus.entries[1].id duplicates externalCorpus.entries[0].id"
-        in diagnostic["message"]
-    )
-    assert (
-        "externalCorpus.entries[1].path duplicates externalCorpus.entries[0].path"
         in diagnostic["message"]
     )
 
@@ -25847,6 +26305,7 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
                         "variant": 0,
                         "checkKind": "maybe",
                         "missingCapabilities": "repo.scan",
+                        "details": [],
                     }
                 ],
             }
@@ -25896,6 +26355,7 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
     assert "diagnostics[0].missingCapabilities must be a list of strings" in (
         diagnostic["message"]
     )
+    assert "diagnostics[0].details must be an object" in diagnostic["message"]
 
 
 def test_project_diagnostics_preserve_original_locations(tmp_path):
@@ -31987,11 +32447,15 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
         "status": "ready",
         "source": "source-artifact",
         "parser": "cgl",
+        "artifactFormat": None,
         "entryPointCount": 1,
         "resourceCount": 0,
+        "constantCount": 0,
         "entryPoints": [{"name": "main", "stage": "vertex", "executionConfig": {}}],
         "resources": [],
+        "constants": [],
         "diagnostics": [],
+        "diagnosticRecords": [],
     }
     assert artifact["entryPoints"] == [
         {"name": "main", "stage": "vertex", "executionConfig": {}}
@@ -32508,11 +32972,15 @@ def test_build_runtime_package_from_runtime_artifact_manifest(tmp_path):
         "status": "ready",
         "source": "source-artifact",
         "parser": "cgl",
+        "artifactFormat": None,
         "entryPointCount": 1,
         "resourceCount": 0,
+        "constantCount": 0,
         "entryPoints": [{"name": "main", "stage": "vertex", "executionConfig": {}}],
         "resources": [],
+        "constants": [],
         "diagnostics": [],
+        "diagnosticRecords": [],
     }
     assert (
         set(artifact["sourceRemap"])
@@ -32693,6 +33161,236 @@ def _build_runtime_package_fixture(
     return repo, package_dir, package
 
 
+def _write_reduced_runtime_package(tmp_path, *, target, filename, source):
+    package_dir = tmp_path / f"{target}-runtime-package"
+    artifact_dir = package_dir / "artifacts" / "out" / target
+    artifact_dir.mkdir(parents=True)
+    artifact_path = artifact_dir / filename
+    if isinstance(source, bytes):
+        artifact_path.write_bytes(source)
+    else:
+        artifact_path.write_text(source, encoding="utf-8")
+    package_path = artifact_path.relative_to(package_dir).as_posix()
+    package = {
+        "schemaVersion": 1,
+        "kind": project_pipeline.RUNTIME_PACKAGE_KIND,
+        "success": True,
+        "packageRoot": str(package_dir),
+        "project": {"targets": [target]},
+        "runtimePlan": {"runtimeReferenceCount": 0},
+        "artifacts": [
+            {
+                "id": f"{target}|{filename}",
+                "status": "packaged",
+                "source": f"kernels/{filename}",
+                "sourcePath": f"out/{target}/{filename}",
+                "packagePath": package_path,
+                "target": target,
+                "sourceBackend": "cgl",
+                "stage": "compute",
+                "variant": "reduced",
+                "defines": {},
+                "hash": project_pipeline._source_hash(artifact_path),
+                "sizeBytes": artifact_path.stat().st_size,
+                "sourceRemap": None,
+                "hostInterface": None,
+            }
+        ],
+    }
+    manifest_path = package_dir / "runtime-package.json"
+    manifest_path.write_text(json.dumps(package, indent=2), encoding="utf-8")
+    return package_dir, manifest_path
+
+
+def test_inspect_runtime_package_reflects_hlsl_artifact_metadata(tmp_path):
+    _, manifest_path = _write_reduced_runtime_package(
+        tmp_path,
+        target="directx",
+        filename="kernel.hlsl",
+        source=textwrap.dedent("""
+            RWStructuredBuffer<float> values : register(u0, space1);
+            const uint tileSize = 16u;
+
+            [numthreads(8, 2, 1)]
+            void main(uint3 tid : SV_DispatchThreadID) {
+                values[tid.x] = 1.0;
+            }
+            """).strip(),
+    )
+
+    payload = inspect_runtime_package(manifest_path)
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["source"] == "compiled-artifact"
+    assert host_interface["parser"] == "directx-reflection"
+    assert host_interface["entryPoints"] == [
+        {
+            "name": "main",
+            "stage": "compute",
+            "executionConfig": {"numthreads": [8, 2, 1]},
+        }
+    ]
+    assert host_interface["resources"] == [
+        {
+            "name": "values",
+            "kind": "buffer",
+            "type": "RWStructuredBuffer<float>",
+            "set": 1,
+            "binding": 0,
+            "access": "read_write",
+        }
+    ]
+    assert host_interface["constants"] == [
+        {
+            "name": "tileSize",
+            "kind": "scalar-constant",
+            "dtype": "uint",
+            "value": 16,
+            "required": False,
+            "source": "hlsl.const",
+        }
+    ]
+    assert host_interface["diagnostics"] == []
+
+
+def test_inspect_runtime_package_reflects_glsl_artifact_metadata(tmp_path):
+    _, manifest_path = _write_reduced_runtime_package(
+        tmp_path,
+        target="opengl",
+        filename="kernel.comp",
+        source=textwrap.dedent("""
+            #version 450 core
+            layout(local_size_x = 8, local_size_y = 2, local_size_z = 1) in;
+            layout(set = 2, binding = 3) buffer Values { float values[]; } values;
+            layout(constant_id = 7) const uint tileSize = 16u;
+
+            void main() {
+                values.values[gl_GlobalInvocationID.x] = 1.0;
+            }
+            """).strip(),
+    )
+
+    payload = inspect_runtime_package(manifest_path)
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["parser"] == "opengl-reflection"
+    assert host_interface["entryPoints"] == [
+        {
+            "name": "main",
+            "stage": "compute",
+            "executionConfig": {
+                "local_size_x": 8,
+                "local_size_y": 2,
+                "local_size_z": 1,
+            },
+        }
+    ]
+    assert host_interface["resources"] == [
+        {
+            "name": "values",
+            "kind": "buffer",
+            "type": "Values",
+            "set": 2,
+            "binding": 3,
+            "access": "read_write",
+        }
+    ]
+    assert host_interface["constants"] == [
+        {
+            "name": "tileSize",
+            "kind": "specialization-constant",
+            "id": 7,
+            "dtype": "uint",
+            "value": 16,
+            "required": False,
+            "source": "glsl.layout.constant_id",
+        }
+    ]
+    assert host_interface["diagnostics"] == []
+
+
+def test_inspect_runtime_package_reflects_spirv_assembly_metadata(tmp_path):
+    _, manifest_path = _write_reduced_runtime_package(
+        tmp_path,
+        target="vulkan",
+        filename="kernel.spvasm",
+        source=textwrap.dedent("""
+            OpEntryPoint GLCompute %main "main" %buf
+            OpExecutionMode %main LocalSize 8 2 1
+            OpName %buf "values"
+            OpName %Buffer "Values"
+            OpName %tileSize "tileSize"
+            OpDecorate %buf DescriptorSet 2
+            OpDecorate %buf Binding 3
+            OpDecorate %tileSize SpecId 7
+            %uint = OpTypeInt 32 0
+            %Buffer = OpTypeStruct %uint
+            %ptr = OpTypePointer StorageBuffer %Buffer
+            %buf = OpVariable %ptr StorageBuffer
+            %tileSize = OpSpecConstant %uint 16
+            """).strip(),
+    )
+
+    payload = inspect_runtime_package(manifest_path)
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["parser"] == "spirv-reflection"
+    assert host_interface["entryPoints"] == [
+        {
+            "name": "main",
+            "stage": "compute",
+            "executionConfig": {"local_size": [8, 2, 1]},
+            "metadata": {"executionModel": "GLCompute", "function": "%main"},
+        }
+    ]
+    assert host_interface["resources"][0] == {
+        "name": "values",
+        "kind": "buffer",
+        "type": "Values",
+        "set": 2,
+        "binding": 3,
+        "access": "read_write",
+        "metadata": {
+            "id": "%buf",
+            "storageClass": "StorageBuffer",
+            "typeId": "%ptr",
+        },
+    }
+    assert host_interface["constants"] == [
+        {
+            "name": "tileSize",
+            "kind": "specialization-constant",
+            "dtype": "uint",
+            "value": 16,
+            "required": False,
+            "source": "spirv.spec-constant",
+            "metadata": {"id": "%tileSize", "typeId": "%uint"},
+            "id": 7,
+        }
+    ]
+    assert host_interface["diagnostics"] == []
+
+
+def test_reflect_spirv_binary_reports_missing_disassembler(tmp_path):
+    artifact_path = tmp_path / "kernel.spv"
+    artifact_path.write_bytes(b"\x03\x02#\x07")
+
+    host_interface = reflect_target_host_interface(
+        artifact_path,
+        target="vulkan",
+        tool_resolver=lambda _tool: None,
+    )
+
+    assert host_interface is not None
+    assert host_interface["status"] == "unavailable"
+    assert host_interface["parser"] == "spirv-reflection"
+    assert host_interface["diagnostics"] == [REFLECTION_TOOL_UNAVAILABLE]
+    assert host_interface["diagnosticRecords"][0]["details"]["tool"] == "spirv-dis"
+
+
 def test_inspect_runtime_package_reports_ready_bindings(tmp_path):
     _, package_dir, package = _build_runtime_package_fixture(tmp_path)
     package_manifest = package_dir / "runtime-package.json"
@@ -32853,8 +33551,9 @@ def test_inspect_runtime_package_uses_registered_target_parser_for_host_interfac
 
     host_interface = payload["bindings"][0]["hostInterface"]
     assert host_interface["status"] == "ready"
-    assert host_interface["source"] == "package-artifact"
-    assert host_interface["parser"] == "opengl"
+    assert host_interface["source"] == "compiled-artifact"
+    assert host_interface["parser"] == "opengl-reflection"
+    assert host_interface["artifactFormat"] == "GLSL source"
     assert host_interface["entryPointCount"] == 1
     assert host_interface["entryPoints"] == [
         {
@@ -32869,7 +33568,7 @@ def test_inspect_runtime_package_uses_registered_target_parser_for_host_interfac
             "name": "Camera",
             "kind": "constant-buffer",
             "type": "Camera",
-            "set": None,
+            "set": 0,
             "binding": 0,
             "access": "read",
         },
@@ -32877,9 +33576,9 @@ def test_inspect_runtime_package_uses_registered_target_parser_for_host_interfac
             "name": "sourceTexture",
             "kind": "texture",
             "type": "sampler2D",
-            "set": None,
+            "set": 0,
             "binding": 1026,
-            "access": None,
+            "access": "read",
         },
     ]
     assert host_interface["diagnostics"] == []
@@ -33731,10 +34430,12 @@ def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface(
     assert adapter["hostInterface"]["status"] == "ready"
     assert adapter["hostInterface"] == {
         "status": "ready",
-        "source": "package-artifact",
-        "parser": "opengl",
+        "source": "compiled-artifact",
+        "parser": "opengl-reflection",
+        "artifactFormat": "GLSL source",
         "entryPointCount": 1,
         "resourceCount": 0,
+        "constantCount": 0,
         "entryPoints": [
             {
                 "name": "main",
@@ -33743,7 +34444,9 @@ def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface(
             }
         ],
         "resources": [],
+        "constants": [],
         "diagnostics": [],
+        "diagnosticRecords": [],
     }
     assert [action["kind"] for action in payload["actions"]] == [
         "wire-runtime-adapter",
@@ -33751,7 +34454,7 @@ def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface(
     ]
 
 
-def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty(
+def test_plan_runtime_adapters_reflects_vulkan_host_interface(
     tmp_path,
 ):
     _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
@@ -33765,7 +34468,7 @@ def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty(
         "readyBindingCount": 1,
         "failedBindingCount": 0,
         "adapterCount": 1,
-        "actionCount": 3,
+        "actionCount": 2,
         "runtimeReferenceCount": 1,
     }
     assert payload["targets"][0]["target"] == "vulkan"
@@ -33774,32 +34477,21 @@ def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty(
     adapter = payload["adapters"][0]
     assert adapter["target"] == "vulkan"
     assert adapter["adapterKind"] == "vulkan-shader-adapter"
-    assert adapter["hostInterface"] == {
-        "status": "unavailable",
-        "source": "package-artifact",
-        "parser": "vulkan",
-        "entryPointCount": 0,
-        "resourceCount": 0,
-        "entryPoints": [],
-        "resources": [],
-        "diagnostics": ["project.runtime-package-inspection.host-interface-empty"],
-    }
+    host_interface = adapter["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["source"] == "compiled-artifact"
+    assert host_interface["parser"] == "spirv-reflection"
+    assert host_interface["artifactFormat"] == "Vulkan-targeted shader source"
+    assert host_interface["entryPointCount"] == 1
+    assert host_interface["entryPoints"][0]["name"] == "main"
+    assert host_interface["entryPoints"][0]["stage"] == "vertex"
+    assert host_interface["resourceCount"] == 0
+    assert host_interface["constantCount"] == 0
+    assert host_interface["diagnostics"] == []
     assert [action["kind"] for action in payload["actions"]] == [
         "wire-runtime-adapter",
-        "resolve-host-interface-metadata",
         "review-runtime-references",
     ]
-    host_interface_action = payload["actions"][1]
-    assert set(host_interface_action) == (
-        project_pipeline.RUNTIME_ADAPTER_PLAN_ACTION_FIELDS
-    )
-    assert host_interface_action["severity"] == "warning"
-    assert host_interface_action["target"] == "vulkan"
-    assert host_interface_action["adapter"] == adapter["id"]
-    assert host_interface_action["binding"] == adapter["binding"]
-    assert host_interface_action["packagePath"] == adapter["packagePath"]
-    assert "status is unavailable" in host_interface_action["message"]
-    assert "host-interface-empty" in host_interface_action["message"]
 
 
 def test_plan_runtime_adapters_reports_webgpu_wgsl_adapter_metadata(tmp_path):
@@ -33825,13 +34517,17 @@ def test_plan_runtime_adapters_reports_webgpu_wgsl_adapter_metadata(tmp_path):
         "status": "ready",
         "source": "package-artifact",
         "parser": "wgsl-reflection",
+        "artifactFormat": "WGSL source",
         "entryPointCount": 1,
         "resourceCount": 0,
+        "constantCount": 0,
         "entryPoints": [
             {"name": "vertex_main", "stage": "vertex", "executionConfig": {}}
         ],
         "resources": [],
+        "constants": [],
         "diagnostics": [],
+        "diagnosticRecords": [],
     }
     assert [action["kind"] for action in payload["actions"]] == [
         "wire-runtime-adapter",
@@ -33931,13 +34627,13 @@ def test_webgl_runtime_package_preserves_graphics_stage_artifacts(tmp_path):
         (
             "vertex",
             "ready",
-            "opengl",
+            "webgl-reflection",
             [{"name": "main", "stage": "vertex", "executionConfig": {}}],
         ),
         (
             "fragment",
             "ready",
-            "opengl",
+            "webgl-reflection",
             [{"name": "main", "stage": "fragment", "executionConfig": {}}],
         ),
     ]
@@ -34113,10 +34809,9 @@ def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status(
 
     assert result.returncode == 0
     assert "Runtime adapters:" in result.stdout
-    assert "interface: unavailable" in result.stdout
-    assert "host-interface-empty" in result.stdout
+    assert "interface: ready" in result.stdout
     assert "Runtime adapter actions:" in result.stdout
-    assert "resolve-host-interface-metadata" in result.stdout
+    assert "review-runtime-references" in result.stdout
 
 
 def test_project_cli_plan_runtime_adapters_json_writes_output(tmp_path):
@@ -34231,7 +34926,7 @@ def test_build_runtime_loader_manifest_from_runtime_package(tmp_path):
     }
 
 
-def test_runtime_loader_manifest_reports_blocked_host_interface_metadata(tmp_path):
+def test_runtime_loader_manifest_uses_reflected_vulkan_host_interface(tmp_path):
     _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
 
     payload = build_runtime_loader_manifest(package_dir / "runtime-package.json")
@@ -34241,35 +34936,34 @@ def test_runtime_loader_manifest_reports_blocked_host_interface_metadata(tmp_pat
         "targetCount": 1,
         "bindingCount": 1,
         "loadUnitCount": 1,
-        "readyLoadUnitCount": 0,
-        "blockedLoadUnitCount": 1,
-        "actionCount": 3,
+        "readyLoadUnitCount": 1,
+        "blockedLoadUnitCount": 0,
+        "actionCount": 2,
         "runtimeReferenceCount": 1,
     }
     assert payload["targets"][0]["target"] == "vulkan"
     assert payload["targets"][0]["adapterKind"] == "vulkan-shader-adapter"
-    assert payload["targets"][0]["readyLoadUnitCount"] == 0
-    assert payload["targets"][0]["blockedLoadUnitCount"] == 1
+    assert payload["targets"][0]["readyLoadUnitCount"] == 1
+    assert payload["targets"][0]["blockedLoadUnitCount"] == 0
     load_unit = payload["loadUnits"][0]
     assert load_unit["target"] == "vulkan"
-    assert load_unit["hostInterface"]["status"] == "unavailable"
-    assert load_unit["validation"]["loadReady"] is False
-    assert load_unit["validation"]["hostInterface"] == "unavailable"
+    assert load_unit["hostInterface"]["status"] == "ready"
+    assert load_unit["hostInterface"]["parser"] == "spirv-reflection"
+    assert load_unit["validation"]["loadReady"] is True
+    assert load_unit["validation"]["hostInterface"] == "ready"
     assert [step["kind"] for step in load_unit["loadSteps"]] == [
         "load-package-artifact",
         "load-source-remap",
+        "bind-host-interface",
         "validate-target-toolchain",
     ]
-    assert load_unit["loadSteps"][2]["command"] == [
+    assert load_unit["loadSteps"][3]["command"] == [
         "spirv-as",
         "artifacts/out/vulkan/simple.spvasm",
         "-o",
         project_pipeline.os.devnull,
     ]
-    assert len(load_unit["blockers"]) == 1
-    assert load_unit["blockers"][0]["kind"] == "resolve-host-interface-metadata"
-    assert load_unit["blockers"][0]["severity"] == "warning"
-    assert "host-interface-empty" in load_unit["blockers"][0]["message"]
+    assert load_unit["blockers"] == []
 
 
 def test_runtime_loader_manifest_reports_wgsl_validation_command(tmp_path):
@@ -34539,15 +35233,13 @@ def test_project_cli_runtime_loader_manifest_text_outputs_load_units(tmp_path):
         "Loader non-goals: host-code-rewriting, device-execution, "
         "runtime-framework-generation, target-sdk-installation"
     ) in result.stdout
-    assert "Summary: 1 targets, 1 load units, 0 ready, 1 blocked" in result.stdout
-    assert "Adapter plan: ok, 1 adapters, 3 actions" in result.stdout
-    assert "- vulkan: vulkan-shader-adapter, 0 ready, 1 blocked" in result.stdout
+    assert "Summary: 1 targets, 1 load units, 1 ready, 0 blocked" in result.stdout
+    assert "Adapter plan: ok, 1 adapters, 2 actions" in result.stdout
+    assert "- vulkan: vulkan-shader-adapter, 1 ready, 0 blocked" in result.stdout
     assert "Runtime loader units:" in result.stdout
-    assert "via vulkan-shader-adapter [interface: unavailable; blockers: 1" in (
-        result.stdout
-    )
+    assert "via vulkan-shader-adapter [interface: ready; steps: 4]" in result.stdout
     assert "Runtime loader actions:" in result.stdout
-    assert "resolve-host-interface-metadata" in result.stdout
+    assert "review-runtime-references" in result.stdout
 
 
 def test_project_cli_runtime_loader_manifest_json_writes_output(tmp_path):
@@ -34688,7 +35380,7 @@ def test_runtime_host_loader_scaffolds_preserve_loader_step_metadata(tmp_path):
 def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files(
     tmp_path,
 ):
-    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
+    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("cuda",))
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
     loader_manifest_path.write_text(
         json.dumps(
@@ -34782,7 +35474,7 @@ def test_runtime_host_loader_scaffolds_sanitize_target_and_unit_paths(tmp_path):
 
 
 def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds(tmp_path):
-    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
+    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("cuda",))
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
     loader_manifest_path.write_text(
         json.dumps(
@@ -34972,7 +35664,7 @@ def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file(
 
 def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units(tmp_path):
     _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = inspect_runtime_host_loader_scaffolds(
@@ -35155,7 +35847,7 @@ def test_plan_runtime_host_loader_consumption_reports_ready_units(tmp_path):
 
 def test_plan_runtime_host_loader_consumption_carries_blocked_units(tmp_path):
     _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = plan_runtime_host_loader_consumption(
@@ -35320,7 +36012,7 @@ def test_build_runtime_host_integration_handoff_writes_ready_bundle(tmp_path):
 
 def test_build_runtime_host_integration_handoff_writes_blocked_bundle(tmp_path):
     repo, plan_path, _ = _write_host_loader_consumption_plan_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
     handoff_dir = repo / "host-integration"
 
@@ -35331,7 +36023,7 @@ def test_build_runtime_host_integration_handoff_writes_blocked_bundle(tmp_path):
     assert payload["summary"]["blockedLoaderUnitCount"] == 1
     assert payload["targets"][0]["status"] == "blocked"
     assert payload["actions"][0]["kind"] == "resolve-loader-scaffold-blockers"
-    assert (handoff_dir / "targets" / "vulkan.integration.json").is_file()
+    assert (handoff_dir / "targets" / "cuda.integration.json").is_file()
 
 
 def test_build_runtime_host_integration_handoff_rejects_wrong_plan_kind(tmp_path):
@@ -35575,7 +36267,7 @@ def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch(
 
 def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle(tmp_path):
     _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = inspect_runtime_host_integration_handoff(
@@ -35588,7 +36280,7 @@ def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle(tmp_pat
     assert payload["summary"]["readyTargetCount"] == 0
     assert payload["summary"]["blockedTargetCount"] == 1
     assert payload["summary"]["failedTargetCount"] == 0
-    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["target"] == "cuda"
     assert payload["targets"][0]["status"] == "blocked"
     assert payload["targets"][0]["targetStatus"] == "blocked"
     assert payload["targets"][0]["loaderUnitCount"] == 1
@@ -35777,7 +36469,7 @@ def test_plan_runtime_host_integration_execution_reports_ready_steps(tmp_path):
 
 def test_plan_runtime_host_integration_execution_carries_blocked_steps(tmp_path):
     _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = plan_runtime_host_integration_execution(
@@ -35793,7 +36485,7 @@ def test_plan_runtime_host_integration_execution_carries_blocked_steps(tmp_path)
     assert payload["summary"]["blockedLoaderUnitCount"] == 1
     assert payload["summary"]["stepCount"] == 1
     assert payload["summary"]["blockedStepCount"] == 1
-    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["target"] == "cuda"
     assert payload["targets"][0]["status"] == "blocked"
     assert payload["targets"][0]["blockedStepCount"] == 1
     assert payload["steps"][0]["kind"] == "resolve-loader-scaffold-blockers"
@@ -36028,7 +36720,7 @@ def test_execute_runtime_host_integration_reports_blocked_steps_without_failure(
     tmp_path,
 ):
     _, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("cuda",)
     )
 
     payload = execute_runtime_host_integration(plan_path)
@@ -39578,6 +40270,82 @@ def test_translate_project_metal_call_site_template_materializes_for_opengl(
     assert validation["success"] is True
 
 
+def test_translate_project_metal_implicit_template_helper_materializes_to_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "implicit_helper.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            T add_one(T value) {
+                return value + T(1);
+            }
+
+            kernel void launch(
+                device float* out [[buffer(0)]],
+                device const float* src [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                float value = src[gid];
+                out[gid] = add_one(value);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx", "opengl", "vulkan"],
+        output_dir="out",
+    )
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+    for artifact in payload["artifacts"]:
+        assert artifact["templateMaterialization"] == {
+            "status": "materialized",
+            "specializationCount": 1,
+            "configuredParameterCount": 0,
+            "configuredParameters": {},
+            "configuredParameterSources": {},
+            "specializations": [
+                {
+                    "name": "add_one",
+                    "materializedName": "add_one_float",
+                    "parameters": {"T": "float"},
+                    "parameterSources": {"T": "call-site"},
+                    "source": "call-site",
+                }
+            ],
+            "unsupported": [],
+        }
+        output_path = repo / artifact["path"]
+        assert output_path.exists()
+        output = output_path.read_text(encoding="utf-8")
+        assert "add_one<" not in output
+        assert not re.search(r"\bT\b", output)
+        if artifact["target"] in {"directx", "opengl"}:
+            assert "add_one_float" in output
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+
+
 def test_translate_project_metal_source_instantiation_propagates_plain_helper_bindings_for_opengl(
     tmp_path,
 ):
@@ -39950,7 +40718,8 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
         encoding="utf-8",
     )
 
-    payload = translate_project(load_project_config(repo)).to_json()
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
 
     artifact = payload["artifacts"][0]
     assert artifact["status"] == "failed"
@@ -39980,6 +40749,21 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
     assert diagnostic["location"]["line"] == 9
     assert diagnostic["location"]["column"] == 1
     assert "work limit exceeded before GLSL codegen" in diagnostic["message"]
+    assert diagnostic["details"]["templateMaterialization"] == {
+        "limit": 4,
+        "limitSource": "project.source_options.metal.max_template_materialization_work",
+        "requiredWorkItems": 6,
+        "requestedSignature": "3 source instantiations x 2 templates",
+        "suggestedAction": (
+            "raise max_template_materialization_work for this source pattern or "
+            "OpenGL target, or reduce source template instantiations"
+        ),
+    }
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
 
 
 def test_metal_project_materialization_default_work_budget_scales_source_instantiations(
@@ -40251,6 +41035,17 @@ def test_translate_project_metal_implicit_type_environment_budget_diagnostic(
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
     assert "implicit-template-materialization/type-environment" in diagnostic["message"]
     assert "templates=1" in diagnostic["message"]
+    detail = diagnostic["details"]["templateMaterialization"]
+    assert detail["limit"] == 3
+    assert (
+        detail["limitSource"]
+        == "project.source_options.metal.max_template_materialization_work"
+    )
+    assert detail["requiredWorkItems"] > detail["limit"]
+    assert "implicit-template-materialization/type-environment" in (
+        detail["requestedSignature"]
+    )
+    assert "raise max_template_materialization_work" in detail["suggestedAction"]
 
 
 def test_translate_project_metal_type_alias_rewrite_cycle_reports_diagnostic(
@@ -41761,6 +42556,32 @@ def test_translate_project_metal_void_cast_before_unresolved_helper_is_diagnosti
         assert diagnostic["missingCapabilities"] == ["template.specialization"]
         assert "convert_value missing U" in diagnostic["message"]
         assert "list index out of range" not in diagnostic["message"]
+        assert "Suggested action:" in diagnostic["message"]
+        assert diagnostic["details"] == {
+            "sourcePath": "steel_attention_nax_min.metal",
+            "targetBackend": diagnostic["target"],
+            "missingTemplateParameters": ["U"],
+            "sourceDeclarations": [
+                {
+                    "name": "convert_value",
+                    "missingTemplateParameters": ["U"],
+                    "requiredSignature": "convert_value<U>",
+                    "reason": "missing-template-arguments",
+                    "targetBackend": diagnostic["target"],
+                    "declarationLocation": {
+                        "file": "steel_attention_nax_min.metal",
+                        "line": 4,
+                        "column": 1,
+                    },
+                }
+            ],
+            "suggestedRemediation": (
+                "add a concrete Metal template instantiation, supply explicit "
+                "template arguments, or configure "
+                "project.source_options.metal.template_variants for the "
+                f"{diagnostic['target']} target"
+            ),
+        }
 
 
 def test_translate_project_variadic_template_helper_materializes_for_opengl(

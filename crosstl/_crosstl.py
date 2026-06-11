@@ -897,6 +897,225 @@ def _run_runtime_test_manifest(args):
     return 0 if payload["success"] else 1
 
 
+def _load_project_test_runner_config(path):
+    if not path:
+        return {}
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(payload, list):
+        return {"testCommands": payload}
+    if not isinstance(payload, Mapping):
+        raise ValueError("Project test-runner config must be an object or list")
+    return dict(payload)
+
+
+def _format_project_test_runner_plan(payload):
+    lines = [
+        f"Project test-runner plan: {payload.get('sourceArtifacts', {}).get('path')}"
+    ]
+    for header_line in (
+        _format_payload_schema_version(payload, "Plan schema version"),
+        _format_payload_kind(payload, "Plan kind"),
+        _format_payload_generated_at(payload, "Plan generated at"),
+    ):
+        if header_line:
+            lines.append(header_line)
+    lines.append(f"Status: {'ok' if payload.get('success') else 'failed'}")
+    targets = payload.get("selectedTargets", [])
+    if targets:
+        lines.append(
+            f"Selected targets: {', '.join(str(target) for target in targets)}"
+        )
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        lines.append(
+            "Summary: "
+            f"{summary.get('commandCount', 0)} commands, "
+            f"{summary.get('runtimeTestCount', 0)} runtime tests, "
+            f"{summary.get('skippedCommandCount', 0) + summary.get('skippedRuntimeTestCount', 0)} skipped, "
+            f"{summary.get('diagnosticCount', 0)} diagnostics"
+        )
+    packages = payload.get("runtimeHandoffPackages", [])
+    if packages:
+        lines.append("Runtime handoff packages:")
+        for package in packages:
+            if isinstance(package, Mapping):
+                status = "available" if package.get("available") else "missing"
+                lines.append(f"- {package.get('path')} [{status}]")
+    adapters = payload.get("adapters", [])
+    if adapters:
+        lines.append("Adapters:")
+        for adapter in adapters:
+            if not isinstance(adapter, Mapping):
+                continue
+            availability = adapter.get("availability", {})
+            available = (
+                "available"
+                if isinstance(availability, Mapping) and availability.get("available")
+                else "unavailable"
+            )
+            lines.append(f"- {adapter.get('id', 'unknown')} [{available}]")
+    commands = payload.get("testCommands", [])
+    if commands:
+        lines.append("Project test commands:")
+        for command in commands:
+            if not isinstance(command, Mapping):
+                continue
+            command_text = " ".join(str(part) for part in command.get("command", []))
+            lines.append(
+                f"- {command.get('name', 'unknown')} [{command.get('status', 'unknown')}]: "
+                f"{command_text}"
+            )
+    runtime_tests = payload.get("runtimeTests", [])
+    if runtime_tests:
+        lines.append("Runtime tests:")
+        for test in runtime_tests:
+            if isinstance(test, Mapping):
+                lines.append(
+                    f"- {test.get('fixture', 'unknown')} [{test.get('status', 'unknown')}]"
+                )
+    diagnostics = payload.get("diagnostics", [])
+    if diagnostics:
+        lines.append("Diagnostics:")
+        for diagnostic in diagnostics:
+            if isinstance(diagnostic, Mapping):
+                lines.append(_format_project_diagnostic_line(diagnostic))
+    return "\n".join(lines) + "\n"
+
+
+def _format_project_test_runner_inspection(payload):
+    lines = [f"Project test-runner inspection: {payload.get('sourcePlan')}"]
+    for header_line in (
+        _format_payload_schema_version(payload, "Inspection schema version"),
+        _format_payload_kind(payload, "Inspection kind"),
+        _format_payload_generated_at(payload, "Inspection generated at"),
+    ):
+        if header_line:
+            lines.append(header_line)
+    lines.append(f"Status: {'ok' if payload.get('success') else 'failed'}")
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        lines.append(
+            "Summary: "
+            f"{summary.get('targetCount', 0)} targets, "
+            f"{summary.get('adapterCount', 0)} adapters, "
+            f"{summary.get('commandCount', 0)} commands, "
+            f"{summary.get('runtimeTestCount', 0)} runtime tests"
+        )
+    unavailable = payload.get("unavailableAdapters", [])
+    if unavailable:
+        lines.append("Unavailable adapters:")
+        for adapter in unavailable:
+            if isinstance(adapter, Mapping):
+                lines.append(f"- {adapter.get('id', 'unknown')}")
+    diagnostics = payload.get("diagnostics", [])
+    if diagnostics:
+        lines.append("Diagnostics:")
+        for diagnostic in diagnostics:
+            if isinstance(diagnostic, Mapping):
+                lines.append(_format_project_diagnostic_line(diagnostic))
+    return "\n".join(lines) + "\n"
+
+
+def _format_project_test_runner_report(payload):
+    lines = [f"Project test-runner report: {payload.get('sourcePlan')}"]
+    for header_line in (
+        _format_payload_schema_version(payload, "Report schema version"),
+        _format_payload_kind(payload, "Report kind"),
+        _format_payload_generated_at(payload, "Report generated at"),
+    ):
+        if header_line:
+            lines.append(header_line)
+    lines.append(f"Status: {'ok' if payload.get('success') else 'failed'}")
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        lines.append(
+            "Summary: "
+            f"{summary.get('resultCount', 0)} results, "
+            f"{summary.get('passedCount', 0)} passed, "
+            f"{summary.get('skippedCount', 0)} skipped, "
+            f"{summary.get('failedCount', 0)} failed"
+        )
+    results = payload.get("results", [])
+    if results:
+        lines.append("Results:")
+        for result in results:
+            if isinstance(result, Mapping):
+                name = result.get("name") or result.get("fixture") or "unknown"
+                lines.append(f"- {name} [{result.get('status', 'unknown')}]")
+    return "\n".join(lines) + "\n"
+
+
+def _run_project_test_runner_plan(args):
+    from .project import build_project_test_runner_plan
+
+    config = _load_project_test_runner_config(args.test_config)
+    payload = build_project_test_runner_plan(
+        args.artifact_report,
+        args.runtime_test_manifest,
+        handoff_packages=args.handoff_package,
+        selected_targets=args.target,
+        test_commands=config.get("testCommands"),
+        expected_artifacts=config.get("expectedArtifacts") or args.expected_artifact,
+        environment=config.get("environment"),
+        project_root=args.project_root,
+    )
+    if args.format == "sarif":
+        _write_json_payload(
+            _format_project_diagnostics_sarif(
+                payload, tool_name="CrossTL project test-runner planning"
+            ),
+            args.output,
+        )
+    elif args.format == "text":
+        _write_text_payload(_format_project_test_runner_plan(payload), args.output)
+    else:
+        _write_json_payload(payload, args.output)
+    return 0 if payload["success"] else 1
+
+
+def _run_inspect_project_test_runner_plan(args):
+    from .project import inspect_project_test_runner_plan
+
+    payload = inspect_project_test_runner_plan(args.plan)
+    if args.format == "sarif":
+        _write_json_payload(
+            _format_project_diagnostics_sarif(
+                payload, tool_name="CrossTL project test-runner inspection"
+            ),
+            args.output,
+        )
+    elif args.format == "text":
+        _write_text_payload(
+            _format_project_test_runner_inspection(payload), args.output
+        )
+    else:
+        _write_json_payload(payload, args.output)
+    return 0 if payload["success"] else 1
+
+
+def _run_execute_project_test_runner(args):
+    from .project import execute_project_test_runner_plan
+
+    payload = execute_project_test_runner_plan(
+        args.plan,
+        project_root=args.project_root,
+        output_path=args.output if args.format == "json" else None,
+        run_runtime_tests=not args.no_runtime_tests,
+    )
+    if args.format == "sarif":
+        _write_json_payload(
+            _format_project_diagnostics_sarif(
+                payload, tool_name="CrossTL project test-runner execution"
+            ),
+            args.output,
+        )
+    elif args.format == "text":
+        _write_text_payload(_format_project_test_runner_report(payload), args.output)
+    elif not args.output:
+        _write_json_payload(payload)
+    return 0 if payload["success"] else 1
+
+
 def _format_runtime_binding_manifest(payload):
     lines = [f"Runtime binding manifest: {payload.get('sourceReport')}"]
     for header_line in (
@@ -3177,6 +3396,9 @@ def _format_project_diagnostics_sarif(
         missing_capabilities = diagnostic.get("missingCapabilities")
         if isinstance(missing_capabilities, list) and missing_capabilities:
             properties["missingCapabilities"] = list(missing_capabilities)
+        details = diagnostic.get("details")
+        if isinstance(details, Mapping) and details:
+            properties["details"] = dict(details)
         if original_location:
             diagnostic_location = _sarif_location_property(diagnostic.get("location"))
             if diagnostic_location is not None:
@@ -6112,6 +6334,103 @@ def _build_parser():
     )
     runtime_test_manifest_parser.set_defaults(func=_run_runtime_test_manifest)
 
+    test_runner_plan_parser = subparsers.add_parser(
+        "test-runner-plan",
+        help="Build a project test-runner plan for translated runtime handoffs",
+    )
+    test_runner_plan_parser.add_argument(
+        "artifact_report", help="Project report or runtime artifact manifest JSON"
+    )
+    test_runner_plan_parser.add_argument(
+        "--runtime-test-manifest",
+        help="Runtime test manifest JSON or TOML to include in the plan",
+    )
+    test_runner_plan_parser.add_argument(
+        "--handoff-package",
+        action="append",
+        default=[],
+        help="Runtime handoff package path to reference; repeatable",
+    )
+    test_runner_plan_parser.add_argument(
+        "--target",
+        action="append",
+        type=_non_empty_project_arg("--target"),
+        help="Target backend to select for project test execution; repeatable",
+    )
+    test_runner_plan_parser.add_argument(
+        "--test-config",
+        help="JSON object or list describing project test commands and environment",
+    )
+    test_runner_plan_parser.add_argument(
+        "--expected-artifact",
+        action="append",
+        default=[],
+        help="Expected artifact path to include in provenance; repeatable",
+    )
+    test_runner_plan_parser.add_argument(
+        "--project-root",
+        help="Project root override for relative artifact paths",
+    )
+    test_runner_plan_parser.add_argument(
+        "--format",
+        choices=("json", "text", "sarif"),
+        default="json",
+        help="Project test-runner plan output format",
+    )
+    test_runner_plan_parser.add_argument(
+        "--output", "-o", help="Write project test-runner plan; use '-' for stdout"
+    )
+    test_runner_plan_parser.set_defaults(func=_run_project_test_runner_plan)
+
+    inspect_test_runner_plan_parser = subparsers.add_parser(
+        "inspect-test-runner-plan",
+        help="Inspect a project test-runner plan without running host code",
+    )
+    inspect_test_runner_plan_parser.add_argument(
+        "plan", help="Project test-runner plan JSON"
+    )
+    inspect_test_runner_plan_parser.add_argument(
+        "--format",
+        choices=("json", "text", "sarif"),
+        default="json",
+        help="Project test-runner inspection output format",
+    )
+    inspect_test_runner_plan_parser.add_argument(
+        "--output",
+        "-o",
+        help="Write project test-runner inspection; use '-' for stdout",
+    )
+    inspect_test_runner_plan_parser.set_defaults(
+        func=_run_inspect_project_test_runner_plan
+    )
+
+    execute_test_runner_parser = subparsers.add_parser(
+        "execute-test-runner",
+        help="Execute available project tests from a project test-runner plan",
+    )
+    execute_test_runner_parser.add_argument(
+        "plan", help="Project test-runner plan JSON"
+    )
+    execute_test_runner_parser.add_argument(
+        "--project-root",
+        help="Project root override for command execution",
+    )
+    execute_test_runner_parser.add_argument(
+        "--no-runtime-tests",
+        action="store_true",
+        help="Run project commands only and skip runtime fixture execution",
+    )
+    execute_test_runner_parser.add_argument(
+        "--format",
+        choices=("json", "text", "sarif"),
+        default="json",
+        help="Project test-runner report output format",
+    )
+    execute_test_runner_parser.add_argument(
+        "--output", "-o", help="Write project test-runner report; use '-' for stdout"
+    )
+    execute_test_runner_parser.set_defaults(func=_run_execute_project_test_runner)
+
     runtime_binding_manifest_parser = subparsers.add_parser(
         "runtime-binding-manifest",
         help="Build a runtime binding manifest from a project report",
@@ -6422,6 +6741,9 @@ def _use_legacy_cli(argv):
         "plan-runtime",
         "runtime-manifest",
         "runtime-test-manifest",
+        "test-runner-plan",
+        "inspect-test-runner-plan",
+        "execute-test-runner",
         "runtime-binding-manifest",
         "package-runtime",
         "inspect-runtime-package",

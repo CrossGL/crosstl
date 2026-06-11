@@ -486,6 +486,8 @@ class VulkanSPIRVCodeGen:
                 self.require_capability("Image1D")
             else:
                 self.require_capability("Sampled1D")
+        if dim == "SubpassData":
+            self.require_capability("InputAttachment")
 
         id_value = self.get_id()
         self.emit(
@@ -1799,17 +1801,79 @@ class VulkanSPIRVCodeGen:
         id_value = self.get_id()
 
         indices = [self.access_chain_index(index) for index in indices]
+        result_type, pointee_type = self.access_chain_result_pointer_type(
+            base_id, indices, result_type
+        )
         index_list = " ".join([f"%{index.id}" for index in indices])
         self.emit(
             f"%{id_value} = OpAccessChain %{result_type.id} %{base_id.id} {index_list}"
         )
 
         spirv_id = SpirvId(id_value, result_type.type)
+        if pointee_type is not None:
+            self.variable_value_types[id_value] = pointee_type
         if self.is_non_uniform_value(base_id) or any(
             self.is_non_uniform_value(index) for index in indices
         ):
             self.mark_non_uniform_result(spirv_id)
         return spirv_id
+
+    def access_chain_result_pointer_type(
+        self, base_id: SpirvId, indices: List[SpirvId], fallback_type: SpirvId
+    ) -> Tuple[SpirvId, Optional[SpirvId]]:
+        pointee_type = self.access_chain_result_pointee_type(base_id, indices)
+        if pointee_type is None:
+            return fallback_type, self.pointer_type_pointee_type(fallback_type)
+
+        storage_class = base_id.type.storage_class or fallback_type.type.storage_class
+        if storage_class is None:
+            return fallback_type, pointee_type
+
+        return self.register_pointer_type(pointee_type, storage_class), pointee_type
+
+    def access_chain_result_pointee_type(
+        self, base_id: SpirvId, indices: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        current_type = self.pointer_pointee_type(base_id)
+        if current_type is None and base_id.type.storage_class is not None:
+            current_type = self.find_registered_type_by_base(
+                base_id.type.base_type.replace("ptr_", "", 1)
+            )
+        if current_type is None:
+            return None
+
+        for index in indices:
+            array_info = self.array_type_info_from_type(current_type)
+            if array_info is not None:
+                current_type = array_info[0]
+                continue
+
+            matrix_info = self.matrix_type_info_from_type(current_type)
+            if matrix_info is not None:
+                current_type = matrix_info[0]
+                continue
+
+            vector_info = self.vector_type_info_from_type(current_type)
+            if vector_info is not None:
+                current_type = vector_info[0]
+                continue
+
+            members = self.current_struct_members.get(current_type.type.base_type)
+            if members is None:
+                return None
+
+            member_index = self.constant_values_by_id.get(index.id)
+            if member_index is None:
+                return None
+            try:
+                member_index = int(member_index)
+            except (TypeError, ValueError):
+                return None
+            if not 0 <= member_index < len(members):
+                return None
+            current_type = members[member_index][0]
+
+        return current_type
 
     def access_chain_index(self, index: SpirvId) -> SpirvId:
         """Return an integer-typed value suitable for OpAccessChain indexes."""
@@ -3463,6 +3527,7 @@ class VulkanSPIRVCodeGen:
 
     def resource_function_names(self):
         return {
+            "subpassLoad",
             "imageLoad",
             "imageStore",
             "imageAtomicAdd",
@@ -5021,6 +5086,45 @@ class VulkanSPIRVCodeGen:
 
             self.store_to_variable(element_pointer, args[2])
             return None
+
+        if function_name == "subpassLoad":
+            if not args:
+                self.emit("; WARNING: subpassLoad requires an input attachment operand")
+                result_type = self.register_vector_type(
+                    self.register_primitive_type("float"), 4
+                )
+                return self.default_value_for_type(result_type)
+
+            image_id = args[0]
+            metadata = self.resource_metadata_for_value(image_id)
+            if not metadata or metadata.get("kind") != "input_attachment":
+                self.emit("; WARNING: subpassLoad requires a subpassInput operand")
+                result_type = self.register_vector_type(
+                    self.register_primitive_type("float"), 4
+                )
+                return self.default_value_for_type(result_type)
+
+            result_type = self.resource_access_result_type(metadata)
+            image_operands = ""
+            if metadata.get("multisampled"):
+                if len(args) < 2:
+                    self.emit(
+                        "; WARNING: subpassLoad on subpassInputMS requires "
+                        "a sample operand"
+                    )
+                    return self.default_value_for_type(result_type)
+                if not self.validate_storage_image_sample("subpassLoad", args[1]):
+                    return self.default_value_for_type(result_type)
+                image_operands = f" Sample %{args[1].id}"
+
+            coord_id = self.input_attachment_zero_coordinate()
+            id_value = self.get_id()
+            self.emit(
+                f"%{id_value} = OpImageRead %{result_type.id} "
+                f"%{image_id.id} %{coord_id.id}{image_operands}"
+            )
+            self.value_types[id_value] = result_type
+            return SpirvId(id_value, result_type.type)
 
         if function_name == "imageLoad":
             if len(args) < 2:
@@ -11054,11 +11158,18 @@ class VulkanSPIRVCodeGen:
             size, element_type = match.groups()
             element_type = self.normalize_primitive_name(element_type)
         else:
-            match = re.fullmatch(r"(float|double|int|uint|bool)([234])", compact)
+            match = re.fullmatch(
+                r"(float|double|int|uint|bool|i64|u64|int64|int64_t|long|"
+                r"uint64|uint64_t|ulong)([234])",
+                compact,
+            )
             if not match:
                 return compact
             element_type, size = match.groups()
+            element_type = self.normalize_primitive_name(element_type)
 
+        if element_type in {"i64", "u64"}:
+            return f"v{size}{element_type}"
         prefixes = {
             "float": "vec",
             "double": "dvec",
@@ -11089,7 +11200,9 @@ class VulkanSPIRVCodeGen:
         self, type_str: str
     ) -> Optional[Tuple[str, int]]:
         type_str = self.normalize_generic_vector_type(type_str)
-        internal_match = re.fullmatch(r"v([234])(float|double|int|uint|bool)", type_str)
+        internal_match = re.fullmatch(
+            r"v([234])(float|double|int|uint|bool|i64|u64)", type_str
+        )
         if internal_match:
             size, component_type = internal_match.groups()
             return component_type, int(size)
@@ -11173,6 +11286,10 @@ class VulkanSPIRVCodeGen:
 
     def resource_type_info(self, type_str: str):
         type_str = self.normalize_resource_type_name(type_str)
+        input_attachment_info = self.input_attachment_type_info(type_str)
+        if input_attachment_info is not None:
+            return input_attachment_info
+
         sampler_info = {
             "sampler": {"kind": "sampler"},
             "texture1D": {
@@ -11424,6 +11541,35 @@ class VulkanSPIRVCodeGen:
 
         return None
 
+    def input_attachment_type_info(self, type_str: str):
+        match = re.fullmatch(r"([iu]?)(subpassInput)(MS)?", str(type_str))
+        if not match:
+            return None
+
+        prefix, _base, ms_suffix = match.groups()
+        component_type = {
+            "": "float",
+            "i": "int",
+            "u": "uint",
+        }[prefix]
+        return {
+            "kind": "input_attachment",
+            "component_type": component_type,
+            "dim": "SubpassData",
+            "depth": 0,
+            "arrayed": 0,
+            "multisampled": 1 if ms_suffix else 0,
+            "sampled": 2,
+            "format": "Unknown",
+            "component_count": 4,
+        }
+
+    def is_input_attachment_type_name(self, type_str: str) -> bool:
+        return (
+            self.input_attachment_type_info(self.normalize_resource_type_name(type_str))
+            is not None
+        )
+
     def is_resource_type_name(self, type_str: str) -> bool:
         return self.resource_type_info(type_str) is not None
 
@@ -11563,6 +11709,12 @@ class VulkanSPIRVCodeGen:
         if component_count <= 1:
             return component_type
         return self.register_vector_type(component_type, component_count)
+
+    def input_attachment_zero_coordinate(self) -> SpirvId:
+        int_type = self.register_primitive_type("int")
+        coord_type = self.register_vector_type(int_type, 2)
+        zero = self.register_constant(0, int_type)
+        return self.register_vector_constant(coord_type, [zero, zero])
 
     def image_coordinate_component_count(self, metadata) -> int:
         component_count = {
@@ -14051,6 +14203,7 @@ class VulkanSPIRVCodeGen:
         if metadata is None or metadata.get("kind") not in {
             "sampled_image",
             "storage_image",
+            "input_attachment",
             "texture",
             "sampler",
         }:
@@ -14182,11 +14335,8 @@ class VulkanSPIRVCodeGen:
         return self.uniform_scalar_size(type_id)
 
     def uniform_scalar_size(self, type_id: SpirvId) -> int:
-        return (
-            8
-            if self.normalize_primitive_name(type_id.type.base_type) == "double"
-            else 4
-        )
+        primitive_name = self.normalize_primitive_name(type_id.type.base_type)
+        return 8 if primitive_name in {"double", "i64", "u64"} else 4
 
     def uniform_array_stride(self, element_type: SpirvId) -> int:
         return self.align_to(self.uniform_layout_size(element_type), 16)
@@ -15444,6 +15594,17 @@ class VulkanSPIRVCodeGen:
                 )
                 self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
                 self.register_declared_resource_metadata(node, var_id, var_type)
+                metadata = self.resource_metadata_for_value(var_id)
+                if metadata and metadata.get("kind") == "input_attachment":
+                    input_attachment_index = self.explicit_interface_integer_attribute(
+                        node, "input_attachment_index"
+                    )
+                    if input_attachment_index is None:
+                        input_attachment_index = binding
+                    self.decorations.append(
+                        f"OpDecorate %{var_id.id} "
+                        f"InputAttachmentIndex {input_attachment_index}"
+                    )
             elif storage_class == "Uniform":
                 members = self.current_struct_members.get(var_type.type.base_type)
                 if members is not None:

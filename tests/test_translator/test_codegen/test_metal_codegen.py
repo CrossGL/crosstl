@@ -7,6 +7,7 @@ from typing import List
 
 import pytest
 
+import crosstl
 import crosstl.translator
 from crosstl.translator.ast import (
     BlockNode,
@@ -171,6 +172,34 @@ def test_glsl_fragment_fragcoord_lowers_to_metal_position_input(tmp_path):
     assert "_crossglFragCoord.x" in generated_code
     assert "_crossglFragCoord.y" in generated_code
     compile_with_metal_if_available(generated_code)
+
+
+def test_glsl_input_attachment_reports_unsupported_metal_diagnostic(tmp_path):
+    shader = """
+    #version 450
+    layout(input_attachment_index = 0, set = 0, binding = 0)
+    uniform subpassInput sceneColor;
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        fragColor = subpassLoad(sceneColor);
+    }
+    """
+    shader_path = tmp_path / "input-attachment.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "unsupported Metal input attachment declaration" in generated_code
+    assert "unsupported Metal input attachment load" in generated_code
+    assert "constant subpassInput sceneColor" not in generated_code
+    assert "subpassLoad(sceneColor)" not in generated_code
+    assert "float4(0)" in generated_code
 
 
 def test_metal_reserved_stage_keyword_local_identifier_is_escaped():
@@ -13803,6 +13832,93 @@ def test_compute_direct_builtin_references_inject_metal_parameters():
         assert gl_builtin not in generated
 
 
+def test_compute_direct_subgroup_builtin_references_inject_metal_parameters():
+    code = """
+    shader MetalGLSLSubgroupBuiltins {
+        compute {
+            void main() {
+                uint subgroupSize = gl_SubgroupSize;
+                uint subgroupInvocation = gl_SubgroupInvocationID;
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+    generated = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "uint threads_per_simdgroup [[threads_per_simdgroup]]" in generated
+    assert "uint thread_index_in_simdgroup [[thread_index_in_simdgroup]]" in generated
+    assert "uint subgroupSize = threads_per_simdgroup;" in generated
+    assert "uint subgroupInvocation = thread_index_in_simdgroup;" in generated
+    assert "gl_SubgroupSize" not in generated
+    assert "gl_SubgroupInvocationID" not in generated
+
+
+def test_compute_subgroup_builtins_share_wave_lane_parameters():
+    code = """
+    shader MetalGLSLSubgroupAndWaveBuiltins {
+        compute {
+            void main() {
+                uint subgroupSize = gl_SubgroupSize;
+                uint subgroupInvocation = gl_SubgroupInvocationID;
+                uint waveSize = WaveGetLaneCount();
+                uint waveInvocation = WaveGetLaneIndex();
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+    generated = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert generated.count("[[threads_per_simdgroup]]") == 1
+    assert generated.count("[[thread_index_in_simdgroup]]") == 1
+    assert "uint subgroupSize = threads_per_simdgroup;" in generated
+    assert "uint subgroupInvocation = thread_index_in_simdgroup;" in generated
+    assert "uint waveSize = threads_per_simdgroup;" in generated
+    assert "uint waveInvocation = thread_index_in_simdgroup;" in generated
+    assert "crossglWaveLaneCount" not in generated
+    assert "crossglWaveLaneIndex" not in generated
+    assert "gl_SubgroupSize" not in generated
+    assert "gl_SubgroupInvocationID" not in generated
+
+
+def test_glsl_fragment_subgroup_builtins_emit_metal_diagnostics(tmp_path):
+    shader_path = tmp_path / "glsl.es320.subgroup.frag"
+    shader_path.write_text(
+        "\n".join(
+            [
+                "#version 320 es",
+                "#extension GL_KHR_shader_subgroup_basic: enable",
+                "layout(location = 0) out uvec4 data;",
+                "void main (void)",
+                "{",
+                "  data = uvec4(gl_SubgroupSize, gl_SubgroupInvocationID, 0, 0);",
+                "}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+    )
+
+    assert "fragment uint4 fragment_main()" in generated
+    assert "unsupported Metal GLSL subgroup builtin: gl_SubgroupSize" in generated
+    assert (
+        "unsupported Metal GLSL subgroup builtin: gl_SubgroupInvocationID" in generated
+    )
+    assert "requires compute-stage threads_per_simdgroup value" in generated
+    assert "requires compute-stage thread_index_in_simdgroup value" in generated
+    assert "[[threads_per_simdgroup]]" not in generated
+    assert "[[thread_index_in_simdgroup]]" not in generated
+    assert "uint4(gl_SubgroupSize" not in generated
+    assert "gl_SubgroupInvocationID, 0" not in generated
+
+
 def test_graphics_builtin_parameter_semantics_roundtrip():
     code = """
     shader GraphicsBuiltinMetal {
@@ -25718,6 +25834,76 @@ def test_metal_nested_implicit_shadow_compare_lod_grad_uses_depth_overloads():
     assert "textureQueryLod(" not in generated_code
     assert "textureCompareLod(" not in generated_code
     assert "textureCompareGradOffset(" not in generated_code
+
+
+def test_metal_glsl_es_shadow_sampler_lod_overloads_lower_to_compare_sampling():
+    shader = """
+    shader GlslEsShadowSamplerLodOverloads {
+        sampler2DArrayShadow s2da;
+        samplerCubeArrayShadow sca;
+        samplerCubeShadow sc;
+
+        struct FragmentInput {
+            vec4 tc @ TEXCOORD0;
+        };
+
+        fragment {
+            float main(FragmentInput input) @ gl_FragDepth {
+                float c;
+                c = texture(s2da, input.tc, 0.0);
+                c = texture(sca, input.tc, 0.0, 0.0);
+                c = textureOffset(s2da, input.tc, ivec2(0.0), 0.0);
+                c = textureCompareLod(s2da, input.tc.xyz, input.tc.w, 0.0);
+                c = textureCompareLod(sc, input.tc.xyz, input.tc.w, 0.0);
+                c = textureLod(sca, input.tc, 0.0, 0.0);
+                c = textureCompareLodOffset(
+                    s2da,
+                    input.tc.xyz,
+                    input.tc.w,
+                    0.0,
+                    ivec2(0.0)
+                );
+                return c;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
+
+    assert "depth2d_array<float> s2da [[texture(0)]]" in generated_code
+    assert "depthcube_array<float> sca [[texture(1)]]" in generated_code
+    assert "depthcube<float> sc [[texture(2)]]" in generated_code
+    s2da_compare = (
+        f"c = s2da.sample_compare({default_sampler}, input.tc.xy, "
+        "uint(input.tc.z), input.tc.w"
+    )
+    s2da_lod_compare = (
+        f"c = s2da.sample_compare({default_sampler}, input.tc.xyz.xy, "
+        "uint(input.tc.xyz.z), input.tc.w"
+    )
+    assert f"{s2da_compare}, bias(0.0));" in generated_code
+    assert (
+        f"c = sca.sample_compare({default_sampler}, input.tc.xyz, "
+        "uint(input.tc.w), 0.0, bias(0.0));" in generated_code
+    )
+    assert f"{s2da_compare}, bias(0.0), int2(0.0));" in generated_code
+    assert f"{s2da_lod_compare}, level(0.0));" in generated_code
+    assert (
+        f"c = sc.sample_compare({default_sampler}, input.tc.xyz, "
+        "input.tc.w, level(0.0));" in generated_code
+    )
+    assert (
+        f"c = sca.sample_compare({default_sampler}, input.tc.xyz, "
+        "uint(input.tc.w), 0.0, level(0.0));" in generated_code
+    )
+    assert f"{s2da_lod_compare}, level(0.0), int2(0.0));" in generated_code
+    assert "texture(s2da" not in generated_code
+    assert "textureOffset(" not in generated_code
+    assert "textureLod(" not in generated_code
+    assert "textureCompareLod(" not in generated_code
+    assert "textureCompareLodOffset(" not in generated_code
 
 
 def test_metal_array_shadow_texture_resource_arrays_keep_compare_coordinates():

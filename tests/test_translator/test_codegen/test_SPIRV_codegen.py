@@ -58,6 +58,15 @@ def spirv_named_variable(spv_code, name, pointer_type=None, storage_class=None):
     raise AssertionError(f"Missing variable {name}")
 
 
+def spirv_pointer_type(spv_code, pointee_type, storage_class):
+    match = re.search(
+        rf"(%\d+) = OpTypePointer {storage_class} {re.escape(pointee_type)}\b",
+        spv_code,
+    )
+    assert match is not None
+    return match.group(1)
+
+
 def spirv_result_ids_for_opcode(spv_code, opcode):
     return re.findall(rf"(%\d+) = {re.escape(opcode)}\b", spv_code)
 
@@ -245,6 +254,40 @@ def assert_spirv_function_variables_are_first_block_declarations(spv_code):
                     assert first_label < variable_index < first_non_variable
 
             function_start = None
+
+
+def test_glsl_input_attachment_lowers_to_spirv_subpass_data(tmp_path):
+    shader = """
+    #version 450
+    layout(input_attachment_index = 3, set = 1, binding = 2)
+    uniform subpassInput sceneColor;
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        fragColor = subpassLoad(sceneColor);
+    }
+    """
+    shader_path = tmp_path / "input-attachment.frag"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="vulkan",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    scene_color_id = spirv_named_variable(
+        generated, "sceneColor", storage_class="UniformConstant"
+    )
+    assert re.search(r"%\d+ = OpTypeImage %\d+ SubpassData 0 0 0 2 Unknown", generated)
+    assert "OpTypePointer UniformConstant" in generated
+    assert f"OpDecorate {scene_color_id} DescriptorSet 1" in generated
+    assert f"OpDecorate {scene_color_id} Binding 2" in generated
+    assert f"OpDecorate {scene_color_id} InputAttachmentIndex 3" in generated
+    assert "OpImageRead" in generated
+    assert "subpassLoad" not in generated
+    assert "Unknown type subpassInput" not in generated
 
 
 def assert_spirv_module_validates(spv_code, tmp_path, target_env=None):
@@ -24530,6 +24573,321 @@ class TestVulkanSPIRVCodeGen:
             spv_code,
         )
         assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mlx_arange_u64_storage_buffer_access_chain_validates(self, tmp_path):
+        source_code = """
+        shader MLXArangeU64StorageBufferAccess {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer u64* offsets;
+                layout(set = 0, binding = 1) buffer uint* outValues;
+
+                void main() {
+                    uint index = gl_GlobalInvocationID.x;
+                    u64 value = offsets[index] + u64(index);
+                    offsets[index] = value;
+                    outValues[index] = uint(value);
+                    return;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        u64_type = re.search(r"(%\d+) = OpTypeInt 64 0\b", spv_code)
+        assert u64_type is not None
+        u64_runtime_array = re.search(
+            rf"(%\d+) = OpTypeRuntimeArray {re.escape(u64_type.group(1))}\b",
+            spv_code,
+        )
+        assert u64_runtime_array is not None
+        assert f"OpDecorate {u64_runtime_array.group(1)} ArrayStride 8" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mlx_arange_metal_u64_constant_refs_access_chains_validate(self, tmp_path):
+        source_path = tmp_path / "arange_u64.metal"
+        source_path.write_text(
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void arange_u64(
+                constant const uint64_t& start [[buffer(0)]],
+                constant const uint64_t& step [[buffer(1)]],
+                device uint64_t* out [[buffer(2)]],
+                uint index [[thread_position_in_grid]]
+            ) {
+                out[index] = start + index * step;
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        spv_code = crosstl.translate(
+            str(source_path), backend="vulkan", format_output=False
+        )
+
+        u64_type = re.search(r"(%\d+) = OpTypeInt 64 0\b", spv_code)
+        assert u64_type is not None
+        uniform_u64_ptr = spirv_pointer_type(spv_code, u64_type.group(1), "Uniform")
+        assert re.search(
+            rf"%\d+ = OpAccessChain {re.escape(uniform_u64_ptr)} %\d+ %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mlx_binary_two_u64_storage_buffer_access_chain_validates(self, tmp_path):
+        source_code = """
+        shader MLXBinaryTwoU64StorageBufferAccess {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer u64* leftValues;
+                layout(set = 0, binding = 1) buffer u64* rightValues;
+                layout(set = 0, binding = 2) buffer u64* outValues;
+
+                void main() {
+                    uint index = gl_GlobalInvocationID.x;
+                    u64 value = leftValues[index] + rightValues[index + uint(1)];
+                    outValues[index] = value;
+                    return;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        u64_type = re.search(r"(%\d+) = OpTypeInt 64 0\b", spv_code)
+        assert u64_type is not None
+        u64_runtime_array = re.search(
+            rf"(%\d+) = OpTypeRuntimeArray {re.escape(u64_type.group(1))}\b",
+            spv_code,
+        )
+        assert u64_runtime_array is not None
+        assert f"OpDecorate {u64_runtime_array.group(1)} ArrayStride 8" in spv_code
+        assert re.search(
+            rf"%\d+ = OpIAdd {re.escape(u64_type.group(1))} %\d+ %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mlx_binary_two_metal_u64_vector_result_index_validates(self, tmp_path):
+        source_path = tmp_path / "binary_two_u64.metal"
+        source_path.write_text(
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            inline ulong2 divmod_pair(ulong a, ulong b) {
+                return ulong2(a / b, a % b);
+            }
+
+            kernel void binary_two_u64(
+                device const ulong* a [[buffer(0)]],
+                device const ulong* b [[buffer(1)]],
+                device ulong* c [[buffer(2)]],
+                device ulong* d [[buffer(3)]],
+                uint index [[thread_position_in_grid]]
+            ) {
+                auto out = divmod_pair(a[index], b[index]);
+                c[index] = out[0];
+                d[index] = out[1];
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        spv_code = crosstl.translate(
+            str(source_path), backend="vulkan", format_output=False
+        )
+
+        u64_type = re.search(r"(%\d+) = OpTypeInt 64 0\b", spv_code)
+        assert u64_type is not None
+        u64_vector = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(u64_type.group(1))} 2\b",
+            spv_code,
+        )
+        assert u64_vector is not None
+        function_u64_ptr = spirv_pointer_type(spv_code, u64_type.group(1), "Function")
+        out_var = spirv_named_variable(spv_code, "out_", storage_class="Function")
+        assert re.search(
+            rf"%\d+ = OpAccessChain {re.escape(function_u64_ptr)} "
+            rf"{re.escape(out_var)} %\d+",
+            spv_code,
+        )
+        assert "Unknown type ulong2" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mlx_ternary_mixed_u64_uint_storage_buffer_access_validates(self, tmp_path):
+        source_code = """
+        shader MLXTernaryMixedStorageBufferAccess {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer u64* trueValues;
+                layout(set = 0, binding = 1) buffer uint* falseValues;
+                layout(set = 0, binding = 2) buffer u64* outValues;
+
+                void main() {
+                    uint index = gl_GlobalInvocationID.x;
+                    bool chooseLeft = (index & uint(1)) == uint(0);
+                    u64 value = chooseLeft ? trueValues[index] : falseValues[index];
+                    outValues[index] = value;
+                    return;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        u64_type = re.search(r"(%\d+) = OpTypeInt 64 0\b", spv_code)
+        assert u64_type is not None
+        u64_runtime_array = re.search(
+            rf"(%\d+) = OpTypeRuntimeArray {re.escape(u64_type.group(1))}\b",
+            spv_code,
+        )
+        assert u64_runtime_array is not None
+        assert f"OpDecorate {u64_runtime_array.group(1)} ArrayStride 8" in spv_code
+        assert re.search(
+            rf"%\d+ = OpSelect {re.escape(u64_type.group(1))} %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mlx_ternary_metal_u64_derived_indices_validate(self, tmp_path):
+        source_path = tmp_path / "ternary_u64.metal"
+        source_path.write_text(
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void ternary_u64(
+                device const bool* a [[buffer(0)]],
+                device const ulong* b [[buffer(1)]],
+                device const ulong* c [[buffer(2)]],
+                device ulong* d [[buffer(3)]],
+                constant uint& size [[buffer(4)]],
+                uint index [[thread_position_in_grid]]
+            ) {
+                uint i = 0;
+                auto bidx = size > 0 ? 0 : index + i;
+                auto cidx = size > 1 ? 0 : index + i;
+                d[index + i] = a[index + i] ? b[bidx] : c[cidx];
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        spv_code = crosstl.translate(
+            str(source_path), backend="vulkan", format_output=False
+        )
+
+        u64_type = re.search(r"(%\d+) = OpTypeInt 64 0\b", spv_code)
+        assert u64_type is not None
+        uniform_u64_ptr = spirv_pointer_type(spv_code, u64_type.group(1), "Uniform")
+        assert re.search(
+            rf"%\d+ = OpAccessChain {re.escape(uniform_u64_ptr)} %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    @pytest.mark.parametrize(
+        ("source_name", "source"),
+        [
+            (
+                "arange.metal",
+                """
+                #include <metal_stdlib>
+                using namespace metal;
+
+                kernel void arange_u64(
+                    constant const uint64_t& start [[buffer(0)]],
+                    constant const uint64_t& step [[buffer(1)]],
+                    device uint64_t* out [[buffer(2)]],
+                    uint index [[thread_position_in_grid]]
+                ) {
+                    out[index] = start + index * step;
+                }
+                """,
+            ),
+            (
+                "binary_two.metal",
+                """
+                #include <metal_stdlib>
+                using namespace metal;
+
+                inline ulong2 divmod_pair(ulong a, ulong b) {
+                    return ulong2(a / b, a % b);
+                }
+
+                kernel void binary_two_u64(
+                    device const ulong* a [[buffer(0)]],
+                    device const ulong* b [[buffer(1)]],
+                    device ulong* c [[buffer(2)]],
+                    device ulong* d [[buffer(3)]],
+                    uint index [[thread_position_in_grid]]
+                ) {
+                    auto out = divmod_pair(a[index], b[index]);
+                    c[index] = out[0];
+                    d[index] = out[1];
+                }
+                """,
+            ),
+            (
+                "ternary.metal",
+                """
+                #include <metal_stdlib>
+                using namespace metal;
+
+                kernel void ternary_u64(
+                    device const bool* a [[buffer(0)]],
+                    device const ulong* b [[buffer(1)]],
+                    device const ulong* c [[buffer(2)]],
+                    device ulong* d [[buffer(3)]],
+                    constant uint& size [[buffer(4)]],
+                    uint index [[thread_position_in_grid]]
+                ) {
+                    uint i = 0;
+                    auto bidx = size > 0 ? 0 : index + i;
+                    auto cidx = size > 1 ? 0 : index + i;
+                    d[index + i] = a[index + i] ? b[bidx] : c[cidx];
+                }
+                """,
+            ),
+        ],
+    )
+    def test_mlx_reduced_frontier_metal_access_chain_regressions_validate(
+        self, tmp_path, source_name, source
+    ):
+        source_path = tmp_path / source_name
+        source_path.write_text(source, encoding="utf-8")
+
+        spv_code = crosstl.translate(
+            str(source_path), backend="vulkan", format_output=False
+        )
+
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_mlx_random_for_in_over_fixed_array_row_validates(self, tmp_path):
