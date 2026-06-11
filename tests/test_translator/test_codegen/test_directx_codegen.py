@@ -4,6 +4,8 @@ from typing import List
 import pytest
 
 import crosstl.translator
+from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
+from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.translator.ast import (
     ArrayNode,
     AttributeNode,
@@ -6613,6 +6615,30 @@ def test_hlsl_two_argument_atan_renames_shadowed_atan2_locals():
     assert "float angle = (atan2(direction.y, direction.x) + atan2_);" in generated_code
     assert "helper(atan2_, direction.y, direction.x)" in generated_code
     assert "float atan2 = direction.x;" not in generated_code
+
+
+def test_hlsl_reserved_linear_parameter_is_renamed_consistently():
+    shader = """
+    shader HlslReservedLinearParameter {
+        float linearToSrgb(float linear) {
+            return linear + (linear * linear);
+        }
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                float converted = linearToSrgb(uv.x);
+                return vec4(converted, converted, converted, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float linearToSrgb(float linear_)" in generated_code
+    assert "return (linear_ + (linear_ * linear_));" in generated_code
+    assert re.search(r"\blinear\b", generated_code) is None
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
 def test_hlsl_two_argument_atan_renames_shadowed_global_atan2_function():

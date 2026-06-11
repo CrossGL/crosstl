@@ -331,6 +331,7 @@ class HLSLCodeGen:
         "sample": "sample",
         "linear_sample": "sample",
     }
+    HLSL_RESERVED_IDENTIFIER_NAMES = {"linear"}
     HLSL_FEEDBACK_WRITE_HELPERS = {
         "write_sampler_feedback": ("WriteSamplerFeedback", {4, 5}),
         "write_sampler_feedback_bias": ("WriteSamplerFeedbackBias", {5, 6}),
@@ -518,7 +519,7 @@ class HLSLCodeGen:
     }
     HLSL_WAVE_BASIC_COMPONENT_TYPES = HLSL_WAVE_NUMERIC_COMPONENT_TYPES | {"bool"}
     HLSL_WAVE_SIZE_LANE_COUNTS = {4, 8, 16, 32, 64, 128}
-    HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES = {
+    HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES = HLSL_RESERVED_IDENTIFIER_NAMES | {
         # GLSL atan(y, x) lowers to HLSL atan2(y, x); keep local symbols from
         # capturing that intrinsic because HLSL does not provide a namespace escape.
         "atan2",
@@ -588,6 +589,7 @@ class HLSLCodeGen:
         self.literal_int_constants = {}
         self.literal_bool_constants = {}
         self.current_identifier_aliases = {}
+        self.current_identifier_reserved_names = set()
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.current_hlsl_visible_int_constants = None
@@ -980,6 +982,7 @@ class HLSLCodeGen:
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.required_hlsl_inverse_helpers = set()
         self.current_identifier_aliases = {}
+        self.current_identifier_reserved_names = set()
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.allow_hlsl_byteaddress_interlocked_member_expression = False
@@ -3230,6 +3233,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         previous_function_return_type = self.current_function_return_type
         previous_local_variable_types = self.local_variable_types
         previous_identifier_aliases = self.current_identifier_aliases
+        previous_identifier_reserved_names = self.current_identifier_reserved_names
         previous_generic_function_substitutions = (
             self.current_generic_function_substitutions
         )
@@ -3264,6 +3268,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.current_identifier_aliases = {}
         self.current_identifier_aliases.update(
             self.hlsl_hoisted_groupshared_aliases_by_function.get(id(func), {})
+        )
+        self.current_identifier_reserved_names = (
+            self.collect_hlsl_function_identifier_names(func)
         )
         self.local_variable_types.update(
             self.hlsl_hoisted_groupshared_types_by_function.get(id(func), {})
@@ -3512,6 +3519,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.current_function_return_type = previous_function_return_type
             self.local_variable_types = previous_local_variable_types
             self.current_identifier_aliases = previous_identifier_aliases
+            self.current_identifier_reserved_names = previous_identifier_reserved_names
             self.current_generic_function_substitutions = (
                 previous_generic_function_substitutions
             )
@@ -3549,6 +3557,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.current_function_return_type = previous_function_return_type
             self.local_variable_types = previous_local_variable_types
             self.current_identifier_aliases = previous_identifier_aliases
+            self.current_identifier_reserved_names = previous_identifier_reserved_names
             self.current_generic_function_substitutions = (
                 previous_generic_function_substitutions
             )
@@ -3682,6 +3691,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.current_function_return_type = previous_function_return_type
         self.local_variable_types = previous_local_variable_types
         self.current_identifier_aliases = previous_identifier_aliases
+        self.current_identifier_reserved_names = previous_identifier_reserved_names
         self.current_generic_function_substitutions = (
             previous_generic_function_substitutions
         )
@@ -5628,6 +5638,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return "float4"
         return None
 
+    def collect_hlsl_function_identifier_names(self, func):
+        names = {
+            getattr(param, "name", None)
+            for param in getattr(func, "parameters", getattr(func, "params", [])) or []
+            if getattr(param, "name", None)
+        }
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if isinstance(node, VariableNode):
+                name = getattr(node, "name", None)
+            elif isinstance(node, ForInNode):
+                name = getattr(node, "pattern", None)
+            else:
+                name = None
+            if name:
+                names.add(name)
+        return names
+
     def hlsl_declaration_identifier_name(self, name):
         if not isinstance(name, str):
             return name
@@ -5641,6 +5668,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         used_names = set(self.local_variable_types)
         used_names.update(self.global_variable_types)
+        used_names.update(self.current_identifier_reserved_names)
         used_names.update(self.current_identifier_aliases.values())
         alias = f"{name}_"
         while alias in used_names or alias in self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES:
@@ -5653,6 +5681,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         while (
             candidate in used_names
             or candidate in self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES
+            or candidate in self.current_identifier_reserved_names
         ):
             candidate += "_"
         return candidate
