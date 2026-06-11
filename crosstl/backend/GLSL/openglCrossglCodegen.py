@@ -684,6 +684,114 @@ class GLSLToCrossGLConverter:
         qualifiers = self._qualifier_set(var)
         return io_type == "OUT" or "out" in qualifiers or "inout" in qualifiers
 
+    def _is_stage_io_var(self, var):
+        return self._is_input_var(var) or self._is_output_var(var)
+
+    def is_glsl_builtin_stage_io_var(self, var):
+        if not isinstance(var, VariableNode):
+            return False
+        return str(getattr(var, "name", "")).startswith(
+            "gl_"
+        ) and self._is_stage_io_var(var)
+
+    def stage_io_direction(self, var):
+        directions = []
+        io_type = str(getattr(var, "io_type", "") or "").upper()
+        if io_type == "IN":
+            directions.append("in")
+        elif io_type == "OUT":
+            directions.append("out")
+        elif io_type == "INOUT":
+            directions.append("inout")
+        for qualifier in getattr(var, "qualifiers", []) or []:
+            lowered = str(qualifier).lower()
+            if lowered in {"in", "out", "inout"} and lowered not in directions:
+                directions.append(lowered)
+        return tuple(directions)
+
+    def layout_conflict_value(self, value):
+        return self.layout_value_to_string(value) if value is not None else None
+
+    def merge_builtin_stage_io_layout(self, target, source):
+        target_layout = dict(getattr(target, "layout", None) or {})
+        for key, value in (getattr(source, "layout", None) or {}).items():
+            normalized_key = str(key).lower()
+            existing_key = next(
+                (
+                    target_key
+                    for target_key in target_layout
+                    if str(target_key).lower() == normalized_key
+                ),
+                None,
+            )
+            if existing_key is None:
+                target_layout[key] = value
+                continue
+            existing_value = self.layout_conflict_value(target_layout[existing_key])
+            new_value = self.layout_conflict_value(value)
+            if existing_value != new_value:
+                raise ValueError(
+                    "Conflicting GLSL builtin redeclaration for "
+                    f"'{target.name}': layout {existing_key}={existing_value} "
+                    f"differs from {key}={new_value}"
+                )
+        target.layout = target_layout or None
+
+    def merge_builtin_stage_io_qualifiers(self, target, source):
+        target_qualifiers = list(getattr(target, "qualifiers", []) or [])
+        for qualifier in getattr(source, "qualifiers", []) or []:
+            if qualifier not in target_qualifiers:
+                target_qualifiers.append(qualifier)
+        target.qualifiers = target_qualifiers
+
+    def validate_builtin_stage_io_array_metadata(self, target, source):
+        for attr_name in ("is_array", "array_size", "array_sizes"):
+            if getattr(target, attr_name, None) != getattr(source, attr_name, None):
+                raise ValueError(
+                    "Conflicting GLSL builtin redeclaration for "
+                    f"'{target.name}': {attr_name} "
+                    f"{getattr(target, attr_name, None)} differs from "
+                    f"{getattr(source, attr_name, None)}"
+                )
+
+    def merge_builtin_stage_io_redeclaration(self, target, source):
+        if getattr(target, "vtype", None) != getattr(source, "vtype", None):
+            raise ValueError(
+                "Conflicting GLSL builtin redeclaration for "
+                f"'{target.name}': type {target.vtype} differs from {source.vtype}"
+            )
+        if self.stage_io_direction(target) != self.stage_io_direction(source):
+            raise ValueError(
+                "Conflicting GLSL builtin redeclaration for "
+                f"'{target.name}': direction {self.stage_io_direction(target)} "
+                f"differs from {self.stage_io_direction(source)}"
+            )
+        if getattr(target, "semantic", None) != getattr(source, "semantic", None):
+            raise ValueError(
+                "Conflicting GLSL builtin redeclaration for "
+                f"'{target.name}': semantic {getattr(target, 'semantic', None)} "
+                f"differs from {getattr(source, 'semantic', None)}"
+            )
+        self.validate_builtin_stage_io_array_metadata(target, source)
+        self.merge_builtin_stage_io_layout(target, source)
+        self.merge_builtin_stage_io_qualifiers(target, source)
+
+    def deduplicate_builtin_stage_io_variables(self, variables):
+        deduplicated = []
+        by_key = {}
+        for var in variables or []:
+            if not self.is_glsl_builtin_stage_io_var(var):
+                deduplicated.append(var)
+                continue
+            key = var.name
+            existing = by_key.get(key)
+            if existing is None:
+                by_key[key] = var
+                deduplicated.append(var)
+                continue
+            self.merge_builtin_stage_io_redeclaration(existing, var)
+        return deduplicated
+
     def _is_resource_type(self, type_name):
         if not type_name:
             return False
@@ -2309,6 +2417,9 @@ class GLSLToCrossGLConverter:
             if getattr(function, "name", None)
         }
         self.prepare_structured_buffers(node)
+        node.io_variables = self.deduplicate_builtin_stage_io_variables(
+            getattr(node, "io_variables", []) or []
+        )
 
         for var in node.io_variables:
             if isinstance(var, (LayoutNode, VariableNode)):

@@ -39,10 +39,12 @@ from crosstl.project import (
     plan_runtime_host_integration_execution,
     plan_runtime_host_loader_consumption,
     plan_runtime_integration,
+    reflect_target_host_interface,
     scan_project,
     translate_project,
     validate_project_report,
 )
+from crosstl.project.host_reflection import REFLECTION_TOOL_UNAVAILABLE
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 from tests.test_backend.test_SPIRV.test_codegen import (
     SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
@@ -463,6 +465,13 @@ def test_project_package_exposes_public_api_surface():
         "ProjectPortabilityReport",
         "ProjectScan",
         "ProjectTranslationUnit",
+        "REFLECTION_AMBIGUOUS_BINDING",
+        "REFLECTION_EMPTY",
+        "REFLECTION_INCOMPLETE_OUTPUT",
+        "REFLECTION_PARSE_FAILED",
+        "REFLECTION_TOOL_UNAVAILABLE",
+        "REFLECTION_UNSUPPORTED_FORMAT",
+        "ReflectionDiagnostic",
         "DirectXRuntimeParityAdapter",
         "NativeRuntimeBufferBinding",
         "NativeRuntimeConstantBinding",
@@ -530,6 +539,7 @@ def test_project_package_exposes_public_api_surface():
         "parse_runtime_test_manifest",
         "plan_runtime_test_manifest",
         "prepare_runtime_execution",
+        "reflect_target_host_interface",
         "plan_runtime_adapters",
         "plan_runtime_host_bindings",
         "plan_runtime_host_integration_execution",
@@ -7962,6 +7972,72 @@ def test_translate_project_specializes_generic_helper_for_spirv(tmp_path):
     assert "; SPIR-V" in spirv
     assert "OpFunctionCall" in spirv
     assert "unspecialized generic helper" not in spirv
+
+
+def test_translate_project_opengl_rejects_unresolved_generic_struct_type(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "unresolved_box.cgl").write_text(
+        textwrap.dedent("""
+            shader OpenGLTemplateLeak {
+                generic<T> struct Box {
+                    T value;
+                };
+
+                struct Payload {
+                    Box<T> unresolved;
+                };
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["path"] == "translated/opengl/shaders/unresolved_box.glsl"
+    assert not (repo / artifact["path"]).exists()
+    assert "Box_T" not in artifact["error"]
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.opengl-template-type-unresolved": 1
+    }
+
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.opengl-template-type-unresolved"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert diagnostic["details"] == {
+        "enclosingGeneratedType": "Box<T>",
+        "sourcePath": "shaders/unresolved_box.cgl",
+        "targetArtifact": "translated/opengl/shaders/unresolved_box.glsl",
+        "unresolvedParameter": "T",
+    }
+    assert "unresolved template type 'T' from 'Box<T>'" in diagnostic["message"]
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
 
 
 def test_translate_project_lowers_glsl_vertex_index_for_graphics_targets(tmp_path):
@@ -31991,11 +32067,15 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
         "status": "ready",
         "source": "source-artifact",
         "parser": "cgl",
+        "artifactFormat": None,
         "entryPointCount": 1,
         "resourceCount": 0,
+        "constantCount": 0,
         "entryPoints": [{"name": "main", "stage": "vertex", "executionConfig": {}}],
         "resources": [],
+        "constants": [],
         "diagnostics": [],
+        "diagnosticRecords": [],
     }
     assert artifact["entryPoints"] == [
         {"name": "main", "stage": "vertex", "executionConfig": {}}
@@ -32512,11 +32592,15 @@ def test_build_runtime_package_from_runtime_artifact_manifest(tmp_path):
         "status": "ready",
         "source": "source-artifact",
         "parser": "cgl",
+        "artifactFormat": None,
         "entryPointCount": 1,
         "resourceCount": 0,
+        "constantCount": 0,
         "entryPoints": [{"name": "main", "stage": "vertex", "executionConfig": {}}],
         "resources": [],
+        "constants": [],
         "diagnostics": [],
+        "diagnosticRecords": [],
     }
     assert (
         set(artifact["sourceRemap"])
@@ -32697,6 +32781,236 @@ def _build_runtime_package_fixture(
     return repo, package_dir, package
 
 
+def _write_reduced_runtime_package(tmp_path, *, target, filename, source):
+    package_dir = tmp_path / f"{target}-runtime-package"
+    artifact_dir = package_dir / "artifacts" / "out" / target
+    artifact_dir.mkdir(parents=True)
+    artifact_path = artifact_dir / filename
+    if isinstance(source, bytes):
+        artifact_path.write_bytes(source)
+    else:
+        artifact_path.write_text(source, encoding="utf-8")
+    package_path = artifact_path.relative_to(package_dir).as_posix()
+    package = {
+        "schemaVersion": 1,
+        "kind": project_pipeline.RUNTIME_PACKAGE_KIND,
+        "success": True,
+        "packageRoot": str(package_dir),
+        "project": {"targets": [target]},
+        "runtimePlan": {"runtimeReferenceCount": 0},
+        "artifacts": [
+            {
+                "id": f"{target}|{filename}",
+                "status": "packaged",
+                "source": f"kernels/{filename}",
+                "sourcePath": f"out/{target}/{filename}",
+                "packagePath": package_path,
+                "target": target,
+                "sourceBackend": "cgl",
+                "stage": "compute",
+                "variant": "reduced",
+                "defines": {},
+                "hash": project_pipeline._source_hash(artifact_path),
+                "sizeBytes": artifact_path.stat().st_size,
+                "sourceRemap": None,
+                "hostInterface": None,
+            }
+        ],
+    }
+    manifest_path = package_dir / "runtime-package.json"
+    manifest_path.write_text(json.dumps(package, indent=2), encoding="utf-8")
+    return package_dir, manifest_path
+
+
+def test_inspect_runtime_package_reflects_hlsl_artifact_metadata(tmp_path):
+    _, manifest_path = _write_reduced_runtime_package(
+        tmp_path,
+        target="directx",
+        filename="kernel.hlsl",
+        source=textwrap.dedent("""
+            RWStructuredBuffer<float> values : register(u0, space1);
+            const uint tileSize = 16u;
+
+            [numthreads(8, 2, 1)]
+            void main(uint3 tid : SV_DispatchThreadID) {
+                values[tid.x] = 1.0;
+            }
+            """).strip(),
+    )
+
+    payload = inspect_runtime_package(manifest_path)
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["source"] == "compiled-artifact"
+    assert host_interface["parser"] == "directx-reflection"
+    assert host_interface["entryPoints"] == [
+        {
+            "name": "main",
+            "stage": "compute",
+            "executionConfig": {"numthreads": [8, 2, 1]},
+        }
+    ]
+    assert host_interface["resources"] == [
+        {
+            "name": "values",
+            "kind": "buffer",
+            "type": "RWStructuredBuffer<float>",
+            "set": 1,
+            "binding": 0,
+            "access": "read_write",
+        }
+    ]
+    assert host_interface["constants"] == [
+        {
+            "name": "tileSize",
+            "kind": "scalar-constant",
+            "dtype": "uint",
+            "value": 16,
+            "required": False,
+            "source": "hlsl.const",
+        }
+    ]
+    assert host_interface["diagnostics"] == []
+
+
+def test_inspect_runtime_package_reflects_glsl_artifact_metadata(tmp_path):
+    _, manifest_path = _write_reduced_runtime_package(
+        tmp_path,
+        target="opengl",
+        filename="kernel.comp",
+        source=textwrap.dedent("""
+            #version 450 core
+            layout(local_size_x = 8, local_size_y = 2, local_size_z = 1) in;
+            layout(set = 2, binding = 3) buffer Values { float values[]; } values;
+            layout(constant_id = 7) const uint tileSize = 16u;
+
+            void main() {
+                values.values[gl_GlobalInvocationID.x] = 1.0;
+            }
+            """).strip(),
+    )
+
+    payload = inspect_runtime_package(manifest_path)
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["parser"] == "opengl-reflection"
+    assert host_interface["entryPoints"] == [
+        {
+            "name": "main",
+            "stage": "compute",
+            "executionConfig": {
+                "local_size_x": 8,
+                "local_size_y": 2,
+                "local_size_z": 1,
+            },
+        }
+    ]
+    assert host_interface["resources"] == [
+        {
+            "name": "values",
+            "kind": "buffer",
+            "type": "Values",
+            "set": 2,
+            "binding": 3,
+            "access": "read_write",
+        }
+    ]
+    assert host_interface["constants"] == [
+        {
+            "name": "tileSize",
+            "kind": "specialization-constant",
+            "id": 7,
+            "dtype": "uint",
+            "value": 16,
+            "required": False,
+            "source": "glsl.layout.constant_id",
+        }
+    ]
+    assert host_interface["diagnostics"] == []
+
+
+def test_inspect_runtime_package_reflects_spirv_assembly_metadata(tmp_path):
+    _, manifest_path = _write_reduced_runtime_package(
+        tmp_path,
+        target="vulkan",
+        filename="kernel.spvasm",
+        source=textwrap.dedent("""
+            OpEntryPoint GLCompute %main "main" %buf
+            OpExecutionMode %main LocalSize 8 2 1
+            OpName %buf "values"
+            OpName %Buffer "Values"
+            OpName %tileSize "tileSize"
+            OpDecorate %buf DescriptorSet 2
+            OpDecorate %buf Binding 3
+            OpDecorate %tileSize SpecId 7
+            %uint = OpTypeInt 32 0
+            %Buffer = OpTypeStruct %uint
+            %ptr = OpTypePointer StorageBuffer %Buffer
+            %buf = OpVariable %ptr StorageBuffer
+            %tileSize = OpSpecConstant %uint 16
+            """).strip(),
+    )
+
+    payload = inspect_runtime_package(manifest_path)
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["parser"] == "spirv-reflection"
+    assert host_interface["entryPoints"] == [
+        {
+            "name": "main",
+            "stage": "compute",
+            "executionConfig": {"local_size": [8, 2, 1]},
+            "metadata": {"executionModel": "GLCompute", "function": "%main"},
+        }
+    ]
+    assert host_interface["resources"][0] == {
+        "name": "values",
+        "kind": "buffer",
+        "type": "Values",
+        "set": 2,
+        "binding": 3,
+        "access": "read_write",
+        "metadata": {
+            "id": "%buf",
+            "storageClass": "StorageBuffer",
+            "typeId": "%ptr",
+        },
+    }
+    assert host_interface["constants"] == [
+        {
+            "name": "tileSize",
+            "kind": "specialization-constant",
+            "dtype": "uint",
+            "value": 16,
+            "required": False,
+            "source": "spirv.spec-constant",
+            "metadata": {"id": "%tileSize", "typeId": "%uint"},
+            "id": 7,
+        }
+    ]
+    assert host_interface["diagnostics"] == []
+
+
+def test_reflect_spirv_binary_reports_missing_disassembler(tmp_path):
+    artifact_path = tmp_path / "kernel.spv"
+    artifact_path.write_bytes(b"\x03\x02#\x07")
+
+    host_interface = reflect_target_host_interface(
+        artifact_path,
+        target="vulkan",
+        tool_resolver=lambda _tool: None,
+    )
+
+    assert host_interface is not None
+    assert host_interface["status"] == "unavailable"
+    assert host_interface["parser"] == "spirv-reflection"
+    assert host_interface["diagnostics"] == [REFLECTION_TOOL_UNAVAILABLE]
+    assert host_interface["diagnosticRecords"][0]["details"]["tool"] == "spirv-dis"
+
+
 def test_inspect_runtime_package_reports_ready_bindings(tmp_path):
     _, package_dir, package = _build_runtime_package_fixture(tmp_path)
     package_manifest = package_dir / "runtime-package.json"
@@ -32857,8 +33171,9 @@ def test_inspect_runtime_package_uses_registered_target_parser_for_host_interfac
 
     host_interface = payload["bindings"][0]["hostInterface"]
     assert host_interface["status"] == "ready"
-    assert host_interface["source"] == "package-artifact"
-    assert host_interface["parser"] == "opengl"
+    assert host_interface["source"] == "compiled-artifact"
+    assert host_interface["parser"] == "opengl-reflection"
+    assert host_interface["artifactFormat"] == "GLSL source"
     assert host_interface["entryPointCount"] == 1
     assert host_interface["entryPoints"] == [
         {
@@ -32873,7 +33188,7 @@ def test_inspect_runtime_package_uses_registered_target_parser_for_host_interfac
             "name": "Camera",
             "kind": "constant-buffer",
             "type": "Camera",
-            "set": None,
+            "set": 0,
             "binding": 0,
             "access": "read",
         },
@@ -32881,9 +33196,9 @@ def test_inspect_runtime_package_uses_registered_target_parser_for_host_interfac
             "name": "sourceTexture",
             "kind": "texture",
             "type": "sampler2D",
-            "set": None,
+            "set": 0,
             "binding": 1026,
-            "access": None,
+            "access": "read",
         },
     ]
     assert host_interface["diagnostics"] == []
@@ -33735,10 +34050,12 @@ def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface(
     assert adapter["hostInterface"]["status"] == "ready"
     assert adapter["hostInterface"] == {
         "status": "ready",
-        "source": "package-artifact",
-        "parser": "opengl",
+        "source": "compiled-artifact",
+        "parser": "opengl-reflection",
+        "artifactFormat": "GLSL source",
         "entryPointCount": 1,
         "resourceCount": 0,
+        "constantCount": 0,
         "entryPoints": [
             {
                 "name": "main",
@@ -33747,7 +34064,9 @@ def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface(
             }
         ],
         "resources": [],
+        "constants": [],
         "diagnostics": [],
+        "diagnosticRecords": [],
     }
     assert [action["kind"] for action in payload["actions"]] == [
         "wire-runtime-adapter",
@@ -33755,7 +34074,7 @@ def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface(
     ]
 
 
-def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty(
+def test_plan_runtime_adapters_reflects_vulkan_host_interface(
     tmp_path,
 ):
     _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
@@ -33769,7 +34088,7 @@ def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty(
         "readyBindingCount": 1,
         "failedBindingCount": 0,
         "adapterCount": 1,
-        "actionCount": 3,
+        "actionCount": 2,
         "runtimeReferenceCount": 1,
     }
     assert payload["targets"][0]["target"] == "vulkan"
@@ -33778,32 +34097,21 @@ def test_plan_runtime_adapters_reports_unavailable_host_interface_when_empty(
     adapter = payload["adapters"][0]
     assert adapter["target"] == "vulkan"
     assert adapter["adapterKind"] == "vulkan-shader-adapter"
-    assert adapter["hostInterface"] == {
-        "status": "unavailable",
-        "source": "package-artifact",
-        "parser": "vulkan",
-        "entryPointCount": 0,
-        "resourceCount": 0,
-        "entryPoints": [],
-        "resources": [],
-        "diagnostics": ["project.runtime-package-inspection.host-interface-empty"],
-    }
+    host_interface = adapter["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["source"] == "compiled-artifact"
+    assert host_interface["parser"] == "spirv-reflection"
+    assert host_interface["artifactFormat"] == "Vulkan-targeted shader source"
+    assert host_interface["entryPointCount"] == 1
+    assert host_interface["entryPoints"][0]["name"] == "main"
+    assert host_interface["entryPoints"][0]["stage"] == "vertex"
+    assert host_interface["resourceCount"] == 0
+    assert host_interface["constantCount"] == 0
+    assert host_interface["diagnostics"] == []
     assert [action["kind"] for action in payload["actions"]] == [
         "wire-runtime-adapter",
-        "resolve-host-interface-metadata",
         "review-runtime-references",
     ]
-    host_interface_action = payload["actions"][1]
-    assert set(host_interface_action) == (
-        project_pipeline.RUNTIME_ADAPTER_PLAN_ACTION_FIELDS
-    )
-    assert host_interface_action["severity"] == "warning"
-    assert host_interface_action["target"] == "vulkan"
-    assert host_interface_action["adapter"] == adapter["id"]
-    assert host_interface_action["binding"] == adapter["binding"]
-    assert host_interface_action["packagePath"] == adapter["packagePath"]
-    assert "status is unavailable" in host_interface_action["message"]
-    assert "host-interface-empty" in host_interface_action["message"]
 
 
 def test_plan_runtime_adapters_reports_webgpu_wgsl_adapter_metadata(tmp_path):
@@ -33829,13 +34137,17 @@ def test_plan_runtime_adapters_reports_webgpu_wgsl_adapter_metadata(tmp_path):
         "status": "ready",
         "source": "package-artifact",
         "parser": "wgsl-reflection",
+        "artifactFormat": "WGSL source",
         "entryPointCount": 1,
         "resourceCount": 0,
+        "constantCount": 0,
         "entryPoints": [
             {"name": "vertex_main", "stage": "vertex", "executionConfig": {}}
         ],
         "resources": [],
+        "constants": [],
         "diagnostics": [],
+        "diagnosticRecords": [],
     }
     assert [action["kind"] for action in payload["actions"]] == [
         "wire-runtime-adapter",
@@ -33935,13 +34247,13 @@ def test_webgl_runtime_package_preserves_graphics_stage_artifacts(tmp_path):
         (
             "vertex",
             "ready",
-            "opengl",
+            "webgl-reflection",
             [{"name": "main", "stage": "vertex", "executionConfig": {}}],
         ),
         (
             "fragment",
             "ready",
-            "opengl",
+            "webgl-reflection",
             [{"name": "main", "stage": "fragment", "executionConfig": {}}],
         ),
     ]
@@ -34117,10 +34429,9 @@ def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status(
 
     assert result.returncode == 0
     assert "Runtime adapters:" in result.stdout
-    assert "interface: unavailable" in result.stdout
-    assert "host-interface-empty" in result.stdout
+    assert "interface: ready" in result.stdout
     assert "Runtime adapter actions:" in result.stdout
-    assert "resolve-host-interface-metadata" in result.stdout
+    assert "review-runtime-references" in result.stdout
 
 
 def test_project_cli_plan_runtime_adapters_json_writes_output(tmp_path):
@@ -34377,7 +34688,7 @@ def test_build_runtime_loader_manifest_from_runtime_package(tmp_path):
     }
 
 
-def test_runtime_loader_manifest_reports_blocked_host_interface_metadata(tmp_path):
+def test_runtime_loader_manifest_uses_reflected_vulkan_host_interface(tmp_path):
     _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
 
     payload = build_runtime_loader_manifest(package_dir / "runtime-package.json")
@@ -34387,35 +34698,121 @@ def test_runtime_loader_manifest_reports_blocked_host_interface_metadata(tmp_pat
         "targetCount": 1,
         "bindingCount": 1,
         "loadUnitCount": 1,
-        "readyLoadUnitCount": 0,
-        "blockedLoadUnitCount": 1,
-        "actionCount": 3,
+        "readyLoadUnitCount": 1,
+        "blockedLoadUnitCount": 0,
+        "actionCount": 2,
         "runtimeReferenceCount": 1,
     }
     assert payload["targets"][0]["target"] == "vulkan"
     assert payload["targets"][0]["adapterKind"] == "vulkan-shader-adapter"
-    assert payload["targets"][0]["readyLoadUnitCount"] == 0
-    assert payload["targets"][0]["blockedLoadUnitCount"] == 1
+    assert payload["targets"][0]["readyLoadUnitCount"] == 1
+    assert payload["targets"][0]["blockedLoadUnitCount"] == 0
     load_unit = payload["loadUnits"][0]
     assert load_unit["target"] == "vulkan"
-    assert load_unit["hostInterface"]["status"] == "unavailable"
-    assert load_unit["validation"]["loadReady"] is False
-    assert load_unit["validation"]["hostInterface"] == "unavailable"
+    assert load_unit["hostInterface"]["status"] == "ready"
+    assert load_unit["hostInterface"]["parser"] == "spirv-reflection"
+    assert load_unit["validation"]["loadReady"] is True
+    assert load_unit["validation"]["hostInterface"] == "ready"
     assert [step["kind"] for step in load_unit["loadSteps"]] == [
         "load-package-artifact",
         "load-source-remap",
+        "bind-host-interface",
         "validate-target-toolchain",
     ]
-    assert load_unit["loadSteps"][2]["command"] == [
+    assert load_unit["loadSteps"][3]["command"] == [
         "spirv-as",
         "artifacts/out/vulkan/simple.spvasm",
         "-o",
         project_pipeline.os.devnull,
     ]
-    assert len(load_unit["blockers"]) == 1
-    assert load_unit["blockers"][0]["kind"] == "resolve-host-interface-metadata"
-    assert load_unit["blockers"][0]["severity"] == "warning"
-    assert "host-interface-empty" in load_unit["blockers"][0]["message"]
+    assert load_unit["blockers"] == []
+
+
+def _runtime_loader_manifest_with_blocked_host_interface(loader_manifest):
+    payload = copy.deepcopy(loader_manifest)
+    load_units = [
+        load_unit
+        for load_unit in payload.get("loadUnits", [])
+        if isinstance(load_unit, dict)
+    ]
+    blockers = []
+    for load_unit in load_units:
+        blocker = {
+            "kind": "resolve-host-interface-metadata",
+            "severity": "warning",
+            "message": (
+                "Resolve host interface metadata before generating host loader "
+                f"scaffolds for {load_unit.get('target')}."
+            ),
+            "target": load_unit.get("target"),
+            "adapter": load_unit.get("id"),
+            "binding": None,
+            "packagePath": load_unit.get("packagePath"),
+        }
+        blockers.append(blocker)
+        load_unit["blockers"] = [blocker]
+        host_interface = (
+            dict(load_unit.get("hostInterface"))
+            if isinstance(load_unit.get("hostInterface"), dict)
+            else {}
+        )
+        host_interface.update(
+            {
+                "status": "unavailable",
+                "entryPointCount": 0,
+                "resourceCount": 0,
+                "constantCount": 0,
+                "entryPoints": [],
+                "resources": [],
+                "constants": [],
+                "diagnostics": [
+                    "project.runtime-package-inspection.host-interface-not-recorded"
+                ],
+                "diagnosticRecords": [],
+            }
+        )
+        load_unit["hostInterface"] = host_interface
+        validation = (
+            dict(load_unit.get("validation"))
+            if isinstance(load_unit.get("validation"), dict)
+            else {}
+        )
+        validation["hostInterface"] = "unavailable"
+        validation["loadReady"] = False
+        load_unit["validation"] = validation
+
+    payload["actions"] = list(payload.get("actions", [])) + blockers
+    summary = dict(payload.get("summary", {}))
+    summary["readyLoadUnitCount"] = 0
+    summary["blockedLoadUnitCount"] = len(load_units)
+    summary["actionCount"] = len(payload["actions"])
+    payload["summary"] = summary
+
+    for target in payload.get("targets", []):
+        if not isinstance(target, dict):
+            continue
+        target_units = [
+            load_unit
+            for load_unit in load_units
+            if load_unit.get("target") == target.get("target")
+        ]
+        target["readyLoadUnitCount"] = 0
+        target["blockedLoadUnitCount"] = len(target_units)
+
+    return payload
+
+
+def _write_blocked_runtime_loader_manifest_fixture(tmp_path, targets=("vulkan",)):
+    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=targets)
+    loader_manifest_path = package_dir / "runtime-loader-manifest.json"
+    loader_manifest = _runtime_loader_manifest_with_blocked_host_interface(
+        build_runtime_loader_manifest(package_dir / "runtime-package.json")
+    )
+    loader_manifest_path.write_text(
+        json.dumps(loader_manifest, indent=2),
+        encoding="utf-8",
+    )
+    return repo, package_dir, loader_manifest_path, loader_manifest
 
 
 def test_runtime_loader_manifest_reports_wgsl_validation_command(tmp_path):
@@ -34685,15 +35082,13 @@ def test_project_cli_runtime_loader_manifest_text_outputs_load_units(tmp_path):
         "Loader non-goals: host-code-rewriting, device-execution, "
         "runtime-framework-generation, target-sdk-installation"
     ) in result.stdout
-    assert "Summary: 1 targets, 1 load units, 0 ready, 1 blocked" in result.stdout
-    assert "Adapter plan: ok, 1 adapters, 3 actions" in result.stdout
-    assert "- vulkan: vulkan-shader-adapter, 0 ready, 1 blocked" in result.stdout
+    assert "Summary: 1 targets, 1 load units, 1 ready, 0 blocked" in result.stdout
+    assert "Adapter plan: ok, 1 adapters, 2 actions" in result.stdout
+    assert "- vulkan: vulkan-shader-adapter, 1 ready, 0 blocked" in result.stdout
     assert "Runtime loader units:" in result.stdout
-    assert "via vulkan-shader-adapter [interface: unavailable; blockers: 1" in (
-        result.stdout
-    )
+    assert "via vulkan-shader-adapter [interface: ready; steps: 4]" in result.stdout
     assert "Runtime loader actions:" in result.stdout
-    assert "resolve-host-interface-metadata" in result.stdout
+    assert "review-runtime-references" in result.stdout
 
 
 def test_project_cli_runtime_loader_manifest_json_writes_output(tmp_path):
@@ -34834,14 +35229,8 @@ def test_runtime_host_loader_scaffolds_preserve_loader_step_metadata(tmp_path):
 def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files(
     tmp_path,
 ):
-    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
-    loader_manifest_path = package_dir / "runtime-loader-manifest.json"
-    loader_manifest_path.write_text(
-        json.dumps(
-            build_runtime_loader_manifest(package_dir / "runtime-package.json"),
-            indent=2,
-        ),
-        encoding="utf-8",
+    repo, _, loader_manifest_path, _ = _write_blocked_runtime_loader_manifest_fixture(
+        tmp_path
     )
     scaffold_dir = repo / "host-loader-scaffolds"
 
@@ -34928,14 +35317,8 @@ def test_runtime_host_loader_scaffolds_sanitize_target_and_unit_paths(tmp_path):
 
 
 def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds(tmp_path):
-    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
-    loader_manifest_path = package_dir / "runtime-loader-manifest.json"
-    loader_manifest_path.write_text(
-        json.dumps(
-            build_runtime_loader_manifest(package_dir / "runtime-package.json"),
-            indent=2,
-        ),
-        encoding="utf-8",
+    repo, _, loader_manifest_path, _ = _write_blocked_runtime_loader_manifest_fixture(
+        tmp_path
     )
     scaffold_dir = repo / "host-loader-scaffolds"
 
@@ -35010,14 +35393,20 @@ def test_project_cli_scaffold_host_loaders_json_writes_output(tmp_path):
     assert (scaffold_dir / "host-loader-scaffolds.json").is_file()
 
 
-def _build_runtime_host_loader_scaffold_fixture(tmp_path, targets=("cgl",)):
+def _build_runtime_host_loader_scaffold_fixture(
+    tmp_path, targets=("cgl",), *, blocked_host_interface=False
+):
     repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=targets)
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
+    loader_manifest = build_runtime_loader_manifest(
+        package_dir / "runtime-package.json"
+    )
+    if blocked_host_interface:
+        loader_manifest = _runtime_loader_manifest_with_blocked_host_interface(
+            loader_manifest
+        )
     loader_manifest_path.write_text(
-        json.dumps(
-            build_runtime_loader_manifest(package_dir / "runtime-package.json"),
-            indent=2,
-        ),
+        json.dumps(loader_manifest, indent=2),
         encoding="utf-8",
     )
     scaffold_dir = repo / "host-loader-scaffolds"
@@ -35118,7 +35507,7 @@ def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file(
 
 def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units(tmp_path):
     _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("vulkan",), blocked_host_interface=True
     )
 
     payload = inspect_runtime_host_loader_scaffolds(
@@ -35301,7 +35690,7 @@ def test_plan_runtime_host_loader_consumption_reports_ready_units(tmp_path):
 
 def test_plan_runtime_host_loader_consumption_carries_blocked_units(tmp_path):
     _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("vulkan",), blocked_host_interface=True
     )
 
     payload = plan_runtime_host_loader_consumption(
@@ -35404,9 +35793,11 @@ def test_project_cli_plan_host_loader_consumption_json_writes_output(tmp_path):
     assert payload["actions"][0]["kind"] == "consume-host-loader-unit"
 
 
-def _write_host_loader_consumption_plan_fixture(tmp_path, targets=("cgl",)):
+def _write_host_loader_consumption_plan_fixture(
+    tmp_path, targets=("cgl",), *, blocked_host_interface=False
+):
     repo, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=targets
+        tmp_path, targets=targets, blocked_host_interface=blocked_host_interface
     )
     plan_payload = plan_runtime_host_loader_consumption(
         scaffold_dir / "host-loader-scaffolds.json"
@@ -35466,7 +35857,7 @@ def test_build_runtime_host_integration_handoff_writes_ready_bundle(tmp_path):
 
 def test_build_runtime_host_integration_handoff_writes_blocked_bundle(tmp_path):
     repo, plan_path, _ = _write_host_loader_consumption_plan_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("vulkan",), blocked_host_interface=True
     )
     handoff_dir = repo / "host-integration"
 
@@ -35570,9 +35961,11 @@ def test_project_cli_host_integration_handoff_json_writes_output(tmp_path):
     assert (handoff_dir / "HOST_INTEGRATION.md").is_file()
 
 
-def _build_runtime_host_integration_handoff_fixture(tmp_path, targets=("cgl",)):
+def _build_runtime_host_integration_handoff_fixture(
+    tmp_path, targets=("cgl",), *, blocked_host_interface=False
+):
     repo, plan_path, _ = _write_host_loader_consumption_plan_fixture(
-        tmp_path, targets=targets
+        tmp_path, targets=targets, blocked_host_interface=blocked_host_interface
     )
     handoff_dir = repo / "host-integration"
     handoff_payload = build_runtime_host_integration_handoff(plan_path, handoff_dir)
@@ -35721,7 +36114,7 @@ def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch(
 
 def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle(tmp_path):
     _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("vulkan",), blocked_host_interface=True
     )
 
     payload = inspect_runtime_host_integration_handoff(
@@ -35923,7 +36316,7 @@ def test_plan_runtime_host_integration_execution_reports_ready_steps(tmp_path):
 
 def test_plan_runtime_host_integration_execution_carries_blocked_steps(tmp_path):
     _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("vulkan",), blocked_host_interface=True
     )
 
     payload = plan_runtime_host_integration_execution(
@@ -36063,9 +36456,11 @@ def test_project_cli_plan_host_integration_execution_json_writes_output(tmp_path
     assert payload["steps"][0]["kind"] == "consume-host-loader-unit"
 
 
-def _write_runtime_host_integration_execution_plan_fixture(tmp_path, targets=("cgl",)):
+def _write_runtime_host_integration_execution_plan_fixture(
+    tmp_path, targets=("cgl",), *, blocked_host_interface=False
+):
     repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=targets
+        tmp_path, targets=targets, blocked_host_interface=blocked_host_interface
     )
     plan_payload = plan_runtime_host_integration_execution(
         handoff_dir / "host-integration.json",
@@ -36174,7 +36569,7 @@ def test_execute_runtime_host_integration_reports_blocked_steps_without_failure(
     tmp_path,
 ):
     _, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
-        tmp_path, targets=("vulkan",)
+        tmp_path, targets=("vulkan",), blocked_host_interface=True
     )
 
     payload = execute_runtime_host_integration(plan_path)

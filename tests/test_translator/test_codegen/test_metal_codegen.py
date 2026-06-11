@@ -174,6 +174,34 @@ def test_glsl_fragment_fragcoord_lowers_to_metal_position_input(tmp_path):
     compile_with_metal_if_available(generated_code)
 
 
+def test_glsl_input_attachment_reports_unsupported_metal_diagnostic(tmp_path):
+    shader = """
+    #version 450
+    layout(input_attachment_index = 0, set = 0, binding = 0)
+    uniform subpassInput sceneColor;
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        fragColor = subpassLoad(sceneColor);
+    }
+    """
+    shader_path = tmp_path / "input-attachment.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "unsupported Metal input attachment declaration" in generated_code
+    assert "unsupported Metal input attachment load" in generated_code
+    assert "constant subpassInput sceneColor" not in generated_code
+    assert "subpassLoad(sceneColor)" not in generated_code
+    assert "float4(0)" in generated_code
+
+
 def test_metal_reserved_stage_keyword_local_identifier_is_escaped():
     shader = """
     shader ReservedStageKeywordLocal {
@@ -25806,6 +25834,76 @@ def test_metal_nested_implicit_shadow_compare_lod_grad_uses_depth_overloads():
     assert "textureQueryLod(" not in generated_code
     assert "textureCompareLod(" not in generated_code
     assert "textureCompareGradOffset(" not in generated_code
+
+
+def test_metal_glsl_es_shadow_sampler_lod_overloads_lower_to_compare_sampling():
+    shader = """
+    shader GlslEsShadowSamplerLodOverloads {
+        sampler2DArrayShadow s2da;
+        samplerCubeArrayShadow sca;
+        samplerCubeShadow sc;
+
+        struct FragmentInput {
+            vec4 tc @ TEXCOORD0;
+        };
+
+        fragment {
+            float main(FragmentInput input) @ gl_FragDepth {
+                float c;
+                c = texture(s2da, input.tc, 0.0);
+                c = texture(sca, input.tc, 0.0, 0.0);
+                c = textureOffset(s2da, input.tc, ivec2(0.0), 0.0);
+                c = textureCompareLod(s2da, input.tc.xyz, input.tc.w, 0.0);
+                c = textureCompareLod(sc, input.tc.xyz, input.tc.w, 0.0);
+                c = textureLod(sca, input.tc, 0.0, 0.0);
+                c = textureCompareLodOffset(
+                    s2da,
+                    input.tc.xyz,
+                    input.tc.w,
+                    0.0,
+                    ivec2(0.0)
+                );
+                return c;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
+
+    assert "depth2d_array<float> s2da [[texture(0)]]" in generated_code
+    assert "depthcube_array<float> sca [[texture(1)]]" in generated_code
+    assert "depthcube<float> sc [[texture(2)]]" in generated_code
+    s2da_compare = (
+        f"c = s2da.sample_compare({default_sampler}, input.tc.xy, "
+        "uint(input.tc.z), input.tc.w"
+    )
+    s2da_lod_compare = (
+        f"c = s2da.sample_compare({default_sampler}, input.tc.xyz.xy, "
+        "uint(input.tc.xyz.z), input.tc.w"
+    )
+    assert f"{s2da_compare}, bias(0.0));" in generated_code
+    assert (
+        f"c = sca.sample_compare({default_sampler}, input.tc.xyz, "
+        "uint(input.tc.w), 0.0, bias(0.0));" in generated_code
+    )
+    assert f"{s2da_compare}, bias(0.0), int2(0.0));" in generated_code
+    assert f"{s2da_lod_compare}, level(0.0));" in generated_code
+    assert (
+        f"c = sc.sample_compare({default_sampler}, input.tc.xyz, "
+        "input.tc.w, level(0.0));" in generated_code
+    )
+    assert (
+        f"c = sca.sample_compare({default_sampler}, input.tc.xyz, "
+        "uint(input.tc.w), 0.0, level(0.0));" in generated_code
+    )
+    assert f"{s2da_lod_compare}, level(0.0), int2(0.0));" in generated_code
+    assert "texture(s2da" not in generated_code
+    assert "textureOffset(" not in generated_code
+    assert "textureLod(" not in generated_code
+    assert "textureCompareLod(" not in generated_code
+    assert "textureCompareLodOffset(" not in generated_code
 
 
 def test_metal_array_shadow_texture_resource_arrays_keep_compare_coordinates():

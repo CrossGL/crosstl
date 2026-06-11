@@ -302,6 +302,11 @@ class OpenGLTemplateTypeError(ValueError):
     project_diagnostic_code = "project.translate.opengl-template-type-unresolved"
     missing_capabilities = ("template.specialization",)
 
+    def __init__(self, message, *, unresolved_parameter=None, enclosing_type=None):
+        super().__init__(message)
+        self.unresolved_parameter = unresolved_parameter
+        self.enclosing_generated_type = enclosing_type
+
 
 class GLSLCodeGen:
     """Emit GLSL source from the shared CrossGL translator AST."""
@@ -16934,6 +16939,16 @@ class GLSLCodeGen:
         if canonical_type is not None:
             return canonical_type
 
+        unresolved_template_type = self.unresolved_template_placeholder_type(vtype_str)
+        if unresolved_template_type is not None:
+            raise OpenGLTemplateTypeError(
+                "OpenGL codegen cannot emit unresolved template type "
+                f"'{unresolved_template_type}' from '{vtype_str}'; "
+                "provide a concrete instantiation before GLSL generation",
+                unresolved_parameter=unresolved_template_type,
+                enclosing_type=vtype_str,
+            )
+
         generic_enum_type = generic_enum_specialized_type_name(self, vtype_str)
         if generic_enum_type is not None:
             return generic_enum_type
@@ -16947,14 +16962,6 @@ class GLSLCodeGen:
 
         if vtype_str in getattr(self, "enum_struct_type_names", set()):
             return vtype_str
-
-        unresolved_template_type = self.unresolved_template_placeholder_type(vtype_str)
-        if unresolved_template_type is not None:
-            raise OpenGLTemplateTypeError(
-                "OpenGL codegen cannot emit unresolved template type "
-                f"'{unresolved_template_type}' from '{vtype_str}'; "
-                "provide a concrete instantiation before GLSL generation"
-            )
 
         return self.type_mapping.get(vtype_str, vtype_str)
 
