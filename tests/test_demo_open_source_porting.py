@@ -439,3 +439,13 @@ def test_open_source_demo_runner_verifies_fast_reference_subset():
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "directx-graphics-samples-hello-triangle: verified cgl" in result.stdout
+
+
+def test_open_source_demo_runner_ignores_trailing_text_artifact_whitespace(tmp_path):
+    runner = _load_demo_runner()
+    expected = tmp_path / "expected.spvasm"
+    actual = tmp_path / "actual.spvasm"
+    expected.write_text("OpFunctionCall %8 %20\nOpReturn\n", encoding="utf-8")
+    actual.write_text("OpFunctionCall %8 %20 \r\nOpReturn\t\r\n", encoding="utf-8")
+
+    assert runner._comparison_bytes(expected) == runner._comparison_bytes(actual)

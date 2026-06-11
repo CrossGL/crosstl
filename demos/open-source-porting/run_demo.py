@@ -221,10 +221,10 @@ def _normalize_artifact(path: Path) -> None:
 
 
 def _comparison_bytes(path: Path) -> bytes:
-    data = path.read_bytes().replace(b"\r\n", b"\n").rstrip(b"\n")
+    data = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     if path.suffix == ".json":
         try:
-            payload = json.loads(data.decode("utf-8"))
+            payload = json.loads(data.rstrip(b"\n").decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError):
             return data
         if path.name.endswith(".source-remap.json"):
@@ -234,7 +234,9 @@ def _comparison_bytes(path: Path) -> bytes:
             separators=(",", ":"),
             sort_keys=True,
         ).encode("utf-8")
-    return data
+    if b"\0" in data:
+        return data
+    return b"\n".join(line.rstrip(b" \t") for line in data.rstrip(b"\n").split(b"\n"))
 
 
 def _normalize_json_paths(value: object) -> object:
