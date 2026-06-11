@@ -37430,6 +37430,89 @@ def test_translate_project_metal_reduction_materializes_shared_helper_templates(
         assert not re.search(r"\\b(?:T|U|Op|N_READS)\\b", output)
 
 
+def test_translate_project_skips_standalone_metal_template_utility_artifacts(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "common.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, typename U>
+            T ceildiv(T n, U m) {
+                return (n + T(m) - T(1)) / T(m);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "reduce.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            #include "common.metal"
+            using namespace metal;
+
+            #define instantiate_reduce(name, type) \\
+                instantiate_kernel("reduce" #name, reduce_kernel, type)
+
+            template <typename T>
+            kernel void reduce_kernel(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = ceildiv(T(gid), 2u);
+            }
+
+            instantiate_reduce(_f32, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl", "vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["skipped"] == [
+        {"path": "common.metal", "reason": "metal-template-utility"}
+    ]
+    assert payload["summary"]["unitCount"] == 1
+    assert payload["summary"]["artifactCount"] == 3
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert {artifact["source"] for artifact in payload["artifacts"]} == {
+        "reduce.metal"
+    }
+
+    for artifact in payload["artifacts"]:
+        assert artifact["status"] == "translated"
+        assert artifact["templateMaterialization"]["specializations"] == [
+            {
+                "name": "reduce_kernel",
+                "materializedName": "reduce_f32",
+                "parameters": {"T": "float"},
+                "parameterSources": {"T": "source-instantiation"},
+                "source": "source-instantiation",
+                "hostName": "reduce_f32",
+            },
+            {
+                "name": "ceildiv",
+                "materializedName": "ceildiv_float_uint",
+                "parameters": {"T": "float", "U": "uint"},
+                "parameterSources": {"T": "call-site", "U": "call-site"},
+                "source": "call-site",
+            },
+        ]
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        if artifact["target"] in {"directx", "opengl"}:
+            assert "ceildiv_float_uint" in output
+        assert "ceildiv<" not in output
+        assert not re.search(r"\\b(?:T|U)\\b", output)
+
+
 def test_translate_project_metal_norm_materializes_variadic_shared_helper(
     tmp_path,
 ):
