@@ -339,6 +339,29 @@ def test_wgsl_duplicate_hlsl_register_space_resource_bindings_raise():
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+def test_wgsl_hlsl_texture_and_sampler_registers_get_distinct_bindings():
+    shader = """
+    shader WGSLHLSLTextureSamplerRegisters {
+        @register(t0)
+        sampler2D g_texture;
+        @register(s0)
+        sampler g_sampler;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD) @ SV_TARGET {
+                return texture(g_texture, g_sampler, uv);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(0)\nvar g_texture: texture_2d<f32>;" in generated
+    assert "@group(0) @binding(1)\nvar g_sampler: sampler;" in generated
+    assert "@group(0) @binding(2)\nvar g_texture_sampler: sampler;" in generated
+    assert "return textureSample(g_texture, g_sampler, uv);" in generated
+
+
 def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings():
     shader = """
     shader WGSLCBuffer {

@@ -1074,9 +1074,55 @@ class MetalPreprocessor(HLSLPreprocessor):
             return None
         return tokens[-2], tokens[-1]
 
+    def _function_parameter_start(self, header: str) -> Optional[int]:
+        paren_depth = 0
+        bracket_depth = 0
+        angle_depth = 0
+        i = 0
+        while i < len(header):
+            if header[i] in "\"'":
+                _literal, consumed = self._read_string(header, i)
+                i += consumed
+                continue
+            if header.startswith("//", i):
+                end = header.find("\n", i)
+                if end == -1:
+                    return None
+                i = end + 1
+                continue
+            if header.startswith("/*", i):
+                end = header.find("*/", i + 2)
+                if end == -1:
+                    return None
+                i = end + 2
+                continue
+
+            ch = header[i]
+            if (
+                ch == "("
+                and paren_depth == 0
+                and bracket_depth == 0
+                and angle_depth == 0
+            ):
+                return i
+            if ch == "(":
+                paren_depth += 1
+            elif ch == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif ch == "[":
+                bracket_depth += 1
+            elif ch == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif ch == "<":
+                angle_depth += 1
+            elif ch == ">":
+                angle_depth = max(0, angle_depth - 1)
+            i += 1
+        return None
+
     def _function_name_from_header(self, header: str) -> Optional[str]:
-        paren_index = header.find("(")
-        if paren_index == -1:
+        paren_index = self._function_parameter_start(header)
+        if paren_index is None:
             return None
         before_params = header[:paren_index].rstrip()
         match = re.search(r"([A-Za-z_][A-Za-z0-9_:]*)\s*$", before_params)

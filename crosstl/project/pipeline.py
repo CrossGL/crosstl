@@ -8355,6 +8355,71 @@ def _plain_template_call_replacements(
     return replacements
 
 
+def _explicit_template_call_replacements(
+    preprocessor: Any,
+    source: str,
+    replacements_by_name: Mapping[str, str],
+    excluded_spans: Sequence[tuple[int, int]],
+    included_spans: Sequence[tuple[int, int]] | None,
+) -> list[tuple[int, int, str]]:
+    replacements: list[tuple[int, int, str]] = []
+    i = 0
+    excluded = list(excluded_spans)
+    included = list(included_spans) if included_spans is not None else None
+    while i < len(source):
+        if source[i] in "\"'":
+            _literal, consumed = preprocessor._read_string(source, i)
+            i += consumed
+            continue
+        if source.startswith("//", i):
+            end = source.find("\n", i)
+            if end == -1:
+                break
+            i = end + 1
+            continue
+        if source.startswith("/*", i):
+            end = source.find("*/", i + 2)
+            if end == -1:
+                break
+            i = end + 2
+            continue
+        span = preprocessor._containing_span(i, excluded)
+        if span is not None:
+            i = span[1]
+            continue
+        if included is not None and preprocessor._containing_span(i, included) is None:
+            i += 1
+            continue
+        if source[i].isalpha() or source[i] == "_":
+            ident, consumed = preprocessor._read_identifier(source, i)
+            replacement = replacements_by_name.get(ident)
+            j = i + consumed
+            while j < len(source) and source[j].isspace():
+                j += 1
+            if replacement is None or j >= len(source) or source[j] != "<":
+                i += consumed
+                continue
+            angle_end = preprocessor._find_matching_angle(source, j)
+            if angle_end is None:
+                i += consumed
+                continue
+            k = angle_end + 1
+            while k < len(source) and source[k].isspace():
+                k += 1
+            if k < len(source) and source[k] == "(":
+                replacements.append(
+                    (
+                        preprocessor._scoped_identifier_start(source, i),
+                        angle_end + 1,
+                        replacement,
+                    )
+                )
+            i = angle_end + 1
+            continue
+        i += 1
+    return replacements
+
+
 def _template_materialization_metadata(
     *,
     specializations: Sequence[Mapping[str, Any]],
@@ -8583,6 +8648,7 @@ def _project_template_materialization_for_artifact(
     unsupported: list[dict[str, Any]] = []
     used_configured_parameters: dict[str, str] = {}
     default_call_replacements: dict[str, str] = {}
+    materialized_call_replacements: dict[str, str] = {}
     current_template_spans = preprocessor._find_template_declaration_spans(materialized)
     current_reachable_function_spans = preprocessor._reachable_function_spans(
         materialized,
@@ -8646,6 +8712,7 @@ def _project_template_materialization_for_artifact(
                 )
                 source_kind = "source-default"
                 default_call_replacements[template.name] = materialized_name
+            materialized_call_replacements[template.name] = materialized_name
             materialized_source = preprocessor._materialize_template_function_with_name(
                 template,
                 arguments,
@@ -8713,6 +8780,25 @@ def _project_template_materialization_for_artifact(
         )
     if replacements:
         materialized = preprocessor._apply_text_replacements(materialized, replacements)
+    if materialized_call_replacements:
+        remaining_template_spans = preprocessor._find_template_declaration_spans(
+            materialized
+        )
+        remaining_reachable_function_spans = preprocessor._reachable_function_spans(
+            materialized,
+            remaining_template_spans,
+        )
+        explicit_replacements = _explicit_template_call_replacements(
+            preprocessor,
+            materialized,
+            materialized_call_replacements,
+            remaining_template_spans,
+            remaining_reachable_function_spans,
+        )
+        if explicit_replacements:
+            materialized = preprocessor._apply_text_replacements(
+                materialized, explicit_replacements
+            )
     if not materialized.endswith("\n"):
         materialized += "\n"
 
