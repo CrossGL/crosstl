@@ -1,5 +1,6 @@
 """CrossGL-to-HLSL code generator."""
 
+from copy import deepcopy
 from hashlib import sha1
 
 from ..ast import (
@@ -1030,9 +1031,131 @@ class HLSLCodeGen:
         """Generate HLSL source for a single requested shader stage."""
         return self.generate_program(ast, target_stage=shader_type)
 
+    def with_hlsl_builtin_option_prelude(self, ast):
+        if not self.hlsl_ast_needs_builtin_option(ast):
+            return ast
+        if self.hlsl_ast_declares_type(ast, "Option"):
+            return ast
+
+        self.hlsl_builtin_option_available = True
+        ast = deepcopy(ast)
+        prelude_ast = self.parse_hlsl_builtin_option_prelude()
+        ast.structs = list(getattr(prelude_ast, "structs", []) or []) + list(
+            getattr(ast, "structs", []) or []
+        )
+        ast.functions = list(getattr(prelude_ast, "functions", []) or []) + list(
+            getattr(ast, "functions", []) or []
+        )
+        return ast
+
+    def parse_hlsl_builtin_option_prelude(self):
+        from ..lexer import Lexer
+        from ..parser import Parser
+
+        source = """
+        shader DirectXBuiltinOption {
+            generic<T> struct Option {
+                enum OptionType { Some(T), Absent }
+                OptionType variant;
+            }
+
+            generic<T> bool is_Some(Option<T> item) {
+                return item.variant == Option::Some;
+            }
+
+            generic<T> bool is_None(Option<T> item) {
+                return item.variant == Option::Absent;
+            }
+
+            generic<T> T unwrap_Some(Option<T> item) {
+                return item.Some_0;
+            }
+        }
+        """
+        return Parser(Lexer(source).tokens).parse()
+
+    def hlsl_ast_declares_type(self, ast, type_name):
+        return any(
+            getattr(struct, "name", None) == type_name
+            for struct in getattr(ast, "structs", []) or []
+        )
+
+    def hlsl_ast_needs_builtin_option(self, ast):
+        option_helpers = {"is_Some", "is_None", "unwrap_Some"}
+        for node in self.walk_ast(ast):
+            if self.hlsl_node_type_uses_builtin_option(node):
+                return True
+            if self.function_call_name(node) in option_helpers:
+                return True
+        return False
+
+    def hlsl_node_type_uses_builtin_option(self, node):
+        for attr in (
+            "return_type",
+            "param_type",
+            "var_type",
+            "vtype",
+            "member_type",
+            "const_type",
+            "constructor_type",
+        ):
+            if self.hlsl_type_uses_builtin_option(getattr(node, attr, None)):
+                return True
+        return False
+
+    def hlsl_type_uses_builtin_option(self, type_value):
+        type_name = self.type_name_string(type_value)
+        if not isinstance(type_name, str):
+            return False
+        base_name, generic_args = generic_type_parts(type_name)
+        return base_name.rsplit("::", 1)[-1] == "Option" and bool(generic_args)
+
+    def hlsl_builtin_option_payload_type(self, type_value):
+        type_name = self.type_name_string(type_value)
+        if not isinstance(type_name, str):
+            return None
+
+        base_name, generic_args = generic_type_parts(type_name)
+        if base_name.rsplit("::", 1)[-1] == "Option" and len(generic_args) == 1:
+            return generic_args[0]
+
+        for specialization in getattr(
+            self, "generic_enum_specializations", {}
+        ).values():
+            if (
+                specialization.get("struct_name") == type_name
+                and str(specialization.get("base_name")).rsplit("::", 1)[-1] == "Option"
+            ):
+                generic_params = specialization.get("definition", {}).get(
+                    "generic_params", []
+                )
+                if not generic_params:
+                    return None
+                return specialization.get("substitutions", {}).get(generic_params[0])
+        return None
+
+    def hlsl_builtin_option_call_type(self, node, func_name):
+        if not getattr(self, "hlsl_builtin_option_available", False):
+            return None
+
+        base_name = str(func_name).rsplit("::", 1)[-1]
+        if base_name == "Some":
+            return self.current_expression_expected_type
+        if base_name in {"is_Some", "is_None"}:
+            return "bool"
+        if base_name == "unwrap_Some":
+            args = list(getattr(node, "arguments", getattr(node, "args", [])) or [])
+            if len(args) != 1:
+                return None
+            option_type = self.expression_result_type(args[0])
+            return self.hlsl_builtin_option_payload_type(option_type)
+        return None
+
     def generate_program(self, ast, target_stage=None):
         """Render an AST to HLSL, optionally filtering stage entry points."""
         target_stage = normalize_stage_name(target_stage)
+        self.hlsl_builtin_option_available = False
+        ast = self.with_hlsl_builtin_option_prelude(ast)
 
         self.texture_variables = set()
         self.sampler_variables = set()
@@ -4184,6 +4307,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         vtype = getattr(stmt, "var_type", None)
         if vtype is None:
             vtype = getattr(stmt, "vtype", None)
+        vtype_name = self.type_name_string(vtype)
+        if isinstance(vtype_name, str) and vtype_name.strip().lower() in {
+            "auto",
+            "let",
+        }:
+            inferred_type = self.expression_result_type(
+                getattr(stmt, "initial_value", None)
+            )
+            if inferred_type is not None:
+                return inferred_type
         if vtype is None:
             vtype = self.expression_result_type(getattr(stmt, "initial_value", None))
         return vtype or "float"
@@ -4625,6 +4758,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            option_call_type = self.hlsl_builtin_option_call_type(expr, func_name)
+            if option_call_type is not None:
+                return option_call_type
             if func_name in self.HLSL_WAVE_INTRINSIC_ARITIES:
                 return self.hlsl_wave_intrinsic_return_type(func_name, args)
             if func_name in self.HLSL_NONUNIFORM_RESOURCE_INDEX_NAMES:
@@ -5292,11 +5428,51 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             declaration = f"{declaration} = {value}"
         return declaration
 
+    def is_hlsl_builtin_option_none_expression(self, expr):
+        if not getattr(self, "hlsl_builtin_option_available", False):
+            return False
+        if isinstance(expr, str):
+            return expr.rsplit("::", 1)[-1] == "None"
+        name = getattr(expr, "name", None)
+        return isinstance(name, str) and name.rsplit("::", 1)[-1] == "None"
+
+    def hlsl_builtin_option_constructor_name(self, func_name):
+        if not getattr(self, "hlsl_builtin_option_available", False):
+            return func_name
+        base_name = str(func_name).rsplit("::", 1)[-1]
+        if base_name == "Some":
+            return "Option::Some"
+        if base_name == "None":
+            return "Option::Absent"
+        return func_name
+
+    def generate_hlsl_builtin_option_none_value(self):
+        if not getattr(self, "hlsl_builtin_option_available", False):
+            return None
+        return generate_enum_constructor_call(self, "Option::Absent", [])
+
+    def generate_hlsl_builtin_option_none_comparison(self, left, op, right):
+        if op not in {"==", "!="}:
+            return None
+        left_is_none = self.is_hlsl_builtin_option_none_expression(left)
+        right_is_none = self.is_hlsl_builtin_option_none_expression(right)
+        if left_is_none == right_is_none:
+            return None
+
+        subject = right if left_is_none else left
+        subject_expr = self.generate_expression(subject)
+        operator = "==" if op == "==" else "!="
+        return f"({subject_expr}.variant {operator} Option_Absent)"
+
     def generate_expression(self, expr):
         """Render a CrossGL AST expression into HLSL expression syntax."""
         if expr is None:
             return ""
         elif isinstance(expr, str):
+            if self.is_hlsl_builtin_option_none_expression(expr):
+                none_value = self.generate_hlsl_builtin_option_none_value()
+                if none_value is not None:
+                    return none_value
             return expr
         elif isinstance(expr, bool):
             return "true" if expr else "false"
@@ -5325,6 +5501,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return str(value)
             return str(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
+            if self.is_hlsl_builtin_option_none_expression(expr):
+                none_value = self.generate_hlsl_builtin_option_none_value()
+                if none_value is not None:
+                    return none_value
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
@@ -5334,6 +5514,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return enum_value
             return self.hlsl_identifier_name(name)
         elif isinstance(expr, VariableNode):
+            if self.is_hlsl_builtin_option_none_expression(expr):
+                none_value = self.generate_hlsl_builtin_option_none_value()
+                if none_value is not None:
+                    return none_value
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
@@ -5345,6 +5529,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             left = self.generate_expression(getattr(expr, "left", ""))
             right = self.generate_expression(getattr(expr, "right", ""))
             op = getattr(expr, "operator", getattr(expr, "op", "+"))
+            option_none_comparison = self.generate_hlsl_builtin_option_none_comparison(
+                getattr(expr, "left", ""),
+                self.map_operator(op),
+                getattr(expr, "right", ""),
+            )
+            if option_none_comparison is not None:
+                return option_none_comparison
             if self.hlsl_binary_multiply_uses_mul(expr):
                 return f"mul({left}, {right})"
             return f"({left} {self.map_operator(op)} {right})"
@@ -5412,6 +5603,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 callee = self.hlsl_function_call_name(func_expr)
             else:
                 callee = self.generate_expression(func_expr)
+
+            original_func_name = self.hlsl_builtin_option_constructor_name(func_name)
+            if original_func_name != func_name:
+                func_name = original_func_name
+                callee = original_func_name
 
             byteaddress_interlocked_call = (
                 self.generate_hlsl_byteaddress_interlocked_member_call(
