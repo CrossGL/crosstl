@@ -14547,6 +14547,86 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_generic_structured_buffer_overloads_resolve_project_helper_family(
+        self, tmp_path
+    ):
+        source_code = """
+        shader GenericStorageBufferProjectHelpers {
+            StructuredBuffer<float> weights @binding(0);
+            StructuredBuffer<uint> counters @binding(1);
+            RWStructuredBuffer<float> values @binding(2);
+
+            generic<T> fn elem_to_loc(
+                StructuredBuffer<T> source,
+                RWStructuredBuffer<float> target,
+                uint index,
+                uvec3 tid
+            ) -> void {
+                target.Store(index + tid.x, float(source.Load(index)));
+            }
+
+            generic<T> fn elem_to_loc(
+                StructuredBuffer<T> source,
+                RWStructuredBuffer<float> target,
+                uint base,
+                uint index,
+                uvec3 tid
+            ) -> void {
+                target.Store(base + index + tid.x, float(source.Load(index)));
+            }
+
+            generic<T> fn elem_to_loc_broadcast(
+                StructuredBuffer<T> source,
+                RWStructuredBuffer<float> target,
+                uint index,
+                uvec3 lane
+            ) -> void {
+                target.Store(index + lane.x, float(source.Load(index)));
+            }
+
+            compute {
+                void main() {
+                    uint staticScratch = 7u;
+                    uint dynamicScratch = 5u;
+                    elem_to_loc(
+                        weights,
+                        values,
+                        1u,
+                        0u,
+                        staticScratch,
+                        dynamicScratch,
+                        uvec3(0u, 0u, 0u)
+                    );
+                    elem_to_loc(
+                        counters,
+                        values,
+                        2u,
+                        1u,
+                        staticScratch,
+                        dynamicScratch,
+                        uvec3(1u, 0u, 0u)
+                    );
+                    elem_to_loc_broadcast(weights, values, 3u, 2u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "elem_to_loc" not in spv_code
+        assert "elem_to_loc_broadcast" not in spv_code
+        assert "storage-buffer-function-overload" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "OpConvertUToF" in spv_code
+        assert "OpCompositeConstruct" in spv_code
+        assert "Unknown type" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_structured_buffer_overload_diagnostic_lists_rejection_reasons(self):
         source_code = """
         shader StorageBufferOverloadDiagnostic {

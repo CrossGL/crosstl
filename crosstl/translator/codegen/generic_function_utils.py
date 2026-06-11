@@ -65,14 +65,20 @@ RESERVED_GENERIC_FUNCTION_BUILTIN_NAMES = (
 
 def prepare_generic_function_specializations(generator, functions):
     """Collect concrete generic function instantiations used by ``functions``."""
-    definitions = {
-        func.name: func
-        for func in functions or []
-        if getattr(func, "name", None)
-        and generic_function_parameters(func)
-        and not is_reserved_generic_function_builtin_name(func.name)
-    }
+    definitions = {}
+    definition_ordinals = {}
+    for func in functions or []:
+        func_name = getattr(func, "name", None)
+        if (
+            not func_name
+            or not generic_function_parameters(func)
+            or is_reserved_generic_function_builtin_name(func_name)
+        ):
+            continue
+        definition_ordinals[id(func)] = len(definitions.setdefault(func_name, []))
+        definitions[func_name].append(func)
     generator.generic_function_definitions = definitions
+    generator.generic_function_definition_ordinals = definition_ordinals
     generator.generic_function_specializations = {}
     generator.generic_function_specialized_names = {}
 
@@ -171,8 +177,8 @@ def generic_function_emission_list(generator, func):
     specializations = getattr(generator, "generic_function_specializations", {}) or {}
     return [
         clone
-        for key, clone in specializations.items()
-        if key[0] == getattr(func, "name", None)
+        for clone in specializations.values()
+        if getattr(clone, "_generic_source_function_id", None) == id(func)
     ]
 
 
@@ -189,23 +195,53 @@ def generic_function_call_key(generator, func_name, args):
         return None
 
     definitions = getattr(generator, "generic_function_definitions", {}) or {}
-    func = definitions.get(func_name)
-    if func is None:
+    candidates = definitions.get(func_name) or []
+    if not candidates:
         return None
 
+    matches = []
+    for func in candidates:
+        match = _generic_function_candidate_call_match(
+            generator,
+            func,
+            func_name,
+            args,
+        )
+        if match is None:
+            continue
+        matches.append(match)
+
+    if not matches:
+        return None
+
+    matches.sort(key=lambda match: match["rank"], reverse=True)
+    for match in matches:
+        _ensure_generic_function_specialization(
+            generator,
+            match["function"],
+            match["key"],
+            match["substitutions"],
+        )
+    return matches[0]["key"]
+
+
+def _generic_function_candidate_call_match(generator, func, func_name, args):
     generic_params = generic_function_parameters(func)
     if not generic_params:
         return None
 
     substitutions = {}
+    generic_param_set = set(generic_params)
     param_list = list(getattr(func, "parameters", getattr(func, "params", [])) or [])
+    matched_params = 0
+    exact_matches = 0
+    compatible_params = 0
+
     for param, arg in zip(param_list, args or []):
         expected_type = generator.type_name_string(
             getattr(param, "param_type", getattr(param, "vtype", None))
         )
-        actual_type = generator.type_name_string(
-            _safe_expression_result_type(generator, arg)
-        )
+        actual_type = _safe_call_argument_type_name(generator, arg)
         if not actual_type:
             actual_type = getattr(
                 generator,
@@ -214,12 +250,30 @@ def generic_function_call_key(generator, func_name, args):
             ).get(expected_type)
         if not actual_type:
             continue
+
+        before = dict(substitutions)
         _collect_type_parameter_bindings(
             expected_type,
             actual_type,
             substitutions,
-            set(generic_params),
+            generic_param_set,
         )
+        if substitutions != before:
+            matched_params += 1
+
+        concrete_expected = substitute_generic_type_name(
+            expected_type,
+            substitutions,
+        )
+        expected_normalized = _normalize_signature_type_name(
+            generator,
+            concrete_expected,
+        )
+        actual_normalized = _normalize_signature_type_name(generator, actual_type)
+        if expected_normalized == actual_normalized:
+            exact_matches += 1
+        elif _types_compatible(generator, concrete_expected, actual_type):
+            compatible_params += 1
 
     if any(param not in substitutions for param in generic_params):
         defaults = generic_function_parameter_defaults(generator, func)
@@ -236,9 +290,36 @@ def generic_function_call_key(generator, func_name, args):
         return None
 
     concrete_args = tuple(substitutions[param] for param in generic_params)
-    key = (func_name, concrete_args)
-    _ensure_generic_function_specialization(generator, func, key, substitutions)
-    return key
+    ordinal = (getattr(generator, "generic_function_definition_ordinals", {}) or {}).get(
+        id(func),
+        0,
+    )
+    overload_count = len(
+        (getattr(generator, "generic_function_definitions", {}) or {}).get(
+            func_name,
+            [],
+        )
+    )
+    key = (
+        (func_name, concrete_args, ordinal)
+        if overload_count > 1
+        else (func_name, concrete_args)
+    )
+    args_count = len(args or [])
+    arity_distance = abs(args_count - len(param_list))
+    return {
+        "function": func,
+        "key": key,
+        "substitutions": substitutions,
+        "rank": (
+            matched_params,
+            exact_matches,
+            compatible_params,
+            -arity_distance,
+            len(param_list),
+            -ordinal,
+        ),
+    }
 
 
 def generate_numeric_trait_method_call(generator, func_expr, args):
@@ -419,7 +500,12 @@ def _ensure_generic_function_specialization(generator, func, key, substitutions)
         return
 
     clone = deepcopy(func)
-    clone.name = generic_function_specialization_name(key[0], key[1])
+    overload_ordinal = key[2] if len(key) > 2 else None
+    clone.name = generic_function_specialization_name(
+        key[0],
+        key[1],
+        overload_ordinal,
+    )
     clone.generic_params = []
     clone.return_type = substitute_generic_type_name(
         generator.type_name_string(getattr(func, "return_type", "void")),
@@ -435,14 +521,24 @@ def _ensure_generic_function_specialization(generator, func, key, substitutions)
         if hasattr(param, "vtype"):
             param.vtype = concrete_type
     clone._generic_source_name = key[0]
+    clone._generic_source_function_id = id(func)
     clone._generic_substitutions = dict(substitutions)
     specializations[key] = clone
     generator.generic_function_specialized_names[key] = clone.name
 
 
-def generic_function_specialization_name(func_name, concrete_args):
+def generic_function_specialization_name(
+    func_name,
+    concrete_args,
+    overload_ordinal=None,
+):
     suffix = "_".join(sanitize_type_name(arg) for arg in concrete_args)
-    return f"{sanitize_type_name(func_name)}_{suffix}" if suffix else func_name
+    parts = [sanitize_type_name(func_name)]
+    if suffix:
+        parts.append(suffix)
+    if overload_ordinal is not None:
+        parts.append(f"overload{overload_ordinal}")
+    return "_".join(parts)
 
 
 def is_reserved_generic_function_builtin_name(func_name):
@@ -483,6 +579,61 @@ def _safe_expression_result_type(generator, expr):
         return generator.expression_result_type(expr)
     except (AttributeError, TypeError, ValueError):
         return None
+
+
+def _safe_call_argument_type_name(generator, expr):
+    try:
+        call_argument_type_name = getattr(generator, "call_argument_type_name")
+    except AttributeError:
+        call_argument_type_name = None
+    if call_argument_type_name is not None:
+        try:
+            actual_type = call_argument_type_name(expr)
+        except (AttributeError, TypeError, ValueError):
+            actual_type = None
+        if actual_type:
+            return generator.type_name_string(actual_type)
+
+    return generator.type_name_string(_safe_expression_result_type(generator, expr))
+
+
+def _normalize_signature_type_name(generator, type_name):
+    try:
+        normalize = getattr(generator, "normalize_signature_type_name")
+    except AttributeError:
+        normalize = None
+    if normalize is not None:
+        return normalize(type_name)
+    type_name = generator.type_name_string(type_name)
+    return str(type_name).replace(" ", "") if type_name is not None else None
+
+
+def _types_compatible(generator, expected_type, actual_type):
+    try:
+        compatible = getattr(generator, "storage_buffer_parameter_type_is_compatible")
+    except AttributeError:
+        compatible = None
+    if compatible is not None:
+        try:
+            expected_base = generator.array_base_type_name(str(expected_type))
+            actual_base = generator.array_base_type_name(str(actual_type))
+            if generator.structured_buffer_type_info(
+                expected_base
+            ) or generator.structured_buffer_type_info(actual_base):
+                return compatible(expected_type, actual_type)
+        except (AttributeError, TypeError, ValueError):
+            pass
+
+    try:
+        scalar_or_vector = getattr(generator, "scalar_or_vector_type_compatible")
+    except AttributeError:
+        scalar_or_vector = None
+    if scalar_or_vector is not None:
+        try:
+            return scalar_or_vector(expected_type, actual_type)
+        except (AttributeError, TypeError, ValueError):
+            return False
+    return False
 
 
 def _function_call_name(call):
