@@ -41,7 +41,7 @@ OpName %4174 "valid_count"
 OpName %4203 "i"
 OpDecorate %10 Block
 OpMemberDecorate %10 0 Offset 0
-OpMemberDecorate %10 1 Offset 4
+OpMemberDecorate %10 1 Offset 8
 OpDecorate %12 DescriptorSet 0
 OpDecorate %12 Binding 2
 OpDecorate %13 ArrayStride 4
