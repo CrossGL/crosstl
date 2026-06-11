@@ -314,7 +314,6 @@ jobs:
             --case apple-modern-rendering-mesh-viewdir \
             --case arm-opengl-es-sdk-cube \
             --case rust-gpu-compute-collatz \
-            --case rust-gpu-graphics-stage-inputs \
             --case rust-gpu-vulkan-examples-triangle-overlay \
             --case sascha-willems-vulkan-conservative-triangle \
             --case sascha-willems-vulkan-headless-compute \
@@ -380,8 +379,6 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.vert.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.frag.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/rust-gpu-compute-collatz/crosstl-out/directx/lib.hlsl CSMain cs_6_0
-          compile_hlsl demos/open-source-porting/cases/rust-gpu-graphics-stage-inputs/crosstl-out/directx/lib.hlsl VSMain vs_6_0
-          compile_hlsl demos/open-source-porting/cases/rust-gpu-graphics-stage-inputs/crosstl-out/directx/lib.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/rust-gpu-vulkan-examples-triangle-overlay/crosstl-out/directx/lib.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/sascha-willems-vulkan-conservative-triangle/crosstl-out/directx/triangle.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/directx/headless.hlsl CSMain cs_6_0

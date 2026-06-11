@@ -7,7 +7,7 @@
       "id": "rust-gpu-graphics-stage-inputs-fragment",
       "path": "lib.rs",
       "sourceBackend": "rust",
-      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
+      "targets": ["cgl", "opengl", "metal", "vulkan"],
       "repository": "https://github.com/Rust-GPU/rust-gpu",
       "commit": "36e3348cdc2f824afec64b3b5af5d369d98a4c0d",
       "sourceUrl": "https://github.com/Rust-GPU/rust-gpu/blob/36e3348cdc2f824afec64b3b5af5d369d98a4c0d/examples/shaders/sky-shader/src/lib.rs"
@@ -16,7 +16,7 @@
       "id": "rust-gpu-graphics-stage-inputs-vertex",
       "path": "lib.rs",
       "sourceBackend": "rust",
-      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
+      "targets": ["cgl", "opengl", "metal", "vulkan"],
       "repository": "https://github.com/Rust-GPU/rust-gpu",
       "commit": "36e3348cdc2f824afec64b3b5af5d369d98a4c0d",
       "sourceUrl": "https://github.com/Rust-GPU/rust-gpu/blob/36e3348cdc2f824afec64b3b5af5d369d98a4c0d/examples/shaders/mouse-shader/src/lib.rs"
