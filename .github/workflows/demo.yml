@@ -97,6 +97,7 @@ jobs:
             --case directx-sdk-samples-tutorial02 \
             --case directx-shader-compiler-groupshared-splat \
             --case directx-shader-compiler-neg1 \
+            --case glfw-opengl-triangle \
             --case glslang-push-constant-vertex \
             --case glslang-spec-constant-vertex \
             --case godot-betsy-alpha-stitch \

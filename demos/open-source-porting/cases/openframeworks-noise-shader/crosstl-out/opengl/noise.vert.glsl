@@ -1,4 +1,4 @@
-#version 150
+#version 330 core
 in vec4 position;
 // Constant Buffers
 layout(std140) uniform Uniforms {

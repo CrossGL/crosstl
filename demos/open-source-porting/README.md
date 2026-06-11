@@ -50,7 +50,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `directx-sdk-samples-tutorial02` | `walbourn/directx-sdk-samples-reworked` at `1ad8f0f6a3e4d9be7e54ca52640ac12b6565ab0c` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Direct3D 11 Tutorial02 effect include unchanged. |
 | `diligent-samples-tutorial02-cube` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Tutorial02 cube vertex and pixel shader pair with repository whitespace normalization. |
 | `diligent-samples-vrs-cube` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | GLSL | CrossGL, OpenGL, DirectX, Vulkan | Uses the upstream VRS cube vertex and fragment-density shader pair unchanged. Metal has no fragment-size input equivalent. |
-| `glfw-opengl-triangle` | `glfw/glfw` at `567b1ec2442d59525e24c19e8d413df6baf02496` | Zlib | GLSL | CrossGL, Metal, DirectX, Vulkan | Uses the upstream OpenGL triangle shader strings extracted from `triangle-opengl.c`. OpenGL output is tracked separately in issue #1304. |
+| `glfw-opengl-triangle` | `glfw/glfw` at `567b1ec2442d59525e24c19e8d413df6baf02496` | Zlib | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream OpenGL triangle shader strings extracted from `triangle-opengl.c`. |
 | `glslang-push-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream push-constant vertex shader unchanged. |
 | `glslang-spec-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream specialization-constant vertex shader unchanged. Source-target output records fallback literals where native specialization IDs cannot be preserved. |
 | `godot-betsy-alpha-stitch` | `godotengine/godot` at `3df26a02c446710c979daa541b74f87edeca81b0` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Removes the Godot shader-section marker so the compute shader is standalone GLSL. |
@@ -147,10 +147,9 @@ The `glfw/glfw` OpenGL triangle shader strings were tested as a candidate and
 originally exposed the CrossGL intermediate keyword collision tracked in issue
 #766. Retesting after issue #1159 closed shows the generated Metal fragment
 shader now escapes the `fragment` stage keyword collision and compiles
-directly. The extracted shader strings are now checked for CrossGL, Metal,
-DirectX, and Vulkan output. OpenGL target validation remains tracked in issue
-#1304 because generated vertex output currently mixes GLSL 110 with modern
-interface qualifiers.
+directly. The extracted shader strings are now checked for CrossGL, OpenGL,
+Metal, DirectX, and Vulkan output after issue #1304 restored GLSL 110
+interface-qualifier compatibility.
 
 The checked `KhronosGroup/glslang` push-constant vertex shader was retested
 after issue #813 and issue #856 closed and is now checked for DirectX and

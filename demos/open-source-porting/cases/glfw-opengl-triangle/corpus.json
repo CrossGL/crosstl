@@ -7,7 +7,7 @@
       "id": "glfw-opengl-triangle-vertex",
       "path": "triangle.vert",
       "sourceBackend": "opengl",
-      "targets": ["cgl", "metal", "directx", "vulkan"],
+      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
       "repository": "https://github.com/glfw/glfw",
       "commit": "567b1ec2442d59525e24c19e8d413df6baf02496",
       "sourceUrl": "https://github.com/glfw/glfw/blob/567b1ec2442d59525e24c19e8d413df6baf02496/examples/triangle-opengl.c"
@@ -16,7 +16,7 @@
       "id": "glfw-opengl-triangle-fragment",
       "path": "triangle.frag",
       "sourceBackend": "opengl",
-      "targets": ["cgl", "metal", "directx", "vulkan"],
+      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
       "repository": "https://github.com/glfw/glfw",
       "commit": "567b1ec2442d59525e24c19e8d413df6baf02496",
       "sourceUrl": "https://github.com/glfw/glfw/blob/567b1ec2442d59525e24c19e8d413df6baf02496/examples/triangle-opengl.c"
