@@ -7978,6 +7978,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "compute",
             "domain",
             "fragment",
+            "max_total_threads_per_threadgroup",
             "maxvertexcount",
             "maxtessfactor",
             "numthreads",

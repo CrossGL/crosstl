@@ -921,6 +921,35 @@ def test_metal_max_total_threads_metadata_translates_to_vulkan(tmp_path):
     assert "return semantic" not in generated
 
 
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_metal_max_total_threads_metadata_is_not_return_semantic_for_void_compute(
+    tmp_path, target
+):
+    source_path = _write_source(
+        tmp_path,
+        "mlx-void-compute-max-total-threads.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        [[max_total_threads_per_threadgroup(1024)]]
+        kernel void pinned_kernel(
+            device float* out [[buffer(0)]],
+            uint index [[thread_position_in_grid]]) {
+            out[index] = 1.0;
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend=target, format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "return semantic" not in generated
+    assert "max_total_threads_per_threadgroup" not in generated
+
+
 def test_hlsl_hello_const_buffers_vertex_semantics_lower_to_metal_attributes(
     tmp_path,
 ):
