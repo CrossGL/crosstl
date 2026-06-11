@@ -5,6 +5,7 @@ from typing import List
 
 import pytest
 
+import crosstl
 from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
@@ -1936,6 +1937,57 @@ def test_glsl_codegen_lowers_native_metal_entry_buffer_parameters_to_resources()
     assert "constant float* A" not in glsl
     assert "constant float* B" not in glsl
     assert "device float* X" not in glsl
+
+
+def test_translate_metal_constant_buffer_member_access_qualifies_glsl_uniform_block(
+    tmp_path,
+):
+    metal = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Camera {
+        float4x4 invViewMatrix;
+    };
+
+    struct VertexOut {
+        float4 position [[position]];
+        float3 viewDir;
+    };
+
+    vertex VertexOut vertex_main(uint vertexID [[vertex_id]],
+                                 constant Camera& camera [[buffer(0)]]) {
+        VertexOut out;
+        out.position = float4(0.0, 0.0, 0.0, 1.0);
+        out.viewDir = camera.invViewMatrix[3].xyz;
+        return out;
+    }
+    """
+    shader_path = tmp_path / "apple_mesh_viewdir.metal"
+    shader_path.write_text(metal, encoding="utf-8")
+
+    glsl = crosstl.translate(
+        str(shader_path),
+        backend="opengl",
+        format_output=False,
+    )
+
+    assert "layout(std140, binding = 0) uniform Camera" in glsl
+    assert "} camera;" in glsl
+    assert "viewDir = camera.invViewMatrix[3].xyz;" in glsl
+    assert "viewDir = invViewMatrix[3].xyz;" not in glsl
+
+    glslang = shutil.which("glslangValidator")
+    if glslang:
+        glsl_path = tmp_path / "apple_mesh_viewdir.vert"
+        glsl_path.write_text(glsl, encoding="utf-8")
+        result = subprocess.run(
+            [glslang, "-S", "vert", str(glsl_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_codegen_mlx_multi_entry_opengl_resource_bindings_do_not_overlap():

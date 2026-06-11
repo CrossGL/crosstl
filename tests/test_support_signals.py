@@ -675,6 +675,45 @@ def test_build_report_creates_issues_for_unmapped_documented_candidates():
     )
 
 
+def test_build_report_skips_triaged_wgsl_webgpu_api_candidates():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "wgsl",
+                "name": "WebGPU / WGSL",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {"features": []}
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "wgsl",
+                "backend": "WebGPU / WGSL",
+                "source": "WebGPU specification",
+                "url": "https://example.com/webgpu",
+                "ok": True,
+                "candidate_terms": [
+                    {"term": "pipelineLayout", "count": 2},
+                    {"term": "pipelineTargetsLayout", "count": 1},
+                    {"term": "PipelineMagicState", "count": 1},
+                ],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+    features_by_issue = {issue["feature"] for issue in report["issues"]}
+
+    assert "pipelineLayout" not in features_by_issue
+    assert "pipelineTargetsLayout" not in features_by_issue
+    assert "PipelineMagicState" in features_by_issue
+
+
 def test_build_report_skips_documented_candidates_mapped_to_existing_features():
     module = load_signals_module()
     backends = {

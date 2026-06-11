@@ -3106,6 +3106,36 @@ class GLSLCodeGen:
                         resource_count,
                     )
                 continue
+            if self.is_constant_buffer_type(vtype):
+                binding_namespace = "uniform buffer binding"
+                resource_binding = self.opengl_resource_binding_for_declaration(
+                    node,
+                    used_resource_bindings,
+                    resource_binding_cursors,
+                    binding_namespace,
+                    resource_count,
+                )
+                self.reserve_resource_binding_range(
+                    used_resource_bindings,
+                    "OpenGL",
+                    binding_namespace,
+                    resource_binding,
+                    resource_count,
+                    var_name,
+                )
+                code += self.glsl_constant_buffer_block_declaration(
+                    vtype,
+                    var_name,
+                    resource_binding,
+                    array_suffix,
+                )
+                self.advance_resource_binding(
+                    resource_binding_cursors,
+                    binding_namespace,
+                    resource_binding,
+                    resource_count,
+                )
+                continue
             if self.is_opaque_resource_type(mapped_type):
                 self.texture_variable_types[var_name] = mapped_type
                 fixed_array_size = self.glsl_resource_array_size_value(array_size)
@@ -6466,6 +6496,8 @@ class GLSLCodeGen:
         for func in self.stage_functions(ast, stage_name):
             parameters = getattr(func, "parameters", getattr(func, "params", [])) or []
             for param in parameters:
+                if self.is_stage_entry_resource_parameter(param):
+                    continue
                 type_name = self.type_node_name(getattr(param, "param_type", None))
                 if type_name in self.structs_by_name:
                     struct_names.add(type_name)
@@ -6839,9 +6871,13 @@ class GLSLCodeGen:
     def stage_entry_parameter_expression_type(self, param, raw_type):
         resource_type = self.stage_entry_resource_parameter_type(param)
         if resource_type is None:
+            if self.is_constant_buffer_type(raw_type):
+                return self.constant_buffer_element_type(raw_type)
             return self.type_name_string(raw_type)
         if self.is_structured_buffer_type(resource_type):
             return f"{self.structured_buffer_element_type(resource_type)}[]"
+        if self.is_constant_buffer_type(resource_type):
+            return self.constant_buffer_element_type(resource_type)
         return self.type_name_string(resource_type)
 
     def is_stage_entry_resource_parameter(self, param):
@@ -6849,6 +6885,8 @@ class GLSLCodeGen:
         if self.is_sampler_type(raw_type):
             return False
         if self.stage_entry_constant_struct_parameter_type(param) is not None:
+            return True
+        if self.is_constant_buffer_type(raw_type):
             return True
         resource_type = self.stage_entry_resource_parameter_type(param)
         if resource_type is not None:
@@ -7926,6 +7964,8 @@ class GLSLCodeGen:
 
         maps = {}
         for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            if self.is_stage_entry_resource_parameter(param):
+                continue
             type_name = self.type_node_name(getattr(param, "param_type", None))
             struct = self.structs_by_name.get(type_name)
             if struct is None:
@@ -15474,6 +15514,15 @@ class GLSLCodeGen:
             "ConsumeStructuredBuffer",
         }
 
+    def is_constant_buffer_type(self, vtype):
+        return str(self.resource_base_type(vtype)).split("<", 1)[0] == "ConstantBuffer"
+
+    def constant_buffer_element_type(self, vtype):
+        type_name = str(self.resource_base_type(vtype))
+        if "<" not in type_name or not type_name.endswith(">"):
+            return None
+        return type_name.split("<", 1)[1][:-1].strip()
+
     def structured_buffer_requires_counter(self, vtype):
         return self.structured_buffer_type_name(vtype) in {
             "AppendStructuredBuffer",
@@ -15816,6 +15865,10 @@ class GLSLCodeGen:
         names = set()
         for node in global_vars:
             node_type = self.resource_node_type(node)
+            if self.is_constant_buffer_type(node_type):
+                element_type = self.constant_buffer_element_type(node_type)
+                if element_type:
+                    names.add(str(element_type))
             if not self.is_layout_bound_struct_uniform(node, node_type):
                 continue
             names.add(str(self.resource_base_type(node_type)))
@@ -15953,6 +16006,19 @@ class GLSLCodeGen:
             and self.explicit_resource_binding_index(node) is not None
         )
 
+    def glsl_constant_buffer_block_declaration(
+        self, vtype, var_name, binding, array_suffix=""
+    ):
+        struct_name = self.constant_buffer_element_type(vtype)
+        if struct_name not in self.structs_by_name:
+            return ""
+        return self.glsl_struct_uniform_block_declaration(
+            struct_name,
+            var_name,
+            binding,
+            array_suffix,
+        )
+
     def glsl_struct_uniform_block_declaration(
         self, vtype, var_name, binding, array_suffix=""
     ):
@@ -16049,6 +16115,14 @@ class GLSLCodeGen:
                 array_suffix,
                 resource_count,
             )
+        if self.is_constant_buffer_type(vtype):
+            return (
+                "uniform buffer binding",
+                "ConstantBuffer",
+                self.constant_buffer_element_type(vtype),
+                array_suffix,
+                resource_count,
+            )
 
         mapped_type = self.map_resource_type_with_format(vtype, node)
         if mapped_type == "sampler" or not self.is_opaque_resource_type(mapped_type):
@@ -16093,6 +16167,8 @@ class GLSLCodeGen:
             namespace = "buffer binding"
         elif self.is_structured_buffer_type(vtype):
             namespace = "buffer binding"
+        elif self.is_constant_buffer_type(vtype):
+            namespace = "uniform buffer binding"
         elif self.is_layout_bound_struct_uniform(node, vtype):
             namespace = "uniform buffer binding"
         else:

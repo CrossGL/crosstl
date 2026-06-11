@@ -289,6 +289,56 @@ def test_wgsl_synthetic_sampler_skips_occupied_binding():
     assert "@group(0) @binding(2)\nvar colorTex_sampler: sampler;" in generated
 
 
+def test_wgsl_duplicate_explicit_resource_bindings_raise():
+    shader = """
+    shader WGSLDuplicateExplicitBindings {
+        sampler firstSampler @binding(3);
+        layout(set = 0, binding = 3) uniform vec4 tint;
+        compute {
+            void main() {
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target resource binding collision: tint and firstSampler "
+            r"both declare @group\(0\) @binding\(3\)"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_duplicate_hlsl_register_space_resource_bindings_raise():
+    shader = """
+    shader WGSLDuplicateRegisterBindings {
+        cbuffer First : register(b2, space1) {
+            float firstValue;
+        };
+        cbuffer Second : register(b2, space1) {
+            float secondValue;
+        };
+        compute {
+            void main() {
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target resource binding collision: Second and First "
+            r"both declare @group\(1\) @binding\(2\)"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings():
     shader = """
     shader WGSLCBuffer {

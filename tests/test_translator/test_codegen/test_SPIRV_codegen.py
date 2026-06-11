@@ -352,6 +352,57 @@ class TestVulkanSPIRVCodeGen:
         )
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_metal_constant_buffer_member_matrix_column_swizzle_lowers_to_spirv(
+        self, tmp_path
+    ):
+        source_path = tmp_path / "apple_mesh_view_dir.metal"
+        source_path.write_text(
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct Camera {
+                float4x4 invViewMatrix;
+            };
+
+            struct VSOut {
+                float4 position [[position]];
+                float3 viewDir;
+            };
+
+            vertex VSOut apple_mesh(
+                uint vertexID [[vertex_id]],
+                constant Camera& camera [[buffer(1)]]
+            ) {
+                VSOut out;
+                out.position = float4(0.0, 0.0, 0.0, 1.0);
+                out.viewDir = camera.invViewMatrix[3].xyz;
+                return out;
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        spv_code = crosstl.translate(
+            str(source_path), backend="vulkan", format_output=False
+        )
+
+        camera_uniform = spirv_named_variable(
+            spv_code, "cameraUniform", storage_class="Uniform"
+        )
+        assert f"OpDecorate {camera_uniform} Binding 1" in spv_code
+        assert "Unknown type &Camera" not in spv_code
+        assert "Could not find member invViewMatrix" not in spv_code
+        assert (
+            "Could not determine array element type for camera.invViewMatrix"
+            not in spv_code
+        )
+        assert "Could not find member xyz" not in spv_code
+        assert "WARNING" not in spv_code
+        assert len(re.findall(r"%\d+ = OpAccessChain %\d+ %\d+ %\d+", spv_code)) >= 2
+        assert re.search(r"%\d+ = OpVectorShuffle %\d+ %\d+ %\d+ 0 1 2", spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_compute_bool_input_reports_structured_lowering_diagnostic(self):
         source_code = """
         shader BoolInputDiagnostic {

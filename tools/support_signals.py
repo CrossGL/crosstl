@@ -343,6 +343,12 @@ DOC_CANDIDATE_FEATURE_ALIAS_PATTERNS = (
     ),
 )
 DOC_CANDIDATE_NOISE_PATTERNS = (re.compile(r"^(?:cuda|hip)(?:error|success)"),)
+TRIAGED_DOC_CANDIDATE_NOISE_BY_BACKEND = {
+    "wgsl": {
+        "pipelinelayout",
+        "pipelinetargetslayout",
+    },
+}
 
 
 class DocumentHTMLParser(HTMLParser):
@@ -995,6 +1001,10 @@ def actionable_doc_candidate(term: str, backend_id: str | None = None) -> bool:
     if len(normalized) < 4:
         return False
     if normalized in DOC_CANDIDATE_NOISE:
+        return False
+    if normalized in TRIAGED_DOC_CANDIDATE_NOISE_BY_BACKEND.get(
+        backend_id or "", set()
+    ):
         return False
     if any(pattern.search(normalized) for pattern in DOC_CANDIDATE_NOISE_PATTERNS):
         return False
