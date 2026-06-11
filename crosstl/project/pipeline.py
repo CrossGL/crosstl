@@ -8565,6 +8565,12 @@ def _is_metal_diagnostic_template_helper(template: Any) -> bool:
     )
 
 
+def _is_metal_entry_template(template: Any) -> bool:
+    from crosstl.backend.Metal.preprocessor import METAL_ENTRY_FUNCTION_RE
+
+    return METAL_ENTRY_FUNCTION_RE.search(_metal_template_header(template)) is not None
+
+
 def _metal_template_parameter_defaults(
     preprocessor: Any,
     source: str,
@@ -8606,6 +8612,264 @@ def _metal_template_parameter_defaults(
         defaults[parameter] = resolved
         available_parameters[parameter] = resolved
     return defaults
+
+
+def _plain_template_function_call_names(
+    preprocessor: Any,
+    template: Any,
+    template_names: set[str],
+) -> set[str]:
+    body_start = template.source.find("{")
+    if body_start == -1:
+        return set()
+    body_end = template.source.rfind("}")
+    body = template.source[body_start + 1 : body_end if body_end != -1 else None]
+    return {
+        name
+        for name in preprocessor._find_function_references(body, template_names)
+        if name != template.name
+    }
+
+
+def _inherited_template_arguments(
+    preprocessor: Any,
+    template: Any,
+    inherited_parameters: Mapping[str, str],
+    inherited_parameter_sources: Mapping[str, str],
+) -> tuple[list[str], dict[str, str], dict[str, str]] | None:
+    defaults = _metal_template_parameter_defaults(
+        preprocessor,
+        "",
+        template,
+        inherited_parameters,
+    )
+    arguments: list[str] = []
+    parameters: dict[str, str] = {}
+    parameter_sources: dict[str, str] = {}
+    available_parameters = dict(inherited_parameters)
+    available_sources = dict(inherited_parameter_sources)
+    variadic = getattr(template, "variadic_template_parameters", set())
+
+    for parameter in getattr(template, "template_parameters", []) or []:
+        if parameter in available_parameters:
+            value = available_parameters[parameter]
+            parameters[parameter] = value
+            parameter_sources[parameter] = available_sources.get(
+                parameter,
+                "source-instantiation",
+            )
+            if parameter in variadic:
+                arguments.extend(preprocessor._split_top_level_commas(value))
+            else:
+                arguments.append(value)
+            continue
+
+        default_argument = defaults.get(parameter)
+        if default_argument is None:
+            return None
+        parameters[parameter] = default_argument
+        parameter_sources[parameter] = "source-default"
+        available_parameters[parameter] = default_argument
+        available_sources[parameter] = "source-default"
+        if parameter in variadic:
+            arguments.extend(preprocessor._split_top_level_commas(default_argument))
+        else:
+            arguments.append(default_argument)
+
+    return arguments, parameters, parameter_sources
+
+
+@dataclass
+class _SourceInstantiationTemplateContext:
+    template: Any
+    materialized_name: str
+    parameters: Mapping[str, str]
+    parameter_sources: Mapping[str, str]
+
+
+@dataclass
+class _InheritedTemplateMaterialization:
+    text: str
+    specializations: list[dict[str, Any]]
+    template_names: set[str]
+
+
+def _materialize_inherited_source_template_helpers(
+    *,
+    preprocessor: Any,
+    materialized: str,
+    templates_by_name: Mapping[str, Any],
+    source_contexts: Sequence[_SourceInstantiationTemplateContext],
+    existing_materialized_names: Mapping[tuple[str, tuple[str, ...]], str],
+) -> _InheritedTemplateMaterialization:
+    template_names = set(templates_by_name)
+    generated: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
+    generated_order: list[tuple[str, tuple[str, ...]]] = []
+    inherited_template_names: set[str] = set()
+    specialization_records: list[dict[str, Any]] = []
+    seen_records: set[tuple[str, str, tuple[tuple[str, str], ...]]] = set()
+    active: set[tuple[str, tuple[str, ...]]] = set()
+
+    def ensure_helper(
+        name: str,
+        inherited_parameters: Mapping[str, str],
+        inherited_parameter_sources: Mapping[str, str],
+    ) -> str | None:
+        template = templates_by_name.get(name)
+        if template is None or _is_metal_entry_template(template):
+            return None
+        inherited = _inherited_template_arguments(
+            preprocessor,
+            template,
+            inherited_parameters,
+            inherited_parameter_sources,
+        )
+        if inherited is None:
+            return None
+        arguments, parameters, parameter_sources = inherited
+        key = preprocessor._template_specialization_key(name, arguments)
+
+        existing_name = existing_materialized_names.get(key)
+        if existing_name is not None:
+            return existing_name
+
+        cached = generated.get(key)
+        if cached is not None:
+            return str(cached["materialized_name"])
+
+        materialized_name = preprocessor._template_specialization_identifier(
+            name,
+            list(key[1]),
+        )
+        generated[key] = {
+            "template": template,
+            "arguments": list(key[1]),
+            "materialized_name": materialized_name,
+            "parameters": parameters,
+            "parameter_sources": parameter_sources,
+            "source": "",
+        }
+        if key in active:
+            return materialized_name
+
+        active.add(key)
+        child_replacements: dict[str, str] = {}
+        for child_name in sorted(
+            _plain_template_function_call_names(
+                preprocessor,
+                template,
+                template_names,
+            )
+        ):
+            child_materialized_name = ensure_helper(
+                child_name,
+                parameters,
+                parameter_sources,
+            )
+            if child_materialized_name is not None:
+                child_replacements[child_name] = child_materialized_name
+
+        source = preprocessor._materialize_template_function_with_name(
+            template,
+            list(key[1]),
+            materialized_name,
+            host_name=None,
+        )
+        if child_replacements:
+            replacements = _plain_template_call_replacements(
+                preprocessor,
+                source,
+                child_replacements,
+                [],
+                None,
+            )
+            source = preprocessor._apply_text_replacements(source, replacements)
+
+        generated[key]["source"] = source
+        generated_order.append(key)
+        inherited_template_names.add(name)
+        active.remove(key)
+
+        record_key = (
+            name,
+            materialized_name,
+            tuple(sorted(parameters.items())),
+        )
+        if record_key not in seen_records:
+            seen_records.add(record_key)
+            specialization_records.append(
+                _materialized_template_specialization_record(
+                    name=name,
+                    materialized_name=materialized_name,
+                    parameters=parameters,
+                    parameter_sources=parameter_sources,
+                    source=_template_specialization_source(
+                        parameter_sources,
+                        fallback="source-instantiation",
+                    ),
+                )
+            )
+        return materialized_name
+
+    function_spans_by_name: dict[str, list[tuple[int, int]]] = {}
+    template_spans = preprocessor._find_template_declaration_spans(materialized)
+    for function in preprocessor._find_non_template_function_definitions(
+        materialized,
+        template_spans,
+    ):
+        function_spans_by_name.setdefault(function.name, []).append(function.span)
+
+    call_replacements: list[tuple[int, int, str]] = []
+    for context in source_contexts:
+        replacements_by_name: dict[str, str] = {}
+        for helper_name in sorted(
+            _plain_template_function_call_names(
+                preprocessor,
+                context.template,
+                template_names,
+            )
+        ):
+            materialized_name = ensure_helper(
+                helper_name,
+                context.parameters,
+                context.parameter_sources,
+            )
+            if materialized_name is not None:
+                replacements_by_name[helper_name] = materialized_name
+        if not replacements_by_name:
+            continue
+        for function_span in function_spans_by_name.get(context.materialized_name, []):
+            call_replacements.extend(
+                _plain_template_call_replacements(
+                    preprocessor,
+                    materialized,
+                    replacements_by_name,
+                    template_spans,
+                    [function_span],
+                )
+            )
+
+    if call_replacements:
+        materialized = preprocessor._apply_text_replacements(
+            materialized,
+            call_replacements,
+        )
+
+    generated_sources = [
+        str(generated[key]["source"]).rstrip()
+        for key in generated_order
+        if str(generated[key].get("source", "")).strip()
+    ]
+    if generated_sources:
+        materialized = materialized.rstrip() + "\n\n" + "\n\n".join(generated_sources)
+        if not materialized.endswith("\n"):
+            materialized += "\n"
+
+    return _InheritedTemplateMaterialization(
+        text=materialized,
+        specializations=specialization_records,
+        template_names=inherited_template_names,
+    )
 
 
 def _plain_template_call_replacements(
@@ -9209,6 +9473,10 @@ def _project_template_materialization_for_artifact(
     source_instantiations = preprocessor._find_project_template_instantiations(
         preprocessed
     )
+    source_instantiation_contexts: list[_SourceInstantiationTemplateContext] = []
+    source_instantiation_materialized_names: dict[
+        tuple[str, tuple[str, ...]], str
+    ] = {}
     seen_source_instantiations: set[tuple[str, tuple[str, ...], str]] = set()
     seen_unsupported_source_instantiations: set[
         tuple[str, tuple[tuple[str, str], ...], str]
@@ -9292,6 +9560,21 @@ def _project_template_materialization_for_artifact(
                 source="source-instantiation",
             )
         )
+        source_instantiation_contexts.append(
+            _SourceInstantiationTemplateContext(
+                template=template,
+                materialized_name=materialized_name,
+                parameters=parameters,
+                parameter_sources=parameter_sources,
+            )
+        )
+        if not _is_metal_entry_template(template):
+            source_instantiation_materialized_names[
+                preprocessor._template_specialization_key(
+                    instantiation.function_name,
+                    normalized_arguments,
+                )
+            ] = materialized_name
     preprocessed = preprocessor._materialize_project_template_instantiations(
         preprocessed
     )
@@ -9315,6 +9598,7 @@ def _project_template_materialization_for_artifact(
 
     explicit_template_names: set[str] = set()
     seen_call_specializations: set[tuple[str, tuple[str, ...]]] = set()
+    call_site_materialized_names: dict[tuple[str, tuple[str, ...]], str] = {}
     for function_name, arguments, _span in calls:
         template = templates_by_name.get(function_name)
         if template is None or not preprocessor._template_arguments_satisfy_parameters(
@@ -9332,6 +9616,7 @@ def _project_template_materialization_for_artifact(
             function_name,
             normalized_arguments,
         )
+        call_site_materialized_names[key] = materialized_name
         parameters = _template_parameter_values_from_arguments(
             preprocessor,
             template,
@@ -9357,6 +9642,20 @@ def _project_template_materialization_for_artifact(
     except Exception:  # noqa: BLE001
         return None
 
+    inherited_materialization = _materialize_inherited_source_template_helpers(
+        preprocessor=preprocessor,
+        materialized=materialized,
+        templates_by_name=template_lookup,
+        source_contexts=source_instantiation_contexts,
+        existing_materialized_names={
+            **source_instantiation_materialized_names,
+            **call_site_materialized_names,
+        },
+    )
+    materialized = inherited_materialization.text
+    specializations.extend(inherited_materialization.specializations)
+    inherited_template_names = inherited_materialization.template_names
+
     replacements: list[tuple[int, int, str]] = []
     unsupported: list[dict[str, Any]] = list(source_instantiation_unsupported)
     used_configured_parameters: dict[str, str] = {}
@@ -9371,7 +9670,10 @@ def _project_template_materialization_for_artifact(
         current_template_spans,
     )
     for template in preprocessor._find_template_functions(materialized):
-        if template.name in explicit_template_names:
+        if (
+            template.name in explicit_template_names
+            or template.name in inherited_template_names
+        ):
             replacements.append((template.span[0], template.span[1], ""))
             continue
         if template.name in source_instantiation_partial_templates:
