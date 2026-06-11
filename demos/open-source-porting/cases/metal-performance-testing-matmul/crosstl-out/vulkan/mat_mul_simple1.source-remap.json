@@ -6,9 +6,9 @@
         "column": 1,
         "endColumn": 14,
         "endLine": 168,
-        "endOffset": 4515,
+        "endOffset": 4208,
         "file": "crosstl-out/vulkan/mat_mul_simple1.spvasm",
-        "length": 4515,
+        "length": 4208,
         "line": 1,
         "offset": 0
       },

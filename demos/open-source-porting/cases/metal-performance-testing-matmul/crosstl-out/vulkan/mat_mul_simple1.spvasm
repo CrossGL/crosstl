@@ -59,10 +59,10 @@ OpDecorate %31 BuiltIn GlobalInvocationId
 %23 = OpVariable %15 Input
 %26 = OpVariable %15 Input
 %31 = OpVariable %30 Input
-; WARNING: Unknown type PointerType(pointee_type=PrimitiveType(name=float,size_bits=None),is_mutable=True), using float as default
-; WARNING: Unknown type PointerType(pointee_type=PrimitiveType(name=float,size_bits=None),is_mutable=True), using float as default
-; WARNING: Unknown type PointerType(pointee_type=PrimitiveType(name=float,size_bits=None),is_mutable=True), using float as default
-; WARNING: Unknown type ReferenceType(referenced_type=NamedType(name=MatMulParams,generic_args=[]),is_mutable=False), using float as default
+; WARNING: Unknown type float*, using float as default
+; WARNING: Unknown type float*, using float as default
+; WARNING: Unknown type float*, using float as default
+; WARNING: Unknown type &MatMulParams, using float as default
 %13 = OpFunction %2 None %12
 %14 = OpLabel
 %19 = OpVariable %18 Function
