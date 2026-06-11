@@ -855,6 +855,7 @@ class WGSLCodeGen:
                         entry_point, stage_name
                     ),
                     skip_parameter_ids=stage_resource_parameter_ids,
+                    parameter_attributes=True,
                 )
                 body = self.generate_block(entry_point.body, indent=0)
             finally:
@@ -908,13 +909,16 @@ class WGSLCodeGen:
         return_attributes=(),
         leading_parameters=(),
         skip_parameter_ids=(),
+        parameter_attributes=False,
     ):
         function_name = name or self.function_identifier_name(func.name)
         skip_parameter_ids = set(skip_parameter_ids or ())
         parameters = ", ".join(
             list(leading_parameters)
             + [
-                self.generate_parameter(param)
+                self.generate_parameter(
+                    param, include_attributes=parameter_attributes
+                )
                 for param in func.parameters
                 if id(param) not in skip_parameter_ids
             ]
@@ -927,8 +931,12 @@ class WGSLCodeGen:
             return f"fn {function_name}({parameters}) -> {return_prefix} {return_type}"
         return f"fn {function_name}({parameters}) -> {return_type}"
 
-    def generate_parameter(self, node):
-        attributes = self.wgsl_attributes(node.attributes, direction="in")
+    def generate_parameter(self, node, include_attributes=True):
+        attributes = (
+            self.wgsl_attributes(node.attributes, direction="in")
+            if include_attributes
+            else ""
+        )
         prefix = f"{attributes} " if attributes else ""
         parameter_name = self.identifier_name(node.name)
         if self.is_glsl_buffer_block_parameter(node):

@@ -331,6 +331,30 @@ def test_wgsl_codegen_does_not_treat_semantic_attributes_as_stage_entries():
     assert "@out_color" not in generated.lower()
 
 
+def test_wgsl_codegen_strips_io_attributes_from_helper_parameters():
+    shader = """
+    shader WGSLHelperSemanticParameters {
+        vec4 tint(vec4 color @ TEXCOORD0) {
+            return color;
+        }
+        fragment {
+            vec4 main(vec4 color @ TEXCOORD0) @ gl_FragColor {
+                return tint(color);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "fn tint(color: vec4<f32>) -> vec4<f32>" in generated
+    assert "fn tint(@location" not in generated
+    assert (
+        "@fragment\nfn fragment_main(@location(2) color: vec4<f32>) "
+        "-> @location(0) vec4<f32>"
+    ) in generated
+
+
 def test_wgsl_codegen_emits_resource_address_spaces_and_bindings():
     shader = """
     shader WGSLResources {
