@@ -490,7 +490,28 @@ class MojoToCrossGLConverter:
         if selected:
             return selected
 
-        return set()
+        if "main" in function_names:
+            return set()
+
+        return {
+            function.name
+            for function in functions
+            if self.is_standalone_mojo_gpu_kernel(function)
+        }
+
+    def is_standalone_mojo_gpu_kernel(self, function):
+        return (
+            getattr(function, "name", None)
+            and self.function_has_mojo_gpu_resource_parameter(function)
+            and self.expression_uses_mojo_gpu_builtins(function)
+        )
+
+    def function_has_mojo_gpu_resource_parameter(self, function):
+        for parameter in getattr(function, "params", []) or []:
+            param_type = getattr(parameter, "vtype", None)
+            if isinstance(param_type, str) and param_type.startswith("TileTensor["):
+                return True
+        return False
 
     def collect_reachable_gpu_function_names(self, ast, kernel_names):
         if not kernel_names:

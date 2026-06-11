@@ -4225,6 +4225,49 @@ def test_mojo_gpu_kernel_extraction_filters_host_runtime():
     parse_crossgl(generated_code)
 
 
+def test_mojo_standalone_gpu_kernel_uses_comptime_metadata():
+    code = """
+    from std.math import ceildiv
+    from std.gpu.host import DeviceContext
+    from std.gpu import block_dim, block_idx, thread_idx
+    from layout import TileTensor, row_major
+
+    comptime float_dtype = DType.float32
+    comptime vector_size = 1000
+    comptime layout = row_major[vector_size]()
+    comptime block_size = 256
+    comptime num_blocks = ceildiv(vector_size, block_size)
+
+    def vector_addition(
+        lhs_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+        rhs_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+        out_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+    ):
+        var tid = block_idx.x * block_dim.x + thread_idx.x
+        if tid < vector_size:
+            out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid]
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "compute {" in generated_code
+    assert "void vector_addition(" in generated_code
+    assert "RWStructuredBuffer<float> lhs_tensor" in generated_code
+    assert "RWStructuredBuffer<float> rhs_tensor" in generated_code
+    assert "RWStructuredBuffer<float> out_tensor" in generated_code
+    assert "int vector_size = 1000;" in generated_code
+    assert "gl_WorkGroupID.x" in generated_code
+    assert "gl_WorkGroupSize.x" in generated_code
+    assert "gl_LocalInvocationID.x" in generated_code
+    assert "TileTensor" not in generated_code
+    assert "DType" not in generated_code
+    assert "DeviceContext" not in generated_code
+    assert "num_blocks" not in generated_code
+
+    parse_crossgl(generated_code)
+
+
 def test_class_codegen_uses_struct_shape_and_method_functions():
     code = """
     class Accumulator:
