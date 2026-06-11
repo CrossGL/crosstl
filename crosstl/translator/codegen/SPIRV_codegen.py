@@ -10582,6 +10582,11 @@ class VulkanSPIRVCodeGen:
         aliases = {
             "f32": "float",
             "f64": "double",
+            "f16": "float",
+            "float16": "float",
+            "float16_t": "float",
+            "half": "float",
+            "min16float": "float",
             "i32": "int",
             "u32": "uint",
             "int64": "i64",
@@ -10595,6 +10600,11 @@ class VulkanSPIRVCodeGen:
 
     def normalize_generic_vector_type(self, type_str: str) -> str:
         compact = re.sub(r"\s+", "", str(type_str))
+        half_vector_match = re.fullmatch(
+            r"(?:f16vec|half|min16float|float16_t)([234])", compact
+        )
+        if half_vector_match:
+            return f"vec{half_vector_match.group(1)}"
         match = re.fullmatch(r"vec([234])<([^>]+)>", compact)
         if match:
             size, element_type = match.groups()
