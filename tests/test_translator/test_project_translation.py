@@ -10182,6 +10182,151 @@ def test_translate_project_opengl_materializes_mlx_accumulator_template_default(
     assert_compute_glsl_validates_if_available(output, tmp_path)
 
 
+def test_translate_project_opengl_materializes_mlx_softmax_implicit_helper(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "softmax.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_softmax(name, type) \\
+                instantiate_kernel("softmax" #name, softmax, type, float)
+
+            template <typename T>
+            inline T softmax_exp(T x) {
+                return x;
+            }
+
+            template <typename T, typename AccT = T>
+            [[kernel]] void softmax(
+                const device T* in [[buffer(0)]],
+                device T* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                AccT maxval = AccT(in[gid]);
+                AccT exp_x = softmax_exp(maxval);
+                out[gid] = T(exp_x);
+            }
+
+            instantiate_softmax(int32, int)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["specializations"] == [
+        {
+            "name": "softmax",
+            "materializedName": "softmaxint32",
+            "parameters": {"AccT": "float", "T": "int"},
+            "parameterSources": {
+                "AccT": "source-instantiation",
+                "T": "source-instantiation",
+            },
+            "source": "source-instantiation",
+            "hostName": "softmaxint32",
+        },
+        {
+            "name": "softmax_exp",
+            "materializedName": "softmax_exp_float",
+            "parameters": {"T": "float"},
+            "parameterSources": {"T": "call-site"},
+            "source": "call-site",
+        },
+    ]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "float softmax_exp_float(float x)" in output
+    assert "float exp_x = softmax_exp_float(maxval);" in output
+    assert not re.search(r"\b(?:T|AccT)\b", output)
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_opengl_inlines_mlx_ordering_dependent_aliases(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "sort.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_sort(name, type) \\
+                instantiate_kernel("sort" #name, block_sort, type)
+
+            template <typename T>
+            struct SortKernel {
+                using ValT = T;
+                using IdxT = uint;
+                static constexpr constant int N_PER_BLOCK = 4;
+            };
+
+            template <typename T>
+            [[kernel]] void block_sort(
+                const device T* inp [[buffer(0)]],
+                device uint* out_idxs [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                using sort_kernel = SortKernel<T>;
+                using ValT = typename sort_kernel::ValT;
+                using IdxT = typename sort_kernel::IdxT;
+                threadgroup ValT vals[sort_kernel::N_PER_BLOCK];
+                threadgroup IdxT idxs[sort_kernel::N_PER_BLOCK];
+                vals[gid] = inp[gid];
+                idxs[gid] = IdxT(gid);
+                out_idxs[gid] = idxs[gid];
+            }
+
+            instantiate_sort(float32, float)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "float vals[4];" in output
+    assert "uint idxs[4];" in output
+    assert "sort_kernel" not in output
+    assert "IdxT" not in output
+    assert "ValT" not in output
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
 def test_translate_project_opengl_materializes_mlx_auxiliary_template_default(
     tmp_path,
 ):
@@ -10244,6 +10389,7 @@ def test_translate_project_opengl_materializes_mlx_auxiliary_template_default(
                 "U": "source-default",
             },
             "source": "source-instantiation",
+            "hostName": "attentionfloat32",
         },
         {
             "name": "read_aux",
@@ -10333,6 +10479,7 @@ def test_translate_project_opengl_materializes_quantized_local_template_alias(
                 "group_size": "source-instantiation",
             },
             "source": "source-instantiation",
+            "hostName": "affine_quantize_float_gs_16_b_4",
         },
         {
             "name": "get_pack_factor",
@@ -10426,6 +10573,7 @@ def test_translate_project_opengl_materializes_fft_auxiliary_template_alias(
                 "tg_mem_size": "source-instantiation",
             },
             "source": "source-instantiation",
+            "hostName": "four_step_mem_256_float_float",
         }
     ]
     output = (repo / artifact["path"]).read_text(encoding="utf-8")
@@ -10515,6 +10663,7 @@ def test_translate_project_opengl_materializes_masked_gemv_local_kernel_alias(
                 "out_mask_t": "source-instantiation",
             },
             "source": "source-instantiation",
+            "hostName": "gemv_masked_float_bool_uint",
         }
     ]
     output = (repo / artifact["path"]).read_text(encoding="utf-8")
