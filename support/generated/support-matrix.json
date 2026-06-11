@@ -275,7 +275,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 47,
+        "unsupported_marker_count": 55,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
@@ -284,6 +284,10 @@
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "UNSUPPORTED_STAGE_NAMES = ("
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "UNSUPPORTED_INTERPOLATION_QUALIFIERS = {\"noperspective\", \"sample\"}"
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
@@ -339,23 +343,19 @@
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "builtin_names = self.webgl_unsupported_builtin_output_names(ast)"
+            "text": "for qualifier in self.webgl_node_unsupported_interpolation_qualifiers(node):"
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "unsupported_builtin = self.webgl_referenced_unsupported_builtin("
+            "text": "\"WebGL target does not support interpolation qualifier \""
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "if unsupported_builtin is None:"
+            "text": "def webgl_node_unsupported_interpolation_qualifiers(self, node):"
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "\"WebGL target does not support vertex built-in output \""
-          },
-          {
-            "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "f\"'{unsupported_builtin}'\""
+            "text": "unsupported = []"
           }
         ]
       },
@@ -371,7 +371,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_webgl_codegen.py"
         ],
-        "test_count": 54
+        "test_count": 55
       },
       "translator_codegen": {
         "exists": true,

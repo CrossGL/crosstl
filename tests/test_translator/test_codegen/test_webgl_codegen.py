@@ -233,6 +233,42 @@ def test_webgl_codegen_omits_vertex_output_location_layouts():
     assert "out vec2 out_uv;" in generated
 
 
+@pytest.mark.parametrize("qualifier", ("noperspective", "sample"))
+def test_webgl_codegen_rejects_desktop_interpolation_qualifiers(qualifier):
+    shader = f"""
+    shader WebGLBadInterpolation {{
+        struct VSInput {{
+            vec3 position @ POSITION;
+            vec2 uv @ TEXCOORD0;
+        }};
+        struct VSOutput {{
+            vec4 position @ gl_Position;
+            vec2 uv @{qualifier} @TEXCOORD0;
+        }};
+        vertex {{
+            VSOutput main(VSInput input) {{
+                VSOutput output;
+                output.position = vec4(input.position, 1.0);
+                output.uv = input.uv;
+                return output;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target does not support interpolation qualifier "
+            rf"'{qualifier}' on 'uv'"
+        ),
+    ):
+        WebGLCodeGen().generate_program(
+            parse_shader(shader),
+            target_stage="vertex",
+        )
+
+
 def test_webgl_codegen_aligns_split_stage_varying_names_without_locations():
     shader = """
     shader WebGLLinkedVaryings {

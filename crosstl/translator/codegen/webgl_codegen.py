@@ -37,6 +37,7 @@ class WebGLCodeGen(GLSLCodeGen):
         ("float", "precision highp float;"),
         ("int", "precision highp int;"),
     )
+    UNSUPPORTED_INTERPOLATION_QUALIFIERS = {"noperspective", "sample"}
     SUPPORTED_STAGE_NAMES = {"fragment", "vertex"}
     STORAGE_IMAGE_INTRINSIC_NAMES = {
         "imageLoad",
@@ -720,6 +721,7 @@ class WebGLCodeGen(GLSLCodeGen):
         supported_ast = self.webgl_supported_stage_ast(ast, target_stage)
         self.validate_webgl_builtin_support(supported_ast)
         self.validate_webgl_resource_support(supported_ast)
+        self.validate_webgl_interpolation_qualifiers(supported_ast)
         codegen_ast = ast if target_stage is not None else supported_ast
         code = super().generate_program(
             codegen_ast,
@@ -734,6 +736,34 @@ class WebGLCodeGen(GLSLCodeGen):
     def validate_webgl_resource_support(self, ast):
         for node in self.walk_ast(ast):
             self.validate_webgl_node_resource_support(node)
+
+    def validate_webgl_interpolation_qualifiers(self, ast):
+        for node in self.walk_ast(ast):
+            node_name = self.resource_node_name(node, "<unnamed>")
+            for qualifier in self.webgl_node_unsupported_interpolation_qualifiers(node):
+                raise ValueError(
+                    "WebGL target does not support interpolation qualifier "
+                    f"'{qualifier}' on '{node_name}'"
+                )
+
+    def webgl_node_unsupported_interpolation_qualifiers(self, node):
+        qualifiers = [
+            str(qualifier) for qualifier in getattr(node, "qualifiers", []) or []
+        ]
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name:
+                qualifiers.append(str(attr_name))
+
+        unsupported = []
+        for qualifier in qualifiers:
+            normalized = qualifier.lower()
+            if normalized.startswith("glsl_"):
+                normalized = normalized[len("glsl_") :]
+            normalized = normalized.replace("-", "_")
+            if normalized in self.UNSUPPORTED_INTERPOLATION_QUALIFIERS:
+                unsupported.append(normalized)
+        return unsupported
 
     def validate_webgl_builtin_support(self, ast):
         builtin_names = self.webgl_unsupported_builtin_output_names(ast)
