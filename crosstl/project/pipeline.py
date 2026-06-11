@@ -10318,6 +10318,114 @@ class _SpanLookup:
         return None
 
 
+def _metal_template_reference_names(
+    preprocessor: Any,
+    source: str,
+    template_names: set[str],
+    excluded_spans: Sequence[tuple[int, int]],
+    included_spans: Sequence[tuple[int, int]],
+) -> set[str]:
+    references: set[str] = set()
+    excluded = _SpanLookup(excluded_spans)
+    for span_start, span_end in _SpanLookup(included_spans)._spans:
+        i = span_start
+        scan_end = min(span_end, len(source))
+        while i < scan_end:
+            if source[i] in "\"'":
+                _literal, consumed = preprocessor._read_string(source, i)
+                i += consumed
+                continue
+            if source.startswith("//", i):
+                end = source.find("\n", i, scan_end)
+                if end == -1:
+                    break
+                i = end + 1
+                continue
+            if source.startswith("/*", i):
+                end = source.find("*/", i + 2, scan_end)
+                if end == -1:
+                    break
+                i = end + 2
+                continue
+            excluded_span = excluded.containing(i)
+            if excluded_span is not None:
+                i = min(excluded_span[1], scan_end)
+                continue
+            if not (source[i].isalpha() or source[i] == "_"):
+                i += 1
+                continue
+
+            ident, consumed = preprocessor._read_identifier(source, i)
+            if (
+                ident not in template_names
+                or preprocessor._is_member_identifier_context(
+                    source,
+                    i,
+                )
+            ):
+                i += consumed
+                continue
+            j = i + consumed
+            while j < scan_end and source[j].isspace():
+                j += 1
+            if j < scan_end and source[j] == "<":
+                angle_end = preprocessor._find_matching_angle(source, j)
+                if angle_end is None or angle_end >= scan_end:
+                    i += consumed
+                    continue
+                j = angle_end + 1
+                while j < scan_end and source[j].isspace():
+                    j += 1
+            if j < scan_end and source[j] == "(":
+                references.add(ident)
+            i += consumed
+    return references
+
+
+def _reachable_metal_template_function_names(
+    preprocessor: Any,
+    source: str,
+    templates: Sequence[Any],
+    template_spans: Sequence[tuple[int, int]],
+    reachable_function_spans: Sequence[tuple[int, int]] | None,
+) -> set[str]:
+    if not reachable_function_spans:
+        return set()
+
+    template_names = {template.name for template in templates}
+    required = _metal_template_reference_names(
+        preprocessor,
+        source,
+        template_names,
+        template_spans,
+        reachable_function_spans,
+    )
+    if not required:
+        return set()
+
+    templates_by_name: dict[str, list[Any]] = {}
+    for template in templates:
+        templates_by_name.setdefault(template.name, []).append(template)
+
+    pending = list(required)
+    while pending:
+        template_name = pending.pop()
+        for template in templates_by_name.get(template_name, ()):
+            body_span = (int(template.body_start) + 1, int(template.span[1]) - 1)
+            children = _metal_template_reference_names(
+                preprocessor,
+                source,
+                template_names,
+                template_spans,
+                [body_span],
+            )
+            for child in children:
+                if child not in required:
+                    required.add(child)
+                    pending.append(child)
+    return required
+
+
 def _plain_template_helper_call_sites(
     preprocessor: Any,
     source: str,
@@ -11669,11 +11777,25 @@ def _project_template_materialization_for_artifact(
         materialized,
         current_template_spans,
     )
-    for template in preprocessor._find_template_functions(materialized):
+    remaining_templates = preprocessor._find_template_functions(materialized)
+    reachable_template_names = _reachable_metal_template_function_names(
+        preprocessor,
+        materialized,
+        remaining_templates,
+        current_template_spans,
+        current_reachable_function_spans,
+    )
+    for template in remaining_templates:
         if (
             template.name in explicit_template_names
             or template.name in inherited_template_names
             or template.name in inferred_plain_template_names
+        ):
+            replacements.append((template.span[0], template.span[1], ""))
+            continue
+        if (
+            current_reachable_function_spans
+            and template.name not in reachable_template_names
         ):
             replacements.append((template.span[0], template.span[1], ""))
             continue
