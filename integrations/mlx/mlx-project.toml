@@ -1,0 +1,9 @@
+[project]
+source_roots = ["mlx/backend/metal/kernels"]
+include = ["mlx/backend/metal/kernels/**/*.metal"]
+include_dirs = ["."]
+targets = ["directx", "opengl", "vulkan"]
+output_dir = ".crosstl-mlx-porting/out"
+
+[project.sources]
+"**/*.metal" = "metal"

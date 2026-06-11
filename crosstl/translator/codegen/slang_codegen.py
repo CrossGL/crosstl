@@ -1,5 +1,6 @@
 """CrossGL-to-Slang code generator."""
 
+import re
 from hashlib import sha1
 
 from ..ast import (
@@ -82,6 +83,7 @@ from .enum_utils import (
     sanitize_type_name,
 )
 from .generic_function_utils import (
+    collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
     generic_function_call_name,
@@ -91,9 +93,6 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
-)
-from .generic_function_utils import (
-    reject_unsupported_generic_functions as reject_generic_functions_for_target,
 )
 from .glsl_buffer_layout import (
     align_to,
@@ -612,16 +611,39 @@ class SlangCodeGen:
             struct_helpers = ""
         helpers = self.emit_helper_functions()
         self._generating = False
-        return helpers + struct_helpers + result
+        generated = helpers + struct_helpers + result
+        self.reject_unresolved_generic_output(generated)
+        return generated
 
     def reject_unsupported_generic_functions(self, ast_node):
         """Reject generic functions before emitting non-compilable Slang code."""
-        reject_generic_functions_for_target(
-            ast_node,
-            "Slang",
-            self.generic_function_specializations,
-            referenced_generic_names=set(),
+        functions = list(iter_function_nodes(ast_node)) + list(
+            (self.generic_function_specializations or {}).values()
         )
+        unresolved = collect_unresolved_generic_function_call_names(self, functions)
+        if unresolved:
+            raise_unresolved_generic_function_call(self, unresolved[0], "Slang")
+
+    def reject_unresolved_generic_output(self, result):
+        specialized_source_names = {
+            key[0]
+            for key in self.generic_function_specializations or {}
+            if isinstance(key, tuple) and key
+        }
+        generic_names = {
+            param
+            for funcs in (self.generic_function_definitions or {}).values()
+            for func in funcs
+            if getattr(func, "name", None) not in specialized_source_names
+            for param in generic_function_parameters(func)
+        }
+        for name in sorted(generic_names):
+            if re.search(rf"\b{re.escape(name)}\b", result):
+                raise ValueError(
+                    "Slang codegen cannot emit unresolved generic parameter "
+                    f"'{name}'; specialize generic declarations before Slang "
+                    "generation"
+                )
 
     def emit_helper_functions(self):
         helpers = ""

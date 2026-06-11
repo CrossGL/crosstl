@@ -161,6 +161,28 @@ def test_preprocessor_materializes_mlx_decltype_instantiation_entries():
     assert "out[gid] = float(gid);" in output
 
 
+def test_preprocessor_materializes_decltype_instantiation_with_joined_host_name():
+    code = """
+    template <typename T>
+    [[kernel]] void arange(
+        device T* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        out[gid] = T(gid);
+    }
+
+    template [[host_name("arange" "uint32")]] [[kernel]]
+    decltype(arange<uint>) arange<uint>;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "decltype(arange<uint>)" not in output
+    assert '[[host_name("arangeuint32")]]' in output
+    assert "void arangeuint32(" in output
+    assert "device uint* out" in output
+    assert "out[gid] = uint(gid);" in output
+
+
 def test_preprocessor_materializes_signature_only_template_instantiation_entries():
     code = """
     template <int N>
@@ -286,6 +308,30 @@ def test_preprocessor_materializes_explicit_template_helper_calls():
     assert "return src[index] + float(7);" in output
 
 
+def test_preprocessor_leaves_large_decltype_instantiation_families_bounded():
+    declarations = "\n".join(
+        f'template [[host_name("kernel" "{index}")]] [[kernel]] '
+        f"decltype(arange<uint>) arange<uint>;"
+        for index in range(4)
+    )
+    code = f"""
+    template <typename T>
+    [[kernel]] void arange(
+        device T* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {{
+        out[gid] = T(gid);
+    }}
+
+    {declarations}
+    """
+
+    output = MetalPreprocessor(max_template_specializations=3).preprocess(code)
+
+    assert "decltype(arange<uint>)" in output
+    assert "void kernel0(" not in output
+    assert "template <typename T>" in output
+
+
 def test_preprocessor_materializes_nested_explicit_template_helper_calls():
     code = """
     template <typename T>
@@ -311,6 +357,34 @@ def test_preprocessor_materializes_nested_explicit_template_helper_calls():
     assert "float twice_float(float value)" in output
     assert "cast_value_float(value) + cast_value_float(value)" in output
     assert "float cast_value_float(float value)" in output
+
+
+def test_preprocessor_preserves_operator_comparison_overloads():
+    code = """
+    struct complex64_t {
+        float real;
+        float imag;
+    };
+
+    template <typename T>
+    T operator+(T lhs, T rhs) {
+        return lhs + rhs;
+    }
+
+    constexpr bool operator>(complex64_t a, complex64_t b) {
+        return a.real > b.real;
+    }
+
+    constexpr bool operator<=(complex64_t a, complex64_t b) {
+        return operator>(b, a);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "operator<=(complex64_t a, complex64_t b)" in output
+    assert "return operator>(b, a);" in output
+    assert "operator_complex64_t_a_complex64_t_b" not in output
 
 
 def test_preprocessor_materializes_only_reachable_explicit_template_helper_calls():

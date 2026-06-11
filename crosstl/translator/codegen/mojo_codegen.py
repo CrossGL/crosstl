@@ -70,6 +70,7 @@ from .enum_utils import (
     type_node_contains_generic_parameter,
 )
 from .generic_function_utils import (
+    collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
     generic_function_call_name,
@@ -79,9 +80,6 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
-)
-from .generic_function_utils import (
-    reject_unsupported_generic_functions as reject_generic_functions_for_target,
 )
 from .image_access_contracts import (
     explicit_image_format,
@@ -3569,12 +3567,12 @@ class MojoCodeGen:
         visit(ast)
 
     def reject_unsupported_generic_functions(self, ast):
-        reject_generic_functions_for_target(
-            ast,
-            "Mojo",
-            self.generic_function_specializations,
-            referenced_generic_names=set(),
+        functions = list(iter_function_nodes(ast)) + list(
+            (self.generic_function_specializations or {}).values()
         )
+        unresolved = collect_unresolved_generic_function_call_names(self, functions)
+        if unresolved:
+            raise_unresolved_generic_function_call(self, unresolved[0], "Mojo")
 
     def maybe_register_generic_enum_type(self, type_value, specializations):
         type_text = self.type_name(type_value)

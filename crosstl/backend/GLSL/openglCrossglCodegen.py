@@ -690,9 +690,9 @@ class GLSLToCrossGLConverter:
     def is_glsl_builtin_stage_io_var(self, var):
         if not isinstance(var, VariableNode):
             return False
-        return str(getattr(var, "name", "")).startswith("gl_") and self._is_stage_io_var(
-            var
-        )
+        return str(getattr(var, "name", "")).startswith(
+            "gl_"
+        ) and self._is_stage_io_var(var)
 
     def stage_io_direction(self, var):
         directions = []

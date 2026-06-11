@@ -2434,9 +2434,7 @@ DIRECTX_HLSL_STRUCT_RE = re.compile(
 DIRECTX_HLSL_SHADER_ATTR_RE = re.compile(
     r"\[\s*shader\s*\(\s*\"([^\"]+)\"\s*\)\s*\]", re.IGNORECASE
 )
-DIRECTX_HLSL_NUMTHREADS_RE = re.compile(
-    r"\[\s*numthreads\s*\(", re.IGNORECASE
-)
+DIRECTX_HLSL_NUMTHREADS_RE = re.compile(r"\[\s*numthreads\s*\(", re.IGNORECASE)
 DIRECTX_HLSL_SEMANTIC_RE = re.compile(
     r":\s*(?P<semantic>[A-Za-z_]\w*)\b", re.IGNORECASE
 )
@@ -10217,7 +10215,7 @@ def _metal_function_return_type(
     open_paren = preprocessor._function_parameter_start(header)
     if open_paren is None:
         return None
-    before_params = header[:open_paren].rstrip()
+    before_params = _masked_metal_non_code_text(header[:open_paren]).rstrip()
     match = re.search(rf"\b{re.escape(function_name)}\s*$", before_params)
     if match is None:
         return None
@@ -33864,7 +33862,9 @@ def _directx_dxc_entry_profiles_from_artifact(
         return ()
 
     candidates = []
-    for position, entry_point in enumerate(_directx_dxc_artifact_entry_points(artifact)):
+    for position, entry_point in enumerate(
+        _directx_dxc_artifact_entry_points(artifact)
+    ):
         name = entry_point.get("name")
         if not _is_non_empty_string(name):
             continue
@@ -34003,9 +34003,7 @@ def _directx_hlsl_struct_semantics(source: str) -> dict[str, tuple[str, ...]]:
     for match in DIRECTX_HLSL_STRUCT_RE.finditer(source):
         semantics_by_struct[match.group("name")] = tuple(
             semantic_match.group("semantic")
-            for semantic_match in DIRECTX_HLSL_SEMANTIC_RE.finditer(
-                match.group("body")
-            )
+            for semantic_match in DIRECTX_HLSL_SEMANTIC_RE.finditer(match.group("body"))
         )
     return semantics_by_struct
 
@@ -34030,9 +34028,7 @@ def _directx_hlsl_function_stage(
     if generic_stage is not None:
         return generic_stage
 
-    semantic_stage = _directx_hlsl_return_semantic_stage(
-        match.group("return_semantic")
-    )
+    semantic_stage = _directx_hlsl_return_semantic_stage(match.group("return_semantic"))
     if semantic_stage is not None:
         return semantic_stage
 

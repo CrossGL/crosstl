@@ -279,6 +279,31 @@ def assert_only_optional_project_toolchain_warnings(payload):
     assert payload["summary"]["diagnosticsByTarget"] == diagnostics_by_target
 
 
+def assert_only_optional_wgsl_toolchain_warning(payload):
+    expected_toolchain_warnings = 0 if shutil.which("naga") else 1
+    assert payload["diagnosticCounts"] == {
+        "note": 0,
+        "warning": expected_toolchain_warnings,
+        "error": 0,
+    }
+
+    if not expected_toolchain_warnings:
+        assert payload["diagnostics"] == []
+        assert payload["summary"]["diagnosticsByCode"] == {}
+        assert payload["summary"]["diagnosticsByTarget"] == {}
+        return
+
+    diagnostics = payload["diagnostics"]
+    assert len(diagnostics) == expected_toolchain_warnings
+    assert [diagnostic["code"] for diagnostic in diagnostics] == [
+        "project.validate.toolchain-unavailable"
+    ]
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.validate.toolchain-unavailable": expected_toolchain_warnings
+    }
+    assert payload["summary"]["diagnosticsByTarget"] == {"wgsl": 1}
+
+
 def assert_glsl_stage_validates_if_available(glsl_code, tmp_path, stage):
     glslang = shutil.which("glslangValidator")
     if not glslang:
@@ -7482,16 +7507,7 @@ def test_translate_project_glsl_alpha_stitch_storage_image_lowers_to_wgsl(
 
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
-    expected_warning_count = 0 if shutil.which("naga") else 1
-    assert payload["diagnosticCounts"] == {
-        "note": 0,
-        "warning": expected_warning_count,
-        "error": 0,
-    }
-    if expected_warning_count:
-        assert [diagnostic["code"] for diagnostic in payload["diagnostics"]] == [
-            "project.validate.toolchain-unavailable"
-        ]
+    assert_only_optional_wgsl_toolchain_warning(payload)
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("wgsl", "translated")}
@@ -7575,16 +7591,7 @@ def test_translate_project_glsl_fragcoord_lowers_to_wgsl_fragment_position(tmp_p
 
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
-    expected_warning_count = 0 if shutil.which("naga") else 1
-    assert payload["diagnosticCounts"] == {
-        "note": 0,
-        "warning": expected_warning_count,
-        "error": 0,
-    }
-    if expected_warning_count:
-        assert [diagnostic["code"] for diagnostic in payload["diagnostics"]] == [
-            "project.validate.toolchain-unavailable"
-        ]
+    assert_only_optional_wgsl_toolchain_warning(payload)
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("wgsl", "translated")}
@@ -7623,16 +7630,7 @@ def test_translate_project_spirv_assembly_vertex_position_lowers_to_wgsl(tmp_pat
 
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
-    expected_warning_count = 0 if shutil.which("naga") else 1
-    assert payload["diagnosticCounts"] == {
-        "note": 0,
-        "warning": expected_warning_count,
-        "error": 0,
-    }
-    if expected_warning_count:
-        assert [diagnostic["code"] for diagnostic in payload["diagnostics"]] == [
-            "project.validate.toolchain-unavailable"
-        ]
+    assert_only_optional_wgsl_toolchain_warning(payload)
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("wgsl", "translated")}
@@ -10844,6 +10842,51 @@ def test_translate_project_opengl_materializes_mlx_explicit_template_helpers(
     assert "add_offset_float_uint_7(src[gid], uint(gid))" in output
     assert "add_offset<T" not in output
     assert not re.search(r"\b(?:T|IdxT|Offset|AccT|Wtype)\b", output)
+
+
+@pytest.mark.parametrize("target", ["directx", "vulkan"])
+def test_translate_project_ignores_comment_words_before_mlx_metal_helpers(
+    tmp_path,
+    target,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "random.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_random(name, type) \\
+                instantiate_kernel("random" #name, random_values, type)
+
+            // Non templated version to handle arbitrary dims
+            METAL_FUNC float seed_to_unit_float(float seed) {
+                return seed * 0.5;
+            }
+
+            template <typename T>
+            [[kernel]] void random_values(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                out[gid] = T(seed_to_unit_float(float(gid)));
+            }
+
+            instantiate_random(float32, float)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=[target], output_dir="translated")
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["artifacts"][0]["status"] == "translated"
+    assert payload["artifacts"][0]["templateMaterialization"]["unsupported"] == []
+    assert "project.translate.template-materialization-unsupported" not in payload[
+        "summary"
+    ].get("diagnosticsByCode", {})
 
 
 def test_translate_project_opengl_materializes_mlx_pointer_and_value_bindings(
@@ -18149,9 +18192,7 @@ def test_directx_toolchain_smoke_commands_use_monogame_sprite_entries(tmp_path):
         encoding="utf-8",
     )
 
-    commands = project_pipeline._toolchain_smoke_commands(
-        "directx", ["dxc"], shader
-    )
+    commands = project_pipeline._toolchain_smoke_commands("directx", ["dxc"], shader)
 
     assert commands == [
         (
@@ -18204,9 +18245,7 @@ def test_directx_toolchain_smoke_commands_prefer_report_entry_profiles(tmp_path)
         ["dxc"],
         shader,
         artifact={
-            "entryProfiles": [
-                {"entry": "ReportPixelShader", "profile": "ps_6_7"}
-            ]
+            "entryProfiles": [{"entry": "ReportPixelShader", "profile": "ps_6_7"}]
         },
     ) == [
         (

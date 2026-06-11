@@ -14649,13 +14649,12 @@ class MetalCodeGen:
         else:
             value_text = None
             if stage_node is not None:
-                value_text = (
-                    stage_layout_entry_value(stage_node, "max_vertices", "out")
-                    or stage_layout_entry_value(
-                        stage_node,
-                        "maxvertexcount",
-                        "out",
-                    )
+                value_text = stage_layout_entry_value(
+                    stage_node, "max_vertices", "out"
+                ) or stage_layout_entry_value(
+                    stage_node,
+                    "maxvertexcount",
+                    "out",
                 )
             if value_text is None:
                 raise ValueError(
