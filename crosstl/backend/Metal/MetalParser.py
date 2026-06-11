@@ -3060,7 +3060,10 @@ class MetalParser:
         if self.tokens[idx + 1][0] != "LESS_THAN":
             return False
         end = self.skip_template_argument_list_at(idx + 1)
-        return end < len(self.tokens) and self.tokens[end][0] == "LPAREN"
+        return end < len(self.tokens) and self.tokens[end][0] in {
+            "LPAREN",
+            "LBRACE",
+        }
 
     def is_scoped_type_declaration_start_at(self, idx):
         if idx >= len(self.tokens):
@@ -3124,6 +3127,11 @@ class MetalParser:
             idx += 1
             if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
                 idx = self.skip_balanced_tokens_at(idx, "LESS_THAN", "GREATER_THAN")
+            if idx < len(self.tokens) and self.tokens[idx][0] in {
+                "LPAREN",
+                "LBRACE",
+            }:
+                return True
             if idx >= len(self.tokens) or self.tokens[idx][0] != "SCOPE":
                 break
             idx += 1
@@ -3913,27 +3921,6 @@ class MetalParser:
             return False
         depth = 0
         saw_value_token = False
-        saw_value_operator = False
-        value_operator_tokens = {
-            "PLUS",
-            "MINUS",
-            "MULTIPLY",
-            "DIVIDE",
-            "MOD",
-            "SHIFT_LEFT",
-            "SHIFT_RIGHT",
-            "BITWISE_AND",
-            "BITWISE_OR",
-            "BITWISE_XOR",
-            "AND",
-            "OR",
-            "EQUAL",
-            "NOT_EQUAL",
-            "LESS_EQUAL",
-            "GREATER_EQUAL",
-            "QUESTION",
-            "COLON",
-        }
         while idx < len(self.tokens):
             token_type, token_value = self.tokens[idx]
             if depth > 0 and token_type in {"SEMICOLON", "LBRACE", "RBRACE", "EOF"}:
@@ -3943,13 +3930,13 @@ class MetalParser:
             elif token_type == "SHIFT_RIGHT" and depth >= 2:
                 depth -= 2
                 if depth == 0:
-                    return saw_value_token and saw_value_operator
+                    return saw_value_token
             elif token_type == "GREATER_THAN":
                 depth -= 1
                 if depth == 0:
-                    return saw_value_token and saw_value_operator
+                    return saw_value_token
             elif depth > 0:
-                if token_type == "NUMBER" or (
+                if token_type in {"NUMBER", "TRUE", "FALSE"} or (
                     token_type == "IDENTIFIER"
                     and (
                         token_value in self.known_value_template_parameters
@@ -3957,8 +3944,6 @@ class MetalParser:
                     )
                 ):
                     saw_value_token = True
-                elif token_type in value_operator_tokens:
-                    saw_value_operator = True
             idx += 1
         return False
 
