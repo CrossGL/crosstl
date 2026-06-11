@@ -256,13 +256,13 @@ validation remain outside this source-focused demo scope.
 
 The `ROCm/rocm-examples` add-kernel case uses only the upstream
 `[sphinx-kernel-start]` to `[sphinx-kernel-end]` source section and is checked
-for CrossGL, OpenGL, Metal, and Vulkan output. DirectX pointer and invocation
-lowering remains excluded under issue #1216. The full sample host `main()`,
-HIP runtime calls, and launch configuration are runtime integration work
-outside this shader translation demo. The earlier `ROCm/rocm-examples`
-bit-extract HIP kernel was retested after issue #795 closed; generated Metal
-now compiles and generated SPIR-V contains only the translated compute entry
-point. It remains a candidate for a future demo expansion.
+for CrossGL, OpenGL, Metal, DirectX, and Vulkan output after issue #1216 closed.
+The full sample host `main()`, HIP runtime calls, and launch configuration are
+runtime integration work outside this shader translation demo. The earlier
+`ROCm/rocm-examples` bit-extract HIP kernel was retested after issue #795
+closed; generated Metal now compiles and generated SPIR-V contains only the
+translated compute entry point. It remains a candidate for a future demo
+expansion.
 
 The `modular/modular` Mojo GPU vector-add example was tested as a candidate.
 It now generates Metal and SPIR-V artifacts after issue #798 closed, but those
@@ -274,8 +274,8 @@ shader-only kernel slice can be translated and validated as platform target
 source.
 
 The `KhronosGroup/OpenCL-SDK` SAXPY kernel was retested after issue #751 and
-issue #768 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan
-output.
+issue #768 closed and is now checked for OpenGL, Metal, and Vulkan output.
+DirectX output remains excluded under issue #1227.
 
 The `bkvogel/metal_performance_testing` matmul kernel is checked for CrossGL,
 OpenGL, Metal, DirectX, and Vulkan output after issue #1158 restored OpenGL
