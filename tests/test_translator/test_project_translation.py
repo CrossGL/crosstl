@@ -40378,6 +40378,149 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     assert ": void" not in wgsl_output
 
 
+def test_translate_project_cli_cuda_vector_add_demo_directx_outputs_valid_hlsl(
+    tmp_path,
+):
+    repo = tmp_path / "nvidia-cuda-samples-vector-add"
+    repo.mkdir()
+    config_path = repo / "crosstl.toml"
+    config_path.write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["."]
+            include = ["vectorAdd_kernel.cu"]
+            targets = ["cgl", "metal", "vulkan"]
+            output_dir = "crosstl-out"
+            external_corpus_manifest = "corpus.json"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            'targets = ["cgl", "metal", "vulkan"]',
+            'targets = ["cgl", "metal", "directx", "vulkan"]',
+        ),
+        encoding="utf-8",
+    )
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "name": "NVIDIA CUDA Samples vectorAdd kernel",
+                "description": (
+                    "Pinned CUDA sample used by the open-source project "
+                    "porting demo."
+                ),
+                "entries": [
+                    {
+                        "id": "nvidia-cuda-samples-vector-add",
+                        "path": "vectorAdd_kernel.cu",
+                        "sourceBackend": "cuda",
+                        "targets": ["cgl", "metal", "vulkan"],
+                        "repository": "https://github.com/NVIDIA/cuda-samples",
+                        "commit": "b7c5481c556c3fe98db060207ecaa41a4b9a9abc",
+                        "sourceUrl": (
+                            "https://github.com/NVIDIA/cuda-samples/blob/"
+                            "b7c5481c556c3fe98db060207ecaa41a4b9a9abc/"
+                            "cpp/0_Introduction/vectorAdd_nvrtc/"
+                            "vectorAdd_kernel.cu"
+                        ),
+                    }
+                ],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "vectorAdd_kernel.cu").write_text(
+        textwrap.dedent("""
+            extern "C" __global__ void vectorAdd(const float *A,
+                                                  const float *B,
+                                                  float *C,
+                                                  int numElements) {
+                int i = blockDim.x * blockIdx.x + threadIdx.x;
+                if (i < numElements) {
+                    C[i] = A[i] + B[i];
+                }
+            }
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report_path = repo / "crosstl-out" / "portability-report.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "translate-project",
+            str(repo),
+            "--output-dir",
+            str(repo / "crosstl-out"),
+            "--report",
+            str(report_path),
+            "--validate",
+            "--no-format",
+            "--target",
+            "directx",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "Wrote" in result.stdout
+
+    validation = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "validate-project",
+            str(report_path),
+            "--format",
+            "json",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    validation_payload = json.loads(validation.stdout)
+    assert validation_payload["success"] is True
+    assert validation_payload["artifactStatusByTarget"]["directx"] == {
+        "artifactCount": 1,
+        "failedCount": 0,
+        "okCount": 1,
+    }
+
+    directx_output = (
+        repo / "crosstl-out" / "directx" / "vectorAdd_kernel.hlsl"
+    ).read_text(encoding="utf-8")
+
+    assert "RWStructuredBuffer<float> A : register(u0);" in directx_output
+    assert "RWStructuredBuffer<float> B : register(u1);" in directx_output
+    assert "RWStructuredBuffer<float> C : register(u2);" in directx_output
+    assert "cbuffer vectorAdd_Args : register(b3)" in directx_output
+    assert "uint3 groupID : SV_GroupID" in directx_output
+    assert "uint3 groupThreadID : SV_GroupThreadID" in directx_output
+    assert "float A[]" not in directx_output
+    assert "float B[]" not in directx_output
+    assert "float C[]" not in directx_output
+    assert ": group" not in directx_output
+    for gl_builtin in [
+        "gl_GlobalInvocationID",
+        "gl_WorkGroupID",
+        "gl_LocalInvocationID",
+        "gl_WorkGroupSize",
+    ]:
+        assert gl_builtin not in directx_output
+    assert_directx_compute_validates_if_available(directx_output, tmp_path)
+
+
 def test_translate_project_vulkan_compute_bool_parameter_uses_uint_interface(
     tmp_path,
 ):
