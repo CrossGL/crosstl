@@ -3700,6 +3700,62 @@ def test_wgsl_codegen_lowers_prefix_increment_and_decrement_statements():
     assert "i -= 1;" in generated
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "int j = ++i;",
+        "if (++i > 0) { return; }",
+        "int j = i--;",
+    ],
+)
+def test_wgsl_codegen_rejects_update_operators_in_value_contexts(body):
+    shader = f"""
+    shader WGSLBadUpdateValueContext {{
+        compute {{
+            void main() {{
+                int i = 0;
+                {body}
+                return;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target only lowers \+\+/-- update operators as standalone "
+            r"statements or for-loop updates"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_update_operator_return_values():
+    shader = """
+    shader WGSLBadUpdateReturnValue {
+        int bump() {
+            int i = 0;
+            return ++i;
+        }
+        compute {
+            void main() {
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target only lowers \+\+/-- update operators as standalone "
+            r"statements or for-loop updates"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_lowers_switch_default_case():
     shader = """
     shader WGSLSwitchDefault {

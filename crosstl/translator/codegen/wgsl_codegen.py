@@ -730,6 +730,7 @@ class WGSLCodeGen:
         self._current_expression_expected_type = None
         self._current_function_return_type = None
         self._statement_expression_node = None
+        self._for_update_expression_node = None
         self._identifier_scopes = []
         self._identifier_alias_scopes = []
         self._pointer_identifier_scopes = []
@@ -791,6 +792,7 @@ class WGSLCodeGen:
         self._current_expression_expected_type = None
         self._current_function_return_type = None
         self._statement_expression_node = None
+        self._for_update_expression_node = None
         self._module_identifier_names = {}
         self._function_identifier_names = {}
         self._function_signature_identifier_names = {}
@@ -2707,7 +2709,12 @@ class WGSLCodeGen:
             condition = (
                 self.generate_expression(node.condition) if node.condition else ""
             )
-            update = self.generate_expression(node.update) if node.update else ""
+            previous_for_update_expression = self._for_update_expression_node
+            self._for_update_expression_node = node.update
+            try:
+                update = self.generate_expression(node.update) if node.update else ""
+            finally:
+                self._for_update_expression_node = previous_for_update_expression
             return (
                 f"{pad}for ({init}; {condition}; {update}) "
                 f"{self.generate_block(node.body, indent)}"
@@ -3046,6 +3053,13 @@ class WGSLCodeGen:
                 f"{self.generate_expression(expr.right)})"
             )
         if isinstance(expr, UnaryOpNode):
+            if expr.operator in {"++", "--"} and not self.is_update_statement_context(
+                expr
+            ):
+                raise ValueError(
+                    "WGSL target only lowers ++/-- update operators as standalone "
+                    "statements or for-loop updates"
+                )
             operand = self.generate_expression(expr.operand)
             if expr.is_postfix:
                 if expr.operator == "++":
@@ -3133,6 +3147,12 @@ class WGSLCodeGen:
             return self.generate_assignment(expr)
         raise ValueError(
             f"WGSL target does not support expression {type(expr).__name__}"
+        )
+
+    def is_update_statement_context(self, expr):
+        return (
+            expr is self._statement_expression_node
+            or expr is self._for_update_expression_node
         )
 
     def generate_literal(self, node):
