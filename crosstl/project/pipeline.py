@@ -1122,6 +1122,9 @@ REPORT_MIGRATION_FIELDS = frozenset(
         "runtimeReferencesByBackend",
         "runtimeReferencesByKind",
         "runtimeReferencesByPath",
+        "placeholderCount",
+        "placeholdersByTarget",
+        "placeholdersBySource",
         "actions",
     )
 )
@@ -1467,6 +1470,114 @@ REPORT_MIGRATION_NON_GOALS = (
 REPORT_MIGRATION_ACTION_KINDS = (
     "manual-runtime-integration",
     "manual-include-resolution",
+)
+GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE = "project.translate.generated-placeholder"
+PLACEHOLDER_DIAGNOSTIC_MISSING_CODE = (
+    "project.validate.generated-placeholder-diagnostic-missing"
+)
+PLACEHOLDER_MISSING_CAPABILITY = "target.native-placeholder-lowering"
+PLACEHOLDER_DIAGNOSTIC_CAPABILITY = "project.placeholder-diagnostics"
+PLACEHOLDER_MARKER_RULES = (
+    (
+        "crossgl-builtin-placeholders",
+        re.compile(r"(?:#|//)\s*CrossGL builtin placeholders\b"),
+        "CrossGL builtin placeholder prelude",
+        (
+            "Replace the compile-oriented builtin prelude with target-native "
+            "builtin inputs before relying on runtime behavior."
+        ),
+    ),
+    (
+        "crossgl-gpu-builtin-placeholders",
+        re.compile(r"(?:#|//)\s*CrossGL GPU builtin placeholders\b"),
+        "CrossGL GPU builtin placeholder prelude",
+        (
+            "Map the GPU builtin placeholders to target-native launch or stage "
+            "inputs before relying on runtime behavior."
+        ),
+    ),
+    (
+        "crossgl-resource-placeholders",
+        re.compile(r"(?:#|//)\s*CrossGL resource placeholders\b"),
+        "CrossGL resource placeholder prelude",
+        (
+            "Replace resource placeholders with target-native bindings or host "
+            "integration before relying on runtime behavior."
+        ),
+    ),
+    (
+        "crossgl-geometry-placeholders",
+        re.compile(r"(?:#|//)\s*CrossGL geometry stream placeholders\b"),
+        "CrossGL geometry stream placeholder prelude",
+        (
+            "Replace geometry stream placeholders with target-native geometry "
+            "stage integration before relying on runtime behavior."
+        ),
+    ),
+    (
+        "crossgl-tessellation-placeholders",
+        re.compile(r"(?:#|//)\s*CrossGL tessellation patch placeholders\b"),
+        "CrossGL tessellation patch placeholder prelude",
+        (
+            "Replace tessellation patch placeholders with target-native patch "
+            "stage integration before relying on runtime behavior."
+        ),
+    ),
+    (
+        "crossgl-mesh-task-placeholders",
+        re.compile(r"(?:#|//)\s*CrossGL mesh/task placeholders\b"),
+        "CrossGL mesh/task placeholder prelude",
+        (
+            "Replace mesh and task placeholders with target-native mesh pipeline "
+            "integration before relying on runtime behavior."
+        ),
+    ),
+    (
+        "crossgl-synchronization-placeholders",
+        re.compile(r"(?:#|//)\s*CrossGL synchronization placeholders\b"),
+        "CrossGL synchronization placeholder prelude",
+        (
+            "Replace synchronization placeholders with target-native memory "
+            "barriers before relying on runtime behavior."
+        ),
+    ),
+    (
+        "crossgl-wave-placeholders",
+        re.compile(r"(?:#|//)\s*CrossGL wave/subgroup placeholders\b"),
+        "CrossGL wave/subgroup placeholder prelude",
+        (
+            "Replace wave or subgroup placeholders with target-native subgroup "
+            "operations before relying on runtime behavior."
+        ),
+    ),
+    (
+        "crossgl-ray-tracing-placeholders",
+        re.compile(r"(?:#|//)\s*CrossGL ray tracing placeholders\b"),
+        "CrossGL ray tracing placeholder prelude",
+        (
+            "Replace ray tracing placeholders with target-native acceleration "
+            "structure and shader table integration before relying on runtime "
+            "behavior."
+        ),
+    ),
+    (
+        "rust-resource-limitation",
+        re.compile(r"CrossGL Rust limitation:\s*resource\b"),
+        "Rust compile-only resource placeholder",
+        (
+            "Provide a rust-gpu resource binding or host integration shim before "
+            "relying on runtime behavior."
+        ),
+    ),
+    (
+        "unsupported-fallback-expression",
+        re.compile(r"/\*\s*unsupported\b.*?\*/", re.IGNORECASE),
+        "unsupported fallback expression",
+        (
+            "Review the fallback expression and add target-native lowering before "
+            "relying on runtime behavior."
+        ),
+    ),
 )
 REPORT_RUNTIME_REFERENCE_KINDS = (
     "runtime-api",
@@ -6918,6 +7029,7 @@ class ProjectPortabilityReport:
                 "scope": REPORT_MIGRATION_SCOPE,
                 "nonGoals": list(REPORT_MIGRATION_NON_GOALS),
                 **_migration_action_rollups(self.migration_actions),
+                **_migration_placeholder_rollups(self.diagnostics),
                 "actions": list(self.migration_actions),
             },
         }
@@ -9434,6 +9546,9 @@ def translate_project(
                         _attach_artifact_source_remap(
                             config, target, artifact, output_path
                         )
+                    diagnostics.extend(
+                        _generated_placeholder_diagnostics(artifact_records, config)
+                    )
                 except Exception as exc:  # noqa: BLE001
                     # Project translation reports per-artifact failures so one bad
                     # unit does not hide the rest of the repository's migration state.
@@ -10171,6 +10286,213 @@ def _artifact_diagnostic_context(artifact: Mapping[str, Any]) -> dict[str, Any]:
     return context
 
 
+def _generated_placeholder_diagnostic_message(
+    target: str, artifact_path: str, label: str, action: str
+) -> str:
+    return (
+        f"Generated {target} artifact contains {label}: {artifact_path}. "
+        f"{action}"
+    )
+
+
+def _generated_placeholder_diagnostics_for_artifact(
+    artifact: Mapping[str, Any], config: ProjectConfig
+) -> list[ProjectDiagnostic]:
+    if artifact.get("status") != "translated":
+        return []
+    artifact_path_value = artifact.get("path")
+    if not _is_non_empty_string(artifact_path_value):
+        return []
+
+    artifact_path = _resolve_report_path(config, artifact_path_value)
+    if not _is_relative_to(artifact_path, config.root) or not artifact_path.is_file():
+        return []
+
+    try:
+        source = artifact_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+
+    diagnostics: list[ProjectDiagnostic] = []
+    offset = 0
+    for line_number, line in enumerate(source.splitlines(keepends=True), start=1):
+        line_text = line.rstrip("\r\n")
+        for kind, pattern, label, action in PLACEHOLDER_MARKER_RULES:
+            match = pattern.search(line_text)
+            if match is None:
+                continue
+            column = match.start() + 1
+            length = max(match.end() - match.start(), 1)
+            context = _artifact_diagnostic_context(artifact)
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="warning",
+                    code=GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE,
+                    message=_generated_placeholder_diagnostic_message(
+                        str(artifact.get("target", "")),
+                        str(artifact_path_value),
+                        label,
+                        action,
+                    ),
+                    location=SourceLocation(
+                        file=str(artifact_path_value),
+                        line=line_number,
+                        column=column,
+                        offset=offset + match.start(),
+                        length=length,
+                        end_line=line_number,
+                        end_column=column + length,
+                        end_offset=offset + match.end(),
+                    ),
+                    original_location=SourceLocation(
+                        file=str(artifact.get("source", ""))
+                    ),
+                    missing_capabilities=[PLACEHOLDER_MISSING_CAPABILITY, kind],
+                    **context,
+                )
+            )
+            break
+        offset += len(line)
+    return diagnostics
+
+
+def _generated_placeholder_diagnostics(
+    artifacts: Sequence[Mapping[str, Any]], config: ProjectConfig
+) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    for artifact in artifacts:
+        diagnostics.extend(
+            _generated_placeholder_diagnostics_for_artifact(artifact, config)
+        )
+    return diagnostics
+
+
+def _diagnostic_location_field(diagnostic: Any, field_name: str) -> Any:
+    if isinstance(diagnostic, ProjectDiagnostic):
+        location = (
+            diagnostic.original_location
+            if field_name == "originalLocation"
+            else getattr(diagnostic, field_name)
+        )
+        return location.to_json() if isinstance(location, SourceLocation) else None
+    if isinstance(diagnostic, Mapping):
+        location = diagnostic.get(field_name)
+        return location if isinstance(location, Mapping) else None
+    return None
+
+
+def _diagnostic_field(diagnostic: Any, field_name: str) -> Any:
+    if isinstance(diagnostic, ProjectDiagnostic):
+        if field_name == "sourceBackend":
+            return diagnostic.source_backend
+        return getattr(diagnostic, field_name, None)
+    if isinstance(diagnostic, Mapping):
+        return diagnostic.get(field_name)
+    return None
+
+
+def _generated_placeholder_diagnostic_key(diagnostic: Any) -> tuple[Any, ...] | None:
+    if _diagnostic_field(diagnostic, "code") != GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE:
+        return None
+    location = _diagnostic_location_field(diagnostic, "location")
+    if not isinstance(location, Mapping):
+        return None
+    return (
+        _diagnostic_field(diagnostic, "target"),
+        _diagnostic_field(diagnostic, "sourceBackend"),
+        _diagnostic_field(diagnostic, "variant"),
+        location.get("file"),
+        location.get("line"),
+        location.get("column"),
+    )
+
+
+def _placeholder_diagnostics_by_source(
+    diagnostics: Sequence[Any],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for diagnostic in diagnostics:
+        if _generated_placeholder_diagnostic_key(diagnostic) is None:
+            continue
+        original_location = _diagnostic_location_field(diagnostic, "originalLocation")
+        source = (
+            original_location.get("file")
+            if isinstance(original_location, Mapping)
+            else None
+        )
+        if not _is_non_empty_string(source):
+            continue
+        counts[source] = counts.get(source, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _placeholder_diagnostics_by_target(
+    diagnostics: Sequence[Any],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for diagnostic in diagnostics:
+        if _generated_placeholder_diagnostic_key(diagnostic) is None:
+            continue
+        target = _diagnostic_field(diagnostic, "target")
+        if not _is_non_empty_string(target):
+            continue
+        counts[target] = counts.get(target, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _migration_placeholder_rollups(diagnostics: Sequence[Any]) -> dict[str, Any]:
+    placeholder_count = sum(
+        1
+        for diagnostic in diagnostics
+        if _generated_placeholder_diagnostic_key(diagnostic) is not None
+    )
+    return {
+        "placeholderCount": placeholder_count,
+        "placeholdersByTarget": _placeholder_diagnostics_by_target(diagnostics),
+        "placeholdersBySource": _placeholder_diagnostics_by_source(diagnostics),
+    }
+
+
+def _missing_generated_placeholder_diagnostics(
+    artifacts: Sequence[Mapping[str, Any]],
+    config: ProjectConfig,
+    source_diagnostics: Sequence[Mapping[str, Any]],
+) -> list[ProjectDiagnostic]:
+    reported = {
+        key
+        for diagnostic in source_diagnostics
+        for key in (_generated_placeholder_diagnostic_key(diagnostic),)
+        if key is not None
+    }
+    missing: list[ProjectDiagnostic] = []
+    for diagnostic in _generated_placeholder_diagnostics(artifacts, config):
+        key = _generated_placeholder_diagnostic_key(diagnostic)
+        if key in reported:
+            continue
+        missing.append(
+            ProjectDiagnostic(
+                severity="error",
+                code=PLACEHOLDER_DIAGNOSTIC_MISSING_CODE,
+                message=(
+                    "Generated artifact contains a known placeholder marker "
+                    "without a matching project diagnostic: "
+                    f"{diagnostic.location.file}:{diagnostic.location.line}:"
+                    f"{diagnostic.location.column}"
+                ),
+                location=diagnostic.location,
+                original_location=diagnostic.original_location,
+                target=diagnostic.target,
+                source_backend=diagnostic.source_backend,
+                variant=diagnostic.variant,
+                missing_capabilities=[
+                    PLACEHOLDER_DIAGNOSTIC_CAPABILITY,
+                    *diagnostic.missing_capabilities,
+                ],
+            )
+        )
+    return missing
+
+
 def _validate_artifacts(
     artifacts: Sequence[Mapping[str, Any]],
     targets: Sequence[str],
@@ -10493,6 +10815,13 @@ def validate_project_report(
         for diagnostic in report.get("diagnostics", [])
         if isinstance(diagnostic, Mapping)
     ]
+    diagnostic_objects.extend(
+        _missing_generated_placeholder_diagnostics(
+            _record_sequence(report.get("artifacts", [])),
+            config,
+            source_diagnostics,
+        )
+    )
     diagnostics = _validation_diagnostics(
         source_diagnostics,
         [diagnostic.to_json() for diagnostic in diagnostic_objects],
@@ -10618,6 +10947,9 @@ def _empty_inspection_migration_summary() -> dict[str, Any]:
         "runtimeReferencesByBackend": {},
         "runtimeReferencesByKind": {},
         "runtimeReferencesByPath": {},
+        "placeholderCount": 0,
+        "placeholdersByTarget": {},
+        "placeholdersBySource": {},
         "truncatedRuntimeReferenceCount": 0,
         "runtimeReferences": [],
         "truncatedActionCount": 0,
@@ -11040,6 +11372,9 @@ def inspect_project_report(
         runtime_references = [
             dict(reference) for reference in _migration_runtime_references(actions)
         ]
+        placeholder_rollups = _migration_placeholder_rollups(
+            _record_sequence(report.get("diagnostics", []))
+        )
         payload["migration"] = {
             "scope": migration.get("scope"),
             "nonGoals": (
@@ -11086,6 +11421,21 @@ def inspect_project_report(
                 dict(migration.get("runtimeReferencesByPath", {}))
                 if isinstance(migration.get("runtimeReferencesByPath"), Mapping)
                 else runtime_reference_rollups["runtimeReferencesByPath"]
+            ),
+            "placeholderCount": (
+                migration.get("placeholderCount")
+                if _is_non_negative_int(migration.get("placeholderCount"))
+                else placeholder_rollups["placeholderCount"]
+            ),
+            "placeholdersByTarget": (
+                dict(migration.get("placeholdersByTarget", {}))
+                if isinstance(migration.get("placeholdersByTarget"), Mapping)
+                else placeholder_rollups["placeholdersByTarget"]
+            ),
+            "placeholdersBySource": (
+                dict(migration.get("placeholdersBySource", {}))
+                if isinstance(migration.get("placeholdersBySource"), Mapping)
+                else placeholder_rollups["placeholdersBySource"]
             ),
             "truncatedRuntimeReferenceCount": max(
                 0,
@@ -25174,6 +25524,27 @@ def _migration_contract_reasons(
                     migration.get(field_name),
                     rollups[field_name],
                     "migration.actions",
+                )
+            )
+        diagnostics = report.get("diagnostics", [])
+        placeholder_rollups = _migration_placeholder_rollups(
+            diagnostics if isinstance(diagnostics, list) else []
+        )
+        reasons.extend(
+            _count_field_contract_reasons(
+                "migration.placeholderCount",
+                migration.get("placeholderCount"),
+                placeholder_rollups["placeholderCount"],
+                "diagnostics",
+            )
+        )
+        for field_name in ("placeholdersByTarget", "placeholdersBySource"):
+            reasons.extend(
+                _mapping_field_contract_reasons(
+                    f"migration.{field_name}",
+                    migration.get(field_name),
+                    placeholder_rollups[field_name],
+                    "diagnostics",
                 )
             )
     return reasons
