@@ -1820,8 +1820,7 @@ def test_hlsl_structured_buffer_register_t0_and_rw_register_u0():
         "RWStructuredBuffer<float4> outputPositions : register(u0);" in generated_code
     )
     assert "float4 pos = inputPositions.Load(index);" in generated_code
-    assert "outputPositions[index] = pos;" in generated_code
-    assert "outputPositions.Store(" not in generated_code
+    assert "outputPositions.Store(index, pos);" in generated_code
 
 
 def test_hlsl_stage_local_pointer_storage_buffer_lowers_to_structured_buffer():
@@ -2005,8 +2004,7 @@ def test_hlsl_metal_matmul_pointer_params_lower_to_resources(tmp_path):
     assert "float* X" not in generated_code
     assert "A.Load(((row * params.inner_dim) + k))" in generated_code
     assert "B.Load(((k * params.col_dim_x) + col))" in generated_code
-    assert "X[((row * params.col_dim_x) + col)] = sum;" in generated_code
-    assert "X.Store(" not in generated_code
+    assert "X.Store(((row * params.col_dim_x) + col), sum);" in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
@@ -2235,8 +2233,7 @@ def test_hlsl_structured_buffer_fixed_width_aliases_map_resource_generics():
     assert "StructuredBuffer<int64_t> signedValues : register(t4);" in generated_code
     assert "RWStructuredBuffer<uint64_t> offsets : register(u5);" in generated_code
     assert "min16uint count = counts.Load(index);" in generated_code
-    assert "counts[index] = (count + min16uint(1u));" in generated_code
-    assert "counts.Store(" not in generated_code
+    assert "counts.Store(index, (count + min16uint(1u)));" in generated_code
     assert "RWStructuredBuffer<uint16_t>" not in generated_code
     assert "RWStructuredBuffer<size_t>" not in generated_code
     assert "size_t" not in generated_code
@@ -2278,8 +2275,7 @@ def test_hlsl_structured_buffer_alias_arrays_infer_helper_parameter_sizes():
         in generated_code
     )
     assert "return localCounts[which].Load(index);" in generated_code
-    assert "counts[which][index] = (count + min16uint(1u));" in generated_code
-    assert "counts[which].Store(" not in generated_code
+    assert "counts[which].Store(index, (count + min16uint(1u)));" in generated_code
     assert "localCounts[]" not in generated_code
     assert "uint16_t" not in generated_code
     assert "size_t" not in generated_code
@@ -4236,8 +4232,7 @@ def test_rwstructured_buffer_counter_helpers_lower_to_native_methods():
     assert "RWStructuredBuffer<uint> counterArrays[2] : register(u4);" in generated
     assert "uint nextIndex = counters.IncrementCounter();" in generated
     assert "uint oldIndex = counterArrays[which].DecrementCounter();" in generated
-    assert "counterArrays[which][nextIndex] = oldIndex;" in generated
-    assert "counterArrays[which].Store(" not in generated
+    assert "counterArrays[which].Store(nextIndex, oldIndex);" in generated
     assert "buffer_increment_counter" not in generated
     assert "buffer_decrement_counter" not in generated
 
@@ -33637,8 +33632,7 @@ def test_structured_buffer_with_struct_element_type():
         "RWStructuredBuffer<Particle> particleOutput : register(u0);" in generated_code
     )
     assert "Particle p = particleInput.Load(index);" in generated_code
-    assert "particleOutput[index] = p;" in generated_code
-    assert "particleOutput.Store(" not in generated_code
+    assert "particleOutput.Store(index, p);" in generated_code
     assert "struct Particle" in generated_code
 
 
@@ -33773,8 +33767,7 @@ def test_multiple_buffer_declarations_with_explicit_bindings():
     assert "float4x4 viewProj;" in generated_code
     assert "float4 albedo;" in generated_code
     assert "vertices.Load(index)" in generated_code
-    assert "results[index] = value;" in generated_code
-    assert "results.Store(" not in generated_code
+    assert "results.Store(index, value);" in generated_code
     assert "rawData.Load(offset)" in generated_code
     assert "rawOutput.Store(offset, value);" in generated_code
 

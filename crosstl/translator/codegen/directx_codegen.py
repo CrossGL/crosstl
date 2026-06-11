@@ -6872,12 +6872,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value = self.generate_expression(args[2])
             resource_type = self.hlsl_buffer_helper_resource_type(args[0])
             resource_name = self.hlsl_resource_type_name(resource_type)
-            if resource_name in {
-                "RWBuffer",
-                "RWStructuredBuffer",
-                "RasterizerOrderedBuffer",
-                "RasterizerOrderedStructuredBuffer",
-            }:
+            if resource_name in {"RWBuffer", "RasterizerOrderedBuffer"}:
                 return f"{buffer}[{index}] = {value}"
             return f"{buffer}.Store({index}, {value})"
         if func_name == "buffer_append" and len(args) >= 2:

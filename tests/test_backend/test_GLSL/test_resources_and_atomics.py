@@ -429,7 +429,7 @@ def test_codegen_ssbo_single_array_blocks_use_structured_buffer_contract():
     assert "StructuredBuffer<float> inputBlock : register(t0);" in hlsl
     assert "RWStructuredBuffer<float> outputBlock : register(u1);" in hlsl
     assert "float value = inputBlock.Load(0);" in hlsl
-    assert "outputBlock[0] = (value * 2.0);" in hlsl
+    assert "outputBlock.Store(0, (value * 2.0));" in hlsl
 
     metal = MetalCodeGen().generate(shader_ast)
     assert "const device float* inputBlock [[buffer(0)]]" in metal
@@ -503,7 +503,7 @@ def test_codegen_ssbo_instance_arrays_use_structured_buffer_arrays():
     assert "StructuredBuffer<int> readBuffers[2] : register(t2);" in hlsl
     assert "RWStructuredBuffer<int> writeBuffers[2] : register(u4);" in hlsl
     assert "int value = readBuffers[1].Load(0);" in hlsl
-    assert "writeBuffers[0][0] = (value + 1);" in hlsl
+    assert "writeBuffers[0].Store(0, (value + 1));" in hlsl
 
     metal = MetalCodeGen().generate(shader_ast)
     assert "array<const device int*, 2> readBuffers [[buffer(2)]]" in metal
@@ -557,8 +557,8 @@ def test_codegen_ssbo_compound_writes_use_load_store_contract():
     assert shader_ast is not None
 
     hlsl = HLSLCodeGen().generate(shader_ast)
-    assert "valuesBlock[0] = (valuesBlock.Load(0) + 3);" in hlsl
-    assert "layers[1][2] = (layers[1].Load(2) * valuesBlock.Load(0));" in hlsl
+    assert "valuesBlock.Store(0, (valuesBlock.Load(0) + 3));" in hlsl
+    assert "layers[1].Store(2, (layers[1].Load(2) * valuesBlock.Load(0)));" in hlsl
 
     metal = MetalCodeGen().generate(shader_ast)
     assert "valuesBlock[0] = valuesBlock[0] + 3;" in metal
@@ -646,7 +646,7 @@ def test_codegen_unsized_ssbo_instance_arrays_preserve_dynamic_receivers():
     hlsl = HLSLCodeGen().generate(shader_ast)
     assert "RWStructuredBuffer<int> buffers[] : register(u1);" in hlsl
     assert "int value = buffers[dynamicIndex].Load(2);" in hlsl
-    assert "buffers[dynamicIndex][3] = (value + 1);" in hlsl
+    assert "buffers[dynamicIndex].Store(3, (value + 1));" in hlsl
     assert "buffers[dynamicIndex].GetDimensions(len);" in hlsl
 
     metal = MetalCodeGen().generate(shader_ast)
