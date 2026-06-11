@@ -10299,6 +10299,107 @@ def _metal_local_using_alias(
     )
 
 
+def _metal_rewrite_identifier_tokens(
+    text: str,
+    replacements: Mapping[str, str],
+) -> tuple[str, bool]:
+    if not replacements:
+        return text, False
+
+    parts: list[str] = []
+    changed = False
+    i = 0
+    while i < len(text):
+        if text[i].isalpha() or text[i] == "_":
+            j = i + 1
+            while j < len(text) and (text[j].isalnum() or text[j] == "_"):
+                j += 1
+            token = text[i:j]
+            replacement = (
+                None
+                if text[max(0, i - 2) : i] == "::"
+                else replacements.get(token)
+            )
+            if replacement is None:
+                parts.append(token)
+            else:
+                replacement_text = str(replacement)
+                parts.append(replacement_text)
+                changed = changed or replacement_text != token
+            i = j
+            continue
+        parts.append(text[i])
+        i += 1
+
+    if not changed:
+        return text, False
+    return "".join(parts), True
+
+
+def _raise_metal_type_identifier_rewrite_error(
+    *,
+    original_text: str,
+    current_text: str,
+    pass_count: int,
+    pass_limit: int,
+    work_budget: _MetalTemplateMaterializationWorkBudget | None,
+    offset: int,
+    length: int,
+    reason: str,
+) -> None:
+    from crosstl.backend.Metal.preprocessor import MetalTemplateSpecializationError
+
+    location = (
+        _source_location_at_offset(
+            work_budget.unit,
+            work_budget.source,
+            offset,
+            max(length, 0),
+        )
+        if work_budget is not None and work_budget.unit is not None
+        else None
+    )
+    location_text = (
+        f" Source context: {location.file}:{location.line}:{location.column}."
+        if location is not None
+        else ""
+    )
+    target_text = (
+        f" for target '{work_budget.target}'" if work_budget is not None else ""
+    )
+    pass_name = (
+        work_budget.pass_name
+        if work_budget is not None
+        else "metal-template-materialization/type-identifier-rewrite"
+    )
+    limit_source = (
+        f"{work_budget.limit_source}; type-alias dependency graph"
+        if work_budget is not None
+        else "type-alias dependency graph"
+    )
+    suggested_action = (
+        "break cyclic local using aliases or provide explicit template arguments "
+        "so Metal template materialization can resolve concrete types"
+    )
+    raise MetalTemplateSpecializationError(
+        "Metal template materialization type identifier rewrite limit exceeded "
+        f"while running {pass_name}{target_text}; {pass_count} rewrite passes "
+        f"requested, limit {pass_limit} from {limit_source}. "
+        f"Initial type '{original_text}' reached '{current_text}' before "
+        f"stabilizing ({reason}).{location_text} "
+        f"Suggested action: {suggested_action}.",
+        limit=pass_limit,
+        limit_source=limit_source,
+        unique_specialization_count=pass_count,
+        requested_signature=(
+            f"{pass_name}: {pass_count} type identifier rewrite passes for "
+            f"'{original_text}'"
+        ),
+        suggested_action=suggested_action,
+        source_location=location,
+    )
+
+
 def _metal_resolve_type_identifiers(
     preprocessor: Any,
     type_text: str,
@@ -10329,36 +10430,17 @@ def _metal_resolve_type_identifiers(
             length=length,
             context=f"resolving type '{text}'",
         )
-    alias_pattern = (
-        re.compile(
-            r"\b(?:"
-            + "|".join(re.escape(name) for name, _value in aliases_key)
-            + r")\b"
-        )
-        if aliases_key
-        else None
-    )
     alias_values = dict(aliases_key)
-    constant_pattern = (
-        re.compile(
-            r"\b(?:"
-            + "|".join(re.escape(name) for name, _value in constants_key)
-            + r")\b"
-        )
-        if constants_key
-        else None
-    )
     constant_values = dict(constants_key)
-    previous = None
-    while previous != text:
+    rewrite_pass_limit = max(1, len(alias_values) + len(constant_values) + 1)
+    seen_texts = {text}
+    for rewrite_pass in range(1, rewrite_pass_limit + 1):
         previous = text
-        if alias_pattern is not None:
-            text = alias_pattern.sub(lambda match: alias_values[match.group(0)], text)
-        if constant_pattern is not None:
-            text = constant_pattern.sub(
-                lambda match: constant_values[match.group(0)],
-                text,
-            )
+        text, alias_changed = _metal_rewrite_identifier_tokens(text, alias_values)
+        text, constant_changed = _metal_rewrite_identifier_tokens(
+            text,
+            constant_values,
+        )
         if "<" in text and ">" in text:
             base, arguments = _metal_generic_type_parts(preprocessor, text)
             if arguments:
@@ -10367,7 +10449,34 @@ def _metal_resolve_type_identifiers(
                     or argument
                     for argument in arguments
                 ]
-                text = f"{base}<{','.join(resolved_arguments)}>"
+                generic_text = f"{base}<{','.join(resolved_arguments)}>"
+                if generic_text != text:
+                    text = generic_text
+        if text == previous and not alias_changed and not constant_changed:
+            break
+        if text in seen_texts:
+            _raise_metal_type_identifier_rewrite_error(
+                original_text=cache_key[0],
+                current_text=text,
+                pass_count=rewrite_pass,
+                pass_limit=rewrite_pass_limit,
+                work_budget=work_budget,
+                offset=offset,
+                length=length,
+                reason="cycle detected",
+            )
+        seen_texts.add(text)
+    else:
+        _raise_metal_type_identifier_rewrite_error(
+            original_text=cache_key[0],
+            current_text=text,
+            pass_count=rewrite_pass_limit,
+            pass_limit=rewrite_pass_limit,
+            work_budget=work_budget,
+            offset=offset,
+            length=length,
+            reason="pass limit reached",
+        )
     resolved = _normalize_metal_type_text(text)
     if cache is not None:
         cache.resolved_types[cache_key] = resolved
