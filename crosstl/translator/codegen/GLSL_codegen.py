@@ -689,6 +689,18 @@ class GLSLCodeGen:
         "WaveReadLaneFirst": 1,
         "WavePrefixSum": 1,
         "WavePrefixProduct": 1,
+        "WavePrefixInclusiveSum": 1,
+        "WavePrefixInclusiveProduct": 1,
+        "WavePrefixExclusiveMin": 1,
+        "WavePrefixInclusiveMin": 1,
+        "WavePrefixExclusiveMax": 1,
+        "WavePrefixInclusiveMax": 1,
+        "WavePrefixExclusiveBitAnd": 1,
+        "WavePrefixInclusiveBitAnd": 1,
+        "WavePrefixExclusiveBitOr": 1,
+        "WavePrefixInclusiveBitOr": 1,
+        "WavePrefixExclusiveBitXor": 1,
+        "WavePrefixInclusiveBitXor": 1,
         "WavePrefixCountBits": 1,
         "QuadReadAcrossX": 1,
         "QuadReadAcrossY": 1,
@@ -718,10 +730,50 @@ class GLSLCodeGen:
         "WaveReadLaneFirst": "subgroupBroadcastFirst",
         "WavePrefixSum": "subgroupExclusiveAdd",
         "WavePrefixProduct": "subgroupExclusiveMul",
+        "WavePrefixInclusiveSum": "subgroupInclusiveAdd",
+        "WavePrefixInclusiveProduct": "subgroupInclusiveMul",
+        "WavePrefixExclusiveMin": "subgroupExclusiveMin",
+        "WavePrefixInclusiveMin": "subgroupInclusiveMin",
+        "WavePrefixExclusiveMax": "subgroupExclusiveMax",
+        "WavePrefixInclusiveMax": "subgroupInclusiveMax",
+        "WavePrefixExclusiveBitAnd": "subgroupExclusiveAnd",
+        "WavePrefixInclusiveBitAnd": "subgroupInclusiveAnd",
+        "WavePrefixExclusiveBitOr": "subgroupExclusiveOr",
+        "WavePrefixInclusiveBitOr": "subgroupInclusiveOr",
+        "WavePrefixExclusiveBitXor": "subgroupExclusiveXor",
+        "WavePrefixInclusiveBitXor": "subgroupInclusiveXor",
         "QuadReadAcrossX": "subgroupQuadSwapHorizontal",
         "QuadReadAcrossY": "subgroupQuadSwapVertical",
         "QuadReadAcrossDiagonal": "subgroupQuadSwapDiagonal",
         "QuadReadLaneAt": "subgroupQuadBroadcast",
+    }
+    GLSL_METAL_SIMD_GROUP_HELPER_PREFIX = "__metal_simd"
+    GLSL_METAL_SIMD_GROUP_HELPER_OPERATIONS = {
+        "__metal_simd_sum": "WaveActiveSum",
+        "__metal_simd_product": "WaveActiveProduct",
+        "__metal_simd_min": "WaveActiveMin",
+        "__metal_simd_max": "WaveActiveMax",
+        "__metal_simd_and": "WaveActiveBitAnd",
+        "__metal_simd_or": "WaveActiveBitOr",
+        "__metal_simd_xor": "WaveActiveBitXor",
+        "__metal_simd_any": "WaveActiveAnyTrue",
+        "__metal_simd_all": "WaveActiveAllTrue",
+        "__metal_simd_broadcast": "WaveReadLaneAt",
+        "__metal_simd_broadcast_first": "WaveReadLaneFirst",
+        "__metal_simd_prefix_exclusive_sum": "WavePrefixSum",
+        "__metal_simd_prefix_inclusive_sum": "WavePrefixInclusiveSum",
+        "__metal_simd_prefix_exclusive_product": "WavePrefixProduct",
+        "__metal_simd_prefix_inclusive_product": "WavePrefixInclusiveProduct",
+        "__metal_simd_prefix_exclusive_min": "WavePrefixExclusiveMin",
+        "__metal_simd_prefix_inclusive_min": "WavePrefixInclusiveMin",
+        "__metal_simd_prefix_exclusive_max": "WavePrefixExclusiveMax",
+        "__metal_simd_prefix_inclusive_max": "WavePrefixInclusiveMax",
+        "__metal_simd_prefix_exclusive_and": "WavePrefixExclusiveBitAnd",
+        "__metal_simd_prefix_inclusive_and": "WavePrefixInclusiveBitAnd",
+        "__metal_simd_prefix_exclusive_or": "WavePrefixExclusiveBitOr",
+        "__metal_simd_prefix_inclusive_or": "WavePrefixInclusiveBitOr",
+        "__metal_simd_prefix_exclusive_xor": "WavePrefixExclusiveBitXor",
+        "__metal_simd_prefix_inclusive_xor": "WavePrefixInclusiveBitXor",
     }
     GLSL_VECTOR_RELATIONAL_FUNCTIONS = {
         "<": "lessThan",
@@ -745,6 +797,42 @@ class GLSLCodeGen:
         "WaveActiveMax": "#extension GL_KHR_shader_subgroup_arithmetic : require",
         "WavePrefixSum": "#extension GL_KHR_shader_subgroup_arithmetic : require",
         "WavePrefixProduct": "#extension GL_KHR_shader_subgroup_arithmetic : require",
+        "WavePrefixInclusiveSum": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixInclusiveProduct": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixExclusiveMin": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixInclusiveMin": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixExclusiveMax": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixInclusiveMax": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixExclusiveBitAnd": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixInclusiveBitAnd": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixExclusiveBitOr": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixInclusiveBitOr": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixExclusiveBitXor": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
+        "WavePrefixInclusiveBitXor": (
+            "#extension GL_KHR_shader_subgroup_arithmetic : require"
+        ),
         "WaveActiveBallot": "#extension GL_KHR_shader_subgroup_ballot : require",
         "WaveActiveCountBits": "#extension GL_KHR_shader_subgroup_ballot : require",
         "WavePrefixCountBits": "#extension GL_KHR_shader_subgroup_ballot : require",
@@ -824,11 +912,23 @@ class GLSLCodeGen:
         "WaveActiveMax",
         "WavePrefixSum",
         "WavePrefixProduct",
+        "WavePrefixInclusiveSum",
+        "WavePrefixInclusiveProduct",
+        "WavePrefixExclusiveMin",
+        "WavePrefixInclusiveMin",
+        "WavePrefixExclusiveMax",
+        "WavePrefixInclusiveMax",
     }
     GLSL_WAVE_INTEGER_OR_BOOLEAN_OPERATIONS = {
         "WaveActiveBitAnd",
         "WaveActiveBitOr",
         "WaveActiveBitXor",
+        "WavePrefixExclusiveBitAnd",
+        "WavePrefixInclusiveBitAnd",
+        "WavePrefixExclusiveBitOr",
+        "WavePrefixInclusiveBitOr",
+        "WavePrefixExclusiveBitXor",
+        "WavePrefixInclusiveBitXor",
     }
     GLSL_WAVE_BOOLEAN_OPERATIONS = {
         "WaveActiveAllTrue",
@@ -1700,7 +1800,9 @@ class GLSLCodeGen:
                 if isinstance(node, WaveOpNode):
                     operations.add(node.operation)
                 elif isinstance(node, FunctionCallNode):
-                    operation = self.function_call_name(node)
+                    operation = self.glsl_wave_operation_name(
+                        self.function_call_name(node)
+                    )
                     if operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
                         operations.add(operation)
         return operations
@@ -9228,8 +9330,9 @@ class GLSLCodeGen:
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
-            if func_name in self.GLSL_WAVE_INTRINSIC_ARITIES:
-                return self.glsl_wave_result_type(func_name, args)
+            wave_operation = self.glsl_wave_operation_name(func_name)
+            if wave_operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
+                return self.glsl_wave_result_type(wave_operation, args)
             if is_resource_size_query_operation(func_name) and args:
                 return self.texture_size_result_type(args[0])
             numeric_result_type = numeric_trait_method_result_type(self, expr)
@@ -10379,8 +10482,15 @@ class GLSLCodeGen:
             if synchronization_call is not None:
                 return synchronization_call
 
-            if original_func_name in self.GLSL_WAVE_INTRINSIC_ARITIES:
-                return self.generate_glsl_wave_operation(original_func_name, expr.args)
+            wave_operation = self.glsl_wave_operation_name(original_func_name)
+            if wave_operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
+                return self.generate_glsl_wave_operation(
+                    wave_operation, expr.args, original_func_name
+                )
+            if self.is_metal_simd_group_helper_name(original_func_name):
+                return self.glsl_wave_diagnostic_expression(
+                    original_func_name, "has no OpenGL subgroup equivalent"
+                )
 
             glsl_memory_atomic_call = self.generate_glsl_memory_atomic_call(
                 original_func_name, expr.args
@@ -10523,6 +10633,14 @@ class GLSLCodeGen:
         if func_name == "workgroupBarrier":
             return "barrier()"
         return None
+
+    def glsl_wave_operation_name(self, operation):
+        return self.GLSL_METAL_SIMD_GROUP_HELPER_OPERATIONS.get(operation, operation)
+
+    def is_metal_simd_group_helper_name(self, func_name):
+        return isinstance(func_name, str) and func_name.startswith(
+            self.GLSL_METAL_SIMD_GROUP_HELPER_PREFIX
+        )
 
     def generate_glsl_wave_op_expression(self, node):
         return self.generate_glsl_wave_operation(node.operation, node.arguments)
@@ -10714,20 +10832,26 @@ class GLSLCodeGen:
             return "0", "1"
         return "0.0", "1.0"
 
-    def generate_glsl_wave_operation(self, operation, arguments):
+    def generate_glsl_wave_operation(
+        self, operation, arguments, diagnostic_operation=None
+    ):
+        diagnostic_operation = diagnostic_operation or operation
         expected_arity = self.GLSL_WAVE_INTRINSIC_ARITIES.get(operation)
         if expected_arity is None:
             return self.glsl_wave_diagnostic_expression(
-                operation, "is not recognized by the OpenGL backend"
+                diagnostic_operation, "is not recognized by the OpenGL backend"
             )
 
         actual_arity = len(arguments)
         if actual_arity != expected_arity:
             return self.glsl_wave_diagnostic_expression(
-                operation, f"expects {expected_arity} arguments, got {actual_arity}"
+                diagnostic_operation,
+                f"expects {expected_arity} arguments, got {actual_arity}",
             )
 
-        type_diagnostic = self.glsl_wave_type_diagnostic(operation, arguments)
+        type_diagnostic = self.glsl_wave_type_diagnostic(
+            operation, arguments, diagnostic_operation
+        )
         if type_diagnostic is not None:
             return type_diagnostic
 
@@ -10756,7 +10880,7 @@ class GLSLCodeGen:
         mapped = self.GLSL_WAVE_DIRECT_MAPPINGS.get(operation)
         if mapped is None:
             return self.glsl_wave_diagnostic_expression(
-                operation, "is not recognized by the OpenGL backend"
+                diagnostic_operation, "is not recognized by the OpenGL backend"
             )
 
         args = ", ".join(self.generate_expression(arg) for arg in arguments)
@@ -10784,10 +10908,11 @@ class GLSLCodeGen:
             return self.expression_result_type(arguments[0])
         return None
 
-    def glsl_wave_type_diagnostic(self, operation, args):
+    def glsl_wave_type_diagnostic(self, operation, args, diagnostic_operation=None):
+        diagnostic_operation = diagnostic_operation or operation
         if operation in self.GLSL_WAVE_NUMERIC_OPERATIONS:
             return self.glsl_wave_validate_argument_kind(
-                operation,
+                diagnostic_operation,
                 args[0],
                 "a numeric scalar or vector",
                 "value",
@@ -10795,7 +10920,7 @@ class GLSLCodeGen:
             )
         if operation in self.GLSL_WAVE_INTEGER_OR_BOOLEAN_OPERATIONS:
             return self.glsl_wave_validate_argument_kind(
-                operation,
+                diagnostic_operation,
                 args[0],
                 "an integer or boolean scalar or vector",
                 "value",
@@ -10803,7 +10928,7 @@ class GLSLCodeGen:
             )
         if operation in self.GLSL_WAVE_BOOLEAN_OPERATIONS:
             return self.glsl_wave_validate_argument_type(
-                operation,
+                diagnostic_operation,
                 args[0],
                 "a boolean scalar",
                 "value",
@@ -10812,7 +10937,7 @@ class GLSLCodeGen:
             )
         if operation in self.GLSL_WAVE_SCALAR_OR_VECTOR_OPERATIONS:
             return self.glsl_wave_validate_argument_type(
-                operation,
+                diagnostic_operation,
                 args[0],
                 "a scalar or vector",
                 "value",
@@ -10821,7 +10946,7 @@ class GLSLCodeGen:
             )
         if operation == "WaveMatch":
             return self.glsl_wave_validate_argument_type(
-                operation,
+                diagnostic_operation,
                 args[0],
                 "a scalar or vector",
                 "value",
@@ -10830,7 +10955,7 @@ class GLSLCodeGen:
             )
         if operation == "WaveMultiPrefixCountBits":
             diagnostic = self.glsl_wave_validate_argument_type(
-                operation,
+                diagnostic_operation,
                 args[0],
                 "a boolean scalar",
                 "value",
@@ -10839,10 +10964,10 @@ class GLSLCodeGen:
             )
             if diagnostic is not None:
                 return diagnostic
-            return self.glsl_wave_validate_mask_argument(operation, args[1])
+            return self.glsl_wave_validate_mask_argument(diagnostic_operation, args[1])
         if operation in self.GLSL_WAVE_MULTI_PREFIX_NUMERIC_OPERATIONS:
             diagnostic = self.glsl_wave_validate_argument_kind(
-                operation,
+                diagnostic_operation,
                 args[0],
                 "a numeric scalar or vector",
                 "value",
@@ -10850,10 +10975,10 @@ class GLSLCodeGen:
             )
             if diagnostic is not None:
                 return diagnostic
-            return self.glsl_wave_validate_mask_argument(operation, args[1])
+            return self.glsl_wave_validate_mask_argument(diagnostic_operation, args[1])
         if operation in self.GLSL_WAVE_MULTI_PREFIX_INTEGER_OPERATIONS:
             diagnostic = self.glsl_wave_validate_argument_kind(
-                operation,
+                diagnostic_operation,
                 args[0],
                 "an integer scalar or vector",
                 "value",
@@ -10861,11 +10986,11 @@ class GLSLCodeGen:
             )
             if diagnostic is not None:
                 return diagnostic
-            return self.glsl_wave_validate_mask_argument(operation, args[1])
+            return self.glsl_wave_validate_mask_argument(diagnostic_operation, args[1])
         index_argument = self.GLSL_WAVE_LANE_INDEX_ARGUMENTS.get(operation)
         if index_argument is not None:
             return self.glsl_wave_validate_argument_type(
-                operation,
+                diagnostic_operation,
                 args[index_argument],
                 "a scalar integer",
                 "lane",
