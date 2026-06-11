@@ -801,6 +801,102 @@ def _run_runtime_manifest(args):
     return 0 if payload["success"] else 1
 
 
+def _format_runtime_test_manifest(payload):
+    lines = [f"Project runtime test manifest: {payload.get('artifactManifest')}"]
+    for header_line in (
+        _format_payload_schema_version(payload, "Manifest schema version"),
+        _format_payload_kind(payload, "Manifest kind"),
+        _format_payload_generated_at(payload, "Manifest generated at"),
+    ):
+        if header_line:
+            lines.append(header_line)
+    lines.append(f"Status: {'ok' if payload.get('success') else 'failed'}")
+    metadata = payload.get("metadata")
+    if isinstance(metadata, Mapping):
+        fixture_metadata = metadata.get("sourceFixtureMetadata")
+        if isinstance(fixture_metadata, str) and fixture_metadata:
+            lines.append(f"Fixture metadata: {fixture_metadata}")
+    project_root = payload.get("projectRoot")
+    if isinstance(project_root, str) and project_root:
+        lines.append(f"Project root: {project_root}")
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        lines.append(
+            "Summary: "
+            f"{summary.get('testCount', 0)} runtime tests, "
+            f"{summary.get('adapterCount', 0)} adapters, "
+            f"{summary.get('diagnosticCount', 0)} diagnostics"
+        )
+        target_counts = summary.get("testsByTarget")
+        target_line = _format_count_rollup(
+            "Runtime tests by target", target_counts, include_zero=False
+        )
+        if target_line:
+            lines.append(target_line)
+    adapters = payload.get("adapters", [])
+    if adapters:
+        lines.append("Runtime adapters:")
+        for adapter in adapters:
+            if not isinstance(adapter, Mapping):
+                continue
+            details = []
+            target = adapter.get("target")
+            if isinstance(target, str) and target:
+                details.append(f"target: {target}")
+            adapter_kind = adapter.get("adapterKind")
+            if isinstance(adapter_kind, str) and adapter_kind:
+                details.append(f"kind: {adapter_kind}")
+            detail_suffix = f" [{'; '.join(details)}]" if details else ""
+            lines.append(f"- {adapter.get('id', 'unknown')}{detail_suffix}")
+    tests = payload.get("tests", [])
+    if tests:
+        lines.append("Runtime tests:")
+        for test in tests:
+            if not isinstance(test, Mapping):
+                continue
+            selector = test.get("selector")
+            selector_bits = []
+            if isinstance(selector, Mapping):
+                for key in ("target", "source", "path", "variant", "id"):
+                    value = selector.get(key)
+                    if isinstance(value, str) and value:
+                        selector_bits.append(f"{key}: {value}")
+            adapter = test.get("adapter")
+            if isinstance(adapter, str) and adapter:
+                selector_bits.append(f"adapter: {adapter}")
+            detail_suffix = f" [{'; '.join(selector_bits)}]" if selector_bits else ""
+            lines.append(f"- {test.get('id', 'unknown')}{detail_suffix}")
+    diagnostics = payload.get("diagnostics", [])
+    if diagnostics:
+        lines.append("Diagnostics:")
+        for diagnostic in diagnostics:
+            if isinstance(diagnostic, Mapping):
+                lines.append(_format_project_diagnostic_line(diagnostic))
+    return "\n".join(lines) + "\n"
+
+
+def _run_runtime_test_manifest(args):
+    from .project import build_runtime_test_manifest
+
+    payload = build_runtime_test_manifest(
+        args.artifact_report,
+        args.fixture_metadata,
+        project_root=args.project_root,
+    )
+    if args.format == "sarif":
+        _write_json_payload(
+            _format_project_diagnostics_sarif(
+                payload, tool_name="CrossTL runtime test manifest"
+            ),
+            args.output,
+        )
+    elif args.format == "text":
+        _write_text_payload(_format_runtime_test_manifest(payload), args.output)
+    else:
+        _write_json_payload(payload, args.output)
+    return 0 if payload["success"] else 1
+
+
 def _format_runtime_binding_manifest(payload):
     lines = [f"Runtime binding manifest: {payload.get('sourceReport')}"]
     for header_line in (
@@ -5991,6 +6087,31 @@ def _build_parser():
     )
     runtime_manifest_parser.set_defaults(func=_run_runtime_manifest)
 
+    runtime_test_manifest_parser = subparsers.add_parser(
+        "runtime-test-manifest",
+        help="Build a project runtime test manifest from fixture metadata",
+    )
+    runtime_test_manifest_parser.add_argument(
+        "artifact_report", help="Project report or runtime artifact manifest JSON"
+    )
+    runtime_test_manifest_parser.add_argument(
+        "fixture_metadata", help="Curated runtime fixture metadata JSON or TOML"
+    )
+    runtime_test_manifest_parser.add_argument(
+        "--project-root",
+        help="Project root override for relative artifact paths",
+    )
+    runtime_test_manifest_parser.add_argument(
+        "--format",
+        choices=("json", "text", "sarif"),
+        default="json",
+        help="Runtime test manifest output format",
+    )
+    runtime_test_manifest_parser.add_argument(
+        "--output", "-o", help="Write runtime test manifest; use '-' for stdout"
+    )
+    runtime_test_manifest_parser.set_defaults(func=_run_runtime_test_manifest)
+
     runtime_binding_manifest_parser = subparsers.add_parser(
         "runtime-binding-manifest",
         help="Build a runtime binding manifest from a project report",
@@ -6300,6 +6421,7 @@ def _use_legacy_cli(argv):
         "inspect-report",
         "plan-runtime",
         "runtime-manifest",
+        "runtime-test-manifest",
         "runtime-binding-manifest",
         "package-runtime",
         "inspect-runtime-package",
