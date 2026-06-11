@@ -268,9 +268,8 @@ def test_wgsl_codegen_lowers_writeonly_uimage2d_to_storage_texture_store():
         "var dstTexture: texture_storage_2d<rgba32uint, write>;"
     ) in generated
     assert (
-        "textureStore(dstTexture, vec2<i32>(1, 2), "
-        "vec4<u32>(3, 4, 5, 6));"
-    ) in generated
+        "textureStore(dstTexture, vec2<i32>(1, 2), vec4<u32>(3, 4, 5, 6));" in generated
+    )
     assert "imageStore" not in generated
 
 

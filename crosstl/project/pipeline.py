@@ -10290,10 +10290,7 @@ def _artifact_diagnostic_context(artifact: Mapping[str, Any]) -> dict[str, Any]:
 def _generated_placeholder_diagnostic_message(
     target: str, artifact_path: str, label: str, action: str
 ) -> str:
-    return (
-        f"Generated {target} artifact contains {label}: {artifact_path}. "
-        f"{action}"
-    )
+    return f"Generated {target} artifact contains {label}: {artifact_path}. {action}"
 
 
 def _generated_placeholder_diagnostics_for_artifact(

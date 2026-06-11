@@ -6784,18 +6784,14 @@ def test_translate_project_glsl_alpha_stitch_storage_image_lowers_to_wgsl(
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("wgsl", "translated")}
 
-    wgsl = (repo / "out" / "wgsl" / "alpha_stitch.wgsl").read_text(
-        encoding="utf-8"
-    )
+    wgsl = (repo / "out" / "wgsl" / "alpha_stitch.wgsl").read_text(encoding="utf-8")
     assert "@group(0) @binding(0)\nvar srcRGB: texture_2d<u32>;" in wgsl
     assert "@group(0) @binding(1)\nvar srcAlpha: texture_2d<u32>;" in wgsl
     assert (
         "@group(0) @binding(2)\n"
         "var dstTexture: texture_storage_2d<rgba32uint, write>;"
     ) in wgsl
-    assert (
-        "textureLoad(srcRGB, vec2<i32>(global_invocation_id.xy), 0).xy" in wgsl
-    )
+    assert "textureLoad(srcRGB, vec2<i32>(global_invocation_id.xy), 0).xy" in wgsl
     assert (
         "textureStore(dstTexture, vec2<i32>(global_invocation_id.xy), "
         "vec4<u32>(rgbBlock.xy, alphaBlock.xy));"
@@ -7591,12 +7587,8 @@ def _write_placeholder_probe_report(tmp_path, monkeypatch):
     return repo, report_path, report.to_json()
 
 
-def test_translate_project_reports_generated_placeholder_markers(
-    tmp_path, monkeypatch
-):
-    _repo, report_path, payload = _write_placeholder_probe_report(
-        tmp_path, monkeypatch
-    )
+def test_translate_project_reports_generated_placeholder_markers(tmp_path, monkeypatch):
+    _repo, report_path, payload = _write_placeholder_probe_report(tmp_path, monkeypatch)
 
     placeholder_diagnostics = [
         diagnostic
@@ -7620,8 +7612,7 @@ def test_translate_project_reports_generated_placeholder_markers(
         "translated/rust/shaders/main.rs",
     }
     assert {
-        diagnostic["originalLocation"]["file"]
-        for diagnostic in placeholder_diagnostics
+        diagnostic["originalLocation"]["file"] for diagnostic in placeholder_diagnostics
     } == {"shaders/main.cgl"}
     assert all(
         diagnostic["severity"] == "warning"
@@ -7646,25 +7637,24 @@ def test_translate_project_reports_generated_placeholder_markers(
     assert payload["migration"]["placeholdersByTarget"] == {"mojo": 2, "rust": 1}
     assert payload["migration"]["placeholdersBySource"] == {"shaders/main.cgl": 3}
     assert validation["success"] is True
-    assert validation["diagnosticsByCode"][
-        project_pipeline.GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE
-    ] == 3
+    assert (
+        validation["diagnosticsByCode"][
+            project_pipeline.GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE
+        ]
+        == 3
+    )
     assert inspection["migration"]["placeholderCount"] == 3
     assert inspection["migration"]["placeholdersByTarget"] == {
         "mojo": 2,
         "rust": 1,
     }
-    assert inspection["migration"]["placeholdersBySource"] == {
-        "shaders/main.cgl": 3
-    }
+    assert inspection["migration"]["placeholdersBySource"] == {"shaders/main.cgl": 3}
 
 
 def test_validate_project_report_fails_placeholder_marker_without_diagnostic(
     tmp_path, monkeypatch
 ):
-    repo, _report_path, payload = _write_placeholder_probe_report(
-        tmp_path, monkeypatch
-    )
+    repo, _report_path, payload = _write_placeholder_probe_report(tmp_path, monkeypatch)
     _clear_report_diagnostics(payload)
     missing_report_path = repo / "translated" / "missing-placeholder-diagnostics.json"
     missing_report_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -7678,16 +7668,17 @@ def test_validate_project_report_fails_placeholder_marker_without_diagnostic(
 
     assert validation["success"] is False
     assert len(missing_diagnostics) == 3
-    assert validation["diagnosticsByCode"][
-        project_pipeline.PLACEHOLDER_DIAGNOSTIC_MISSING_CODE
-    ] == 3
+    assert (
+        validation["diagnosticsByCode"][
+            project_pipeline.PLACEHOLDER_DIAGNOSTIC_MISSING_CODE
+        ]
+        == 3
+    )
     assert {diagnostic["target"] for diagnostic in missing_diagnostics} == {
         "mojo",
         "rust",
     }
-    assert {
-        diagnostic["location"]["file"] for diagnostic in missing_diagnostics
-    } == {
+    assert {diagnostic["location"]["file"] for diagnostic in missing_diagnostics} == {
         "translated/mojo/shaders/main.mojo",
         "translated/rust/shaders/main.rs",
     }

@@ -2163,9 +2163,12 @@ class WGSLCodeGen:
 
     def require_writable_storage_texture_resource(self, resource, function_name):
         resource_type = self.expression_type(resource)
-        if self.STORAGE_TEXTURE_DIMENSION_MAP.get(
-            self.resource_type_name(resource_type) or ""
-        ) is None:
+        if (
+            self.STORAGE_TEXTURE_DIMENSION_MAP.get(
+                self.resource_type_name(resource_type) or ""
+            )
+            is None
+        ):
             raise ValueError(
                 f"WGSL target requires {function_name}() to use a storage image "
                 "resource"

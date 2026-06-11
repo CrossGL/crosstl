@@ -99,6 +99,7 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
     ("graphics/ComplexShader.cgl", "metal"),
     ("graphics/ComplexShader.cgl", "opengl"),
     ("graphics/ComplexShader.cgl", "webgl"),
+    ("graphics/ComplexShader.cgl", "wgsl"),
 )
 
 ADDITIONAL_FIXED_CASES = (("cross_platform/UniversalPBRShader.cgl", "slang"),)
@@ -147,13 +148,6 @@ KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
         "WGSL target does not support resource arrays of sampler2D; "
         "WebGPU/WGSL requires texture, sampler, image, and storage-buffer "
         "resources to be declared as individual module-scope bindings",
-    ),
-    (
-        "graphics/ComplexShader.cgl",
-        "wgsl",
-        ValueError,
-        "WGSL target does not support CrossGL resource type image2D yet; "
-        "split texture/sampler/storage bindings are required",
     ),
 )
 
