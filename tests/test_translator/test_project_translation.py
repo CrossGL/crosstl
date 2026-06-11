@@ -8628,6 +8628,55 @@ def test_translate_project_opengl_materializes_mlx_explicit_template_helpers(
     assert not re.search(r"\b(?:T|IdxT|Offset|AccT|Wtype)\b", output)
 
 
+def test_translate_project_opengl_uses_metal_default_template_helper_type(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "indexing.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename IndexT = int>
+            inline IndexT linear_index(uint3 tid) {
+                IndexT idx = IndexT(tid.z);
+                return idx;
+            }
+
+            [[kernel]] void write_index(
+                device uint* out [[buffer(0)]],
+                uint3 tid [[thread_position_in_grid]]) {
+                auto idx = linear_index(tid);
+                out[0] = uint(idx);
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    output = (repo / "translated" / "opengl" / "shaders" / "indexing.glsl").read_text(
+        encoding="utf-8"
+    )
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert "int linear_index_int(uvec3 tid)" in output
+    assert "linear_index_int(gl_GlobalInvocationID)" in output
+    assert not re.search(r"\bIndexT\b", output)
+
+
 def test_translate_project_opengl_reports_unresolved_metal_template_kernel(
     tmp_path,
 ):
@@ -8670,6 +8719,19 @@ def test_translate_project_opengl_reports_unresolved_metal_template_kernel(
     assert diagnostic["target"] == "opengl"
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert diagnostic["location"]["file"] == "shaders/raw_template.metal"
+    assert diagnostic["location"]["line"] == 4
+    assert diagnostic["location"]["column"] == 1
+    assert "Missing template binding: T." in diagnostic["message"]
+    assert (
+        "Source declaration: raw_template at shaders/raw_template.metal:4:1."
+        in diagnostic["message"]
+    )
+    assert (
+        "Target artifact: translated/opengl/shaders/raw_template.glsl."
+        in diagnostic["message"]
+    )
+    assert "Suggested action:" in diagnostic["message"]
 
 
 def test_translate_project_named_variants_apply_native_slang_preprocessor(
