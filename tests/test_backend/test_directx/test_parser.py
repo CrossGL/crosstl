@@ -24,6 +24,7 @@ from crosstl.backend.DirectX.DirectxAst import (
 )
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
+from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor
 
 VERTEX_PIXEL_HLSL = textwrap.dedent("""
     cbuffer CameraBuffer : register(b0) {
@@ -997,6 +998,18 @@ def test_preprocessor_ifdef_trailing_comment_keeps_enabled_branch():
     ast = HLSLParser(tokens).parse()
 
     assert [function.name for function in ast.functions] == ["WaveOr"]
+
+
+def test_preprocessor_preserves_unresolved_system_include():
+    code = """
+    #include <d3dcommon.h>
+    float4 main() : SV_Target { return float4(1.0, 0.0, 0.0, 1.0); }
+    """
+
+    processed = HLSLPreprocessor().preprocess(textwrap.dedent(code))
+
+    assert "#include <d3dcommon.h>" in processed
+    assert "float4 main()" in processed
 
 
 def test_parse_unsigned_long_long_integer_suffixes_from_directx_samples():
