@@ -65,6 +65,7 @@ class MetalTemplateSpecializationError(ValueError):
         unique_specialization_count: Optional[int] = None,
         requested_signature: Optional[str] = None,
         suggested_action: Optional[str] = None,
+        source_location: Optional[object] = None,
     ):
         super().__init__(message)
         self.limit = limit
@@ -72,6 +73,7 @@ class MetalTemplateSpecializationError(ValueError):
         self.unique_specialization_count = unique_specialization_count
         self.requested_signature = requested_signature
         self.suggested_action = suggested_action
+        self.source_location = source_location
 
 
 @dataclass
