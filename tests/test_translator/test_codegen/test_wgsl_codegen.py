@@ -183,6 +183,51 @@ def test_wgsl_codegen_preserves_explicit_io_attributes():
     )
 
 
+def test_wgsl_codegen_assigns_locations_to_entry_struct_members(tmp_path):
+    shader = """
+    shader WGSLStructLocations {
+        struct VertexInput {
+            vec3 position;
+            vec2 uv;
+        };
+        struct VertexOutput {
+            vec4 position @ gl_Position;
+            vec2 uv;
+            vec4 tint;
+        };
+        struct FragmentOutput {
+            vec4 color;
+        };
+        vertex {
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                output.position = vec4(input.position, 1.0);
+                output.uv = input.uv;
+                output.tint = vec4(input.uv, 0.0, 1.0);
+                return output;
+            }
+        }
+        fragment {
+            FragmentOutput main(VertexOutput input) {
+                FragmentOutput output;
+                output.color = input.tint;
+                return output;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@location(0) position: vec3<f32>," in generated
+    assert "@location(1) uv: vec2<f32>," in generated
+    assert "@builtin(position) position: vec4<f32>," in generated
+    assert "@location(0) uv: vec2<f32>," in generated
+    assert "@location(1) tint: vec4<f32>," in generated
+    assert "@location(0) color: vec4<f32>," in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_codegen_maps_derivative_intrinsics():
     shader = """
     shader WGSLDerivatives {
