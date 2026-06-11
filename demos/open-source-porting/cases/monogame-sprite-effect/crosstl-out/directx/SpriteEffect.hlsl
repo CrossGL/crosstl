@@ -22,4 +22,3 @@ float4 SpritePixelShader(VSOutput input): SV_TARGET0 {
 // Fragment Shader
 void PSMain() {
 }
-
