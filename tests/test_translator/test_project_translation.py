@@ -4548,6 +4548,132 @@ def test_scan_project_unknown_metal_directive_keeps_macro_native_warning(tmp_pat
     assert "unknown preprocessor directive" in diagnostic["message"]
 
 
+def test_scan_project_can_report_metal_mode_directive_as_unsupported(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.metal").write_text(
+        textwrap.dedent("""
+            #mode threaded tile_width=16
+            kernel void main0() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+
+            [project.source_options.metal]
+            mode_directives = "unsupported"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["metal"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    diagnostic = payload["diagnostics"][0]
+
+    assert validation["success"] is True
+    assert payload["project"]["sourceOptions"] == {
+        "metal": {"mode_directives": "unsupported"}
+    }
+    assert payload["nativeDirectives"] == [
+        {
+            "source": "shaders/kernel.metal",
+            "sourceBackend": "metal",
+            "line": 1,
+            "column": 1,
+            "kind": "mode",
+            "payload": "threaded tile_width=16",
+            "handlingStatus": "unsupported",
+        }
+    ]
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.scan.unsupported-native-directive": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "native.directive.mode": 1
+    }
+    assert diagnostic["code"] == "project.scan.unsupported-native-directive"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["native.directive.mode"]
+    assert diagnostic["location"]["file"] == "shaders/kernel.metal"
+    assert diagnostic["location"]["line"] == 1
+
+
+def test_scan_project_can_expand_metal_mode_directives_into_variants(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.metal").write_text(
+        textwrap.dedent("""
+            #mode threaded tile_width=16
+            #mode scalar
+            kernel void main0() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+
+            [project.source_options.metal]
+            mode_directives = "expand"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["metal"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    threaded_variant = project_pipeline._metal_mode_variant_name(
+        "threaded tile_width=16"
+    )
+    scalar_variant = project_pipeline._metal_mode_variant_name("scalar")
+
+    assert validation["success"] is True
+    assert payload["diagnostics"] == []
+    assert payload["project"]["sourceOptions"] == {
+        "metal": {"mode_directives": "expand"}
+    }
+    assert payload["project"]["variants"] == {
+        scalar_variant: {},
+        threaded_variant: {},
+    }
+    assert payload["project"]["variantCount"] == 2
+    assert payload["artifactMatrix"]["variantMode"] == "named"
+    assert payload["artifactMatrix"]["expectedArtifactCount"] == 2
+    assert payload["nativeDirectives"] == [
+        {
+            "source": "shaders/kernel.metal",
+            "sourceBackend": "metal",
+            "line": 1,
+            "column": 1,
+            "kind": "mode",
+            "payload": "threaded tile_width=16",
+            "handlingStatus": "expanded",
+            "variant": threaded_variant,
+        },
+        {
+            "source": "shaders/kernel.metal",
+            "sourceBackend": "metal",
+            "line": 2,
+            "column": 1,
+            "kind": "mode",
+            "payload": "scalar",
+            "handlingStatus": "expanded",
+            "variant": scalar_variant,
+        },
+    ]
+
+
 def test_scan_project_scopes_define_shadowing_to_selected_variants(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
@@ -11254,6 +11380,7 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
         "variant",
         "error",
         "stage",
+        "templateMaterialization",
     }
     assert set(artifact["sourceHash"]) == project_pipeline.REPORT_HASH_FIELDS
     assert isinstance(artifact["sourceSizeBytes"], int)
