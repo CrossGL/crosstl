@@ -3,9 +3,8 @@ name: MLX Project Porting
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   MLX_COMMIT: "968d264f2903d578e699c4452a4dbf48633921aa"
+  OPENGL_ARANGE_BINDING_ISSUE: "https://github.com/CrossGL/crosstl/issues/852"
   PLAIN_TEMPLATE_HELPER_SCANNING_ISSUE: "https://github.com/CrossGL/crosstl/issues/1146"
-  SPIRV_PROJECT_BINDING_STATE_ISSUE: "https://github.com/CrossGL/crosstl/issues/1155"
-  SPIRV_MULTI_ENTRY_TEMPLATE_BINDINGS_ISSUE: "https://github.com/CrossGL/crosstl/issues/1160"
 
 on:
   push:

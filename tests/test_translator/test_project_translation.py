@@ -799,13 +799,38 @@ def test_translate_project_mojo_gpu_vector_add_filters_host_runtime(tmp_path):
     payload = report.to_json()
     artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
 
-    assert payload["summary"]["translatedCount"] == 3
-    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE: 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY: 1
+    }
     assert payload["migration"]["actionsByKind"] == {"manual-runtime-integration": 1}
+
+    assert artifacts["opengl"]["status"] == "failed"
+    assert artifacts["opengl"]["error"]
+    assert "unresolved Mojo host/runtime constructs" in artifacts["opengl"]["error"]
+    assert not (repo / artifacts["opengl"]["path"]).exists()
+    assert artifacts["metal"]["status"] == "translated"
+    assert artifacts["vulkan"]["status"] == "translated"
+
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["target"] == "opengl"
+    assert (
+        diagnostic["code"]
+        == project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE
+    )
+    assert diagnostic["checkKind"] == "artifact"
+    assert diagnostic["missingCapabilities"] == [
+        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY
+    ]
 
     generated = {
         target: (repo / artifact["path"]).read_text(encoding="utf-8")
         for target, artifact in artifacts.items()
+        if artifact["status"] == "translated"
     }
     for source in generated.values():
         for host_token in (
@@ -819,10 +844,6 @@ def test_translate_project_mojo_gpu_vector_add_filters_host_runtime(tmp_path):
         ):
             assert host_token not in source
 
-    assert "layout(std430, binding = 0) buffer lhs_tensorBuffer" in generated["opengl"]
-    assert (
-        "out_tensor[tid] = (lhs_tensor[tid] + rhs_tensor[tid]);" in generated["opengl"]
-    )
     assert "kernel void vector_addition" in generated["metal"]
     assert "out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid];" in generated["metal"]
     assert "OpEntryPoint GLCompute" in generated["vulkan"]
@@ -7034,6 +7055,62 @@ def test_translate_project_lowers_hlsl_struct_main_vsh_psh_pair_to_native_entrie
     assert_spirv_asm_validates_if_available(fragment_vulkan, tmp_path)
 
 
+def test_translate_project_hlsl_groupshared_scalar_lowers_to_metal_threadgroup(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "SplatGroupSharedScalar.hlsl").write_text(
+        textwrap.dedent("""
+            groupshared int a;
+            [numthreads(64, 1, 1)]
+            void main() {
+              a = 123;
+              int4 x = (a).xxxx;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["."]
+            include = ["SplatGroupSharedScalar.hlsl"]
+            targets = ["cgl", "metal", "vulkan"]
+            output_dir = "crosstl-out"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        load_project_config(repo),
+        format_output=False,
+        validate=True,
+    )
+    payload = report.to_json()
+    artifacts_by_target = {
+        artifact["target"]: artifact for artifact in payload["artifacts"]
+    }
+    metal = (repo / artifacts_by_target["metal"]["path"]).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert artifacts_by_target["metal"]["status"] == "translated"
+    assert "constant int a = int(0)" not in metal
+    assert "unsupported Metal program-scope groupshared" not in metal
+    assert "threadgroup int a;" in metal
+    assert metal.index("threadgroup int a;") > metal.index("kernel void kernel_main")
+    assert metal.index("threadgroup int a;") < metal.index("a = 123;")
+    assert "a = 123;" in metal
+    assert "int4 x = int4(a);" in metal
+    assert not any(
+        diagnostic["code"] == project_pipeline.GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE
+        and diagnostic.get("target") == "metal"
+        for diagnostic in payload["diagnostics"]
+    )
+    assert_metal_validates_if_available(metal, tmp_path)
+
+
 def test_translate_project_wgsl_hlsl_texture_sampler_register_pair(
     tmp_path,
 ):
@@ -7554,36 +7631,35 @@ def test_translate_project_generates_metal_and_spirv_for_modular_mojo_vector_add
         artifact["target"]: artifact for artifact in payload["artifacts"]
     }
 
-    assert payload["summary"]["translatedCount"] == 2
-    assert payload["summary"]["failedCount"] == 0
-    assert validation["success"] is True
-    expected_toolchain_warning_targets = {"metal", "vulkan"}
-    unexpected_validation_diagnostics = [
-        diagnostic
-        for diagnostic in validation["diagnostics"]
-        if not (
-            diagnostic.get("code") == "project.validate.toolchain-unavailable"
-            and diagnostic.get("severity") == "warning"
-            and diagnostic.get("target") in expected_toolchain_warning_targets
-            and diagnostic.get("missingCapabilities") == ["toolchain.validation"]
-        )
-    ]
-    assert unexpected_validation_diagnostics == []
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 2
+    assert payload["summary"]["diagnosticsByCode"] == {
+        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE: 2
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY: 2
+    }
+    assert validation["success"] is False
+    assert validation["diagnosticsByCode"]["project.validate.failed-artifact"] == 2
     assert set(artifacts_by_target) == {"metal", "vulkan"}
-
-    metal_path = repo / artifacts_by_target["metal"]["path"]
-    spirv_path = repo / artifacts_by_target["vulkan"]["path"]
-    metal = metal_path.read_text(encoding="utf-8")
-    spirv = spirv_path.read_text(encoding="utf-8")
-
-    assert artifacts_by_target["metal"]["status"] == "translated"
-    assert artifacts_by_target["vulkan"]["status"] == "translated"
-    assert metal_path.exists()
-    assert spirv_path.exists()
-    assert "TileTensor<float_dtype, type_of(layout), MutAnyOrigin>" in metal
-    assert "; SPIR-V" in spirv
-    assert "IdentifierNode(" not in metal
-    assert "IdentifierNode(" not in spirv
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("metal", "failed"),
+        ("vulkan", "failed"),
+    }
+    for artifact in artifacts_by_target.values():
+        assert "unresolved Mojo host/runtime constructs" in artifact["error"]
+        assert not (repo / artifact["path"]).exists()
+    for diagnostic in payload["diagnostics"]:
+        assert (
+            diagnostic["code"]
+            == project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE
+        )
+        assert diagnostic["checkKind"] == "artifact"
+        assert diagnostic["missingCapabilities"] == [
+            project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY
+        ]
 
 
 def test_translate_project_specializes_generic_helper_for_spirv(tmp_path):
@@ -10307,6 +10383,122 @@ def test_translate_project_opengl_materializes_mlx_pointer_and_value_bindings(
     assert not re.search(r"\b(?:T|U)\b", output)
 
 
+def test_translate_project_opengl_validates_implicit_metal_matmul_resources(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "metal_performance_testing"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "ShaderParams.h").write_text(
+        textwrap.dedent("""
+            #ifndef _SHADER_PARAMS_H
+            #define _SHADER_PARAMS_H
+
+            typedef struct
+            {
+                unsigned int row_dim_x;
+                unsigned int col_dim_x;
+                unsigned int inner_dim;
+            } MatMulParams;
+
+            #endif
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "mat_mul_simple1.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            #include "ShaderParams.h"
+            using namespace metal;
+
+            kernel void mat_mul_simple1(device const float* A,
+                                        device const float* B,
+                                        device float* X,
+                                        constant MatMulParams& params,
+                                        uint2 id [[ thread_position_in_grid ]])
+            {
+                const uint row_dim_x = params.row_dim_x;
+                const uint col_dim_x = params.col_dim_x;
+                const uint inner_dim = params.inner_dim;
+
+                if ((id.x < col_dim_x) && (id.y < row_dim_x)) {
+                    const uint index = id.y*col_dim_x + id.x;
+                    float sum = 0;
+                    for (uint k = 0; k < inner_dim; ++k) {
+                        const uint index_A = id.y*inner_dim + k;
+                        const uint index_B = k*col_dim_x + id.x;
+                        sum += A[index_A] * B[index_B];
+                    }
+                    X[index] = sum;
+                }
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["metal_performance_testing"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    validator_inputs = []
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/usr/bin/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
+
+    def run_validator(command, **kwargs):
+        assert command == ["glslangValidator", "--stdin", "-S", "comp"]
+        shader_source = kwargs["input"]
+        assert "layout(std430, binding = 0) readonly buffer ABuffer" in shader_source
+        assert "layout(std430, binding = 1) readonly buffer BBuffer" in shader_source
+        assert "layout(std430, binding = 2) buffer XBuffer" in shader_source
+        assert "layout(std140, binding = 3) uniform MatMulParams" in shader_source
+        assert "params.row_dim_x" in shader_source
+        assert "A[index_A]" in shader_source
+        assert "B[index_B]" in shader_source
+        assert "X[index] = sum;" in shader_source
+        validator_inputs.append(shader_source)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_validator)
+
+    report = translate_project(
+        load_project_config(repo),
+        validate=True,
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+    output = (
+        repo
+        / "translated"
+        / "opengl"
+        / "metal_performance_testing"
+        / "mat_mul_simple1.glsl"
+    ).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["validation"]["toolchainRuns"][0]["status"] == "ok"
+    assert payload["validation"]["toolchainRuns"][0]["sourceBackend"] == "metal"
+    assert payload["validation"]["toolchainRuns"][0]["command"] == [
+        "glslangValidator",
+        "--stdin",
+        "-S",
+        "comp",
+    ]
+    assert len(validator_inputs) == 1
+    assert output == validator_inputs[0]
+
+
 def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
     tmp_path,
 ):
@@ -10361,22 +10553,18 @@ def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
     report = translate_project(load_project_config(repo))
     payload = report.to_json()
 
-    assert payload["summary"]["translatedCount"] == 2
-    assert payload["summary"]["failedCount"] == 1
-    assert payload["summary"]["diagnosticsByCode"] == {"project.translate.failed": 1}
-    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"].get("diagnosticsByCode", {}) == {}
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {
         ("directx", "translated"),
         ("opengl", "translated"),
-        ("vulkan", "failed"),
+        ("vulkan", "translated"),
     }
-    diagnostic = payload["diagnostics"][0]
-    assert diagnostic["target"] == "vulkan"
-    assert diagnostic["code"] == "project.translate.failed"
-    assert diagnostic["missingCapabilities"] == ["batch.translation"]
-    assert "Duplicate SPIR-V resource binding set 0 binding 0" in diagnostic["message"]
+    assert payload["diagnostics"] == []
 
     for artifact in payload["artifacts"]:
         materialization = artifact["templateMaterialization"]
@@ -10427,17 +10615,12 @@ def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
         if artifact["status"] == "translated":
             output = (repo / artifact["path"]).read_text(encoding="utf-8")
             assert not re.search(r"\b(?:T|IdxT|N)\b", output)
-        else:
-            assert artifact["target"] == "vulkan"
-            assert "Duplicate SPIR-V resource binding" in artifact["error"]
-            assert not (repo / artifact["path"]).exists()
 
     report_path = repo / "translated" / "report.json"
     report.write_json(report_path)
     validation = validate_project_report(report_path)
-    assert validation["success"] is False
-    assert validation["diagnosticsByCode"]["project.validate.failed-artifact"] == 1
-    assert validation["artifactStatusByTarget"]["vulkan"]["failedCount"] == 1
+    assert validation["success"] is True
+    assert validation["artifactStatusByTarget"]["vulkan"]["failedCount"] == 0
 
 
 def test_translate_project_metal_rope_missing_variant_data_reports_template_diagnostic(
@@ -26487,6 +26670,61 @@ def test_translate_project_resolves_mlx_sort_vulkan_storage_buffer_overload(
     assert payload["diagnostics"] == []
 
 
+def test_translate_project_vulkan_resets_metal_entry_resource_bindings_per_artifact(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for prefix in ("alpha", "beta"):
+        (repo / f"{prefix}.metal").write_text(
+            textwrap.dedent(f"""
+                #include <metal_stdlib>
+                using namespace metal;
+
+                kernel void {prefix}_copy(
+                    device uint* values [[buffer(0)]],
+                    constant uint& limit [[buffer(1)]],
+                    uint gid [[thread_position_in_grid]]
+                ) {{
+                    if (gid < limit) {{
+                        values[gid] = values[gid];
+                    }}
+                }}
+
+                kernel void {prefix}_fill(
+                    device uint* values [[buffer(0)]],
+                    constant uint& limit [[buffer(1)]],
+                    uint gid [[thread_position_in_grid]]
+                ) {{
+                    if (gid < limit) {{
+                        values[gid] = 1u;
+                    }}
+                }}
+            """).strip(),
+            encoding="utf-8",
+        )
+
+    payload = translate_project(repo, targets=["vulkan"], output_dir="out").to_json()
+
+    assert payload["summary"]["artifactCount"] == 2
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+    assert payload["diagnosticCounts"]["error"] == 0
+    assert payload["diagnostics"] == []
+
+    for artifact in payload["artifacts"]:
+        assert artifact["status"] == "translated"
+        generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+        source_stem = Path(artifact["source"]).stem
+        assert f'"{source_stem}_copy"' in generated
+        assert f'"{source_stem}_fill"' in generated
+        assert "DescriptorSet 0" in generated
+        assert "Binding 0" in generated
+        assert "Binding 1" in generated
+
+
 def test_translate_project_resolves_mlx_metal_vulkan_storage_buffer_template_overloads(
     tmp_path,
 ):
@@ -36990,8 +37228,8 @@ def test_translate_project_metal_matmul_unbound_device_buffers_lower_to_directx_
 
     assert "StructuredBuffer<float> A : register(t0);" in output
     assert "StructuredBuffer<float> B : register(t1);" in output
-    assert "RWStructuredBuffer<float> X : register(u0);" in output
-    assert "ConstantBuffer<MatMulParams> params : register(b0);" in output
+    assert "RWStructuredBuffer<float> X : register(u2);" in output
+    assert "ConstantBuffer<MatMulParams> params : register(b3);" in output
     assert "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)" in output
     assert "uint2 id = id_dispatchThreadID.xy;" in output
     assert "A.Load(index_A)" in output
@@ -38592,6 +38830,87 @@ def test_translate_project_metal_reduction_materializes_shared_helper_templates(
         assert not re.search(r"\\b(?:T|U|Op|N_READS)\\b", output)
 
 
+def test_translate_project_metal_multi_entry_instantiations_scope_vulkan_bindings(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "rope.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, typename IdxT, int N = 4>
+            T rope_impl(device const T* src, IdxT index) {
+                return src[index] + T(N);
+            }
+
+            template <typename T, typename IdxT, int N = 4>
+            [[kernel]] void rope(
+                device const T* src [[buffer(0)]],
+                device T* out [[buffer(1)]]
+            ) {
+                out[0] = rope_impl<T, IdxT, N>(src, IdxT(0));
+            }
+
+            template <typename T, typename IdxT, int N = 4>
+            [[kernel]] void rope_freqs(
+                device const T* src [[buffer(0)]],
+                device T* out [[buffer(1)]]
+            ) {
+                out[0] = rope_impl<T, IdxT, N>(src, IdxT(0)) + T(1);
+            }
+
+            instantiate_kernel("rope_float32", rope, float, uint)
+            instantiate_kernel("rope_freqs_float32", rope_freqs, float, uint)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl", "directx", "vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+
+    for artifact in payload["artifacts"]:
+        materialization = artifact["templateMaterialization"]
+        assert materialization["status"] == "materialized"
+        assert materialization["unsupported"] == []
+        assert {
+            specialization["materializedName"]
+            for specialization in materialization["specializations"]
+        } == {
+            "rope_float32",
+            "rope_freqs_float32",
+            "rope_impl_float_uint_4",
+        }
+
+    vulkan_artifact = next(
+        artifact for artifact in payload["artifacts"] if artifact["target"] == "vulkan"
+    )
+    output = (repo / vulkan_artifact["path"]).read_text(encoding="utf-8")
+    assert sorted(re.findall(r'OpEntryPoint GLCompute %\d+ "([^"]+)"', output)) == [
+        "rope_float32",
+        "rope_freqs_float32",
+    ]
+    assert len(re.findall(r"OpDecorate %\d+ Binding 0\b", output)) == 2
+    assert len(re.findall(r"OpDecorate %\d+ Binding 1\b", output)) == 2
+    assert "Duplicate SPIR-V resource binding" not in output
+    assert_spirv_asm_validates_if_available(output, tmp_path)
+
+
 def test_translate_project_skips_standalone_metal_template_utility_artifacts(
     tmp_path,
 ):
@@ -39720,7 +40039,7 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
         assert diagnostic["sourceBackend"] == "mojo"
         assert diagnostic["location"]["file"].startswith(f"out/{target}/")
         assert diagnostic["originalLocation"]["file"] == "vector_addition.mojo"
-        assert diagnostic["checkKind"] == "artifact.validation"
+        assert diagnostic["checkKind"] == "artifact"
         assert diagnostic["missingCapabilities"] == [
             project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY
         ]

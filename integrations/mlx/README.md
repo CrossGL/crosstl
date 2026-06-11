@@ -12,9 +12,11 @@ The current harness verifies:
 - discovery of the MLX Metal kernel project surface under
   `mlx/backend/metal/kernels`;
 - DirectX and Vulkan artifact generation for the current reduced frontier:
-  `arange.metal`, `binary_two.metal`, `random.metal`, and `ternary.metal`;
+  `arange.metal`, `binary_two.metal`, `fence.metal`, `random.metal`, and
+  `ternary.metal`;
 - Vulkan assembly validation when SPIR-V tools are available;
-- OpenGL artifact generation for `arange.metal`.
+- a tracked OpenGL `arange.metal` smoke check that currently records
+  CrossGL/crosstl#852 as an expected backend gap.
 
 A previous full-corpus scout against the same pinned MLX revision translated 47
 of 120 target artifacts across DirectX, OpenGL, and Vulkan: DirectX translated
@@ -61,19 +63,15 @@ The harness writes reports, generated artifacts, and command logs under
 
 ## Current Translator Gaps
 
+- CrossGL/crosstl#852 covers the current OpenGL smoke blocker:
+  `mlx/backend/metal/kernels/arange.metal` fails OpenGL project translation
+  because materialized entry variants reuse uniform-buffer binding 0 for
+  distinct generated argument blocks.
 - CrossGL/crosstl#1146 covers the current full-corpus scout blocker: bounded
   plain Metal template helper call-site scanning for large helper graphs. The
   current reproducer is `mlx/backend/metal/kernels/fp_quantized_nax.metal`,
   which did not complete a single-source DirectX/OpenGL/Vulkan project
   translation within a 60-second isolation timeout.
-- CrossGL/crosstl#1155 covers a project-batch SPIR-V binding isolation issue:
-  `fence.metal` translates in single-source DirectX/Vulkan isolation, but fails
-  in the reduced multi-source frontier batch with duplicate SPIR-V resource
-  binding `set 0 binding 0`.
-- CrossGL/crosstl#1160 covers a single-source, multi-entry SPIR-V binding
-  collision: a Metal source with multiple materialized template entry kernels
-  can translate for DirectX/OpenGL while the Vulkan artifact fails with duplicate
-  SPIR-V resource binding `set 0 binding 0`.
 
 These gaps are translator work. Host runtime integration gaps should be handled
 in MLX-specific integration code or downstream runtime adapters, not hidden as
@@ -106,4 +104,5 @@ closed issue set as active missing capabilities. CrossGL/crosstl#1106,
 CrossGL/crosstl#1107, CrossGL/crosstl#1110, CrossGL/crosstl#1111,
 CrossGL/crosstl#1122, CrossGL/crosstl#1124, CrossGL/crosstl#1126, and
 CrossGL/crosstl#1127 are also closed and are no longer tracked as active MLX
-blockers.
+blockers. CrossGL/crosstl#1155 and CrossGL/crosstl#1160 are covered by the
+current frontier after the SPIR-V project-artifact and multi-entry binding fixes.

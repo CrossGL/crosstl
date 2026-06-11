@@ -1228,10 +1228,11 @@ def test_hlsl_compute_scalar_splat_swizzle_lowers_for_vulkan_and_metal(tmp_path)
         vulkan,
     )
     assert "Could not find member xxxx" not in vulkan
+    assert "threadgroup int a;" in metal
     assert "int4 x = int4(a);" in metal
     assert "a.xxxx" not in metal
-    assert "unsupported Metal program-scope groupshared global" in metal
-    assert "unsupported Metal program-scope groupshared store" in metal
+    assert "unsupported Metal program-scope groupshared global" not in metal
+    assert "unsupported Metal program-scope groupshared store" not in metal
 
 
 def test_hlsl_legacy_sampler_register_lowers_to_opengl_binding(tmp_path):

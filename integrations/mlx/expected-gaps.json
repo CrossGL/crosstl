@@ -4,12 +4,18 @@
   "commit": "968d264f2903d578e699c4452a4dbf48633921aa",
   "frontier_status": {
     "status": "passing",
-    "sources": 4,
+    "sources": 5,
     "targets": [
       "directx",
       "vulkan"
     ],
-    "artifacts": 8
+    "artifacts": 10
+  },
+  "opengl_smoke_status": {
+    "status": "blocked",
+    "source": "mlx/backend/metal/kernels/arange.metal",
+    "target": "opengl",
+    "blocked_by": "https://github.com/CrossGL/crosstl/issues/852"
   },
   "full_corpus_scout": {
     "status": "blocked",
@@ -33,22 +39,16 @@
   },
   "tracked_issues": [
     {
+      "issue": "https://github.com/CrossGL/crosstl/issues/852",
+      "scope": "opengl-materialized-entry-resource-bindings",
+      "status": "open",
+      "summary": "Disambiguate OpenGL resource bindings for materialized multi-entry Metal kernels."
+    },
+    {
       "issue": "https://github.com/CrossGL/crosstl/issues/1146",
       "scope": "metal-plain-template-helper-call-site-scan-budget",
       "status": "open",
       "summary": "Bound plain Metal template helper call-site scanning for large helper graphs."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1155",
-      "scope": "spirv-project-artifact-binding-state",
-      "status": "open",
-      "summary": "Reset SPIR-V resource binding allocation between project artifacts."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1160",
-      "scope": "spirv-multi-entry-template-artifact-bindings",
-      "status": "open",
-      "summary": "Isolate SPIR-V bindings for multi-entry Metal template artifacts."
     }
   ],
   "resolved_issues": [
@@ -99,6 +99,8 @@
     "https://github.com/CrossGL/crosstl/issues/1122",
     "https://github.com/CrossGL/crosstl/issues/1124",
     "https://github.com/CrossGL/crosstl/issues/1126",
-    "https://github.com/CrossGL/crosstl/issues/1127"
+    "https://github.com/CrossGL/crosstl/issues/1127",
+    "https://github.com/CrossGL/crosstl/issues/1155",
+    "https://github.com/CrossGL/crosstl/issues/1160"
   ]
 }

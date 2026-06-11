@@ -13491,7 +13491,7 @@ def _mojo_unresolved_target_construct_diagnostics(
             ),
             original_location=SourceLocation(file=str(artifact.get("source", ""))),
             **_artifact_diagnostic_context(artifact),
-            check_kind="artifact.validation",
+            check_kind="artifact",
             missing_capabilities=[MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY],
         )
     ]
