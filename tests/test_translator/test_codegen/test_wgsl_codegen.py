@@ -1562,6 +1562,42 @@ def test_translate_crossgl_to_wgsl(tmp_path):
     assert "fn fragment_main" in generated
 
 
+def test_translate_metal_half_vector_aliases_to_wgsl_widens_to_f32(tmp_path):
+    source_path = tmp_path / "half_aliases.metal"
+    source_path.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        half3 buildViewDir(half2 pair, half z) {
+            half3 dir = half3(pair, z);
+            return half3(dir.x, dir.yz);
+        }
+
+        kernel void half_alias_kernel(uint3 gid [[thread_position_in_grid]]) {
+            half2 pair = half2(1.0h, 2.0h);
+            half3 viewDir = buildViewDir(pair, 3.0h);
+            half x = viewDir.x;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="webgpu")
+
+    assert "fn buildViewDir(pair: vec2<f32>, z: f32) -> vec3<f32>" in generated
+    assert "var dir: vec3<f32> = vec3<f32>(pair, z);" in generated
+    assert "return vec3<f32>(dir.x, dir.yz);" in generated
+    assert (
+        "fn compute_main(@builtin(global_invocation_id) gid: vec3<u32>)" in generated
+    )
+    assert "var pair: vec2<f32> = vec2<f32>(1.0, 2.0);" in generated
+    assert "var viewDir: vec3<f32> = buildViewDir(pair, 3.0);" in generated
+    assert "var x: f32 = viewDir.x;" in generated
+    assert "f16vec" not in generated
+    assert "float16" not in generated
+
+
 @pytest.mark.parametrize(
     "stage",
     (
