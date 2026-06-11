@@ -605,8 +605,7 @@ def test_translate_project_glslang_spec_constant_vertex_to_directx(tmp_path):
     assert payload["summary"]["translatedCount"] == 1
     assert "static const int gl_MaxImageUnits = 8;" in generated
     assert (
-        "void foo(float4 p[arraySize], VertexInput input, "
-        "inout VertexOutput output)"
+        "void foo(float4 p[arraySize], VertexInput input, " "inout VertexOutput output)"
     ) in generated
     assert "foo(input.ucol, input, output);" in generated
 
@@ -749,12 +748,12 @@ def test_translate_project_mojo_gpu_vector_add_filters_host_runtime(tmp_path):
             assert host_token not in source
 
     assert "layout(std430, binding = 0) buffer lhs_tensorBuffer" in generated["opengl"]
-    assert "out_tensor[tid] = (lhs_tensor[tid] + rhs_tensor[tid]);" in generated[
-        "opengl"
-    ]
+    assert (
+        "out_tensor[tid] = (lhs_tensor[tid] + rhs_tensor[tid]);" in generated["opengl"]
+    )
     assert "kernel void vector_addition" in generated["metal"]
     assert "out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid];" in generated["metal"]
-    assert 'OpEntryPoint GLCompute' in generated["vulkan"]
+    assert "OpEntryPoint GLCompute" in generated["vulkan"]
     assert '"vector_addition"' in generated["vulkan"]
 
 
@@ -4892,9 +4891,7 @@ def test_scan_project_can_report_metal_mode_directive_as_unsupported(tmp_path):
     assert payload["summary"]["diagnosticsByCode"] == {
         "project.scan.unsupported-native-directive": 1
     }
-    assert payload["summary"]["missingCapabilityCounts"] == {
-        "native.directive.mode": 1
-    }
+    assert payload["summary"]["missingCapabilityCounts"] == {"native.directive.mode": 1}
     assert diagnostic["code"] == "project.scan.unsupported-native-directive"
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["missingCapabilities"] == ["native.directive.mode"]
@@ -6810,11 +6807,9 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
     assert not [
         diagnostic
         for diagnostic in payload["diagnostics"]
-        if diagnostic["code"]
-        == project_pipeline.GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE
+        if diagnostic["code"] == project_pipeline.GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE
         and diagnostic.get("target") == "mojo"
-        and diagnostic["location"]["file"]
-        == "translated/mojo/gpu/hello_texture.mojo"
+        and diagnostic["location"]["file"] == "translated/mojo/gpu/hello_texture.mojo"
     ]
 
     assert_metal_validates_if_available(metal, tmp_path)
@@ -7033,18 +7028,14 @@ def test_translate_project_glsl_alpha_stitch_storage_image_lowers_to_wgsl(
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("wgsl", "translated")}
 
-    wgsl = (repo / "out" / "wgsl" / "alpha_stitch.wgsl").read_text(
-        encoding="utf-8"
-    )
+    wgsl = (repo / "out" / "wgsl" / "alpha_stitch.wgsl").read_text(encoding="utf-8")
     assert "@group(0) @binding(0)\nvar srcRGB: texture_2d<u32>;" in wgsl
     assert "@group(0) @binding(1)\nvar srcAlpha: texture_2d<u32>;" in wgsl
     assert (
         "@group(0) @binding(2)\n"
         "var dstTexture: texture_storage_2d<rgba32uint, write>;"
     ) in wgsl
-    assert (
-        "textureLoad(srcRGB, vec2<i32>(global_invocation_id.xy), 0).xy" in wgsl
-    )
+    assert "textureLoad(srcRGB, vec2<i32>(global_invocation_id.xy), 0).xy" in wgsl
     assert (
         "textureStore(dstTexture, vec2<i32>(global_invocation_id.xy), "
         "vec4<u32>(rgbBlock.xy, alphaBlock.xy));"
@@ -7188,13 +7179,9 @@ def test_translate_project_glsl_usampler_texel_fetch_lowers_to_cuda_hip_slang(
         ("slang", "translated"),
     }
 
-    cuda = (repo / "out" / "cuda" / "alpha_stitch.cu").read_text(
-        encoding="utf-8"
-    )
+    cuda = (repo / "out" / "cuda" / "alpha_stitch.cu").read_text(encoding="utf-8")
     hip = (repo / "out" / "hip" / "alpha_stitch.hip").read_text(encoding="utf-8")
-    slang = (repo / "out" / "slang" / "alpha_stitch.slang").read_text(
-        encoding="utf-8"
-    )
+    slang = (repo / "out" / "slang" / "alpha_stitch.slang").read_text(encoding="utf-8")
 
     assert "cudaTextureObject_t srcRGB;" in cuda
     assert "cudaTextureObject_t srcAlpha;" in cuda
@@ -7734,9 +7721,7 @@ def test_translate_project_glsl_fragment_output_named_fragment_escapes_metal_key
     assert payload["summary"]["translatedCount"] == 2
     assert payload["summary"]["failedCount"] == 0
     assert fragment_artifact["sourceRemap"]["mappingCount"] >= 1
-    assert (
-        re.search(r"^\s*float4\s+fragment\b", fragment_metal, re.MULTILINE) is None
-    )
+    assert re.search(r"^\s*float4\s+fragment\b", fragment_metal, re.MULTILINE) is None
     assert re.search(r"^\s*fragment\s*=", fragment_metal, re.MULTILINE) is None
     assert re.search(r"\breturn\s+fragment\s*;", fragment_metal) is None
     assert "float4 fragment_;" in fragment_metal
@@ -8043,12 +8028,8 @@ def _write_placeholder_probe_report(tmp_path, monkeypatch):
     return repo, report_path, report.to_json()
 
 
-def test_translate_project_reports_generated_placeholder_markers(
-    tmp_path, monkeypatch
-):
-    _repo, report_path, payload = _write_placeholder_probe_report(
-        tmp_path, monkeypatch
-    )
+def test_translate_project_reports_generated_placeholder_markers(tmp_path, monkeypatch):
+    _repo, report_path, payload = _write_placeholder_probe_report(tmp_path, monkeypatch)
 
     placeholder_diagnostics = [
         diagnostic
@@ -8072,8 +8053,7 @@ def test_translate_project_reports_generated_placeholder_markers(
         "translated/rust/shaders/main.rs",
     }
     assert {
-        diagnostic["originalLocation"]["file"]
-        for diagnostic in placeholder_diagnostics
+        diagnostic["originalLocation"]["file"] for diagnostic in placeholder_diagnostics
     } == {"shaders/main.cgl"}
     assert all(
         diagnostic["severity"] == "warning"
@@ -8109,25 +8089,24 @@ def test_translate_project_reports_generated_placeholder_markers(
     assert payload["migration"]["placeholdersByTarget"] == {"mojo": 2, "rust": 1}
     assert payload["migration"]["placeholdersBySource"] == {"shaders/main.cgl": 3}
     assert validation["success"] is True
-    assert validation["diagnosticsByCode"][
-        project_pipeline.GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE
-    ] == 3
+    assert (
+        validation["diagnosticsByCode"][
+            project_pipeline.GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE
+        ]
+        == 3
+    )
     assert inspection["migration"]["placeholderCount"] == 3
     assert inspection["migration"]["placeholdersByTarget"] == {
         "mojo": 2,
         "rust": 1,
     }
-    assert inspection["migration"]["placeholdersBySource"] == {
-        "shaders/main.cgl": 3
-    }
+    assert inspection["migration"]["placeholdersBySource"] == {"shaders/main.cgl": 3}
 
 
 def test_validate_project_report_fails_placeholder_marker_without_diagnostic(
     tmp_path, monkeypatch
 ):
-    repo, _report_path, payload = _write_placeholder_probe_report(
-        tmp_path, monkeypatch
-    )
+    repo, _report_path, payload = _write_placeholder_probe_report(tmp_path, monkeypatch)
     _clear_report_diagnostics(payload)
     missing_report_path = repo / "translated" / "missing-placeholder-diagnostics.json"
     missing_report_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -8141,16 +8120,17 @@ def test_validate_project_report_fails_placeholder_marker_without_diagnostic(
 
     assert validation["success"] is False
     assert len(missing_diagnostics) == 3
-    assert validation["diagnosticsByCode"][
-        project_pipeline.PLACEHOLDER_DIAGNOSTIC_MISSING_CODE
-    ] == 3
+    assert (
+        validation["diagnosticsByCode"][
+            project_pipeline.PLACEHOLDER_DIAGNOSTIC_MISSING_CODE
+        ]
+        == 3
+    )
     assert {diagnostic["target"] for diagnostic in missing_diagnostics} == {
         "mojo",
         "rust",
     }
-    assert {
-        diagnostic["location"]["file"] for diagnostic in missing_diagnostics
-    } == {
+    assert {diagnostic["location"]["file"] for diagnostic in missing_diagnostics} == {
         "translated/mojo/shaders/main.mojo",
         "translated/rust/shaders/main.rs",
     }
@@ -8204,13 +8184,11 @@ def test_translate_project_rust_sampled_texture_uses_entry_resource_parameters(
     )
     assert (
         '#[cfg_attr(feature = "crossgl_gpu", '
-        "spirv(descriptor_set = 1, binding = 2))] colorMap: Texture2D<f32>"
-        in rust_code
+        "spirv(descriptor_set = 1, binding = 2))] colorMap: Texture2D<f32>" in rust_code
     )
     assert (
         '#[cfg_attr(feature = "crossgl_gpu", '
-        "spirv(descriptor_set = 1, binding = 3))] linearSampler: Sampler"
-        in rust_code
+        "spirv(descriptor_set = 1, binding = 3))] linearSampler: Sampler" in rust_code
     )
     assert "return sample_sampler(colorMap, linearSampler, uv);" in rust_code
     assert "CrossGL Rust limitation: resource colorMap" not in rust_code
@@ -10277,7 +10255,9 @@ def test_translate_project_metal_rope_missing_variant_data_reports_template_diag
         "template.specialization": 1
     }
     diagnostic = payload["diagnostics"][0]
-    assert diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    assert (
+        diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    )
     assert diagnostic["target"] == "opengl"
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
@@ -10402,15 +10382,12 @@ def test_translate_project_bounds_mlx_like_plain_helper_scan_across_targets(tmp_
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
     shader_dir.mkdir(parents=True)
-    excluded_structs = "\n\n".join(
-        textwrap.dedent(f"""
+    excluded_structs = "\n\n".join(textwrap.dedent(f"""
             template <typename T>
             struct ExcludedSpan{index} {{
                 T value;
             }};
-            """).strip()
-        for index in range(400)
-    )
+            """).strip() for index in range(400))
     (shader_dir / "fp_quantized_nax_like.metal").write_text(
         textwrap.dedent(f"""
             #include <metal_stdlib>
@@ -10436,8 +10413,7 @@ def test_translate_project_bounds_mlx_like_plain_helper_scan_across_targets(tmp_
             }}
 
             instantiate_fp_quantized_nax(float32, float)
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -10446,8 +10422,7 @@ def test_translate_project_bounds_mlx_like_plain_helper_scan_across_targets(tmp_
             source_roots = ["shaders"]
             targets = ["directx", "opengl", "vulkan"]
             output_dir = "translated"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -10484,25 +10459,20 @@ def test_translate_project_bounds_mlx_like_large_plain_helper_graph(tmp_path):
             if index + 1 < helper_count
             else "return value + T(1);"
         )
-        helper_sources.append(
-            textwrap.dedent(f"""
+        helper_sources.append(textwrap.dedent(f"""
                 template <typename T>
                 T graph_helper_{index}(T value) {{
                     {next_call}
                 }}
-                """).strip()
-        )
+                """).strip())
     helper_graph = "\n\n".join(helper_sources)
-    excluded_structs = "\n\n".join(
-        textwrap.dedent(f"""
+    excluded_structs = "\n\n".join(textwrap.dedent(f"""
             template <typename T>
             struct QuantizedBlock{index} {{
                 T scales[8];
                 T values[8];
             }};
-            """).strip()
-        for index in range(500)
-    )
+            """).strip() for index in range(500))
     (shader_dir / "fp_quantized_nax_graph.metal").write_text(
         textwrap.dedent(f"""
             #include <metal_stdlib>
@@ -10519,8 +10489,7 @@ def test_translate_project_bounds_mlx_like_large_plain_helper_graph(tmp_path):
                 float value = in[gid];
                 out[gid] = graph_helper_0(value);
             }}
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -10529,8 +10498,7 @@ def test_translate_project_bounds_mlx_like_large_plain_helper_graph(tmp_path):
             source_roots = ["shaders"]
             targets = ["directx", "opengl", "vulkan"]
             output_dir = "translated"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -10638,8 +10606,7 @@ def test_translate_project_opengl_materializes_mlx_accumulator_template_default(
             }
 
             instantiate_softmax(float32, float)
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -10648,8 +10615,7 @@ def test_translate_project_opengl_materializes_mlx_accumulator_template_default(
             source_roots = ["shaders"]
             targets = ["opengl"]
             output_dir = "translated"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -10721,8 +10687,7 @@ def test_translate_project_opengl_materializes_mlx_softmax_implicit_helper(
             }
 
             instantiate_softmax(int32, int)
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -10731,8 +10696,7 @@ def test_translate_project_opengl_materializes_mlx_softmax_implicit_helper(
             source_roots = ["shaders"]
             targets = ["opengl"]
             output_dir = "translated"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -10806,8 +10770,7 @@ def test_translate_project_opengl_inlines_mlx_ordering_dependent_aliases(
             }
 
             instantiate_sort(float32, float)
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -10816,8 +10779,7 @@ def test_translate_project_opengl_inlines_mlx_ordering_dependent_aliases(
             source_roots = ["shaders"]
             targets = ["opengl"]
             output_dir = "translated"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -10867,8 +10829,7 @@ def test_translate_project_opengl_materializes_mlx_auxiliary_template_default(
             }
 
             instantiate_attention(float32, float)
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -10877,8 +10838,7 @@ def test_translate_project_opengl_materializes_mlx_auxiliary_template_default(
             source_roots = ["shaders"]
             targets = ["opengl"]
             output_dir = "translated"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -10956,8 +10916,7 @@ def test_translate_project_opengl_materializes_quantized_local_template_alias(
             }
 
             instantiate_quantized(affine_quantize, float, 16, 4)
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -10966,8 +10925,7 @@ def test_translate_project_opengl_materializes_quantized_local_template_alias(
             source_roots = ["shaders"]
             targets = ["opengl"]
             output_dir = "translated"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -11042,8 +11000,7 @@ def test_translate_project_opengl_materializes_fft_auxiliary_template_alias(
             }
 
             instantiate_fft(256, float, float, 1, false)
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -11052,8 +11009,7 @@ def test_translate_project_opengl_materializes_fft_auxiliary_template_alias(
             source_roots = ["shaders"]
             targets = ["opengl"]
             output_dir = "translated"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -11132,8 +11088,7 @@ def test_translate_project_opengl_materializes_masked_gemv_local_kernel_alias(
             }
 
             instantiate_gemv(gemv_masked, float, bool, uint, 2, 3)
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -11142,8 +11097,7 @@ def test_translate_project_opengl_materializes_masked_gemv_local_kernel_alias(
             source_roots = ["shaders"]
             targets = ["opengl"]
             output_dir = "translated"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -11216,8 +11170,7 @@ def test_translate_project_opengl_propagates_steel_conv_helper_template_binding(
             }
 
             instantiate_conv(float32, float)
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -11226,8 +11179,7 @@ def test_translate_project_opengl_propagates_steel_conv_helper_template_binding(
             source_roots = ["shaders"]
             targets = ["opengl"]
             output_dir = "translated"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -11296,8 +11248,7 @@ def test_translate_project_opengl_propagates_steel_gemm_accumulator_binding(
             }
 
             instantiate_gemm(float32, float)
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -11306,8 +11257,7 @@ def test_translate_project_opengl_propagates_steel_gemm_accumulator_binding(
             source_roots = ["shaders"]
             targets = ["opengl"]
             output_dir = "translated"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -11543,8 +11493,7 @@ def test_translate_project_opengl_missing_accumulator_template_diagnostic(
             }
 
             instantiate_reduce(float32, float)
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -11553,8 +11502,7 @@ def test_translate_project_opengl_missing_accumulator_template_diagnostic(
             source_roots = ["shaders"]
             targets = ["opengl"]
             output_dir = "translated"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -11581,8 +11529,7 @@ def test_translate_project_opengl_missing_accumulator_template_diagnostic(
     ]
     diagnostic = payload["diagnostics"][0]
     assert (
-        diagnostic["code"]
-        == "project.translate.template-materialization-unsupported"
+        diagnostic["code"] == "project.translate.template-materialization-unsupported"
     )
     assert "reduce_values missing AccT" in diagnostic["message"]
     assert "reduce_values missing T" not in diagnostic["message"]
@@ -11649,7 +11596,9 @@ def test_translate_project_opengl_reports_unresolved_metal_template_kernel(
     ]
     assert not (repo / artifact["path"]).exists()
     diagnostic = payload["diagnostics"][0]
-    assert diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    assert (
+        diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    )
     assert diagnostic["target"] == "opengl"
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
@@ -11781,21 +11730,15 @@ def test_translate_project_applies_metal_template_limit_source_patterns(tmp_path
         "metal": {
             "max_template_specializations": 1,
             "source_patterns": {
-                "shaders/pattern_budget.metal": {
-                    "max_template_specializations": 2
-                }
+                "shaders/pattern_budget.metal": {"max_template_specializations": 2}
             },
         }
     }
     assert payload["project"]["sourceOptionCount"] == 1
     assert artifacts["shaders/pattern_budget.metal"]["status"] == "translated"
-    assert (
-        repo / "translated" / "cgl" / "shaders" / "pattern_budget.cgl"
-    ).exists()
+    assert (repo / "translated" / "cgl" / "shaders" / "pattern_budget.cgl").exists()
     assert artifacts["shaders/project_budget.metal"]["status"] == "failed"
-    assert not (
-        repo / "translated" / "cgl" / "shaders" / "project_budget.cgl"
-    ).exists()
+    assert not (repo / "translated" / "cgl" / "shaders" / "project_budget.cgl").exists()
     diagnostic = next(
         diagnostic
         for diagnostic in payload["diagnostics"]
@@ -12812,8 +12755,7 @@ def test_translate_project_rust_option_helpers_lower_to_opengl_compute(tmp_path)
             pub fn main() {
                 let value = read_option(collatz(7u32));
             }
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -12828,9 +12770,9 @@ def test_translate_project_rust_option_helpers_lower_to_opengl_compute(tmp_path)
 
     report = translate_project(load_project_config(repo))
     payload = report.to_json()
-    opengl_output = (
-        repo / "translated" / "opengl" / "src" / "collatz.glsl"
-    ).read_text(encoding="utf-8")
+    opengl_output = (repo / "translated" / "opengl" / "src" / "collatz.glsl").read_text(
+        encoding="utf-8"
+    )
 
     assert payload["summary"]["translatedCount"] == 1
     assert "struct Option_u32" in opengl_output
@@ -36364,12 +36306,10 @@ def test_translate_project_hip_pointer_parameters_lower_to_opengl_buffers(
     output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
 
     assert (
-        "layout(std430, binding = 0) readonly buffer ABuffer { float A[]; };"
-        in output
+        "layout(std430, binding = 0) readonly buffer ABuffer { float A[]; };" in output
     )
     assert (
-        "layout(std430, binding = 1) readonly buffer BBuffer { float B[]; };"
-        in output
+        "layout(std430, binding = 1) readonly buffer BBuffer { float B[]; };" in output
     )
     assert "layout(std430, binding = 2) buffer CBuffer { float C[]; };" in output
     assert "layout(std140, binding = 3) uniform addKernel_N_Args" in output
@@ -37713,8 +37653,7 @@ def test_translate_project_nested_metal_include_variant_template_materializes_fo
 
             [project.variants.f32]
             T = "float"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (module_dir / "templated_kernel.h").write_text(
@@ -37726,8 +37665,7 @@ def test_translate_project_nested_metal_include_variant_template_materializes_fo
             ) {
                 out[gid] = T(1.0);
             }
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (kernel_dir / "launch.metal").write_text(
@@ -37741,8 +37679,7 @@ def test_translate_project_nested_metal_include_variant_template_materializes_fo
             }
 
             #include "templated_kernel.h"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -37828,8 +37765,7 @@ def test_translate_project_source_instantiation_materializes_sizing_templates(
             }
 
             instantiate_sizing(f32, float, 8, 16, 2, 4, 1, 2, true, false)
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -37838,8 +37774,7 @@ def test_translate_project_source_instantiation_materializes_sizing_templates(
             source_roots = ["shaders"]
             targets = ["directx", "opengl", "vulkan"]
             output_dir = "translated"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -37884,8 +37819,7 @@ def test_translate_project_variant_materializes_sizing_helper_calls(tmp_path):
             [project.variants.conv2]
             T = "float"
             N = "2"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "unfold.metal").write_text(
@@ -37907,8 +37841,7 @@ def test_translate_project_variant_materializes_sizing_helper_calls(tmp_path):
             ) {
                 out[gid] = accumulate_window<T, N>(in[gid]);
             }
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -37976,8 +37909,7 @@ def test_translate_project_signature_instantiation_materializes_convolution_help
             [project]
             targets = ["directx", "opengl", "vulkan"]
             output_dir = "translated"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "conv.metal").write_text(
@@ -38007,8 +37939,7 @@ def test_translate_project_signature_instantiation_materializes_convolution_help
                     uint gid [[thread_position_in_grid]]);
 
             instantiate_naive_unfold_nd(float32, float, 2)
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -38305,9 +38236,7 @@ def test_translate_project_skips_standalone_metal_template_utility_artifacts(
     assert payload["summary"]["artifactCount"] == 3
     assert payload["summary"]["translatedCount"] == 3
     assert payload["summary"]["failedCount"] == 0
-    assert {artifact["source"] for artifact in payload["artifacts"]} == {
-        "reduce.metal"
-    }
+    assert {artifact["source"] for artifact in payload["artifacts"]} == {"reduce.metal"}
 
     for artifact in payload["artifacts"]:
         assert artifact["status"] == "translated"
@@ -38541,7 +38470,9 @@ def test_translate_project_metal_template_without_arguments_reports_metadata(
     ]
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
     diagnostic = payload["diagnostics"][0]
-    assert diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    assert (
+        diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    )
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
     assert diagnostic["target"] == "opengl"
     assert diagnostic["sourceBackend"] == "metal"
@@ -38550,9 +38481,9 @@ def test_translate_project_metal_template_without_arguments_reports_metadata(
     report_path = repo / "out" / "report.json"
     report.write_json(report_path)
     validation = validate_project_report(report_path)
-    assert {
-        diagnostic["code"] for diagnostic in validation["diagnostics"]
-    }.isdisjoint({"project.validate.invalid-report"})
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
 
 
 def test_translate_project_metal_variadic_debug_helper_noops_for_opengl(
@@ -38653,7 +38584,9 @@ def test_translate_project_metal_required_variadic_entry_reports_metadata(
         }
     ]
     diagnostic = payload["diagnostics"][0]
-    assert diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    assert (
+        diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    )
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
     assert "launch missing Args" in diagnostic["message"]
 
@@ -38712,9 +38645,9 @@ def test_translate_project_groups_unresolved_template_bindings_by_signature(
     report_path = repo / "out" / "report.json"
     report.write_json(report_path)
     validation = validate_project_report(report_path)
-    assert {
-        diagnostic["code"] for diagnostic in validation["diagnostics"]
-    }.isdisjoint({"project.validate.invalid-report"})
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
 
 
 def test_translate_project_variadic_template_helper_materializes_for_opengl(
@@ -38757,7 +38690,10 @@ def test_translate_project_variadic_template_helper_materializes_for_opengl(
         "source": "call-site",
     }
     output = (repo / artifact["path"]).read_text(encoding="utf-8")
-    assert "float pick_first_float_int_uint(float value, int rest_0, uint rest_1)" in output
+    assert (
+        "float pick_first_float_int_uint(float value, int rest_0, uint rest_1)"
+        in output
+    )
     assert "pick_first_float_int_uint(1.0, 2, 3u)" in output
     assert "Args" not in output
     assert_compute_glsl_validates_if_available(output, tmp_path)
@@ -38926,7 +38862,7 @@ def test_translate_project_target_template_variant_manifest_materializes_for_ope
                             "U": "float",
                         }
                     }
-                }
+                },
             }
         }
     }
@@ -39132,25 +39068,32 @@ def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(
             if diagnostic["target"] == target
         ]
         assert len(target_diagnostics) == 6
-        assert {
-            diagnostic["code"] for diagnostic in target_diagnostics
-        } == {
+        assert {diagnostic["code"] for diagnostic in target_diagnostics} == {
             "opencl.target.unresolved-helper",
             "opencl.target.pointer-helper-parameter",
             "opencl.target.unsupported-builtin",
         }
-        assert sum(
-            diagnostic["code"] == "opencl.target.unresolved-helper"
-            for diagnostic in target_diagnostics
-        ) == 3
-        assert sum(
-            diagnostic["code"] == "opencl.target.pointer-helper-parameter"
-            for diagnostic in target_diagnostics
-        ) == 1
-        assert sum(
-            diagnostic["code"] == "opencl.target.unsupported-builtin"
-            for diagnostic in target_diagnostics
-        ) == 2
+        assert (
+            sum(
+                diagnostic["code"] == "opencl.target.unresolved-helper"
+                for diagnostic in target_diagnostics
+            )
+            == 3
+        )
+        assert (
+            sum(
+                diagnostic["code"] == "opencl.target.pointer-helper-parameter"
+                for diagnostic in target_diagnostics
+            )
+            == 1
+        )
+        assert (
+            sum(
+                diagnostic["code"] == "opencl.target.unsupported-builtin"
+                for diagnostic in target_diagnostics
+            )
+            == 2
+        )
 
     for diagnostic in payload["diagnostics"]:
         assert diagnostic["sourceBackend"] == "opencl"
@@ -39161,12 +39104,10 @@ def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(
     messages = [diagnostic["message"] for diagnostic in payload["diagnostics"]]
     assert any("op(lhs: i32, rhs: i32) -> i32" in message for message in messages)
     assert any(
-        "work_group_reduce_op(val: i32) -> i32" in message
-        for message in messages
+        "work_group_reduce_op(val: i32) -> i32" in message for message in messages
     )
     assert any(
-        "sub_group_reduce_op(val: i32) -> i32" in message
-        for message in messages
+        "sub_group_reduce_op(val: i32) -> i32" in message for message in messages
     )
     assert any("read_local(shared_: ptr<i32>)" in message for message in messages)
     assert any("async_work_group_copy(...)" in message for message in messages)
