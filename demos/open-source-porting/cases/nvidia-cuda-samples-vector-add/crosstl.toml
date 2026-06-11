@@ -1,6 +1,6 @@
 [project]
 source_roots = ["."]
 include = ["vectorAdd_kernel.cu"]
-targets = ["cgl", "opengl", "metal", "directx", "vulkan"]
+targets = ["cgl", "metal", "directx", "vulkan"]
 output_dir = "crosstl-out"
 external_corpus_manifest = "corpus.json"

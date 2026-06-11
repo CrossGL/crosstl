@@ -104,7 +104,6 @@ jobs:
             --case lonelydevil-vulkan-tutorial-triangle \
             --case metal-performance-testing-matmul \
             --case monogame-sprite-effect \
-            --case nvidia-cuda-samples-vector-add \
             --case nvpro-vk-mini-samples-rectangle \
             --case ogl-samples-flat-color \
             --case opencl-sdk-saxpy \

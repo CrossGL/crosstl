@@ -62,7 +62,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. |
 | `arm-opengl-es-sdk-cube` | `ARM-software/opengl-es-sdk-for-android` at `c3caf759bb2e71fa9a118b3e3abd996cf00e660a` | MIT | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream cube shader pair unchanged. |
 | `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, OpenGL, Metal, DirectX | Uses the upstream Metal kernel and its shared parameter header. Vulkan `OpStore` validation is tracked in issue #1262. |
-| `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. Host launch and memory-management integration remain outside the demo scope. |
+| `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, Metal, DirectX, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. OpenGL output determinism is tracked in issue #1290. Host launch and memory-management integration remain outside the demo scope. |
 | `nvpro-vk-mini-samples-rectangle` | `nvpro-samples/vk_mini_samples` at `994ac9f446ef44962c563b9600c8e9f117a3725d` | Apache-2.0 | GLSL | CrossGL, Metal, OpenGL, DirectX, Vulkan | Uses the upstream rectangle shader pair unchanged. |
 | `ogl-samples-flat-color` | `g-truc/ogl-samples` at `38cada7a9458864265e25415ae61586d500ff5fc` | MIT | GLSL | CrossGL, Metal, OpenGL, DirectX, Vulkan | Uses the upstream GLSL 330 flat-color shader pair unchanged. |
 | `openframeworks-noise-shader` | `openframeworks/openFrameworks` at `63eb03828c40de713b85db7810f1c519d8b9b0cc` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream noise shader pair with whitespace normalization. |
@@ -246,7 +246,9 @@ Metal now lowers the program-scope `groupshared` value to kernel-local
 
 The `NVIDIA/cuda-samples` vector-add NVRTC kernel was retested after issue #772
 closed and is now checked for Metal and Vulkan output. DirectX output was
-retested after issue #1183 closed and is now checked as a compute shader. The
+retested after issue #1183 closed and is now checked as a compute shader.
+OpenGL output remains excluded until issue #1290 resolves cross-platform
+uniform-member naming and source-map determinism for this CUDA kernel. The
 upstream host launcher is intentionally not included; rewriting launch
 configuration, memory allocation, and data-transfer code is a runtime porting
 task outside this demo scope.
