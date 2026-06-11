@@ -580,6 +580,8 @@ class HLSLCodeGen:
         # GLSL findLSB/findMSB lower to HLSL first-bit intrinsics.
         "firstbithigh",
         "firstbitlow",
+        # OpenCL/GLSL fma lowers to HLSL mad.
+        "mad",
     }
     HLSL_BITCAST_FUNCTION_TARGETS = {
         "floatBitsToInt": "int",
@@ -947,6 +949,7 @@ class HLSLCodeGen:
             "floatBitsToUint": "asuint",
             "findLSB": "firstbitlow",
             "findMSB": "firstbithigh",
+            "fma": "mad",
             "inverseSqrt": "rsqrt",
             "inversesqrt": "rsqrt",
             "intBitsToFloat": "asfloat",

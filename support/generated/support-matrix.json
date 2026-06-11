@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1108
+        "test_count": 1112
       },
       "translator_codegen": {
         "exists": true,

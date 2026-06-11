@@ -1,6 +1,8 @@
 import pytest
 
 import crosstl
+from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
+from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import OpenCLToCrossGLConverter
 from crosstl.backend.OpenCL.OpenCLLexer import OpenCLLexer
 from crosstl.backend.OpenCL.OpenCLParser import OpenCLParser
@@ -56,6 +58,23 @@ def test_opencl_saxpy_signed_global_id_lowers_to_wgsl_casted_local(tmp_path):
     assert "var gid: i32 = gl_GlobalInvocationID.x;" in crossgl
     assert "var gid: i32 = i32(global_invocation_id.x);" in wgsl
     assert "out[gid] = (_saxpy_Args.a * x[gid]);" in wgsl
+
+
+def test_opencl_saxpy_fma_lowers_to_directx_mad(tmp_path):
+    source = """
+        kernel void saxpy(global float *y, global const float *x, const float a) {
+            const uint gid = get_global_id(0);
+            y[gid] = fma(a, x[gid], y[gid]);
+        }
+        """
+    opencl_path = tmp_path / "saxpy.cl"
+    opencl_path.write_text(source, encoding="utf-8")
+
+    hlsl = crosstl.translate(str(opencl_path), backend="directx", format_output=False)
+
+    assert "y[gid] = mad(a, x[gid], y[gid]);" in hlsl
+    assert "fma(" not in hlsl
+    HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
 
 
 def test_hashcat_kernel_specifier_macros_codegen_reparse():
