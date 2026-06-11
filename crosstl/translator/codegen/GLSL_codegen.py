@@ -1021,6 +1021,7 @@ class GLSLCodeGen:
         self.stage_parameter_output_aliases = {}
         self.stage_entry_functions_by_stage = {}
         self.stage_entry_resource_parameter_aliases = {}
+        self.stage_entry_constant_value_parameter_aliases = {}
         self.stage_entry_resource_declaration_names = set()
         self.current_identifier_aliases = {}
         self.current_mesh_output_parameters = {}
@@ -2528,6 +2529,7 @@ class GLSLCodeGen:
         self.current_stage_parameter_aliases = {}
         self.stage_entry_functions_by_stage = {}
         self.stage_entry_resource_parameter_aliases = {}
+        self.stage_entry_constant_value_parameter_aliases = {}
         self.stage_entry_resource_declaration_names = set()
         self.current_identifier_aliases = {}
         self.current_target_stage = target_stage
@@ -4221,6 +4223,16 @@ class GLSLCodeGen:
         self, ast, target_stage=None
     ):
         cbuffers = []
+        existing_cbuffers = list(getattr(ast, "cbuffers", []) or [])
+        existing_cbuffers += collect_stage_local_cbuffers(ast, target_stage)
+        used_block_names = self.glsl_existing_cbuffer_block_names(
+            ast, target_stage, existing_cbuffers
+        )
+        used_member_names = self.glsl_existing_cbuffer_member_names(existing_cbuffers)
+        used_member_names.update(
+            self.glsl_existing_cbuffer_global_member_names(ast, target_stage)
+        )
+        self.stage_entry_constant_value_parameter_aliases = {}
         stage_entry_types = self.combined_stage_entry_types()
         for _entry_id, _stage_name, func in collect_stage_entry_records(
             ast, target_stage, stage_entry_types
@@ -4235,11 +4247,26 @@ class GLSLCodeGen:
                 parameter_name = getattr(parameter, "name", None)
                 if not parameter_name:
                     continue
-                cbuffer = StructNode(
+                block_name = self.unique_stage_entry_constant_value_block_name(
                     self.stage_entry_constant_value_parameter_block_name(
                         func, parameter_name
                     ),
-                    [StructMemberNode(parameter_name, member_type)],
+                    used_block_names,
+                )
+                used_block_names.add(block_name)
+                member_name = self.stage_entry_constant_value_parameter_member_name(
+                    block_name, parameter_name, used_member_names
+                )
+                used_member_names.add(member_name)
+                if member_name != parameter_name:
+                    self.stage_entry_constant_value_parameter_aliases.setdefault(
+                        id(func), {}
+                    )[parameter_name] = member_name
+                member = StructMemberNode(member_name, member_type)
+                member.add_annotation("opengl.source_name", parameter_name)
+                cbuffer = StructNode(
+                    block_name,
+                    [member],
                     attributes=[
                         AttributeNode(
                             "binding",
@@ -4250,6 +4277,95 @@ class GLSLCodeGen:
                 cbuffer.is_cbuffer = True
                 cbuffers.append(cbuffer)
         return cbuffers
+
+    def glsl_existing_cbuffer_block_names(self, ast, target_stage, cbuffers):
+        names = {
+            getattr(cbuffer, "name", None)
+            for cbuffer in cbuffers
+            if getattr(cbuffer, "name", None)
+        }
+        for node in (
+            list(getattr(ast, "structs", []) or [])
+            + collect_stage_local_structs(ast, target_stage)
+            + list(getattr(ast, "global_variables", []) or [])
+            + list(getattr(ast, "constants", []) or [])
+        ):
+            name = getattr(node, "name", None)
+            if name:
+                names.add(name)
+        return names
+
+    def glsl_existing_cbuffer_member_names(self, cbuffers):
+        names = set()
+        for cbuffer in cbuffers:
+            for member in getattr(cbuffer, "members", []) or []:
+                name = getattr(member, "name", None)
+                if name:
+                    names.add(name)
+        return names
+
+    def glsl_existing_cbuffer_global_member_names(self, ast, target_stage):
+        names = set()
+        for node in (
+            list(getattr(ast, "global_variables", []) or [])
+            + list(getattr(ast, "constants", []) or [])
+            + collect_stage_local_variables(
+                ast,
+                target_stage,
+                lambda _node: True,
+            )
+        ):
+            name = getattr(node, "name", None)
+            if name:
+                names.add(name)
+        return names
+
+    def unique_stage_entry_constant_value_identifier(
+        self, base_name, used_names, fallback
+    ):
+        candidate_base = sanitize_type_name(base_name or fallback)
+        if not candidate_base:
+            candidate_base = sanitize_type_name(fallback)
+        if not candidate_base:
+            candidate_base = "EntryConstant"
+        if candidate_base[0].isdigit():
+            candidate_base = f"Entry_{candidate_base}"
+
+        candidate = candidate_base
+        suffix = 2
+        while candidate in used_names or candidate in self.GLSL_RESERVED_IDENTIFIERS:
+            candidate = f"{candidate_base}_{suffix}"
+            suffix += 1
+        return candidate
+
+    def unique_stage_entry_constant_value_block_name(self, block_name, used_names):
+        return self.unique_stage_entry_constant_value_identifier(
+            block_name,
+            used_names,
+            "Entry_Value_Args",
+        )
+
+    def stage_entry_constant_value_parameter_member_name(
+        self, block_name, parameter_name, used_names
+    ):
+        parameter_name = sanitize_type_name(parameter_name or "value")
+        if (
+            parameter_name
+            and parameter_name not in used_names
+            and parameter_name not in self.GLSL_RESERVED_IDENTIFIERS
+            and not parameter_name[0].isdigit()
+        ):
+            return parameter_name
+
+        block_name = sanitize_type_name(block_name or "Entry_Value_Args")
+        base_name = "_".join(
+            part for part in (block_name, parameter_name or "value") if part
+        )
+        return self.unique_stage_entry_constant_value_identifier(
+            base_name,
+            used_names,
+            "Entry_Value",
+        )
 
     def stage_entry_constant_value_parameter_block_name(self, func, parameter_name):
         function_name = sanitize_type_name(getattr(func, "name", None) or "entry")
@@ -5986,6 +6102,11 @@ class GLSLCodeGen:
             if shader_type is not None
             else {}
         )
+        stage_entry_constant_value_aliases = (
+            self.stage_entry_constant_value_parameter_aliases.get(id(func), {})
+            if shader_type is not None
+            else {}
+        )
         unsupported_buffer_array_info = (
             self.unsupported_structured_buffer_array_functions.get(func.name, {})
         )
@@ -6016,6 +6137,7 @@ class GLSLCodeGen:
         self.current_structured_buffer_counter_parameters = {}
         self.current_structured_buffer_access_parameters = {}
         self.current_identifier_aliases.update(stage_entry_resource_aliases)
+        self.current_identifier_aliases.update(stage_entry_constant_value_aliases)
         for alias_name, binding in resource_aliases.items():
             self.local_variable_types[alias_name] = binding.get("type")
         for index, p in enumerate(param_list):
@@ -6045,6 +6167,11 @@ class GLSLCodeGen:
             stage_resource_alias = stage_entry_resource_aliases.get(p.name)
             if stage_resource_alias:
                 self.local_variable_types[stage_resource_alias] = (
+                    parameter_expression_type
+                )
+            stage_constant_value_alias = stage_entry_constant_value_aliases.get(p.name)
+            if stage_constant_value_alias:
+                self.local_variable_types[stage_constant_value_alias] = (
                     parameter_expression_type
                 )
             self.validate_resource_access_metadata_operands(p)
