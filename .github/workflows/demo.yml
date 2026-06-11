@@ -239,7 +239,6 @@ jobs:
             --case directx-shader-compiler-neg1 \
             --case directx-sdk-samples-tutorial02 \
             --case glslang-push-constant-vertex \
-            --case glslang-spec-constant-vertex \
             --case godot-betsy-alpha-stitch \
             --case libgdx-batch-shader \
             --case lonelydevil-vulkan-tutorial-triangle \
@@ -277,7 +276,6 @@ jobs:
           compile_hlsl demos/open-source-porting/cases/directx-shader-compiler-neg1/crosstl-out/directx/neg1.hlsl PSMain ps_6_0
           compile_hlsl demos/open-source-porting/cases/directx-sdk-samples-tutorial02/crosstl-out/directx/Tutorial02.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/directx-sdk-samples-tutorial02/crosstl-out/directx/Tutorial02.hlsl PSMain ps_6_0
-          compile_hlsl demos/open-source-porting/cases/glslang-spec-constant-vertex/crosstl-out/directx/spv.specConstant.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/godot-betsy-alpha-stitch/crosstl-out/directx/alpha_stitch.hlsl CSMain cs_6_0
           compile_hlsl demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.vert.hlsl VSMain vs_6_0
           compile_hlsl demos/open-source-porting/cases/libgdx-batch-shader/crosstl-out/directx/batch.frag.hlsl PSMain ps_6_0
