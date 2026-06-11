@@ -14222,6 +14222,8 @@ def _artifact_diagnostic_context(artifact: Mapping[str, Any]) -> dict[str, Any]:
 def _mojo_target_construct_rule_applies(rule_id: str, target: str) -> bool:
     if target == "mojo":
         return False
+    if rule_id == "mojo-host-main":
+        return target != "opengl"
     if rule_id == "mojo-none":
         return target != "vulkan"
     if rule_id == "spirv-unresolved-warning":

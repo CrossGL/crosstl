@@ -7844,8 +7844,13 @@ def test_translate_project_generates_metal_and_spirv_for_modular_mojo_vector_add
     assert artifacts_by_target["vulkan"]["status"] == "translated"
     assert metal_path.exists()
     assert spirv_path.exists()
-    assert "TileTensor<float_dtype, type_of(layout), MutAnyOrigin>" in metal
+    assert "kernel void vector_addition" in metal
+    assert "device float* lhs_tensor" in metal
+    assert "out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid];" in metal
+    assert "TileTensor" not in metal
     assert "; SPIR-V" in spirv
+    assert "OpEntryPoint GLCompute" in spirv
+    assert "WARNING" not in spirv
     assert "IdentifierNode(" not in metal
     assert "IdentifierNode(" not in spirv
 
