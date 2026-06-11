@@ -109,10 +109,18 @@ class UnsupportedSPIRVFeatureError(ValueError):
 
     project_diagnostic_code = "project.translate.unsupported-feature"
 
-    def __init__(self, feature: str, message: str, *, missing_capabilities=()):
+    def __init__(
+        self,
+        feature: str,
+        message: str,
+        *,
+        missing_capabilities=(),
+        source_location=None,
+    ):
         super().__init__(message)
         self.feature = feature
         self.missing_capabilities = tuple(missing_capabilities)
+        self.source_location = source_location
 
 
 class VulkanSPIRVCodeGen:
@@ -216,6 +224,7 @@ class VulkanSPIRVCodeGen:
         self.stage_local_inline_storage_buffer_functions = {}
         self.inline_storage_buffer_call_stack = []
         self.spirv_skipped_function_parameter_indices = {}
+        self.spirv_skipped_function_parameter_indices_by_id = {}
         self.function_stage_input_dependencies = {}
         self.function_stage_output_dependencies = {}
         self.function_resource_array_params = {}
@@ -1930,16 +1939,25 @@ class VulkanSPIRVCodeGen:
             and parameter_names[arg_index] in pointer_param_names
         )
 
-    def resolve_inline_storage_buffer_function(self, function_name: str, call_args):
+    def resolve_inline_storage_buffer_function(
+        self, function_name: str, call_args, call_node=None
+    ):
+        candidates = []
+        seen_candidates = set()
         stage_candidates = self.stage_local_metadata(
             self.stage_local_inline_storage_buffer_functions, function_name
         )
         if stage_candidates is not None:
-            candidates = list(stage_candidates)
-        else:
-            candidates = list(
-                self.inline_storage_buffer_functions.get(function_name, [])
-            )
+            for candidate in stage_candidates:
+                candidates.append(candidate)
+                seen_candidates.add(id(candidate))
+
+        for candidate in self.inline_storage_buffer_functions.get(function_name, []):
+            candidate_key = id(candidate)
+            if candidate_key in seen_candidates:
+                continue
+            candidates.append(candidate)
+            seen_candidates.add(candidate_key)
 
         if not candidates:
             return None
@@ -1947,7 +1965,7 @@ class VulkanSPIRVCodeGen:
         arity_matches = [
             candidate
             for candidate in candidates
-            if len(self.function_parameters(candidate)) == len(call_args)
+            if self.storage_buffer_effective_arity_matches(candidate, call_args)
         ]
         if not arity_matches:
             if self.has_matching_non_storage_function_candidate(
@@ -1959,6 +1977,7 @@ class VulkanSPIRVCodeGen:
                 call_args,
                 candidates,
                 "no candidate has matching arity",
+                call_node=call_node,
             )
 
         scored_matches = []
@@ -1979,6 +1998,7 @@ class VulkanSPIRVCodeGen:
                 call_args,
                 candidates,
                 "no candidate has compatible argument types",
+                call_node=call_node,
             )
 
         scored_matches.sort(key=lambda item: item[0], reverse=True)
@@ -1992,6 +2012,7 @@ class VulkanSPIRVCodeGen:
                 call_args,
                 tied_candidates,
                 "multiple candidates have compatible argument types",
+                call_node=call_node,
             )
         return best_candidate
 
@@ -13848,7 +13869,7 @@ class VulkanSPIRVCodeGen:
         skipped_parameter_indices = (
             set()
             if is_entry_point
-            else self.skipped_function_parameter_indices(function_node.name)
+            else self.skipped_function_parameter_indices_for_node(function_node)
         )
         if skipped_parameter_indices:
             parameters = [
@@ -15839,6 +15860,45 @@ class VulkanSPIRVCodeGen:
             for param in self.function_parameters(function_node)
         ]
 
+    def storage_buffer_effective_call_signature(self, function_node, call_args):
+        parameters = self.function_parameters(function_node)
+        args = list(call_args or [])
+        skipped_indices = self.skipped_function_parameter_indices_for_node(
+            function_node
+        )
+        if not skipped_indices:
+            return parameters, args
+        return (
+            [
+                param
+                for index, param in enumerate(parameters)
+                if index not in skipped_indices
+            ],
+            [
+                arg
+                for index, arg in enumerate(args)
+                if index not in skipped_indices
+            ],
+        )
+
+    def storage_buffer_effective_arity_matches(self, function_node, call_args):
+        parameters, args = self.storage_buffer_effective_call_signature(
+            function_node, call_args
+        )
+        return len(parameters) == len(args)
+
+    def storage_buffer_effective_call_bindings(self, function_node, call_args):
+        parameters = self.function_parameters(function_node)
+        args = list(call_args or [])
+        skipped_indices = self.skipped_function_parameter_indices_for_node(
+            function_node
+        )
+        return [
+            (index, param, args[index])
+            for index, param in enumerate(parameters)
+            if index not in skipped_indices and index < len(args)
+        ]
+
     def format_function_candidate_signature(self, function_node) -> str:
         function_name = getattr(function_node, "name", "unknown")
         params = ", ".join(self.function_parameter_type_names(function_node))
@@ -15888,12 +15948,14 @@ class VulkanSPIRVCodeGen:
         return False
 
     def storage_buffer_candidate_match_score(self, function_node, call_args):
-        parameters = self.function_parameters(function_node)
-        if len(parameters) != len(call_args):
+        parameters, args = self.storage_buffer_effective_call_signature(
+            function_node, call_args
+        )
+        if len(parameters) != len(args):
             return None
 
         score = 0
-        for param, arg in zip(parameters, call_args):
+        for param, arg in zip(parameters, args):
             storage_buffer_type_name = self.storage_buffer_parameter_type_name(param)
             if storage_buffer_type_name is not None:
                 actual_type_name = self.storage_buffer_expression_type_name(arg)
@@ -15929,13 +15991,16 @@ class VulkanSPIRVCodeGen:
         for function_node in self.function_nodes_by_name.get(function_name, []):
             if self.function_has_storage_buffer_parameters(function_node):
                 continue
-            if len(self.function_parameters(function_node)) != len(call_args):
+            parameters, args = self.storage_buffer_effective_call_signature(
+                function_node, call_args
+            )
+            if len(parameters) != len(args):
                 continue
             return True
         return False
 
     def storage_buffer_overload_diagnostic(
-        self, function_name, call_args, candidates, reason
+        self, function_name, call_args, candidates, reason, call_node=None
     ):
         actual_types = ", ".join(self.call_argument_type_names(call_args))
         actual_signature = f"{function_name}({actual_types})"
@@ -15952,6 +16017,11 @@ class VulkanSPIRVCodeGen:
             f"arity/types: {len(call_args)} ({actual_signature}); candidate "
             f"signatures: {candidate_signatures}",
             missing_capabilities=("spirv.storage_buffer_function_overload",),
+            source_location=(
+                getattr(call_node, "source_location", None)
+                if call_node is not None
+                else None
+            ),
         )
 
     def order_functions_by_dependencies(self, functions):
@@ -17020,24 +17090,27 @@ class VulkanSPIRVCodeGen:
             return None
         return self.default_value_for_type(return_type)
 
-    def inline_storage_buffer_function_call(self, function_node, call_args):
+    def inline_storage_buffer_function_call(
+        self, function_node, call_args, call_node=None
+    ):
         func_name = getattr(function_node, "name", "unknown")
         if not self.validate_function_storage_buffer_access_arguments(
             function_node, call_args
         ):
             return self.default_value_for_function(function_node)
 
-        parameters = getattr(
-            function_node, "parameters", getattr(function_node, "params", [])
+        parameters, effective_call_args = self.storage_buffer_effective_call_signature(
+            function_node, call_args
         )
-        if len(call_args) > len(parameters):
+        if len(effective_call_args) > len(parameters):
             raise self.storage_buffer_overload_diagnostic(
                 func_name,
                 call_args,
                 [function_node],
                 "selected candidate has too few parameters",
+                call_node=call_node,
             )
-        if len(call_args) < len(parameters):
+        if len(effective_call_args) < len(parameters):
             self.emit(
                 f"; WARNING: function call '{func_name}' requires "
                 f"{len(parameters)} arguments"
@@ -17068,24 +17141,22 @@ class VulkanSPIRVCodeGen:
         self.inline_storage_buffer_call_stack.append((function_key, func_name))
 
         try:
-            for index, param in enumerate(parameters):
+            for index, param, arg in self.storage_buffer_effective_call_bindings(
+                function_node, call_args
+            ):
                 param_name = getattr(param, "name", f"param{index}")
                 storage_buffer_type_name = self.storage_buffer_parameter_type_name(
                     param
                 )
                 if storage_buffer_type_name is not None:
-                    pointer_arg = self.variable_pointer_from_expression(
-                        call_args[index]
-                    )
+                    pointer_arg = self.variable_pointer_from_expression(arg)
                     if pointer_arg is None:
                         self.emit(
                             f"; WARNING: function call '{func_name}' requires a "
                             f"storage buffer argument for parameter {param_name}"
                         )
                         return self.default_value_for_function(function_node)
-                    actual_type_name = self.storage_buffer_expression_type_name(
-                        call_args[index]
-                    )
+                    actual_type_name = self.storage_buffer_expression_type_name(arg)
                     if (
                         actual_type_name is not None
                         and not self.storage_buffer_parameter_type_is_compatible(
@@ -17095,16 +17166,15 @@ class VulkanSPIRVCodeGen:
                         self.emit(
                             f"; WARNING: function call '{func_name}' requires "
                             f"{storage_buffer_type_name} storage buffer type for "
-                            f"argument {self.expression_debug_name(call_args[index])} "
+                            "argument "
+                            f"{self.expression_debug_name(arg)} "
                             f"passed to parameter {param_name}: got {actual_type_name}"
                         )
                         return self.default_value_for_function(function_node)
                     self.local_variables[param_name] = pointer_arg
                     continue
 
-                arg_value = self.process_call_argument(
-                    func_name, call_args[index], index
-                )
+                arg_value = self.process_call_argument(func_name, arg, index)
                 if arg_value is None:
                     self.emit(f"; WARNING: Failed to evaluate argument for {func_name}")
                     return self.default_value_for_function(function_node)
@@ -17210,31 +17280,46 @@ class VulkanSPIRVCodeGen:
             if models
         }
 
-    def collect_unused_array_parameter_indices(self, functions):
-        skipped = {}
+    def unused_array_parameter_indices(self, func):
+        indices = set()
+        body = getattr(func, "body", [])
+        for index, param in enumerate(
+            getattr(func, "parameters", getattr(func, "params", [])) or []
+        ):
+            param_name = getattr(param, "name", None)
+            if not param_name:
+                continue
+            param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+            type_name = str(self.type_name_from_value(param_type) or "")
+            if "[" not in type_name:
+                continue
+            if self.is_resource_type_name(self.array_base_type_name(type_name)):
+                continue
+            if not self.function_body_uses_identifier(body, param_name):
+                indices.add(index)
+        return indices
+
+    def collect_unused_array_parameter_index_maps(self, functions):
+        by_name_values = {}
+        by_id = {}
         for func in functions or []:
             func_name = getattr(func, "name", None)
             if not func_name:
                 continue
-            indices = set()
-            body = getattr(func, "body", [])
-            for index, param in enumerate(
-                getattr(func, "parameters", getattr(func, "params", [])) or []
-            ):
-                param_name = getattr(param, "name", None)
-                if not param_name:
-                    continue
-                param_type = getattr(param, "param_type", getattr(param, "vtype", None))
-                type_name = str(self.type_name_from_value(param_type) or "")
-                if "[" not in type_name:
-                    continue
-                if self.is_resource_type_name(self.array_base_type_name(type_name)):
-                    continue
-                if not self.function_body_uses_identifier(body, param_name):
-                    indices.add(index)
-            if indices:
-                skipped[func_name] = indices
-        return skipped
+            indices = self.unused_array_parameter_indices(func)
+            by_id[id(func)] = indices
+            by_name_values.setdefault(func_name, []).append(indices)
+
+        by_name = {}
+        for func_name, index_sets in by_name_values.items():
+            if not index_sets:
+                continue
+            first_indices = index_sets[0]
+            if not first_indices:
+                continue
+            if all(indices == first_indices for indices in index_sets[1:]):
+                by_name[func_name] = set(first_indices)
+        return by_name, by_id
 
     def function_body_uses_identifier(self, body, name):
         for node in self.walk_ast_nodes(body):
@@ -17244,6 +17329,14 @@ class VulkanSPIRVCodeGen:
 
     def skipped_function_parameter_indices(self, func_name):
         return self.spirv_skipped_function_parameter_indices.get(func_name, set())
+
+    def skipped_function_parameter_indices_for_node(self, function_node):
+        function_key = id(function_node)
+        if function_key in self.spirv_skipped_function_parameter_indices_by_id:
+            return self.spirv_skipped_function_parameter_indices_by_id[function_key]
+        return self.skipped_function_parameter_indices(
+            getattr(function_node, "name", None)
+        )
 
     def collect_function_stage_object_dependencies(
         self, ast, target_stage, object_name
@@ -21183,11 +21276,13 @@ class VulkanSPIRVCodeGen:
                 )
 
             inline_storage_buffer_function = (
-                self.resolve_inline_storage_buffer_function(callee_name, expr.args)
+                self.resolve_inline_storage_buffer_function(
+                    callee_name, expr.args, call_node=expr
+                )
             )
             if inline_storage_buffer_function is not None:
                 return self.inline_storage_buffer_function_call(
-                    inline_storage_buffer_function, expr.args
+                    inline_storage_buffer_function, expr.args, call_node=expr
                 )
 
             args = []
@@ -22862,9 +22957,10 @@ class VulkanSPIRVCodeGen:
             self.collect_inline_storage_buffer_functions(ast)
         )
         self.function_execution_models = self.collect_function_execution_models(ast)
-        self.spirv_skipped_function_parameter_indices = (
-            self.collect_unused_array_parameter_indices(all_functions)
-        )
+        (
+            self.spirv_skipped_function_parameter_indices,
+            self.spirv_skipped_function_parameter_indices_by_id,
+        ) = self.collect_unused_array_parameter_index_maps(all_functions)
         self.function_stage_input_dependencies = (
             self.collect_function_stage_object_dependencies(ast, None, "input")
         )
