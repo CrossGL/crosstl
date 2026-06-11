@@ -26434,6 +26434,61 @@ def test_translate_project_resolves_mlx_sort_vulkan_storage_buffer_overload(
     assert payload["diagnostics"] == []
 
 
+def test_translate_project_vulkan_resets_metal_entry_resource_bindings_per_artifact(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for prefix in ("alpha", "beta"):
+        (repo / f"{prefix}.metal").write_text(
+            textwrap.dedent(f"""
+                #include <metal_stdlib>
+                using namespace metal;
+
+                kernel void {prefix}_copy(
+                    device uint* values [[buffer(0)]],
+                    constant uint& limit [[buffer(1)]],
+                    uint gid [[thread_position_in_grid]]
+                ) {{
+                    if (gid < limit) {{
+                        values[gid] = values[gid];
+                    }}
+                }}
+
+                kernel void {prefix}_fill(
+                    device uint* values [[buffer(0)]],
+                    constant uint& limit [[buffer(1)]],
+                    uint gid [[thread_position_in_grid]]
+                ) {{
+                    if (gid < limit) {{
+                        values[gid] = 1u;
+                    }}
+                }}
+            """).strip(),
+            encoding="utf-8",
+        )
+
+    payload = translate_project(repo, targets=["vulkan"], output_dir="out").to_json()
+
+    assert payload["summary"]["artifactCount"] == 2
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+    assert payload["diagnosticCounts"]["error"] == 0
+    assert payload["diagnostics"] == []
+
+    for artifact in payload["artifacts"]:
+        assert artifact["status"] == "translated"
+        generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+        source_stem = Path(artifact["source"]).stem
+        assert f'"{source_stem}_copy"' in generated
+        assert f'"{source_stem}_fill"' in generated
+        assert "DescriptorSet 0" in generated
+        assert "Binding 0" in generated
+        assert "Binding 1" in generated
+
+
 def test_translate_project_resolves_mlx_metal_vulkan_storage_buffer_template_overloads(
     tmp_path,
 ):
