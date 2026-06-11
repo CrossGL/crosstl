@@ -17201,8 +17201,10 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "data: array<f32>" in result
-        assert "indices: array<i32>" in result
+        assert (
+            "@group(0) @binding(0) var<storage, read_write> data: array<f32>" in result
+        )
+        assert "@group(0) @binding(1) var<storage, read> indices: array<i32>" in result
         assert "array<ptr" not in result
 
     def test_kernel_pointer_parameters_roundtrip_to_rust(self, tmp_path):
