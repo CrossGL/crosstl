@@ -4595,9 +4595,7 @@ def test_scan_project_can_report_metal_mode_directive_as_unsupported(tmp_path):
     assert payload["summary"]["diagnosticsByCode"] == {
         "project.scan.unsupported-native-directive": 1
     }
-    assert payload["summary"]["missingCapabilityCounts"] == {
-        "native.directive.mode": 1
-    }
+    assert payload["summary"]["missingCapabilityCounts"] == {"native.directive.mode": 1}
     assert diagnostic["code"] == "project.scan.unsupported-native-directive"
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["missingCapabilities"] == ["native.directive.mode"]

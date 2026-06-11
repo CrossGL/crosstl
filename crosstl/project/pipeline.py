@@ -2169,9 +2169,7 @@ INCLUDE_DEPENDENCY_STATUSES = frozenset(
     ("dynamic", "missing", "outside-project", "resolved", "system")
 )
 INCLUDE_DEPENDENCY_RESOLUTION_SOURCES = frozenset(("include-dir", "source"))
-NATIVE_DIRECTIVE_HANDLING_STATUSES = frozenset(
-    ("preserved", "expanded", "unsupported")
-)
+NATIVE_DIRECTIVE_HANDLING_STATUSES = frozenset(("preserved", "expanded", "unsupported"))
 METAL_MODE_DIRECTIVE_SOURCE_OPTION = "mode_directives"
 METAL_MODE_DIRECTIVE_POLICIES = frozenset(("preserve", "expand", "unsupported"))
 METAL_MODE_DIRECTIVE_POLICY_ALIASES = {
@@ -2490,7 +2488,10 @@ def _normalize_source_options_for_backend(
     option_path: str,
 ) -> dict[str, Any]:
     normalized = dict(options)
-    if source_backend != "metal" or METAL_MODE_DIRECTIVE_SOURCE_OPTION not in normalized:
+    if (
+        source_backend != "metal"
+        or METAL_MODE_DIRECTIVE_SOURCE_OPTION not in normalized
+    ):
         return normalized
 
     field_name = f"{option_path}.{METAL_MODE_DIRECTIVE_SOURCE_OPTION}"
