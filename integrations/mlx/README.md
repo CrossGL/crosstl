@@ -62,11 +62,13 @@ The harness writes reports, generated artifacts, and command logs under
 ## Current Translator Gaps
 
 No active shader artifact generation blocker is tracked for the pinned reduced
-harness or the latest full-corpus scout. CrossGL/crosstl#1300 tracks the
-remaining Vulkan toolchain validation failures for the reduced frontier. Future
-scouts should add issue-backed blockers only when there are concrete repros.
-Host runtime integration gaps should be handled in MLX-specific integration code
-or downstream runtime adapters, not hidden as shader translation successes.
+harness or the latest full-corpus scout. CrossGL/crosstl#1317 tracks the
+remaining Vulkan toolchain validation failures for the reduced frontier.
+CrossGL/crosstl#1300 is closed and is tracked with the resolved frontier issues
+below. Future scouts should add issue-backed blockers only when there are
+concrete repros. Host runtime integration gaps should be handled in
+MLX-specific integration code or downstream runtime adapters, not hidden as
+shader translation successes.
 
 ## Resolved Frontier Issues
 

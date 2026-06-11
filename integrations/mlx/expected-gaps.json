@@ -11,7 +11,7 @@
     ],
     "artifacts": 10,
     "blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1300"
+      "https://github.com/CrossGL/crosstl/issues/1317"
     ]
   },
   "opengl_smoke_status": {
@@ -30,7 +30,7 @@
     ],
     "artifacts": 120,
     "validation_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1300"
+      "https://github.com/CrossGL/crosstl/issues/1317"
     ],
     "last_completed": {
       "translated_artifacts": 120,
@@ -43,9 +43,10 @@
     }
   },
   "tracked_issues": [
-    "https://github.com/CrossGL/crosstl/issues/1300"
+    "https://github.com/CrossGL/crosstl/issues/1317"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1300",
     "https://github.com/CrossGL/crosstl/issues/939",
     "https://github.com/CrossGL/crosstl/issues/940",
     "https://github.com/CrossGL/crosstl/issues/941",
