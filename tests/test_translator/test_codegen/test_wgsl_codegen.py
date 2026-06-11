@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -54,6 +56,24 @@ def parse_shader(source):
 
 def project_root():
     return Path(__file__).resolve().parents[3]
+
+
+def validate_wgsl_with_naga(tmp_path, code):
+    naga = shutil.which("naga")
+    if naga is None:
+        pytest.skip("naga is not installed")
+    source = tmp_path / "shader.wgsl"
+    source.write_text(code, encoding="utf-8")
+    result = subprocess.run(
+        [naga, str(source)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    diagnostics = "\n".join(
+        part for part in (result.stdout, result.stderr) if part.strip()
+    )
+    assert result.returncode == 0, diagnostics
 
 
 def test_wgsl_backend_is_target_only():
@@ -719,7 +739,7 @@ def test_wgsl_hlsl_texture_and_sampler_registers_get_distinct_bindings():
     assert "return textureSample(g_texture, g_sampler, uv);" in generated
 
 
-def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings():
+def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings(tmp_path):
     shader = """
     shader WGSLCBuffer {
         cbuffer TestBuffer : register(b2, space1) {
@@ -739,16 +759,23 @@ def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings():
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
     assert (
+        "struct UniformArrayElementF32 {\n"
+        "    @size(16) value: f32,\n"
+        "};"
+    ) in generated
+    assert (
         "struct TestBuffer {\n"
-        "    values: array<f32, 4>,\n"
+        "    @align(16) values: array<UniformArrayElementF32, 4>,\n"
         "    colors: array<vec3<f32>, 2>,\n"
         "};"
     ) in generated
     assert "@group(1) @binding(2)\nvar<uniform> _TestBuffer: TestBuffer;" in generated
     assert (
-        "var scale: f32 = (_TestBuffer.values[0] + _TestBuffer.values[1]);" in generated
+        "var scale: f32 = (_TestBuffer.values[0].value + "
+        "_TestBuffer.values[1].value);" in generated
     )
     assert "var color: vec3<f32> = _TestBuffer.colors[0];" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
 
 
 def test_wgsl_codegen_lowers_uniform_blocks_to_uniform_struct_bindings():
@@ -1175,6 +1202,38 @@ def test_wgsl_codegen_lowers_constant_buffer_stage_parameters_to_uniform_binding
     )
     assert "ConstantBuffer<Params> params" not in generated
     assert "params.count" in generated
+
+
+def test_wgsl_codegen_pads_uniform_struct_scalar_arrays(tmp_path):
+    shader = """
+    shader WGSLConstantBufferScalarArray {
+        struct Params {
+            float weights[4];
+        };
+        compute {
+            void main(
+                ConstantBuffer<Params> params @buffer(2),
+                uint3 gid @ gl_GlobalInvocationID
+            ) {
+                float weight = params.weights[0];
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert generated.index("struct UniformArrayElementF32") < generated.index(
+        "struct Params"
+    )
+    assert (
+        "struct Params {\n"
+        "    @align(16) weights: array<UniformArrayElementF32, 4>,\n"
+        "};"
+    ) in generated
+    assert "var weight: f32 = params.weights[0].value;" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
 
 
 def test_wgsl_codegen_rejects_readonly_structured_buffer_stores():
