@@ -39251,6 +39251,101 @@ def test_translate_project_metal_source_instantiation_propagates_plain_helper_bi
     assert validation["success"] is True
 
 
+def test_translate_project_metal_templated_functor_header_reports_before_translation(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "binary_ops.h").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            struct AddFunctor {
+                T operator()(T lhs, T rhs) const {
+                    return lhs + rhs;
+                }
+            };
+
+            template <typename T, typename Op>
+            kernel void binary_two(
+                device const T* lhs [[buffer(0)]],
+                device const T* rhs [[buffer(1)]],
+                device T* out [[buffer(2)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                Op op;
+                out[gid] = op(lhs[gid], rhs[gid]);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "binary_two.metal").write_text(
+        textwrap.dedent("""
+            #include "binary_ops.h"
+            template [[host_name("binary_add_f32")]] [[kernel]]
+            decltype(binary_two<float, AddFunctor<float>>)
+            binary_two<float, AddFunctor<float>>;
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    assert artifact["templateMaterialization"] == {
+        "status": "unsupported",
+        "specializationCount": 0,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "configuredParameterSources": {},
+        "specializations": [],
+        "unsupported": [
+            {
+                "name": "AddFunctor",
+                "parameters": ["T"],
+                "missingParameters": [],
+                "reason": "missing-template-arguments",
+                "sourceDeclaration": {
+                    "file": "binary_two.metal",
+                    "line": 4,
+                    "column": 1,
+                    "name": "AddFunctor",
+                },
+                "target": "opengl",
+                "requiredSignature": "AddFunctor<float>",
+            }
+        ],
+    }
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.template-materialization-unsupported": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert (
+        diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    )
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "binary_two.metal"
+    assert diagnostic["location"]["line"] == 4
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert "AddFunctor" in diagnostic["message"]
+    assert "unmaterialized concrete template functor use" in diagnostic["message"]
+    assert "required AddFunctor<float>" in diagnostic["message"]
+    assert "Expected type" not in diagnostic["message"]
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
 def test_translate_project_metal_repeated_call_site_templates_share_budget_for_opengl(
     tmp_path,
 ):
@@ -39476,8 +39571,7 @@ def test_translate_project_metal_implicit_type_environment_cache_bounds_repeated
         encoding="utf-8",
     )
     repeated_declarations = "\n".join(
-        f"    float v{index} = v{index - 1};"
-        for index in range(1, 40)
+        f"    float v{index} = v{index - 1};" for index in range(1, 40)
     )
     (repo / "cached_implicit.metal").write_text(
         textwrap.dedent(f"""
@@ -39559,10 +39653,7 @@ def test_translate_project_metal_implicit_type_environment_budget_diagnostic(
     artifact = payload["artifacts"][0]
     assert artifact["status"] == "failed"
     assert "template materialization work budget exceeded" in artifact["error"].lower()
-    assert (
-        "implicit-template-materialization/type-environment"
-        in artifact["error"]
-    )
+    assert "implicit-template-materialization/type-environment" in artifact["error"]
     assert (
         "limit 3 from "
         "project.source_options.metal.max_template_materialization_work"
@@ -39580,10 +39671,7 @@ def test_translate_project_metal_implicit_type_environment_budget_diagnostic(
     assert diagnostic["location"]["file"] == "budgeted_implicit.metal"
     assert diagnostic["location"]["line"] == 10
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
-    assert (
-        "implicit-template-materialization/type-environment"
-        in diagnostic["message"]
-    )
+    assert "implicit-template-materialization/type-environment" in diagnostic["message"]
     assert "templates=1" in diagnostic["message"]
 
 
@@ -41455,6 +41543,7 @@ def test_translate_project_khronos_opencl_reduce_lowers_all_target_artifacts(
     assert "shared_[lid] = front[((wid * wg_stride) + lid)];" in cgl_source
     assert "async_work_group_copy" not in cgl_source
     assert "wait_group_events" not in cgl_source
+    assert "var read:" not in cgl_source
     assert "ptr<i32> shared_" not in cgl_source
 
     opengl_source = (repo / artifacts["opengl"]["path"]).read_text(encoding="utf-8")
@@ -41467,6 +41556,7 @@ def test_translate_project_khronos_opencl_reduce_lowers_all_target_artifacts(
     )
     assert "async_work_group_copy" not in opengl_source
     assert "wait_group_events" not in opengl_source
+    assert "uint read;" not in opengl_source
     assert "ptr<i32>" not in opengl_source
 
     metal_source = (repo / artifacts["metal"]["path"]).read_text(encoding="utf-8")
@@ -41476,10 +41566,12 @@ def test_translate_project_khronos_opencl_reduce_lowers_all_target_artifacts(
     assert "int read_local(threadgroup int shared_[1024]" in metal_source
     assert "async_work_group_copy" not in metal_source
     assert "wait_group_events" not in metal_source
+    assert "u64 read;" not in metal_source
 
     vulkan_source = (repo / artifacts["vulkan"]["path"]).read_text(encoding="utf-8")
     assert "async_work_group_copy" not in vulkan_source
     assert "wait_group_events" not in vulkan_source
+    assert '"read"' not in vulkan_source
 
     for artifact in payload["artifacts"]:
         assert artifact["generatedHash"]["algorithm"] == "sha256"
@@ -41577,6 +41669,7 @@ def test_translate_project_khronos_opencl_reduce_lowers_supported_target_artifac
     assert "shared_[lid] = front[((wid * wg_stride) + lid)];" in cgl_source
     assert "async_work_group_copy" not in cgl_source
     assert "wait_group_events" not in cgl_source
+    assert "var read:" not in cgl_source
     assert "ptr<i32> shared_" not in cgl_source
 
     opengl_source = (repo / artifacts["opengl"]["path"]).read_text(encoding="utf-8")
@@ -41588,6 +41681,7 @@ def test_translate_project_khronos_opencl_reduce_lowers_supported_target_artifac
     assert "shared_[lid] = front[((wid * wg_stride) + lid)];" in opengl_source
     assert "async_work_group_copy" not in opengl_source
     assert "wait_group_events" not in opengl_source
+    assert "uint read;" not in opengl_source
     assert "ptr<i32>" not in opengl_source
 
     metal_source = (repo / artifacts["metal"]["path"]).read_text(encoding="utf-8")
@@ -41596,10 +41690,12 @@ def test_translate_project_khronos_opencl_reduce_lowers_supported_target_artifac
     assert "uint64_t length;" in metal_source
     assert "async_work_group_copy" not in metal_source
     assert "wait_group_events" not in metal_source
+    assert "u64 read;" not in metal_source
 
     vulkan_source = (repo / artifacts["vulkan"]["path"]).read_text(encoding="utf-8")
     assert "async_work_group_copy" not in vulkan_source
     assert "wait_group_events" not in vulkan_source
+    assert '"read"' not in vulkan_source
 
 
 def test_translate_project_opencl_reduce_get_num_groups_directx_uses_cbuffer_input(

@@ -310,13 +310,15 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
     def visit_OpenCLProgramNode(self, node):
         """Render an OpenCL program AST as a CrossGL shader block."""
         self.opencl_sdk_reduce_materialize_op = self.is_opencl_sdk_reduce_shape(node)
-        if self.normalize_target_safe_cgl and self.opencl_sdk_reduce_materialize_op:
+        if self.opencl_sdk_reduce_materialize_op:
             self.opencl_event_tokens = self.collect_opencl_event_tokens(node)
+        else:
+            self.opencl_event_tokens = set()
+        if self.normalize_target_safe_cgl and self.opencl_sdk_reduce_materialize_op:
             self.opencl_workgroup_pointer_helper_params = (
                 self.collect_opencl_workgroup_pointer_helper_params(node)
             )
         else:
-            self.opencl_event_tokens = set()
             self.opencl_workgroup_pointer_helper_params = {}
         self.emit("// OpenCL to CrossGL conversion")
 
