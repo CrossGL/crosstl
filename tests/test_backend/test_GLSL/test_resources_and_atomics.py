@@ -15616,14 +15616,14 @@ def test_codegen_mixed_ssbo_unsupported_sampling_vectors_are_typed_diagnostics()
         "function omitted */);" in metal
     )
     assert (
-        "float4 fetchedDirect = textures[0].read(uint2(int2(0) /* unsupported "
-        "Metal GLSL buffer block access coordBlock: no target-side fallback "
-        "declaration emitted */), uint(0));" in metal
+        "float4 fetchedDirect = textures[0].read(uint2(int2(0) /* unsupported Metal "
+        "GLSL buffer block access coordBlock: no target-side fallback declaration "
+        "emitted */), uint(0));" in metal
     )
     assert (
-        "float4 fetchedCall = textures[0].read(uint2(int2(0) /* unsupported "
-        "Metal GLSL buffer block function call readPixel: target function omitted "
-        "*/), uint(0));" in metal
+        "float4 fetchedCall = textures[0].read(uint2(int2(0) /* unsupported Metal "
+        "GLSL buffer block function call readPixel: target function omitted */), "
+        "uint(0));" in metal
     )
     assert ".sample(samplers[0], 0 /* unsupported Metal GLSL buffer" not in metal
     assert ".gather(samplers[0], 0 /* unsupported Metal GLSL buffer" not in metal
@@ -15817,15 +15817,15 @@ def test_codegen_mixed_ssbo_unsupported_sampling_offsets_are_typed_diagnostics()
         "function call readOffset: target function omitted */);" in metal
     )
     assert (
-        "float4 fetchedDirect = textures[0].read(uint2((int2(0) /* unsupported "
-        "Metal GLSL buffer block access offsetBlock: no target-side fallback "
-        "declaration emitted */ + int2(0) /* unsupported Metal GLSL buffer block "
-        "access offsetBlock: no target-side fallback declaration emitted */)), "
-        "uint(0));" in metal
+        "float4 fetchedDirect = textures[0].read(uint2((int2(0) /* unsupported Metal "
+        "GLSL buffer block access offsetBlock: no target-side fallback declaration "
+        "emitted */ + int2(0) /* unsupported Metal GLSL buffer block access "
+        "offsetBlock: no target-side fallback declaration emitted */)), uint(0));"
+        in metal
     )
     assert (
-        "float4 fetchedCall = textures[0].read(uint2((int2(0) /* unsupported "
-        "Metal GLSL buffer block function call readPixel: target function omitted */ "
+        "float4 fetchedCall = textures[0].read(uint2((int2(0) /* unsupported Metal "
+        "GLSL buffer block function call readPixel: target function omitted */ "
         "+ int2(0) /* unsupported Metal GLSL buffer block function call readOffset: "
         "target function omitted */)), uint(0));" in metal
     )

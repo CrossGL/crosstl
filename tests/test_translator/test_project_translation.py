@@ -31,6 +31,7 @@ from crosstl.project import (
     load_project_config,
     plan_runtime_adapters,
     plan_runtime_host_bindings,
+    plan_runtime_host_integration_execution,
     plan_runtime_host_loader_consumption,
     plan_runtime_integration,
     scan_project,
@@ -295,6 +296,7 @@ def test_project_package_exposes_public_api_surface():
         "prepare_runtime_execution",
         "plan_runtime_adapters",
         "plan_runtime_host_bindings",
+        "plan_runtime_host_integration_execution",
         "plan_runtime_host_loader_consumption",
         "plan_runtime_integration",
         "scan_project",
@@ -4411,9 +4413,7 @@ def test_scan_project_reports_unsupported_macro_forms_across_source_frontends(
     assert {
         diagnostic["sourceBackend"]: diagnostic["location"]["file"]
         for diagnostic in diagnostics
-    } == {
-        source_name: f"shaders/{source_name}.shader" for source_name in source_names
-    }
+    } == {source_name: f"shaders/{source_name}.shader" for source_name in source_names}
     for diagnostic in diagnostics:
         assert diagnostic["missingCapabilities"] == ["macro.native"]
         assert diagnostic["location"]["line"] == 2
@@ -9009,9 +9009,10 @@ def test_translate_project_forwards_metal_template_specialization_limit(tmp_path
     }
     assert payload["project"]["sourceOptionCount"] == 1
     assert artifacts["shaders/bad.metal"]["status"] == "failed"
-    assert "template specialization limit exceeded" in artifacts["shaders/bad.metal"][
-        "error"
-    ]
+    assert (
+        "template specialization limit exceeded"
+        in artifacts["shaders/bad.metal"]["error"]
+    )
     assert not (repo / "translated" / "cgl" / "shaders" / "bad.cgl").exists()
     assert artifacts["shaders/ok.metal"]["status"] == "translated"
     assert (repo / "translated" / "cgl" / "shaders" / "ok.cgl").exists()
@@ -23147,8 +23148,7 @@ def test_translate_project_directx_translates_mlx_steel_issue_943_frontier(
                 }}
 
                 instantiate_steel(float32, float, {offset})
-                """).strip()
-            + "\n",
+                """).strip() + "\n",
             encoding="utf-8",
         )
 
@@ -23166,8 +23166,7 @@ def test_translate_project_directx_translates_mlx_steel_issue_943_frontier(
             ]
             targets = ["directx"]
             output_dir = "out"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -29276,9 +29275,7 @@ def test_runtime_loader_validation_commands_preserve_posix_package_paths_on_wind
         "packagePath": "artifacts/out/wgsl/simple.wgsl",
     }
 
-    assert project_pipeline._runtime_loader_validation_command(
-        directx_adapter
-    ) == [
+    assert project_pipeline._runtime_loader_validation_command(directx_adapter) == [
         "dxc",
         "-T",
         "vs_6_0",
@@ -29302,9 +29299,7 @@ def test_runtime_loader_validation_commands_preserve_posix_package_paths_on_wind
             project_pipeline.os.devnull,
         ]
     ]
-    assert project_pipeline._runtime_loader_validation_command(
-        vulkan_adapter
-    ) == [
+    assert project_pipeline._runtime_loader_validation_command(vulkan_adapter) == [
         "spirv-as",
         "artifacts/out/vulkan/simple.spvasm",
         "-o",
@@ -30570,6 +30565,232 @@ def test_project_cli_inspect_host_integration_handoff_json_writes_output(tmp_pat
     )
     assert payload["summary"]["readyTargetCount"] == 1
     assert payload["generatedFiles"][0]["status"] == "ready"
+
+
+def test_plan_runtime_host_integration_execution_reports_ready_steps(tmp_path):
+    repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+    before_files = sorted(
+        path.relative_to(handoff_dir).as_posix()
+        for path in handoff_dir.rglob("*")
+        if path.is_file()
+    )
+
+    payload = plan_runtime_host_integration_execution(
+        handoff_dir / "host-integration.json",
+        host_root=repo,
+    )
+
+    after_files = sorted(
+        path.relative_to(handoff_dir).as_posix()
+        for path in handoff_dir.rglob("*")
+        if path.is_file()
+    )
+    assert after_files == before_files
+    assert set(payload) == (
+        project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_FIELDS
+    )
+    assert (
+        payload["kind"] == project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_KIND
+    )
+    assert payload["success"] is True
+    assert payload["status"] == "ready"
+    assert (
+        payload["scope"]
+        == project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_SCOPE
+    )
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_NON_GOALS
+    )
+    assert payload["hostRoot"] == str(repo)
+    assert payload["hostRootStatus"] == "ready"
+    assert payload["handoffInspection"]["success"] is True
+    assert payload["handoffInspection"]["status"] == "ready"
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "loaderUnitCount": 1,
+        "readyLoaderUnitCount": 1,
+        "blockedLoaderUnitCount": 0,
+        "failedLoaderUnitCount": 0,
+        "stepCount": 6,
+        "readyStepCount": 6,
+        "blockedStepCount": 0,
+        "failedStepCount": 0,
+        "requiredToolCount": 0,
+        "hostResponsibilityCount": 2,
+    }
+    assert set(payload["targets"][0]) == (
+        project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_TARGET_FIELDS
+    )
+    assert payload["targets"][0]["target"] == "cgl"
+    assert payload["targets"][0]["status"] == "ready"
+    assert payload["targets"][0]["stepCount"] == 6
+    assert payload["targets"][0]["failedStepCount"] == 0
+    assert len(payload["targets"][0]["hostResponsibilities"]) == 2
+    assert [step["kind"] for step in payload["steps"]] == [
+        "consume-host-loader-unit",
+        "load-package-artifact",
+        "load-source-remap",
+        "bind-host-interface",
+        "satisfy-host-responsibility",
+        "satisfy-host-responsibility",
+    ]
+    assert [step["phase"] for step in payload["steps"]] == [
+        "consume-loader",
+        "load-artifact",
+        "run-host-action",
+        "run-host-action",
+        "satisfy-host-responsibility",
+        "satisfy-host-responsibility",
+    ]
+    assert payload["steps"][0]["id"] == "cgl-0001-consume-host-loader-unit"
+    assert all(
+        set(step)
+        == project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_STEP_FIELDS
+        for step in payload["steps"]
+    )
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+
+
+def test_plan_runtime_host_integration_execution_carries_blocked_steps(tmp_path):
+    _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
+        tmp_path, targets=("vulkan",)
+    )
+
+    payload = plan_runtime_host_integration_execution(
+        handoff_dir / "host-integration.json"
+    )
+
+    assert payload["success"] is True
+    assert payload["status"] == "blocked"
+    assert payload["hostRoot"] is None
+    assert payload["hostRootStatus"] == "not-provided"
+    assert payload["summary"]["loaderUnitCount"] == 1
+    assert payload["summary"]["readyLoaderUnitCount"] == 0
+    assert payload["summary"]["blockedLoaderUnitCount"] == 1
+    assert payload["summary"]["stepCount"] == 1
+    assert payload["summary"]["blockedStepCount"] == 1
+    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["status"] == "blocked"
+    assert payload["targets"][0]["blockedStepCount"] == 1
+    assert payload["steps"][0]["kind"] == "resolve-loader-scaffold-blockers"
+    assert payload["steps"][0]["phase"] == "resolve-blockers"
+    assert payload["steps"][0]["status"] == "blocked"
+    assert payload["steps"][0]["severity"] == "warning"
+
+
+def test_plan_runtime_host_integration_execution_rejects_failed_handoff_inspection(
+    tmp_path,
+):
+    _, handoff_dir, handoff_payload = _build_runtime_host_integration_handoff_fixture(
+        tmp_path
+    )
+    target_path = handoff_dir / handoff_payload["targets"][0]["handoffFile"]
+    target_path.unlink()
+
+    payload = plan_runtime_host_integration_execution(
+        handoff_dir / "host-integration.json"
+    )
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["summary"]["targetCount"] == 0
+    assert payload["steps"] == []
+    assert payload["handoffInspection"]["success"] is False
+    assert payload["diagnosticCounts"]["error"] >= 1
+    assert any(
+        diagnostic["code"]
+        == "project.runtime-host-integration-handoff-inspection.target-missing"
+        for diagnostic in payload["diagnostics"]
+    )
+
+
+def test_plan_runtime_host_integration_execution_rejects_missing_host_root(tmp_path):
+    repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+
+    payload = plan_runtime_host_integration_execution(
+        handoff_dir / "host-integration.json",
+        host_root=repo / "missing-host",
+    )
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["hostRoot"] == str(repo / "missing-host")
+    assert payload["hostRootStatus"] == "missing"
+    assert payload["summary"]["stepCount"] == 6
+    assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == (
+        "project.runtime-host-integration-execution-plan.host-root-missing"
+    )
+
+
+def test_project_cli_plan_host_integration_execution_text_outputs_steps(tmp_path):
+    repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+    manifest_path = handoff_dir / "host-integration.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-host-integration-execution",
+            str(manifest_path),
+            "--host-root",
+            str(repo),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Runtime host integration execution plan: {manifest_path}" in result.stdout
+    assert "Status: ready" in result.stdout
+    assert "Host root:" in result.stdout
+    assert "Execution scope: host-integration-execution-planning" in result.stdout
+    assert (
+        "Execution non-goals: host-code-rewriting, device-execution, "
+        "runtime-framework-generation, target-sdk-installation"
+    ) in result.stdout
+    assert "Summary: 1 targets, 6 steps, 6 ready, 0 blocked, 0 failed" in (
+        result.stdout
+    )
+    assert "Runtime host integration execution steps:" in result.stdout
+    assert "consume-host-loader-unit" in result.stdout
+
+
+def test_project_cli_plan_host_integration_execution_json_writes_output(tmp_path):
+    repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+    output_path = repo / "host-integration-execution-plan.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-host-integration-execution",
+            str(handoff_dir / "host-integration.json"),
+            "--host-root",
+            str(repo),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert (
+        payload["kind"] == project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_KIND
+    )
+    assert payload["summary"]["readyStepCount"] == 6
+    assert payload["steps"][0]["kind"] == "consume-host-loader-unit"
 
 
 def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp_path):
@@ -32983,8 +33204,12 @@ def test_translate_project_metal_matmul_buffers_lower_to_opengl_resources(
         "    uint inner_dim;\n"
         "} params;"
     ) in output
-    assert "layout(std430, binding = 1) readonly buffer ABuffer { float A[]; };" in output
-    assert "layout(std430, binding = 2) readonly buffer BBuffer { float B[]; };" in output
+    assert (
+        "layout(std430, binding = 1) readonly buffer ABuffer { float A[]; };" in output
+    )
+    assert (
+        "layout(std430, binding = 2) readonly buffer BBuffer { float B[]; };" in output
+    )
     assert "layout(std430, binding = 3) buffer XBuffer { float X[]; };" in output
     assert "void main()" in output
     assert "uvec2 id = uvec2(gl_GlobalInvocationID.xy);" in output
@@ -33066,8 +33291,12 @@ def test_translate_project_metal_matmul_opengl_buffers_before_params_validate(
         "    uint inner_dim;\n"
         "} params;"
     ) in output
-    assert "layout(std430, binding = 0) readonly buffer ABuffer { float A[]; };" in output
-    assert "layout(std430, binding = 1) readonly buffer BBuffer { float B[]; };" in output
+    assert (
+        "layout(std430, binding = 0) readonly buffer ABuffer { float A[]; };" in output
+    )
+    assert (
+        "layout(std430, binding = 1) readonly buffer BBuffer { float B[]; };" in output
+    )
     assert "layout(std430, binding = 2) buffer XBuffer { float X[]; };" in output
     assert "const uint row_dim_x = params.row_dim_x;" in output
     assert "const uint col_dim_x = params.col_dim_x;" in output
@@ -33134,8 +33363,12 @@ def test_translate_project_metal_matmul_constant_pointer_params_lower_to_resourc
     opengl = outputs["opengl"]
     assert "layout(std140, binding = 0) uniform MatMulParams" in opengl
     assert "} params;" in opengl
-    assert "layout(std430, binding = 1) readonly buffer ABuffer { float A[]; };" in opengl
-    assert "layout(std430, binding = 2) readonly buffer BBuffer { float B[]; };" in opengl
+    assert (
+        "layout(std430, binding = 1) readonly buffer ABuffer { float A[]; };" in opengl
+    )
+    assert (
+        "layout(std430, binding = 2) readonly buffer BBuffer { float B[]; };" in opengl
+    )
     assert "layout(std430, binding = 3) buffer XBuffer { float X[]; };" in opengl
     assert "params.cols" in opengl
     assert "params.rows" in opengl
@@ -33446,9 +33679,7 @@ def test_translate_project_vulkan_compute_bool_parameter_uses_uint_interface(
     uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", output)
     assert bool_type is not None
     assert uint_type is not None
-    assert re.search(
-        rf"OpTypePointer Input {re.escape(uint_type.group(1))}\b", output
-    )
+    assert re.search(rf"OpTypePointer Input {re.escape(uint_type.group(1))}\b", output)
     assert not re.search(
         rf"OpTypePointer Input {re.escape(bool_type.group(1))}\b", output
     )

@@ -3281,8 +3281,9 @@ class VulkanSPIRVCodeGen:
             return [offsets_value] * 4, component_id
 
         offsets_type = self.value_types.get(offsets_value.id)
-        element_type = self.array_element_type_from_type(offsets_type)
-        if element_type is not None:
+        array_info = self.array_type_info_from_type(offsets_type)
+        if array_info is not None:
+            element_type, _ = array_info
             return [
                 self.composite_extract(offsets_value, element_type, index)
                 for index in range(4)
@@ -11996,7 +11997,7 @@ class VulkanSPIRVCodeGen:
 
         qualifiers = [
             str(qualifier)
-            for qualifier in (getattr(source_node, "qualifiers", None) or [])
+            for qualifier in getattr(source_node, "qualifiers", None) or []
             if qualifier
         ]
         parts = [*qualifiers]
@@ -12021,9 +12022,7 @@ class VulkanSPIRVCodeGen:
 
         direction = storage_class.lower()
         variable_name = f" '{name}'" if name else ""
-        declaration = self.interface_source_declaration_text(
-            source_node, name, type_id
-        )
+        declaration = self.interface_source_declaration_text(source_node, name, type_id)
         declaration_suffix = (
             f" from source declaration '{declaration}'" if declaration else ""
         )
@@ -16136,11 +16135,7 @@ class VulkanSPIRVCodeGen:
                 for index, param in enumerate(parameters)
                 if index not in skipped_indices
             ],
-            [
-                arg
-                for index, arg in enumerate(args)
-                if index not in skipped_indices
-            ],
+            [arg for index, arg in enumerate(args) if index not in skipped_indices],
         )
 
     def storage_buffer_effective_arity_matches(self, function_node, call_args):
@@ -16263,9 +16258,7 @@ class VulkanSPIRVCodeGen:
                 )
             else:
                 incompatibility_reasons.append(
-                    self.storage_buffer_argument_rejection_reason(
-                        param, arg, arg_index
-                    )
+                    self.storage_buffer_argument_rejection_reason(param, arg, arg_index)
                 )
             search(
                 param_index,
@@ -23331,7 +23324,7 @@ class VulkanSPIRVCodeGen:
         """Reject generic functions that have no concrete SPIR-V specialization."""
         specialized_source_names = {
             key[0]
-            for key in (self.generic_function_specializations or {})
+            for key in self.generic_function_specializations or {}
             if isinstance(key, tuple) and key
         }
         for func in iter_function_nodes(ast_node):

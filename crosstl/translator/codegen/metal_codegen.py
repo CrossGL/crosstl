@@ -4,11 +4,9 @@ import ast as py_ast
 import re
 from hashlib import sha1
 
-from ...backend.common_ast import (
-    AssignmentNode as BackendAssignmentNode,
-    ReturnNode as BackendReturnNode,
-    VariableNode as BackendVariableNode,
-)
+from ...backend.common_ast import AssignmentNode as BackendAssignmentNode
+from ...backend.common_ast import ReturnNode as BackendReturnNode
+from ...backend.common_ast import VariableNode as BackendVariableNode
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -3578,9 +3576,7 @@ class MetalCodeGen:
                             "name": name,
                             "raw_type": raw_type,
                             "mapped_type": mapped_type,
-                            "attribute": self.spirv_stage_input_attribute(
-                                interface
-                            ),
+                            "attribute": self.spirv_stage_input_attribute(interface),
                             "semantic": self.spirv_stage_input_semantic(interface),
                         }
                     )
@@ -4082,9 +4078,7 @@ class MetalCodeGen:
             semantic = self.semantic_from_node(func)
             function_name = entry_name or func.name
             semantic_attr = self.map_non_stage_function_semantic(semantic)
-            code += (
-                f"{return_type} {function_name}({params_str}){semantic_attr};\n\n"
-            )
+            code += f"{return_type} {function_name}({params_str}){semantic_attr};\n\n"
             self.current_function_name = previous_function_name
             self.current_function_return_type = previous_function_return_type
             self.current_function_return_wrapper = previous_function_return_wrapper

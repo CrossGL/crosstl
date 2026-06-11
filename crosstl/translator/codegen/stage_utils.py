@@ -33,7 +33,9 @@ def function_stage_name(func):
         if attr_name in STAGE_QUALIFIER_NAMES:
             return attr_name
 
-    spirv_stage_name = normalize_stage_name(getattr(func, "spirv_execution_model", None))
+    spirv_stage_name = normalize_stage_name(
+        getattr(func, "spirv_execution_model", None)
+    )
     if spirv_stage_name in STAGE_QUALIFIER_NAMES:
         return spirv_stage_name
 

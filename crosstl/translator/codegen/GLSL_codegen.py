@@ -2495,9 +2495,7 @@ class GLSLCodeGen:
             "struct",
         )
         self.structs_by_name = {
-            node.name: node
-            for node in structs
-            if self.is_struct_declaration_node(node)
+            node.name: node for node in structs if self.is_struct_declaration_node(node)
         }
         self.struct_member_types = collect_struct_member_types(
             structs, self.type_name_string
@@ -5991,7 +5989,7 @@ class GLSLCodeGen:
                     image_accesses=image_access_parameters,
                 )
 
-            semantic = self.semantic_from_node(p)
+            self.semantic_from_node(p)
 
             parameter_name = (
                 self.glsl_parameter_identifier_name(p.name, parameter_source_names)
@@ -6534,9 +6532,11 @@ class GLSLCodeGen:
         resource_type = self.stage_entry_resource_parameter_type(parameter)
         node = VariableNode(
             name=getattr(parameter, "name", None),
-            var_type=resource_type
-            if resource_type is not None
-            else self.resource_node_type(parameter),
+            var_type=(
+                resource_type
+                if resource_type is not None
+                else self.resource_node_type(parameter)
+            ),
             attributes=list(getattr(parameter, "attributes", []) or []),
             qualifiers=list(getattr(parameter, "qualifiers", []) or []),
         )

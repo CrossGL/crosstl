@@ -41,6 +41,7 @@ TOOLS = [
                 "plan-host-loader-consumption",
                 "host-integration-handoff",
                 "inspect-host-integration-handoff",
+                "plan-host-integration-execution",
                 "report",
             ),
         ),
@@ -204,6 +205,15 @@ TOOLS = [
             ("inspect-host-integration-handoff",),
             (
                 "usage:",
+                "--format",
+                "--output",
+            ),
+        ),
+        (
+            ("plan-host-integration-execution",),
+            (
+                "usage:",
+                "--host-root",
                 "--format",
                 "--output",
             ),

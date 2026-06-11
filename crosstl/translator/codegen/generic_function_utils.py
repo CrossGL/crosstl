@@ -290,7 +290,9 @@ def _generic_function_candidate_call_match(generator, func, func_name, args):
         return None
 
     concrete_args = tuple(substitutions[param] for param in generic_params)
-    ordinal = (getattr(generator, "generic_function_definition_ordinals", {}) or {}).get(
+    ordinal = (
+        getattr(generator, "generic_function_definition_ordinals", {}) or {}
+    ).get(
         id(func),
         0,
     )

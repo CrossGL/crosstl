@@ -37,17 +37,17 @@ implicitly supported.
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "64", "0", "2", "0", "0", "0"
-   "OpenGL / GLSL", "64", "0", "2", "0", "0", "0"
-   "WebGL / GLSL ES", "35", "0", "22", "9", "0", "0"
-   "WebGPU / WGSL", "37", "3", "19", "7", "0", "0"
-   "Metal", "63", "0", "3", "0", "0", "0"
-   "Vulkan SPIR-V", "64", "0", "2", "0", "0", "0"
-   "CUDA", "59", "0", "7", "0", "0", "0"
-   "HIP", "59", "0", "7", "0", "0", "0"
-   "Mojo", "61", "0", "5", "0", "0", "0"
-   "Rust", "62", "0", "4", "0", "0", "0"
-   "Slang", "63", "0", "3", "0", "0", "0"
+   "DirectX / HLSL", "65", "0", "2", "0", "0", "0"
+   "OpenGL / GLSL", "65", "0", "2", "0", "0", "0"
+   "WebGL / GLSL ES", "36", "0", "22", "9", "0", "0"
+   "WebGPU / WGSL", "38", "3", "19", "7", "0", "0"
+   "Metal", "64", "0", "3", "0", "0", "0"
+   "Vulkan SPIR-V", "65", "0", "2", "0", "0", "0"
+   "CUDA", "60", "0", "7", "0", "0", "0"
+   "HIP", "60", "0", "7", "0", "0", "0"
+   "Mojo", "62", "0", "5", "0", "0", "0"
+   "Rust", "63", "0", "4", "0", "0", "0"
+   "Slang", "64", "0", "3", "0", "0", "0"
 
 Graphics Backend Focus
 ----------------------
@@ -58,9 +58,9 @@ scope for graphics backend completion work.
 .. csv-table:: Graphics backend status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "64", "0", "2", "0", "0", "0"
-   "OpenGL / GLSL", "64", "0", "2", "0", "0", "0"
-   "Metal", "63", "0", "3", "0", "0", "0"
+   "DirectX / HLSL", "65", "0", "2", "0", "0", "0"
+   "OpenGL / GLSL", "65", "0", "2", "0", "0", "0"
+   "Metal", "64", "0", "3", "0", "0", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal actionable backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
@@ -75,17 +75,17 @@ inspection, diagnostics, validation, and corpus-coverage rows.
 .. csv-table:: Project-porting status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "22", "0", "1", "0", "0", "0"
-   "OpenGL / GLSL", "22", "0", "1", "0", "0", "0"
-   "WebGL / GLSL ES", "22", "0", "1", "0", "0", "0"
-   "WebGPU / WGSL", "22", "0", "1", "0", "0", "0"
-   "Metal", "22", "0", "1", "0", "0", "0"
-   "Vulkan SPIR-V", "22", "0", "1", "0", "0", "0"
-   "CUDA", "22", "0", "1", "0", "0", "0"
-   "HIP", "22", "0", "1", "0", "0", "0"
-   "Mojo", "22", "0", "1", "0", "0", "0"
-   "Rust", "22", "0", "1", "0", "0", "0"
-   "Slang", "22", "0", "1", "0", "0", "0"
+   "DirectX / HLSL", "23", "0", "1", "0", "0", "0"
+   "OpenGL / GLSL", "23", "0", "1", "0", "0", "0"
+   "WebGL / GLSL ES", "23", "0", "1", "0", "0", "0"
+   "WebGPU / WGSL", "23", "0", "1", "0", "0", "0"
+   "Metal", "23", "0", "1", "0", "0", "0"
+   "Vulkan SPIR-V", "23", "0", "1", "0", "0", "0"
+   "CUDA", "23", "0", "1", "0", "0", "0"
+   "HIP", "23", "0", "1", "0", "0", "0"
+   "Mojo", "23", "0", "1", "0", "0", "0"
+   "Rust", "23", "0", "1", "0", "0", "0"
+   "Slang", "23", "0", "1", "0", "0", "0"
 
 .. csv-table:: Project-porting actionable backlog
    :header: "Backend", "Feature", "Status", "Current gap", "Next scope"
@@ -196,6 +196,7 @@ Each category below uses the status codes from the legend.
    "Runtime host loader consumption plan", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Runtime host integration handoff", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Runtime host integration handoff inspection", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Runtime host integration execution plan", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Project report inspection", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Artifact manifest", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Source provenance and source-map bridge", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
