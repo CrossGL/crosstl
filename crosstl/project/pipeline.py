@@ -2381,9 +2381,7 @@ INCLUDE_DEPENDENCY_STATUSES = frozenset(
     ("dynamic", "missing", "outside-project", "resolved", "system")
 )
 INCLUDE_DEPENDENCY_RESOLUTION_SOURCES = frozenset(("include-dir", "source"))
-NATIVE_DIRECTIVE_HANDLING_STATUSES = frozenset(
-    ("preserved", "expanded", "unsupported")
-)
+NATIVE_DIRECTIVE_HANDLING_STATUSES = frozenset(("preserved", "expanded", "unsupported"))
 METAL_MODE_DIRECTIVE_SOURCE_OPTION = "mode_directives"
 METAL_MODE_DIRECTIVE_POLICIES = frozenset(("preserve", "expand", "unsupported"))
 METAL_MODE_DIRECTIVE_POLICY_ALIASES = {
@@ -2645,9 +2643,7 @@ def _as_source_options(value: Any, *, field_name: str) -> dict[str, dict[str, An
                     if not isinstance(per_source_options, Mapping):
                         raise ValueError(f"{source_path} must be a table")
                     normalized_pattern_options: dict[str, Any] = {}
-                    for per_source_name, per_source_value in (
-                        per_source_options.items()
-                    ):
+                    for per_source_name, per_source_value in per_source_options.items():
                         if (
                             not isinstance(per_source_name, str)
                             or not per_source_name.strip()
@@ -2749,7 +2745,10 @@ def _normalize_source_options_for_backend(
     option_path: str,
 ) -> dict[str, Any]:
     normalized = dict(options)
-    if source_backend != "metal" or METAL_MODE_DIRECTIVE_SOURCE_OPTION not in normalized:
+    if (
+        source_backend != "metal"
+        or METAL_MODE_DIRECTIVE_SOURCE_OPTION not in normalized
+    ):
         return normalized
 
     field_name = f"{option_path}.{METAL_MODE_DIRECTIVE_SOURCE_OPTION}"
@@ -4861,9 +4860,7 @@ def _source_options_for_unit(
     if isinstance(source_patterns, Mapping):
         normalized_path = _normalize_project_relative_path(relative_path)
         for pattern, pattern_options in source_patterns.items():
-            if not isinstance(pattern, str) or not isinstance(
-                pattern_options, Mapping
-            ):
+            if not isinstance(pattern, str) or not isinstance(pattern_options, Mapping):
                 continue
             normalized_pattern = _normalize_project_relative_path(pattern)
             if not fnmatch.fnmatch(normalized_path, normalized_pattern):
@@ -4875,8 +4872,7 @@ def _source_options_for_unit(
                     normalized_pattern,
                 )
                 limit_source = (
-                    f"{pattern_path}."
-                    f"{METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION}"
+                    f"{pattern_path}." f"{METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION}"
                 )
 
     source_options.pop(SOURCE_OPTION_PATTERNS_KEY, None)
@@ -4885,9 +4881,7 @@ def _source_options_for_unit(
         and METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION in source_options
         and limit_source is not None
     ):
-        source_options[METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION] = (
-            limit_source
-        )
+        source_options[METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION] = limit_source
     return source_options
 
 
@@ -9104,9 +9098,10 @@ def _metal_find_implicit_template_function_calls(
     included = list(included_spans) if included_spans is not None else None
     known_return_types = dict(return_types or {})
     for function in functions:
-        if included is not None and preprocessor._containing_span(
-            function.span[0], included
-        ) is None:
+        if (
+            included is not None
+            and preprocessor._containing_span(function.span[0], included) is None
+        ):
             continue
         type_environment = _metal_function_type_environment(
             preprocessor,
@@ -9299,7 +9294,9 @@ def _materialize_implicit_template_function_calls(
             template = templates_by_name.get(function_name)
             if template is None:
                 continue
-            replacements.append((template.span[0], template.span[1], materialized_source))
+            replacements.append(
+                (template.span[0], template.span[1], materialized_source)
+            )
         materialized = preprocessor._apply_text_replacements(materialized, replacements)
     return _ImplicitTemplateMaterialization(
         text=materialized,
@@ -10181,7 +10178,15 @@ def _metal_expression_type(
                 )
                 for part in parts
             ]
-            for preferred in ("double", "float", "half", "ulong", "uint", "long", "int"):
+            for preferred in (
+                "double",
+                "float",
+                "half",
+                "ulong",
+                "uint",
+                "long",
+                "int",
+            ):
                 if preferred in inferred:
                     return preferred
             return next((item for item in inferred if item), None)
@@ -10266,61 +10271,67 @@ def _plain_template_helper_call_sites(
 ) -> list[tuple[str, list[str], tuple[int, int]]]:
     calls: list[tuple[str, list[str], tuple[int, int]]] = []
     excluded = _SpanLookup(excluded_spans)
-    included = _SpanLookup(included_spans)
-    i = 0
-    while i < len(source):
-        if source[i] in "\"'":
-            _literal, consumed = preprocessor._read_string(source, i)
-            i += consumed
-            continue
-        if source.startswith("//", i):
-            end = source.find("\n", i)
-            if end == -1:
-                break
-            i = end + 1
-            continue
-        if source.startswith("/*", i):
-            end = source.find("*/", i + 2)
-            if end == -1:
-                break
-            i = end + 2
-            continue
-        span = excluded.containing(i)
-        if span is not None:
-            i = span[1]
-            continue
-        if included.containing(i) is None:
-            i += 1
-            continue
-        if source[i].isalpha() or source[i] == "_":
-            ident, consumed = preprocessor._read_identifier(source, i)
-            if ident not in templates_by_name or preprocessor._is_member_identifier_context(
-                source,
-                i,
-            ):
+    for span_start, span_end in _SpanLookup(included_spans)._spans:
+        i = span_start
+        scan_end = min(span_end, len(source))
+        while i < scan_end:
+            if source[i] in "\"'":
+                _literal, consumed = preprocessor._read_string(source, i)
                 i += consumed
                 continue
-            j = i + consumed
-            while j < len(source) and source[j].isspace():
-                j += 1
-            if j >= len(source) or source[j] != "(":
-                i += consumed
+            if source.startswith("//", i):
+                end = source.find("\n", i, scan_end)
+                if end == -1:
+                    break
+                i = end + 1
                 continue
-            paren_end = preprocessor._find_matching_delimiter(source, j, "(", ")")
-            if paren_end is None:
-                i += consumed
+            if source.startswith("/*", i):
+                end = source.find("*/", i + 2, scan_end)
+                if end == -1:
+                    break
+                i = end + 2
                 continue
-            arguments = preprocessor._split_top_level_commas(source[j + 1 : paren_end])
-            calls.append(
-                (
-                    ident,
-                    arguments,
-                    (preprocessor._scoped_identifier_start(source, i), i + consumed),
+            span = excluded.containing(i)
+            if span is not None:
+                i = min(span[1], scan_end)
+                continue
+            if source[i].isalpha() or source[i] == "_":
+                ident, consumed = preprocessor._read_identifier(source, i)
+                if (
+                    ident not in templates_by_name
+                    or preprocessor._is_member_identifier_context(
+                        source,
+                        i,
+                    )
+                ):
+                    i += consumed
+                    continue
+                j = i + consumed
+                while j < scan_end and source[j].isspace():
+                    j += 1
+                if j >= scan_end or source[j] != "(":
+                    i += consumed
+                    continue
+                paren_end = preprocessor._find_matching_delimiter(source, j, "(", ")")
+                if paren_end is None:
+                    i += consumed
+                    continue
+                arguments = preprocessor._split_top_level_commas(
+                    source[j + 1 : paren_end]
                 )
-            )
-            i = paren_end + 1
-            continue
-        i += 1
+                calls.append(
+                    (
+                        ident,
+                        arguments,
+                        (
+                            preprocessor._scoped_identifier_start(source, i),
+                            i + consumed,
+                        ),
+                    )
+                )
+                i = paren_end + 1
+                continue
+            i += 1
     return calls
 
 
@@ -10496,6 +10507,196 @@ def _materialize_plain_template_helper_calls(
         reachable = set(reachable_function_spans)
         replacements: list[tuple[int, int, str]] = []
         new_materializations: list[str] = []
+
+        active_materializations: set[tuple[str, tuple[str, ...], tuple[str, ...]]] = (
+            set()
+        )
+
+        def ensure_plain_helper(
+            function_name: str,
+            template: Any,
+            arguments: Sequence[str],
+            parameter_declarations: Sequence[tuple[str, str, bool]],
+        ) -> str:
+            specialization_key = preprocessor._template_specialization_key(
+                function_name,
+                arguments,
+            )
+            signature_key = tuple(
+                _normalize_metal_type_text(type_text)
+                for type_text, _name, _variadic in parameter_declarations
+            )
+            key = (specialization_key[0], specialization_key[1], signature_key)
+            materialized_name = materialized_names.get(key)
+            if materialized_name is not None:
+                return materialized_name
+
+            unique_count = len(materialized_names) + 1
+            if len(materialized_names) >= preprocessor.max_template_specializations:
+                from crosstl.backend.Metal.preprocessor import (
+                    MetalTemplateSpecializationError,
+                )
+
+                requested_signature = preprocessor._template_specialization_signature(
+                    function_name,
+                    arguments,
+                )
+                suggested_action = (
+                    "raise max_template_specializations for this source "
+                    "pattern or backend, or reduce inferred template "
+                    "helper instantiations"
+                )
+                raise MetalTemplateSpecializationError(
+                    "Metal template specialization limit exceeded while "
+                    f"materializing '{requested_signature}'; "
+                    f"{unique_count} unique concrete signatures requested, "
+                    f"limit {preprocessor.max_template_specializations} "
+                    f"from {preprocessor.template_specialization_limit_source}. "
+                    f"Suggested action: {suggested_action}.",
+                    limit=preprocessor.max_template_specializations,
+                    limit_source=(preprocessor.template_specialization_limit_source),
+                    unique_specialization_count=unique_count,
+                    requested_signature=requested_signature,
+                    suggested_action=suggested_action,
+                )
+
+            materialized_name = _metal_template_materialized_name(
+                preprocessor,
+                function_name,
+                list(key[1]),
+                parameter_declarations,
+                materialized_names,
+            )
+            materialized_names[key] = materialized_name
+            parameters = _template_parameter_values_from_arguments(
+                preprocessor,
+                template,
+                list(key[1]),
+            )
+            specialization_records.append(
+                _materialized_template_specialization_record(
+                    name=function_name,
+                    materialized_name=materialized_name,
+                    parameters=parameters,
+                    parameter_sources={
+                        parameter: "call-site" for parameter in parameters
+                    },
+                    source="call-site",
+                )
+            )
+            materialized_template_names.add(function_name)
+
+            materialized = preprocessor._materialize_template_function_with_name(
+                template,
+                list(key[1]),
+                materialized_name,
+                host_name=None,
+            )
+            if not materialized:
+                return materialized_name
+
+            if key not in active_materializations:
+                active_materializations.add(key)
+                child_replacements: list[tuple[int, int, str]] = []
+                materialized_template_spans = (
+                    preprocessor._find_template_declaration_spans(materialized)
+                )
+                materialized_functions = (
+                    preprocessor._find_non_template_function_definitions(
+                        materialized,
+                        materialized_template_spans,
+                    )
+                )
+                materialized_return_types = {
+                    function.name: return_type
+                    for function in materialized_functions
+                    if (
+                        return_type := _metal_function_return_type(
+                            preprocessor,
+                            _metal_function_header(materialized, function),
+                            function.name,
+                        )
+                    )
+                }
+                for function in materialized_functions:
+                    if function.name != materialized_name:
+                        continue
+                    type_environment = _metal_function_type_environment(
+                        preprocessor,
+                        materialized,
+                        function,
+                        materialized_return_types,
+                    )
+                    child_calls = _plain_template_helper_call_sites(
+                        preprocessor,
+                        materialized,
+                        templates_by_name,
+                        materialized_template_spans,
+                        [function.body_span],
+                    )
+                    for child_name, child_arguments, child_span in child_calls:
+                        inferred_matches: list[
+                            tuple[Any, list[str], list[tuple[str, str, bool]]]
+                        ] = []
+                        for child_template in templates_by_name.get(child_name, []):
+                            inferred_arguments = _infer_plain_template_helper_arguments(
+                                preprocessor,
+                                child_template,
+                                child_arguments,
+                                type_environment,
+                                materialized_return_types,
+                            )
+                            if (
+                                not inferred_arguments
+                                or not preprocessor._template_arguments_satisfy_parameters(
+                                    child_template,
+                                    inferred_arguments,
+                                )
+                            ):
+                                continue
+                            child_parameter_declarations = (
+                                _metal_function_parameter_declarations(
+                                    preprocessor,
+                                    _metal_template_header(child_template),
+                                )
+                            )
+                            inferred_matches.append(
+                                (
+                                    child_template,
+                                    inferred_arguments,
+                                    child_parameter_declarations,
+                                )
+                            )
+                        if len(inferred_matches) != 1:
+                            continue
+                        (
+                            child_template,
+                            child_arguments,
+                            child_parameter_declarations,
+                        ) = inferred_matches[0]
+                        child_materialized_name = ensure_plain_helper(
+                            child_name,
+                            child_template,
+                            child_arguments,
+                            child_parameter_declarations,
+                        )
+                        child_replacements.append(
+                            (
+                                child_span[0],
+                                child_span[1],
+                                child_materialized_name,
+                            )
+                        )
+                if child_replacements:
+                    materialized = preprocessor._apply_text_replacements(
+                        materialized,
+                        child_replacements,
+                    )
+                active_materializations.remove(key)
+
+            new_materializations.append(materialized)
+            return materialized_name
+
         for function in functions:
             if function.span not in reachable:
                 continue
@@ -10514,7 +10715,9 @@ def _materialize_plain_template_helper_calls(
             )
             for function_name, call_arguments, span in calls:
                 candidate_templates = templates_by_name.get(function_name, [])
-                inferred_matches: list[tuple[Any, list[str], list[tuple[str, str, bool]]]] = []
+                inferred_matches: list[
+                    tuple[Any, list[str], list[tuple[str, str, bool]]]
+                ] = []
                 for template in candidate_templates:
                     arguments = _infer_plain_template_helper_arguments(
                         preprocessor,
@@ -10523,9 +10726,12 @@ def _materialize_plain_template_helper_calls(
                         type_environment,
                         return_types,
                     )
-                    if not arguments or not preprocessor._template_arguments_satisfy_parameters(
-                        template,
-                        arguments,
+                    if (
+                        not arguments
+                        or not preprocessor._template_arguments_satisfy_parameters(
+                            template,
+                            arguments,
+                        )
                     ):
                         continue
                     parameter_declarations = _metal_function_parameter_declarations(
@@ -10538,82 +10744,12 @@ def _materialize_plain_template_helper_calls(
                 if len(inferred_matches) != 1:
                     continue
                 template, arguments, parameter_declarations = inferred_matches[0]
-                specialization_key = preprocessor._template_specialization_key(
+                materialized_name = ensure_plain_helper(
                     function_name,
+                    template,
                     arguments,
+                    parameter_declarations,
                 )
-                signature_key = tuple(
-                    _normalize_metal_type_text(type_text)
-                    for type_text, _name, _variadic in parameter_declarations
-                )
-                key = (specialization_key[0], specialization_key[1], signature_key)
-                materialized_name = materialized_names.get(key)
-                if materialized_name is None:
-                    unique_count = len(materialized_names) + 1
-                    if len(materialized_names) >= preprocessor.max_template_specializations:
-                        from crosstl.backend.Metal.preprocessor import (
-                            MetalTemplateSpecializationError,
-                        )
-
-                        requested_signature = (
-                            preprocessor._template_specialization_signature(
-                                function_name,
-                                arguments,
-                            )
-                        )
-                        suggested_action = (
-                            "raise max_template_specializations for this source "
-                            "pattern or backend, or reduce inferred template "
-                            "helper instantiations"
-                        )
-                        raise MetalTemplateSpecializationError(
-                            "Metal template specialization limit exceeded while "
-                            f"materializing '{requested_signature}'; "
-                            f"{unique_count} unique concrete signatures requested, "
-                            f"limit {preprocessor.max_template_specializations} "
-                            f"from {preprocessor.template_specialization_limit_source}. "
-                            f"Suggested action: {suggested_action}.",
-                            limit=preprocessor.max_template_specializations,
-                            limit_source=(
-                                preprocessor.template_specialization_limit_source
-                            ),
-                            unique_specialization_count=unique_count,
-                            requested_signature=requested_signature,
-                            suggested_action=suggested_action,
-                        )
-                    materialized_name = _metal_template_materialized_name(
-                        preprocessor,
-                        function_name,
-                        list(key[1]),
-                        parameter_declarations,
-                        materialized_names,
-                    )
-                    materialized_names[key] = materialized_name
-                    materialized = preprocessor._materialize_template_function_with_name(
-                        template,
-                        list(key[1]),
-                        materialized_name,
-                        host_name=None,
-                    )
-                    if materialized:
-                        new_materializations.append(materialized)
-                    parameters = _template_parameter_values_from_arguments(
-                        preprocessor,
-                        template,
-                        list(key[1]),
-                    )
-                    specialization_records.append(
-                        _materialized_template_specialization_record(
-                            name=function_name,
-                            materialized_name=materialized_name,
-                            parameters=parameters,
-                            parameter_sources={
-                                parameter: "call-site" for parameter in parameters
-                            },
-                            source="call-site",
-                        )
-                    )
-                    materialized_template_names.add(function_name)
                 replacements.append((span[0], span[1], materialized_name))
 
         if not replacements and not new_materializations:
@@ -11023,9 +11159,7 @@ def _inline_metal_concrete_using_template_aliases(
         qualified_candidates = [
             alias
             for alias in aliases
-            if alias["name"] == ident
-            and alias["end"] <= i
-            and i < alias["scope_end"]
+            if alias["name"] == ident and alias["end"] <= i and i < alias["scope_end"]
         ]
         qualified = None
         if qualified_candidates and source[i + consumed : i + consumed + 2] == "::":
@@ -11218,9 +11352,11 @@ def _project_template_materialization_for_artifact(
         if name in defines
     }
     configured_parameter_sources = {
-        name: str(define_sources.get(name, "config"))
-        if define_sources is not None
-        else "config"
+        name: (
+            str(define_sources.get(name, "config"))
+            if define_sources is not None
+            else "config"
+        )
         for name in configured_parameters
     }
     parser_defines = {
@@ -11261,9 +11397,7 @@ def _project_template_materialization_for_artifact(
         preprocessed
     )
     source_instantiation_contexts: list[_SourceInstantiationTemplateContext] = []
-    source_instantiation_materialized_names: dict[
-        tuple[str, tuple[str, ...]], str
-    ] = {}
+    source_instantiation_materialized_names: dict[tuple[str, tuple[str, ...]], str] = {}
     seen_source_instantiations: set[tuple[str, tuple[str, ...], str]] = set()
     seen_unsupported_source_instantiations: set[
         tuple[str, tuple[tuple[str, str], ...], str]
@@ -11474,9 +11608,7 @@ def _project_template_materialization_for_artifact(
     used_configured_parameter_sources: dict[str, str] = {}
     default_call_replacements: dict[str, str] = {}
     materialized_call_replacements: dict[str, str] = {}
-    current_template_spans = preprocessor._find_template_declaration_spans(
-        materialized
-    )
+    current_template_spans = preprocessor._find_template_declaration_spans(materialized)
     current_reachable_function_spans = preprocessor._reachable_function_spans(
         materialized,
         current_template_spans,
@@ -11523,10 +11655,7 @@ def _project_template_materialization_for_artifact(
         }
         available_parameter_sources = {
             **base_parameter_sources,
-            **{
-                parameter: "variant-manifest"
-                for parameter in manifest_parameters
-            },
+            **{parameter: "variant-manifest" for parameter in manifest_parameters},
         }
         if all(
             parameter in available_parameters
@@ -11560,7 +11689,9 @@ def _project_template_materialization_for_artifact(
                 materialized_name,
                 host_name=None,
             )
-            replacements.append((template.span[0], template.span[1], materialized_source))
+            replacements.append(
+                (template.span[0], template.span[1], materialized_source)
+            )
             parameters = {
                 parameter: available_parameters[parameter]
                 for parameter in template.template_parameters
@@ -11574,9 +11705,7 @@ def _project_template_materialization_for_artifact(
                 fallback=(
                     "variant-manifest"
                     if has_manifest_parameters
-                    else "config"
-                    if has_configured_parameters
-                    else "source-default"
+                    else "config" if has_configured_parameters else "source-default"
                 ),
             )
             used_configured_parameters.update(
@@ -11712,7 +11841,10 @@ def _project_template_materialization_for_artifact(
             text=materialized,
             metadata=metadata,
             defines=parser_defines,
-            source_options={**_frontend_source_options(source_options), "preprocess": False},
+            source_options={
+                **_frontend_source_options(source_options),
+                "preprocess": False,
+            },
             diagnostics=diagnostics,
             blocked=True,
             error=message,
@@ -11722,7 +11854,10 @@ def _project_template_materialization_for_artifact(
         text=materialized,
         metadata=metadata,
         defines=parser_defines,
-        source_options={**_frontend_source_options(source_options), "preprocess": False},
+        source_options={
+            **_frontend_source_options(source_options),
+            "preprocess": False,
+        },
     )
 
 
@@ -11806,9 +11941,7 @@ def _translation_failure_project_diagnostics(
             if isinstance(capabilities, str):
                 missing_capabilities = [capabilities]
             elif capabilities:
-                missing_capabilities = [
-                    str(capability) for capability in capabilities
-                ]
+                missing_capabilities = [str(capability) for capability in capabilities]
             else:
                 missing_capabilities = _translation_failure_missing_capabilities(
                     exc, target
@@ -11836,9 +11969,7 @@ def _translation_failure_project_diagnostics(
             target=target,
             source_backend=unit.source_backend,
             variant=variant,
-            missing_capabilities=_translation_failure_missing_capabilities(
-                exc, target
-            ),
+            missing_capabilities=_translation_failure_missing_capabilities(exc, target),
         )
     ]
 
@@ -13125,9 +13256,7 @@ def _artifact_provenance_message_suffix(artifact: Mapping[str, Any]) -> str:
     return f" ({', '.join(parts)})" if parts else ""
 
 
-def _placeholder_marker_missing_capabilities(
-    kind: str, target: str
-) -> list[str]:
+def _placeholder_marker_missing_capabilities(kind: str, target: str) -> list[str]:
     capabilities = [PLACEHOLDER_MISSING_CAPABILITY, kind]
     if target == "mojo" and kind == MOJO_RESOURCE_PLACEHOLDER_KIND:
         capabilities.append(MOJO_RESOURCE_PLACEHOLDER_CAPABILITY)
@@ -15437,9 +15566,7 @@ def build_runtime_artifact_manifest(
 
 
 def _runtime_binding_payload_hash(payload: Mapping[str, Any]) -> dict[str, str]:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
-    )
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return {
         "algorithm": "sha256",
         "value": hashlib.sha256(encoded).hexdigest(),
@@ -15872,9 +15999,7 @@ def _runtime_binding_manifest_summary(
             and entry["dispatchDimensions"].get("status") == "available"
         ),
         "entriesBySource": _runtime_manifest_artifact_counter(entries, "sourceFile"),
-        "entriesByTarget": _runtime_manifest_artifact_counter(
-            entries, "targetBackend"
-        ),
+        "entriesByTarget": _runtime_manifest_artifact_counter(entries, "targetBackend"),
         "entriesByVariant": _runtime_manifest_artifact_counter(entries, "variant"),
     }
 
@@ -15955,9 +16080,7 @@ def build_runtime_binding_manifest(
         ),
         "diagnosticCounts": runtime_manifest.get("diagnosticCounts", {}),
         "diagnostics": runtime_manifest.get("diagnostics", []),
-        "runtimeDiagnosticCounts": runtime_manifest.get(
-            "runtimeDiagnosticCounts", {}
-        ),
+        "runtimeDiagnosticCounts": runtime_manifest.get("runtimeDiagnosticCounts", {}),
         "runtimeDiagnostics": runtime_manifest.get("runtimeDiagnostics", []),
     }
 
@@ -18294,9 +18417,7 @@ def _runtime_loader_webgl_program_groups(
         if _is_non_empty_string(binding_id):
             binding_source_path = str(binding_id).split("|", 1)[0]
         source_group_path = (
-            binding_source_path
-            or adapter.get("sourcePath")
-            or package_path
+            binding_source_path or adapter.get("sourcePath") or package_path
         )
         defines = (
             dict(adapter.get("defines"))
@@ -18362,9 +18483,9 @@ def _runtime_loader_webgl_program_groups(
         for adapter in group_adapters:
             package_path = adapter.get("packagePath")
             if _is_non_empty_string(package_path):
-                groups_by_package_path[
-                    _runtime_loader_package_path(package_path)
-                ] = group_payload
+                groups_by_package_path[_runtime_loader_package_path(package_path)] = (
+                    group_payload
+                )
     return groups_by_package_path
 
 
@@ -26637,9 +26758,7 @@ def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[st
                     continue
                 for pattern, pattern_options in option_value.items():
                     if not _is_non_empty_string(pattern):
-                        reasons.append(
-                            f"{name_prefix} keys must be non-empty strings"
-                        )
+                        reasons.append(f"{name_prefix} keys must be non-empty strings")
                         continue
                     pattern_prefix = _mapping_key_path(name_prefix, pattern)
                     if not isinstance(pattern_options, Mapping):
@@ -29840,9 +29959,7 @@ def _source_remap_contract_reasons(
     return reasons
 
 
-def _template_specialization_contract_reasons(
-    prefix: str, value: Any
-) -> list[str]:
+def _template_specialization_contract_reasons(prefix: str, value: Any) -> list[str]:
     if not isinstance(value, Mapping):
         return [f"{prefix} must be an object"]
 
@@ -29939,7 +30056,9 @@ def _unsupported_template_contract_reasons(prefix: str, value: Any) -> list[str]
     )
     if not _is_non_empty_string(value.get("name")):
         reasons.append(f"{prefix}.name must be a string")
-    reasons.extend(_string_list_contract_reasons(f"{prefix}.parameters", value.get("parameters")))
+    reasons.extend(
+        _string_list_contract_reasons(f"{prefix}.parameters", value.get("parameters"))
+    )
     reasons.extend(
         _string_list_contract_reasons(
             f"{prefix}.missingParameters", value.get("missingParameters")
@@ -30003,7 +30122,9 @@ def _artifact_template_materialization_contract_reasons(
     )
     configured_parameter_count = materialization.get("configuredParameterCount")
     if not _is_non_negative_int(configured_parameter_count):
-        reasons.append(f"{prefix}.configuredParameterCount must be a non-negative integer")
+        reasons.append(
+            f"{prefix}.configuredParameterCount must be a non-negative integer"
+        )
     elif not configured_parameter_reasons and configured_parameter_count != len(
         configured_parameters
     ):
@@ -30042,9 +30163,13 @@ def _artifact_template_materialization_contract_reasons(
                 )
             )
     if status == "materialized" and isinstance(unsupported, list) and unsupported:
-        reasons.append(f"{prefix}.unsupported must be empty when status is materialized")
+        reasons.append(
+            f"{prefix}.unsupported must be empty when status is materialized"
+        )
     if status == "unsupported" and isinstance(unsupported, list) and not unsupported:
-        reasons.append(f"{prefix}.unsupported must not be empty when status is unsupported")
+        reasons.append(
+            f"{prefix}.unsupported must not be empty when status is unsupported"
+        )
     return reasons
 
 
