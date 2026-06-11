@@ -150,7 +150,7 @@ OpStore %83 %98
 OpBranch %95
 %97 = OpLabel
 %99 = OpLoad %8 %84
-%100 = OpFunctionCall %8 %20 
+%100 = OpFunctionCall %8 %20
 %101 = OpFAdd %8 %99 %100
 %103 = OpCompositeConstruct %8 %102 %102 %102 %102
 %104 = OpFMul %8 %101 %103
