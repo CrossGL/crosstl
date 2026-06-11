@@ -9193,6 +9193,68 @@ def test_translate_project_opengl_materializes_mlx_explicit_template_helpers(
     assert not re.search(r"\b(?:T|IdxT|Offset|AccT|Wtype)\b", output)
 
 
+def test_translate_project_opengl_materializes_mlx_pointer_and_value_bindings(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "elementwise.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_scale(name, type, out_type) \\
+                instantiate_kernel("scale" #name, scale_values, type, out_type)
+
+            template <typename T, typename U>
+            [[kernel]] void scale_values(
+                device const T* src [[buffer(0)]],
+                device U* dst [[buffer(1)]],
+                constant U& factor [[buffer(2)]],
+                uint gid [[thread_position_in_grid]]) {
+                dst[gid] = U(src[gid]) * factor;
+            }
+
+            instantiate_scale(float32, float, float)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    artifact = payload["artifacts"][0]
+    output = (
+        repo / "translated" / "opengl" / "shaders" / "elementwise.glsl"
+    ).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert artifact["templateMaterialization"]["specializations"] == [
+        {
+            "name": "scale_values",
+            "materializedName": "scalefloat32",
+            "parameters": {"T": "float", "U": "float"},
+            "source": "source-instantiation",
+        }
+    ]
+    assert "layout(std430, binding = 0) readonly buffer srcBuffer" in output
+    assert "layout(std430, binding = 1) buffer dstBuffer" in output
+    assert "layout(std140, binding = 2) uniform scalefloat32_factor_Args" in output
+    assert "float factor;" in output
+    assert "dst[gid] = (float(src[gid]) * factor);" in output
+    assert not re.search(r"\b(?:T|U)\b", output)
+
+
 def test_translate_project_opengl_uses_metal_default_template_helper_type(
     tmp_path,
 ):

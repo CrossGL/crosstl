@@ -9,6 +9,7 @@ from ..ast import (
     ArrayLiteralNode,
     ArrayNode,
     AssignmentNode,
+    AttributeNode,
     BinaryOpNode,
     BlockNode,
     BreakNode,
@@ -34,6 +35,7 @@ from ..ast import (
     ReferenceType,
     ReturnNode,
     StructNode,
+    StructMemberNode,
     SwitchNode,
     TernaryOpNode,
     UnaryOpNode,
@@ -4128,9 +4130,59 @@ class GLSLCodeGen:
             )
 
     def glsl_cbuffer_nodes(self, ast, target_stage=None):
-        return list(getattr(ast, "cbuffers", []) or []) + collect_stage_local_cbuffers(
-            ast, target_stage
+        return (
+            list(getattr(ast, "cbuffers", []) or [])
+            + collect_stage_local_cbuffers(ast, target_stage)
+            + self.collect_stage_entry_constant_value_parameter_cbuffers(
+                ast, target_stage
+            )
         )
+
+    def collect_stage_entry_constant_value_parameter_cbuffers(
+        self, ast, target_stage=None
+    ):
+        cbuffers = []
+        stage_entry_types = self.combined_stage_entry_types()
+        for _entry_id, _stage_name, func in collect_stage_entry_records(
+            ast, target_stage, stage_entry_types
+        ):
+            for parameter in getattr(func, "parameters", getattr(func, "params", [])):
+                member_type = self.stage_entry_constant_value_parameter_type(parameter)
+                if member_type is None:
+                    continue
+                binding = self.explicit_resource_binding_index(parameter)
+                if binding is None:
+                    continue
+                parameter_name = getattr(parameter, "name", None)
+                if not parameter_name:
+                    continue
+                cbuffer = StructNode(
+                    self.stage_entry_constant_value_parameter_block_name(
+                        func, parameter_name
+                    ),
+                    [StructMemberNode(parameter_name, member_type)],
+                    attributes=[
+                        AttributeNode(
+                            "binding",
+                            [LiteralNode(binding, PrimitiveType("int"))],
+                        )
+                    ],
+                )
+                cbuffer.is_cbuffer = True
+                cbuffers.append(cbuffer)
+        return cbuffers
+
+    def stage_entry_constant_value_parameter_block_name(self, func, parameter_name):
+        function_name = sanitize_type_name(getattr(func, "name", None) or "entry")
+        parameter_name = sanitize_type_name(parameter_name or "value")
+        block_name = "_".join(
+            part for part in (function_name, parameter_name, "Args") if part
+        )
+        if not block_name:
+            block_name = "Entry_Value_Args"
+        if block_name[0].isdigit():
+            block_name = f"Entry_{block_name}"
+        return block_name
 
     def generate_cbuffers(self, ast, target_stage=None):
         code = ""
@@ -6738,6 +6790,39 @@ class GLSLCodeGen:
             if stripped == type_name:
                 return stripped
             type_name = stripped
+
+    def stage_entry_constant_value_parameter_type(self, param):
+        qualifiers = {str(q).lower() for q in getattr(param, "qualifiers", []) or []}
+        if "constant" not in qualifiers:
+            return None
+        if self.explicit_resource_binding_index(param) is None:
+            return None
+        if self.stage_entry_constant_struct_parameter_type(param) is not None:
+            return None
+
+        raw_type = self.resource_node_type(param)
+        if isinstance(raw_type, PointerType):
+            return None
+        if isinstance(raw_type, ReferenceType):
+            raw_type = raw_type.referenced_type
+
+        type_name = self.strip_metal_parameter_indirection(
+            self.type_name_string(raw_type)
+        )
+        if not type_name or type_name in self.structs_by_name:
+            return None
+        if self.is_sampler_type(type_name):
+            return None
+        if self.is_structured_buffer_type(type_name) or self.is_constant_buffer_type(
+            type_name
+        ):
+            return None
+        mapped_type = self.map_resource_type_with_format(
+            self.resource_base_type(type_name), param
+        )
+        if self.is_opaque_resource_type(mapped_type):
+            return None
+        return type_name
 
     def stage_entry_metal_pointer_element_type(self, param):
         if self.explicit_resource_binding_index(param) is None:
