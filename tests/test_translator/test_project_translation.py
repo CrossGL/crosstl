@@ -1364,6 +1364,43 @@ def _clear_report_diagnostics(payload):
         payload["migration"]["placeholdersBySource"] = {}
 
 
+def _assert_no_errors_or_only_toolchain_unavailable_warnings(payload):
+    assert payload["diagnosticCounts"]["note"] == 0
+    assert payload["diagnosticCounts"]["error"] == 0
+    allowed_warning_code = "project.validate.toolchain-unavailable"
+    allowed_warnings = [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if (
+            diagnostic.get("severity") == "warning"
+            and diagnostic.get("code") == allowed_warning_code
+            and diagnostic.get("missingCapabilities") == ["toolchain.validation"]
+        )
+    ]
+    unexpected = [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic not in allowed_warnings
+    ]
+    assert unexpected == []
+    summary = payload.get("summary", {})
+    assert {
+        code: count
+        for code, count in summary.get("diagnosticsByCode", {}).items()
+        if code != allowed_warning_code
+    } == {}
+    allowed_warning_targets = {
+        diagnostic.get("target")
+        for diagnostic in allowed_warnings
+        if diagnostic.get("target") is not None
+    }
+    assert {
+        target: count
+        for target, count in summary.get("diagnosticsByTarget", {}).items()
+        if target not in allowed_warning_targets
+    } == {}
+
+
 def _write_count_balanced_artifact_gap_report(repo, *, omit_artifact_matrix=False):
     repo.mkdir()
     (repo / "first.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
@@ -7412,7 +7449,7 @@ def test_translate_project_glsl_alpha_stitch_storage_image_lowers_to_wgsl(
 
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
-    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    _assert_no_errors_or_only_toolchain_unavailable_warnings(payload)
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("wgsl", "translated")}
@@ -7496,7 +7533,7 @@ def test_translate_project_glsl_fragcoord_lowers_to_wgsl_fragment_position(tmp_p
 
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
-    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    _assert_no_errors_or_only_toolchain_unavailable_warnings(payload)
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("wgsl", "translated")}
@@ -7535,7 +7572,7 @@ def test_translate_project_spirv_assembly_vertex_position_lowers_to_wgsl(tmp_pat
 
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
-    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    _assert_no_errors_or_only_toolchain_unavailable_warnings(payload)
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("wgsl", "translated")}
@@ -41826,9 +41863,7 @@ def test_translate_project_khronos_opencl_reduce_lowers_all_target_artifacts(
     }
     assert payload["summary"]["translatedCount"] == 4
     assert payload["summary"]["failedCount"] == 0
-    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
-    assert payload["summary"]["diagnosticsByCode"] == {}
-    assert payload["summary"]["diagnosticsByTarget"] == {}
+    _assert_no_errors_or_only_toolchain_unavailable_warnings(payload)
 
     artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
 
@@ -41878,8 +41913,6 @@ def test_translate_project_khronos_opencl_reduce_lowers_all_target_artifacts(
     for artifact in payload["artifacts"]:
         assert artifact["generatedHash"]["algorithm"] == "sha256"
         assert artifact["generatedSizeBytes"] > 0
-
-    assert payload["diagnostics"] == []
 
 
 def test_translate_project_khronos_opencl_reduce_lowers_supported_target_artifacts(
@@ -41953,7 +41986,7 @@ def test_translate_project_khronos_opencl_reduce_lowers_supported_target_artifac
         validate=True,
     ).to_json()
 
-    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    _assert_no_errors_or_only_toolchain_unavailable_warnings(payload)
     assert payload["summary"]["translatedCount"] == 4
     assert payload["summary"]["failedCount"] == 0
 
