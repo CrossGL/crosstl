@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import math
 import os
+import subprocess
 import shutil
+import sys
+import tempfile
 import time
 from collections import Counter
 from dataclasses import dataclass, field, replace
@@ -105,6 +108,43 @@ class RuntimeExecutorSkipped(RuntimeVerificationError):
 
 class RuntimeExecutionError(RuntimeVerificationError):
     """Raised by executors for backend runtime integration failures."""
+
+    failure_phase = "runtime"
+    diagnostic_code = "project.runtime-verification.executor-failed"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_phase: str | None = None,
+        diagnostic_code: str | None = None,
+        details: Mapping[str, Any] | None = None,
+    ):
+        super().__init__(message)
+        self.failure_phase = failure_phase or self.failure_phase
+        self.diagnostic_code = diagnostic_code or self.diagnostic_code
+        self.details = dict(details or {})
+
+
+class RuntimeAdapterSetupError(RuntimeExecutionError):
+    """Raised when native adapter setup fails before artifact validation."""
+
+    failure_phase = "runtime-setup"
+    diagnostic_code = "project.runtime-verification.adapter-setup-failed"
+
+
+class RuntimeAdapterValidationError(RuntimeExecutionError):
+    """Raised when native adapter shader validation fails."""
+
+    failure_phase = "runtime-validation"
+    diagnostic_code = "project.runtime-verification.adapter-validation-failed"
+
+
+class RuntimeAdapterDispatchError(RuntimeExecutionError):
+    """Raised when native adapter dispatch or readback fails."""
+
+    failure_phase = "runtime-dispatch"
+    diagnostic_code = "project.runtime-verification.adapter-dispatch-failed"
 
 
 @dataclass(frozen=True)
@@ -470,6 +510,102 @@ class RuntimeExecutionPlan:
 
 
 @dataclass(frozen=True)
+class NativeRuntimeBufferBinding:
+    """Prepared native runtime buffer/image binding derived from fixture data."""
+
+    name: str
+    binding: RuntimeResourceBinding
+    value: Any = None
+    source: str | None = None
+    dtype: str | None = None
+    shape: tuple[int, ...] = field(default_factory=tuple)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "name": self.name,
+            "binding": self.binding.to_json(),
+        }
+        if self.source is not None:
+            payload["source"] = self.source
+        if self.dtype is not None:
+            payload["dtype"] = self.dtype
+        if self.shape:
+            payload["shape"] = list(self.shape)
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
+
+
+@dataclass(frozen=True)
+class NativeRuntimeConstantBinding:
+    """Prepared native runtime specialization or function constant binding."""
+
+    name: str
+    constant: RuntimeSpecializationConstant
+    value: Any = None
+    source: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "name": self.name,
+            "constant": self.constant.to_json(),
+        }
+        if self.value is not None:
+            payload["value"] = self.value
+        if self.source is not None:
+            payload["source"] = self.source
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
+
+
+@dataclass(frozen=True)
+class NativeRuntimeDispatchRequest:
+    """Native runtime dispatch payload passed from adapters to runtime drivers."""
+
+    target: str
+    artifact: Mapping[str, Any]
+    artifact_path: Path
+    module_path: Path
+    loaded_artifact: Any
+    buffers: Mapping[str, NativeRuntimeBufferBinding]
+    constants: Mapping[str, NativeRuntimeConstantBinding]
+    dispatch: RuntimeDispatchGeometry | None = None
+    entry_point: str | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        payload = {
+            "target": self.target,
+            "artifact": _artifact_result_payload(self.artifact),
+            "artifactPath": str(self.artifact_path),
+            "modulePath": str(self.module_path),
+            "buffers": {
+                name: binding.to_json() for name, binding in self.buffers.items()
+            },
+            "constants": {
+                name: binding.to_json() for name, binding in self.constants.items()
+            },
+        }
+        if self.entry_point is not None:
+            payload["entryPoint"] = self.entry_point
+        if self.dispatch is not None:
+            payload["dispatch"] = self.dispatch.to_json()
+        return payload
+
+
+@dataclass(frozen=True)
+class NativeRuntimeValidationCommand:
+    """Validation command executed before native runtime dispatch."""
+
+    command: tuple[str, ...]
+    action: str = "validate-native-runtime-artifact"
+    input_text: str | None = None
+    module_path: Path | None = None
+
+
+@dataclass(frozen=True)
 class RuntimeFixture:
     """A runtime verification fixture bound to one translated artifact."""
 
@@ -653,6 +789,7 @@ class RuntimeExecutionState:
     details: dict[str, Any] = field(default_factory=dict)
     diagnostics: list[Mapping[str, Any]] = field(default_factory=list)
     adapter_steps: list[RuntimeExecutionStep] = field(default_factory=list)
+    temporary_directories: list[Any] = field(default_factory=list)
 
     def record_step(
         self,
@@ -861,6 +998,609 @@ class RuntimeParityAdapter:
         self, state: RuntimeExecutionState, dispatch_result: Any
     ) -> Any:
         return dispatch_result
+
+
+class NativeRuntimeParityAdapter(RuntimeParityAdapter):
+    """Reusable native parity adapter around a backend runtime driver."""
+
+    name = "native-runtime-parity-adapter"
+    target: str | None = None
+    targets: tuple[str, ...] = ()
+    required_tools: tuple[str, ...] = ()
+    supported_platforms: tuple[str, ...] = ()
+    default_stage = "comp"
+
+    def __init__(
+        self,
+        runtime: Any | None = None,
+        *,
+        required_tools: Sequence[str] | None = None,
+        required_environment: Sequence[str] = (),
+        supported_platforms: Sequence[str] | None = None,
+        validate: bool = True,
+        command_runner: Any | None = None,
+        tool_resolver: Any | None = None,
+    ):
+        self.runtime = runtime
+        if required_tools is not None:
+            self.required_tools = tuple(required_tools)
+        self.required_environment = tuple(required_environment)
+        if supported_platforms is not None:
+            self.supported_platforms = tuple(supported_platforms)
+        self.validate = validate
+        self.command_runner = command_runner or _run_native_runtime_command
+        self.tool_resolver = tool_resolver or shutil.which
+
+    def is_available(
+        self, request: RuntimeExecutionRequest
+    ) -> RuntimeExecutorAvailability:
+        platform_details = self._platform_availability_details()
+        if platform_details:
+            return RuntimeExecutorAvailability(
+                False,
+                reason=platform_details["message"],
+                details=platform_details,
+            )
+        missing_tools = [
+            tool for tool in self.required_tools if self._resolve_tool(tool) is None
+        ]
+        if missing_tools:
+            return RuntimeExecutorAvailability(
+                False,
+                reason=(
+                    "Native runtime validation tools are unavailable: "
+                    + ", ".join(missing_tools)
+                ),
+                details={
+                    "reasonKind": "tool-unavailable",
+                    "target": self.target,
+                    "missingTools": missing_tools,
+                    "requiredTools": list(self.required_tools),
+                },
+            )
+        missing_environment = [
+            name for name in self.required_environment if not os.environ.get(name)
+        ]
+        if missing_environment:
+            return RuntimeExecutorAvailability(
+                False,
+                reason=(
+                    "Native runtime environment is unavailable: "
+                    + ", ".join(missing_environment)
+                ),
+                details={
+                    "reasonKind": "environment-unavailable",
+                    "target": self.target,
+                    "missingEnvironment": missing_environment,
+                    "requiredEnvironment": list(self.required_environment),
+                },
+            )
+        runtime_availability = self._runtime_availability(request)
+        if not runtime_availability.available:
+            return runtime_availability
+        return RuntimeExecutorAvailability(
+            True,
+            details={
+                "reasonKind": "available",
+                "target": self.target,
+                "requiredTools": list(self.required_tools),
+                **dict(runtime_availability.details),
+            },
+        )
+
+    def prepare_buffers(self, state: RuntimeExecutionState) -> Any:
+        artifact_path = self._artifact_path(state)
+        temp_handle = tempfile.TemporaryDirectory(prefix="crosstl-runtime-")
+        state.temporary_directories.append(temp_handle)
+        module_path = self._validate_artifact(
+            state,
+            artifact_path,
+            temp_dir=Path(temp_handle.name),
+        )
+        state.loaded_artifact = self._load_artifact(state, module_path)
+        prepared = self._prepare_dispatch_request(state, artifact_path, module_path)
+        state.details["nativeRuntimeDispatch"] = prepared.to_json()
+        return prepared
+
+    def dispatch(self, state: RuntimeExecutionState, prepared_buffers: Any) -> Any:
+        dispatch = getattr(self.runtime, "dispatch", None)
+        if not callable(dispatch):
+            raise RuntimeExecutorUnavailable(
+                f"No native runtime driver is configured for {self.target} dispatch."
+            )
+        try:
+            return dispatch(self, state, prepared_buffers)
+        except RuntimeExecutionError:
+            raise
+        except Exception as exc:
+            raise RuntimeAdapterDispatchError(
+                f"Native runtime dispatch failed: {exc}",
+                details={
+                    "target": self.target,
+                    "runtime": self._runtime_name(),
+                    "entryPoint": getattr(prepared_buffers, "entry_point", None),
+                },
+            ) from exc
+
+    def collect_outputs(
+        self, state: RuntimeExecutionState, dispatch_result: Any
+    ) -> Any:
+        collect = getattr(self.runtime, "collect_outputs", None)
+        if collect is None:
+            collect = getattr(self.runtime, "read_outputs", None)
+        if callable(collect):
+            try:
+                return collect(self, state, dispatch_result)
+            except RuntimeExecutionError:
+                raise
+            except Exception as exc:
+                raise RuntimeAdapterDispatchError(
+                    f"Native runtime readback failed: {exc}",
+                    details={"target": self.target, "runtime": self._runtime_name()},
+                ) from exc
+        return dispatch_result
+
+    def validation_commands(
+        self,
+        state: RuntimeExecutionState,
+        artifact_path: Path,
+        *,
+        temp_dir: Path,
+    ) -> tuple[NativeRuntimeValidationCommand, ...]:
+        _ = state, artifact_path, temp_dir
+        return ()
+
+    def _platform_availability_details(self) -> dict[str, Any] | None:
+        if not self.supported_platforms:
+            return None
+        if any(
+            sys.platform.startswith(platform) for platform in self.supported_platforms
+        ):
+            return None
+        platforms = list(self.supported_platforms)
+        return {
+            "reasonKind": "platform-unavailable",
+            "target": self.target,
+            "platform": sys.platform,
+            "requiredPlatforms": platforms,
+            "message": (
+                "Native runtime platform is unavailable for "
+                f"{self.target}: {sys.platform} not in {', '.join(platforms)}."
+            ),
+        }
+
+    def _runtime_availability(
+        self, request: RuntimeExecutionRequest
+    ) -> RuntimeExecutorAvailability:
+        if self.runtime is None:
+            return RuntimeExecutorAvailability(
+                False,
+                reason=f"No native runtime driver is configured for {self.target}.",
+                details={
+                    "reasonKind": "runtime-unavailable",
+                    "target": self.target,
+                    "runtime": None,
+                },
+            )
+        probe = getattr(self.runtime, "is_available", None)
+        if not callable(probe):
+            return RuntimeExecutorAvailability(
+                True,
+                details={"runtime": self._runtime_name()},
+            )
+        availability = probe(self, request)
+        if isinstance(availability, RuntimeExecutorAvailability):
+            return RuntimeExecutorAvailability(
+                availability.available,
+                reason=availability.reason,
+                details={
+                    "reasonKind": (
+                        "available" if availability.available else "runtime-unavailable"
+                    ),
+                    "target": self.target,
+                    "runtime": self._runtime_name(),
+                    **dict(availability.details),
+                },
+            )
+        if isinstance(availability, bool):
+            return RuntimeExecutorAvailability(
+                availability,
+                reason=(
+                    None
+                    if availability
+                    else f"Native runtime driver is unavailable for {self.target}."
+                ),
+                details={
+                    "reasonKind": (
+                        "available" if availability else "runtime-unavailable"
+                    ),
+                    "target": self.target,
+                    "runtime": self._runtime_name(),
+                },
+            )
+        if isinstance(availability, Mapping):
+            available = bool(availability.get("available"))
+            reason = (
+                availability.get("reason")
+                if isinstance(availability.get("reason"), str)
+                else None
+            )
+            return RuntimeExecutorAvailability(
+                available,
+                reason=reason,
+                details={
+                    "reasonKind": "available" if available else "runtime-unavailable",
+                    "target": self.target,
+                    "runtime": self._runtime_name(),
+                    **{
+                        key: value
+                        for key, value in availability.items()
+                        if key not in {"available", "reason"}
+                    },
+                },
+            )
+        raise RuntimeVerificationError(
+            "Native runtime availability probe returned invalid data."
+        )
+
+    def _artifact_path(self, state: RuntimeExecutionState) -> Path:
+        artifact_path = state.plan.artifact_path
+        if artifact_path is None:
+            raise RuntimeAdapterSetupError(
+                "Native runtime adapter requires an artifact path.",
+                details={"target": self.target},
+            )
+        if not artifact_path.exists():
+            raise RuntimeAdapterSetupError(
+                f"Native runtime artifact does not exist: {artifact_path}",
+                details={"target": self.target, "artifactPath": str(artifact_path)},
+            )
+        if not artifact_path.is_file():
+            raise RuntimeAdapterSetupError(
+                f"Native runtime artifact is not a file: {artifact_path}",
+                details={"target": self.target, "artifactPath": str(artifact_path)},
+            )
+        return artifact_path
+
+    def _validate_artifact(
+        self,
+        state: RuntimeExecutionState,
+        artifact_path: Path,
+        *,
+        temp_dir: Path,
+    ) -> Path:
+        if not self.validate:
+            state.record_step(
+                "validate",
+                "validate-native-runtime-artifact",
+                status=SKIPPED,
+                details={"target": self.target, "reason": "validation-disabled"},
+            )
+            return artifact_path
+        commands = self.validation_commands(state, artifact_path, temp_dir=temp_dir)
+        if not commands:
+            state.record_step(
+                "validate",
+                "validate-native-runtime-artifact",
+                details={"target": self.target, "commandCount": 0},
+            )
+            return artifact_path
+        module_path = artifact_path
+        for command_spec in commands:
+            command = tuple(command_spec.command)
+            result = self.command_runner(command, input_text=command_spec.input_text)
+            command_result = _native_runtime_command_result(command, result)
+            if command_spec.module_path is not None:
+                module_path = command_spec.module_path
+            details = {
+                "target": self.target,
+                "returncode": command_result["returncode"],
+            }
+            if command_result["stdout"]:
+                details["stdout"] = command_result["stdout"]
+            if command_result["stderr"]:
+                details["stderr"] = command_result["stderr"]
+            status = PASSED if command_result["returncode"] == 0 else RUNTIME_FAILED
+            state.record_step(
+                "validate",
+                command_spec.action,
+                status=status,
+                details=details,
+            )
+            if command_result["returncode"] != 0:
+                raise RuntimeAdapterValidationError(
+                    "Native runtime artifact validation failed.",
+                    details={
+                        "target": self.target,
+                        "command": list(command),
+                        **details,
+                    },
+                )
+        return module_path
+
+    def _load_artifact(self, state: RuntimeExecutionState, module_path: Path) -> Any:
+        load = getattr(self.runtime, "load_artifact", None)
+        if load is None:
+            load = getattr(self.runtime, "load_module", None)
+        if not callable(load):
+            state.record_step(
+                "load",
+                "load-native-runtime-artifact",
+                details={"target": self.target, "modulePath": str(module_path)},
+            )
+            return module_path
+        try:
+            loaded = load(self, state, module_path)
+        except RuntimeExecutionError:
+            raise
+        except Exception as exc:
+            raise RuntimeAdapterSetupError(
+                f"Native runtime artifact load failed: {exc}",
+                details={
+                    "target": self.target,
+                    "runtime": self._runtime_name(),
+                    "modulePath": str(module_path),
+                },
+            ) from exc
+        state.record_step(
+            "load",
+            "load-native-runtime-artifact",
+            details={
+                "target": self.target,
+                "runtime": self._runtime_name(),
+                "modulePath": str(module_path),
+            },
+        )
+        return loaded
+
+    def _prepare_dispatch_request(
+        self, state: RuntimeExecutionState, artifact_path: Path, module_path: Path
+    ) -> NativeRuntimeDispatchRequest:
+        buffers = self._native_buffer_bindings(state)
+        constants = self._native_constant_bindings(state)
+        dispatch = state.plan.dispatch
+        entry_point = dispatch.entry_point if dispatch is not None else None
+        prepared = NativeRuntimeDispatchRequest(
+            target=self.target or str(state.request.artifact.get("target") or ""),
+            artifact=state.request.artifact,
+            artifact_path=artifact_path,
+            module_path=module_path,
+            loaded_artifact=state.loaded_artifact,
+            buffers=buffers,
+            constants=constants,
+            dispatch=dispatch,
+            entry_point=entry_point,
+        )
+        state.record_step(
+            "bind",
+            "bind-native-runtime-resources",
+            details={
+                "target": self.target,
+                "bufferCount": len(buffers),
+                "constantCount": len(constants),
+                "outputBufferCount": sum(
+                    1
+                    for binding in buffers.values()
+                    if binding.source == "expectedOutput"
+                ),
+            },
+        )
+        return prepared
+
+    def _native_buffer_bindings(
+        self, state: RuntimeExecutionState
+    ) -> dict[str, NativeRuntimeBufferBinding]:
+        bindings: dict[str, NativeRuntimeBufferBinding] = {}
+        for resource in state.plan.resource_bindings:
+            binding = resource.binding
+            key = _native_resource_key(binding)
+            runtime_value = resource.value
+            bindings[key] = NativeRuntimeBufferBinding(
+                name=key,
+                binding=binding,
+                value=(
+                    None
+                    if resource.source == "expectedOutput" or runtime_value is None
+                    else runtime_value.values
+                ),
+                source=resource.source,
+                dtype=runtime_value.dtype if runtime_value is not None else None,
+                shape=runtime_value.shape if runtime_value is not None else (),
+                metadata=runtime_value.metadata if runtime_value is not None else {},
+            )
+        return bindings
+
+    def _native_constant_bindings(
+        self, state: RuntimeExecutionState
+    ) -> dict[str, NativeRuntimeConstantBinding]:
+        bindings: dict[str, NativeRuntimeConstantBinding] = {}
+        for bound_constant in state.plan.constant_bindings:
+            key = _native_constant_key(bound_constant.constant)
+            if key is None:
+                continue
+            bindings[key] = NativeRuntimeConstantBinding(
+                name=key,
+                constant=bound_constant.constant,
+                value=bound_constant.value,
+                source=bound_constant.source,
+                metadata=bound_constant.constant.metadata,
+            )
+        return bindings
+
+    def _resolve_tool(self, tool: str) -> str | None:
+        resolved = self.tool_resolver(tool)
+        if resolved is None:
+            return None
+        return str(resolved)
+
+    def _tool_command(self, tool: str) -> str:
+        resolved = self._resolve_tool(tool)
+        if resolved is None:
+            return tool
+        return resolved
+
+    def _runtime_name(self) -> str | None:
+        if self.runtime is None:
+            return None
+        return getattr(self.runtime, "name", self.runtime.__class__.__name__)
+
+
+class DirectXRuntimeParityAdapter(NativeRuntimeParityAdapter):
+    """Native DirectX parity adapter for generated HLSL compute artifacts."""
+
+    name = "directx-native-runtime"
+    target = "directx"
+    targets = ("directx",)
+    required_tools = ("dxc",)
+    supported_platforms = ("win32", "cygwin")
+
+    def validation_commands(
+        self,
+        state: RuntimeExecutionState,
+        artifact_path: Path,
+        *,
+        temp_dir: Path,
+    ) -> tuple[NativeRuntimeValidationCommand, ...]:
+        entry_point = _native_entry_point_name(state)
+        if entry_point is None:
+            raise RuntimeAdapterSetupError(
+                "DirectX native runtime validation requires an entry point.",
+                details={"target": self.target, "artifactPath": str(artifact_path)},
+            )
+        profile = _native_hlsl_profile(state)
+        output_path = temp_dir / f"{artifact_path.stem}.dxil"
+        return (
+            NativeRuntimeValidationCommand(
+                command=(
+                    self._tool_command("dxc"),
+                    "-T",
+                    profile,
+                    "-E",
+                    entry_point,
+                    "-Fo",
+                    str(output_path),
+                    str(artifact_path),
+                ),
+                action="compile-hlsl-for-directx-runtime",
+                module_path=output_path,
+            ),
+        )
+
+
+class OpenGLRuntimeParityAdapter(NativeRuntimeParityAdapter):
+    """Native OpenGL parity adapter for generated GLSL compute artifacts."""
+
+    name = "opengl-native-runtime"
+    target = "opengl"
+    targets = ("opengl",)
+    required_tools = ("glslangValidator",)
+
+    def validation_commands(
+        self,
+        state: RuntimeExecutionState,
+        artifact_path: Path,
+        *,
+        temp_dir: Path,
+    ) -> tuple[NativeRuntimeValidationCommand, ...]:
+        _ = temp_dir
+        stage = _native_glsl_stage(state, artifact_path)
+        return (
+            NativeRuntimeValidationCommand(
+                command=(
+                    self._tool_command("glslangValidator"),
+                    "-S",
+                    stage,
+                    str(artifact_path),
+                ),
+                action="validate-glsl-for-opengl-runtime",
+            ),
+        )
+
+
+class VulkanRuntimeParityAdapter(NativeRuntimeParityAdapter):
+    """Native Vulkan parity adapter for generated SPIR-V artifacts."""
+
+    name = "vulkan-native-runtime"
+    target = "vulkan"
+    targets = ("vulkan",)
+    required_tools = ("spirv-val", "spirv-as")
+
+    def validation_commands(
+        self,
+        state: RuntimeExecutionState,
+        artifact_path: Path,
+        *,
+        temp_dir: Path,
+    ) -> tuple[NativeRuntimeValidationCommand, ...]:
+        _ = state
+        suffix = artifact_path.suffix.lower()
+        if suffix == ".spvasm":
+            module_path = temp_dir / f"{artifact_path.stem}.spv"
+            return (
+                NativeRuntimeValidationCommand(
+                    command=(
+                        self._tool_command("spirv-as"),
+                        str(artifact_path),
+                        "-o",
+                        str(module_path),
+                    ),
+                    action="assemble-spirv-for-vulkan-runtime",
+                    module_path=module_path,
+                ),
+                NativeRuntimeValidationCommand(
+                    command=(self._tool_command("spirv-val"), str(module_path)),
+                    action="validate-spirv-for-vulkan-runtime",
+                    module_path=module_path,
+                ),
+            )
+        return (
+            NativeRuntimeValidationCommand(
+                command=(self._tool_command("spirv-val"), str(artifact_path)),
+                action="validate-spirv-for-vulkan-runtime",
+            ),
+        )
+
+
+def native_runtime_parity_adapter(
+    target: str,
+    runtime: Any | None = None,
+    **kwargs: Any,
+) -> NativeRuntimeParityAdapter:
+    """Create a native runtime parity adapter for a supported target."""
+
+    normalized = _normalize_target(target)
+    adapter_classes = {
+        "directx": DirectXRuntimeParityAdapter,
+        "opengl": OpenGLRuntimeParityAdapter,
+        "vulkan": VulkanRuntimeParityAdapter,
+    }
+    adapter_class = adapter_classes.get(normalized)
+    if adapter_class is None:
+        raise RuntimeVerificationError(
+            f"Native runtime parity adapter is not available for {target}."
+        )
+    return adapter_class(runtime=runtime, **kwargs)
+
+
+def native_runtime_parity_adapters(
+    runtimes: Mapping[str, Any] | None = None,
+    **kwargs: Any,
+) -> dict[str, NativeRuntimeParityAdapter]:
+    """Return native runtime parity adapters keyed by target backend."""
+
+    runtime_by_target = {
+        _normalize_target(target): runtime
+        for target, runtime in dict(runtimes or {}).items()
+        if isinstance(target, str)
+    }
+    return {
+        target: native_runtime_parity_adapter(
+            target,
+            runtime=runtime_by_target.get(target),
+            **kwargs,
+        )
+        for target in ("directx", "opengl", "vulkan")
+    }
 
 
 class RuntimeParityExecutor(RuntimeExecutionAdapter):
@@ -2429,6 +3169,124 @@ def _is_runtime_parity_adapter(value: Any) -> bool:
     return all(callable(getattr(value, method, None)) for method in required_methods)
 
 
+def _run_native_runtime_command(
+    command: Sequence[str], *, input_text: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        list(command),
+        input=input_text,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _native_runtime_command_result(
+    command: Sequence[str], result: Any
+) -> dict[str, Any]:
+    if isinstance(result, Mapping):
+        returncode = result.get("returncode")
+        if returncode is None:
+            status = result.get("status", 0)
+            if isinstance(status, str):
+                returncode = 0 if status.strip().lower() in EXECUTOR_OK_STATUSES else 1
+            else:
+                returncode = status
+        return {
+            "command": list(command),
+            "returncode": int(returncode),
+            "stdout": str(result.get("stdout", "")),
+            "stderr": str(result.get("stderr", "")),
+        }
+    returncode = getattr(result, "returncode", 0)
+    stdout = getattr(result, "stdout", "")
+    stderr = getattr(result, "stderr", "")
+    return {
+        "command": list(command),
+        "returncode": int(returncode),
+        "stdout": "" if stdout is None else str(stdout),
+        "stderr": "" if stderr is None else str(stderr),
+    }
+
+
+def _native_resource_key(binding: RuntimeResourceBinding) -> str:
+    if binding.name is not None:
+        return binding.name
+    if binding.binding_id is not None:
+        return binding.binding_id
+    if binding.binding is not None:
+        if binding.set is not None:
+            return f"{binding.set}:{binding.binding}"
+        return str(binding.binding)
+    if binding.index is not None:
+        return str(binding.index)
+    return "resource"
+
+
+def _native_constant_key(constant: RuntimeSpecializationConstant) -> str | None:
+    if constant.name is not None:
+        return constant.name
+    if constant.constant_id is not None:
+        return str(constant.constant_id)
+    return None
+
+
+def _native_entry_point_name(state: RuntimeExecutionState) -> str | None:
+    dispatch = state.plan.dispatch
+    if dispatch is not None and dispatch.entry_point is not None:
+        return dispatch.entry_point
+    contract = state.request.adapter_contract
+    if contract.entry_points:
+        return contract.entry_points[0].name
+    entry_point = state.request.artifact.get("entryPoint")
+    return entry_point if isinstance(entry_point, str) and entry_point.strip() else None
+
+
+def _native_hlsl_profile(state: RuntimeExecutionState) -> str:
+    artifact = state.request.artifact
+    metadata = state.request.adapter_contract.metadata
+    for source in (artifact, metadata):
+        for key in ("profile", "targetProfile", "shaderModel"):
+            value = source.get(key) if isinstance(source, Mapping) else None
+            if isinstance(value, str) and value.strip():
+                return value
+    entry_point = None
+    contract = state.request.adapter_contract
+    if contract.entry_points:
+        entry_point = contract.entry_points[0]
+    if entry_point is not None:
+        for key in ("profile", "targetProfile", "shaderModel"):
+            value = entry_point.metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        if entry_point.stage == "fragment":
+            return "ps_6_0"
+        if entry_point.stage == "vertex":
+            return "vs_6_0"
+    return "cs_6_0"
+
+
+def _native_glsl_stage(state: RuntimeExecutionState, artifact_path: Path) -> str:
+    artifact = state.request.artifact
+    stage = artifact.get("stage")
+    if isinstance(stage, str):
+        normalized = stage.strip().lower()
+        if normalized in {"compute", "comp"}:
+            return "comp"
+        if normalized in {"fragment", "frag", "pixel"}:
+            return "frag"
+        if normalized in {"vertex", "vert"}:
+            return "vert"
+    suffix = artifact_path.suffix.lower()
+    if suffix in {".comp", ".compute"}:
+        return "comp"
+    if suffix in {".frag", ".fs", ".ps"}:
+        return "frag"
+    if suffix in {".vert", ".vs"}:
+        return "vert"
+    return "comp"
+
+
 def _runtime_test_platform_skip_diagnostic(
     test_case: RuntimeTestCase,
     artifact: Mapping[str, Any],
@@ -3246,10 +4104,25 @@ def _verify_runtime_fixture(
             ],
         )
     except RuntimeExecutionError as exc:
+        failure_phase = getattr(exc, "failure_phase", "runtime") or "runtime"
+        diagnostic_code = (
+            getattr(
+                exc,
+                "diagnostic_code",
+                "project.runtime-verification.executor-failed",
+            )
+            or "project.runtime-verification.executor-failed"
+        )
+        error_details = dict(getattr(exc, "details", {}) or {})
+        executor_details = (
+            {"failurePhase": failure_phase, **error_details}
+            if error_details
+            else {"failurePhase": failure_phase}
+        )
         return _fixture_result(
             fixture,
             status=RUNTIME_FAILED,
-            failure_phase="runtime",
+            failure_phase=failure_phase,
             artifact=artifact,
             adapter_contract=adapter_contract,
             runtime_execution=execution_plan,
@@ -3257,14 +4130,17 @@ def _verify_runtime_fixture(
                 "key": executor_key,
                 "name": executor_name,
                 "status": RUNTIME_FAILED,
+                "message": str(exc),
+                "details": executor_details,
             },
             diagnostics=setup_diagnostics
             + [
                 _diagnostic(
                     "error",
-                    "project.runtime-verification.executor-failed",
+                    diagnostic_code,
                     str(exc),
                     target=target,
+                    executorDetails=error_details or None,
                 )
             ],
         )

@@ -17,6 +17,10 @@ from crosstl.project.runtime_verification import (
     SKIPPED,
     TRANSLATION_FAILED,
     UNAVAILABLE,
+    DirectXRuntimeParityAdapter,
+    NativeRuntimeDispatchRequest,
+    NativeRuntimeParityAdapter,
+    OpenGLRuntimeParityAdapter,
     RuntimeAdapterContract,
     RuntimeDispatchGeometry,
     RuntimeEntryPoint,
@@ -29,11 +33,14 @@ from crosstl.project.runtime_verification import (
     RuntimeParityAdapter,
     RuntimeResourceBinding,
     RuntimeSpecializationConstant,
+    VulkanRuntimeParityAdapter,
     RuntimeVerificationError,
     build_runtime_test_manifest,
     compare_runtime_outputs,
     default_runtime_test_adapters,
     load_runtime_verification_fixtures,
+    native_runtime_parity_adapter,
+    native_runtime_parity_adapters,
     parse_runtime_test_manifest,
     parse_runtime_verification_fixtures,
     plan_runtime_test_manifest,
@@ -96,6 +103,128 @@ def _runtime_fixture(**overrides):
     }
     fixture.update(overrides)
     return fixture
+
+
+def _native_runtime_artifact(**overrides):
+    artifact = _translated_artifact(
+        entryPoints=[
+            {
+                "name": "main",
+                "stage": "compute",
+                "workgroupSize": [2, 1, 1],
+            }
+        ],
+        resourceBindings=[
+            {"name": "lhs", "kind": "buffer", "binding": 0},
+            {"name": "rhs", "kind": "buffer", "binding": 1},
+            {"name": "out", "kind": "buffer", "binding": 2},
+        ],
+        specializationConstants=[
+            {
+                "name": "tile_size",
+                "id": 0,
+                "dtype": "uint32",
+                "value": 2,
+            }
+        ],
+        dispatch={"entryPoint": "main", "globalSize": [2, 1, 1]},
+    )
+    artifact.update(overrides)
+    return artifact
+
+
+def _native_runtime_fixture(**overrides):
+    fixture = _runtime_fixture(
+        id="add-runtime",
+        adapter="runtime-check",
+        inputs=[
+            {
+                "name": "lhs",
+                "kind": "buffer",
+                "dtype": "float32",
+                "shape": [2],
+                "values": [1.0, 2.0],
+            },
+            {
+                "name": "rhs",
+                "kind": "buffer",
+                "dtype": "float32",
+                "shape": [2],
+                "values": [10.0, 20.0],
+            },
+        ],
+        expectedOutputs=[
+            {
+                "name": "out",
+                "kind": "buffer",
+                "dtype": "float32",
+                "shape": [2],
+                "values": [11.0, 22.0],
+            }
+        ],
+    )
+    fixture.update(overrides)
+    return fixture
+
+
+def _native_runtime_manifest(target="opengl", fixture=None):
+    return {
+        "kind": RUNTIME_TEST_MANIFEST_KIND,
+        "adapters": [
+            {
+                "id": "runtime-check",
+                "executor": target,
+                "adapterKind": f"{target}-runtime-parity",
+                "platformRequirements": {"requiredTools": []},
+            }
+        ],
+        "tests": [
+            fixture
+            or _native_runtime_fixture(
+                selector={
+                    "source": "kernels/add.cgl",
+                    "target": target,
+                    "variant": "debug",
+                }
+            )
+        ],
+    }
+
+
+class FakeNativeRuntime:
+    name = "fake-native-runtime"
+
+    def __init__(self, *, outputs=None, dispatch_error=None):
+        self.outputs = outputs
+        self.dispatch_error = dispatch_error
+        self.prepared = None
+
+    def is_available(self, adapter, request):
+        assert isinstance(adapter, NativeRuntimeParityAdapter)
+        assert request.fixture.id == "add-runtime"
+        return RuntimeExecutorAvailability(True)
+
+    def load_artifact(self, adapter, state, module_path):
+        return {"target": adapter.target, "modulePath": str(module_path)}
+
+    def dispatch(self, adapter, state, prepared):
+        assert isinstance(prepared, NativeRuntimeDispatchRequest)
+        assert prepared.entry_point == "main"
+        assert prepared.buffers["lhs"].value == [1.0, 2.0]
+        assert prepared.buffers["rhs"].value == [10.0, 20.0]
+        assert prepared.buffers["out"].source == "expectedOutput"
+        assert prepared.constants["tile_size"].value == 2
+        assert state.loaded_artifact["target"] == adapter.target
+        self.prepared = prepared
+        if self.dispatch_error is not None:
+            raise self.dispatch_error
+        return self.outputs or {
+            "out": {
+                "dtype": "float32",
+                "shape": [2],
+                "values": [11.0, 22.0],
+            }
+        }
 
 
 def test_load_runtime_verification_fixtures_from_json(tmp_path):
@@ -1194,6 +1323,268 @@ def test_verify_runtime_test_manifest_reports_runtime_adapter_gap_as_unavailable
     assert result["diagnostics"][0]["code"] == (
         "project.runtime-verification.executor-unavailable"
     )
+
+
+def test_runtime_parity_native_factories_create_target_adapters():
+    adapters = native_runtime_parity_adapters()
+
+    assert set(adapters) == {"directx", "opengl", "vulkan"}
+    assert isinstance(adapters["directx"], DirectXRuntimeParityAdapter)
+    assert isinstance(adapters["opengl"], OpenGLRuntimeParityAdapter)
+    assert isinstance(adapters["vulkan"], VulkanRuntimeParityAdapter)
+    assert isinstance(
+        native_runtime_parity_adapter("DirectX"), DirectXRuntimeParityAdapter
+    )
+    with pytest.raises(RuntimeVerificationError, match="not available"):
+        native_runtime_parity_adapter("metal")
+
+
+def test_runtime_parity_native_adapter_reports_unavailable_tooling(tmp_path):
+    missing_tool = "crosstl-runtime-tool-that-does-not-exist-1302"
+    adapter = OpenGLRuntimeParityAdapter(
+        required_tools=(missing_tool,),
+        tool_resolver=lambda _tool: None,
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(tmp_path, [_native_runtime_artifact()]),
+        _native_runtime_manifest(),
+        executors={"opengl": adapter},
+    )
+
+    result = report["results"][0]
+    assert report["success"] is True
+    assert result["status"] == UNAVAILABLE
+    assert result["failurePhase"] == "runtime"
+    assert result["executor"]["details"]["reasonKind"] == "tool-unavailable"
+    assert result["executor"]["details"]["missingTools"] == [missing_tool]
+
+
+def test_runtime_parity_native_adapter_reports_unavailable_platform(tmp_path):
+    adapter = OpenGLRuntimeParityAdapter(
+        runtime=FakeNativeRuntime(),
+        required_tools=(),
+        supported_platforms=("missing-platform-1302",),
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(tmp_path, [_native_runtime_artifact()]),
+        _native_runtime_manifest(),
+        executors={"opengl": adapter},
+    )
+
+    result = report["results"][0]
+    assert report["success"] is True
+    assert result["status"] == UNAVAILABLE
+    assert result["executor"]["details"]["reasonKind"] == "platform-unavailable"
+    assert result["executor"]["details"]["requiredPlatforms"] == [
+        "missing-platform-1302"
+    ]
+
+
+def test_runtime_parity_native_adapter_reports_setup_failure(tmp_path):
+    adapter = OpenGLRuntimeParityAdapter(
+        runtime=FakeNativeRuntime(),
+        required_tools=(),
+        validate=False,
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(
+            tmp_path,
+            [_native_runtime_artifact(path="out/opengl/debug/missing.glsl")],
+        ),
+        _native_runtime_manifest(),
+        executors={"opengl": adapter},
+    )
+
+    result = report["results"][0]
+    diagnostic = result["diagnostics"][0]
+    assert report["success"] is False
+    assert result["status"] == RUNTIME_FAILED
+    assert result["failurePhase"] == "runtime-setup"
+    assert result["executor"]["details"]["failurePhase"] == "runtime-setup"
+    assert diagnostic["code"] == ("project.runtime-verification.adapter-setup-failed")
+    assert "does not exist" in diagnostic["message"]
+
+
+def test_runtime_parity_native_adapter_reports_validation_failure(tmp_path):
+    artifact_path = tmp_path / "out" / "opengl" / "debug" / "add.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("#version 450\nvoid main() {}\n", encoding="utf-8")
+
+    def failing_command(command, *, input_text=None):
+        assert input_text is None
+        assert command[0] == "/fake/glslangValidator"
+        return {"returncode": 1, "stderr": "shader validation failed"}
+
+    adapter = OpenGLRuntimeParityAdapter(
+        runtime=FakeNativeRuntime(),
+        required_tools=(),
+        tool_resolver=lambda tool: f"/fake/{tool}",
+        command_runner=failing_command,
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(tmp_path, [_native_runtime_artifact()]),
+        _native_runtime_manifest(),
+        executors={"opengl": adapter},
+    )
+
+    result = report["results"][0]
+    diagnostic = result["diagnostics"][0]
+    assert report["success"] is False
+    assert result["status"] == RUNTIME_FAILED
+    assert result["failurePhase"] == "runtime-validation"
+    assert result["executor"]["details"]["returncode"] == 1
+    assert result["executor"]["details"]["stderr"] == "shader validation failed"
+    assert diagnostic["code"] == (
+        "project.runtime-verification.adapter-validation-failed"
+    )
+
+
+def test_runtime_parity_native_adapter_reports_dispatch_failure(tmp_path):
+    artifact_path = tmp_path / "out" / "opengl" / "debug" / "add.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("#version 450\nvoid main() {}\n", encoding="utf-8")
+    adapter = OpenGLRuntimeParityAdapter(
+        runtime=FakeNativeRuntime(dispatch_error=ValueError("dispatch rejected")),
+        required_tools=(),
+        validate=False,
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(tmp_path, [_native_runtime_artifact()]),
+        _native_runtime_manifest(),
+        executors={"opengl": adapter},
+    )
+
+    result = report["results"][0]
+    diagnostic = result["diagnostics"][0]
+    assert report["success"] is False
+    assert result["status"] == RUNTIME_FAILED
+    assert result["failurePhase"] == "runtime-dispatch"
+    assert result["executor"]["details"]["failurePhase"] == "runtime-dispatch"
+    assert diagnostic["code"] == (
+        "project.runtime-verification.adapter-dispatch-failed"
+    )
+    assert "dispatch rejected" in diagnostic["message"]
+
+
+def test_runtime_parity_native_adapter_reports_numerical_mismatch(tmp_path):
+    artifact_path = tmp_path / "out" / "opengl" / "debug" / "add.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("#version 450\nvoid main() {}\n", encoding="utf-8")
+    runtime = FakeNativeRuntime(
+        outputs={
+            "out": {
+                "dtype": "float32",
+                "shape": [2],
+                "values": [11.0, 23.0],
+            }
+        }
+    )
+    adapter = OpenGLRuntimeParityAdapter(
+        runtime=runtime,
+        required_tools=(),
+        validate=False,
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(tmp_path, [_native_runtime_artifact()]),
+        _native_runtime_manifest(),
+        executors={"opengl": adapter},
+    )
+
+    result = report["results"][0]
+    assert report["success"] is False
+    assert result["status"] == COMPARISON_FAILED
+    assert result["failurePhase"] == "comparison"
+    assert result["comparisons"][0]["firstMismatch"]["index"] == 1
+    assert runtime.prepared.buffers["out"].source == "expectedOutput"
+    assert result["diagnostics"][0]["code"] == (
+        "project.runtime-verification.output-mismatch"
+    )
+
+
+def test_runtime_parity_native_vulkan_adapter_assembles_and_validates_spirv(
+    tmp_path,
+):
+    artifact_path = tmp_path / "out" / "vulkan" / "debug" / "add.spvasm"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("; SPIR-V\n", encoding="utf-8")
+    calls = []
+
+    def passing_command(command, *, input_text=None):
+        assert input_text is None
+        calls.append(command)
+        return {"returncode": 0}
+
+    adapter = VulkanRuntimeParityAdapter(
+        runtime=FakeNativeRuntime(),
+        required_tools=(),
+        tool_resolver=lambda tool: f"/fake/{tool}",
+        command_runner=passing_command,
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(
+            tmp_path,
+            [
+                _native_runtime_artifact(
+                    path="out/vulkan/debug/add.spvasm", target="vulkan"
+                )
+            ],
+        ),
+        _native_runtime_manifest(target="vulkan"),
+        executors={"vulkan": adapter},
+    )
+
+    assert report["results"][0]["status"] == PASSED
+    assert calls[0][:3] == (
+        "/fake/spirv-as",
+        str(artifact_path.resolve()),
+        "-o",
+    )
+    assert calls[1][0] == "/fake/spirv-val"
+    assert calls[1][1].endswith(".spv")
+
+
+def test_runtime_parity_native_directx_adapter_compiles_hlsl(tmp_path):
+    artifact_path = tmp_path / "out" / "directx" / "debug" / "add.hlsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("[numthreads(2,1,1)] void main() {}\n", encoding="utf-8")
+    calls = []
+
+    def passing_command(command, *, input_text=None):
+        assert input_text is None
+        calls.append(command)
+        return {"returncode": 0}
+
+    adapter = DirectXRuntimeParityAdapter(
+        runtime=FakeNativeRuntime(),
+        required_tools=(),
+        supported_platforms=(),
+        tool_resolver=lambda tool: f"/fake/{tool}",
+        command_runner=passing_command,
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(
+            tmp_path,
+            [
+                _native_runtime_artifact(
+                    path="out/directx/debug/add.hlsl", target="directx"
+                )
+            ],
+        ),
+        _native_runtime_manifest(target="directx"),
+        executors={"directx": adapter},
+    )
+
+    assert report["results"][0]["status"] == PASSED
+    assert calls[0][:6] == ("/fake/dxc", "-T", "cs_6_0", "-E", "main", "-Fo")
+    assert calls[0][-1] == str(artifact_path.resolve())
 
 
 def test_default_runtime_test_adapters_cover_native_platform_classes():
