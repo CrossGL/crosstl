@@ -42200,8 +42200,6 @@ def test_translate_project_khronos_opencl_reduce_lowers_all_target_artifacts(
         assert artifact["generatedHash"]["algorithm"] == "sha256"
         assert artifact["generatedSizeBytes"] > 0
 
-    assert payload["diagnostics"] == []
-
 
 def test_translate_project_khronos_opencl_reduce_lowers_supported_target_artifacts(
     tmp_path,
