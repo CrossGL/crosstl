@@ -152,8 +152,8 @@ def _compile_glslang_if_available(source: str, stage: str) -> None:
     if glslang is None:
         return
 
-    stage_name = {"vertex": "vert", "fragment": "frag"}[stage]
-    suffix = {"vertex": ".vert", "fragment": ".frag"}[stage]
+    stage_name = {"vertex": "vert", "fragment": "frag", "compute": "comp"}[stage]
+    suffix = {"vertex": ".vert", "fragment": ".frag", "compute": ".comp"}[stage]
     with tempfile.TemporaryDirectory() as temp_dir:
         source_path = Path(temp_dir) / f"shader{suffix}"
         source_path.write_text(source, encoding="utf-8")
@@ -515,6 +515,59 @@ def test_metal_constant_reference_parameter_lowers_to_directx_constant_buffer(
     assert "const uint inner_dim = params.inner_dim;" in generated
     assert "ReferenceType" not in generated
     assert "MatMulParams&" not in generated
+
+
+def test_metal_constant_reference_parameter_lowers_to_opengl_uniform_block(
+    tmp_path,
+):
+    source_path = _write_source(
+        tmp_path,
+        "mat-mul-params.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        struct MatMulParams {
+            uint row_dim_x;
+            uint col_dim_x;
+            uint inner_dim;
+        };
+
+        kernel void mat_mul_simple1(
+            device float* A [[buffer(0)]],
+            device float* B [[buffer(1)]],
+            device float* X [[buffer(2)]],
+            constant MatMulParams& params [[buffer(3)]],
+            uint2 id [[thread_position_in_grid]]
+        ) {
+            const uint row_dim_x = params.row_dim_x;
+            const uint col_dim_x = params.col_dim_x;
+            const uint inner_dim = params.inner_dim;
+            uint row = id.y;
+            uint col = id.x;
+            X[(row * col_dim_x) + col] = row_dim_x + inner_dim;
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="opengl", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "layout(std430, binding = 0) buffer ABuffer { float A[]; };" in generated
+    assert "layout(std430, binding = 1) buffer BBuffer { float B[]; };" in generated
+    assert "layout(std430, binding = 2) buffer XBuffer { float X[]; };" in generated
+    assert "layout(std140, binding = 3) uniform MatMulParams {" in generated
+    assert "} params;" in generated
+    assert "void main()" in generated
+    assert "const uint row_dim_x = params.row_dim_x;" in generated
+    assert "const uint col_dim_x = params.col_dim_x;" in generated
+    assert "const uint inner_dim = params.inner_dim;" in generated
+    assert "ReferenceType" not in generated
+    assert "MatMulParams&" not in generated
+    assert "constant MatMulParams" not in generated
+    _compile_glslang_if_available(generated, "compute")
 
 
 def test_metal_scalar_dispatch_id_promotes_to_directx_uint3(tmp_path):
