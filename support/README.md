@@ -60,6 +60,10 @@ cross-checks them against implementation/test identifiers. The checked-in matrix
 keeps reviewed support statuses conservative; generated support-signal issues
 track missing or uncataloged candidates so coverage gaps do not depend on manual
 lookup.
+Backend documentation can also contain host API fields or object properties that
+are not shader-language features. Keep those false positives in the
+backend-specific documented-candidate triage map in `tools/support_signals.py`
+instead of adding support catalog rows for non-language terms.
 
 Process rules:
 

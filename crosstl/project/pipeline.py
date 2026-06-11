@@ -1417,6 +1417,7 @@ TARGET_ONLY_UNSUPPORTED_SOURCE_ARTIFACT_EXTENSIONS = (
     ".webgl.glsl",
     ".webgl.glsl.json",
 )
+WGSL_UNSUPPORTED_SOURCE_EXTENSIONS = frozenset((".wgsl", ".wesl"))
 RUNTIME_REFERENCE_NON_TARGET_BACKENDS = frozenset(("opencl",))
 RUNTIME_REFERENCE_RULES = (
     (
@@ -4902,6 +4903,53 @@ def _scan_native_macro_semantic_lines(
     return diagnostics
 
 
+def _scan_unsupported_wgsl_macro_semantics(
+    config: ProjectConfig,
+    source_path: Path,
+    relative_path: str,
+) -> list[ProjectDiagnostic]:
+    if (
+        _skipped_source_extension(relative_path)
+        not in WGSL_UNSUPPORTED_SOURCE_EXTENSIONS
+    ):
+        return []
+
+    try:
+        lines = source_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        return [
+            ProjectDiagnostic(
+                severity="warning",
+                code="project.scan.include-read-failed",
+                message=(
+                    f"Could not scan preprocessor directives in {relative_path}: "
+                    f"{exc}"
+                ),
+                location=SourceLocation(file=relative_path),
+                missing_capabilities=["macro.native"],
+            )
+        ]
+
+    diagnostics: list[ProjectDiagnostic] = []
+    seen: set[tuple[str, int, str, str, str | None]] = set()
+    scan_lines = _mask_preprocessor_block_comments(lines)
+    for variant, defines in _variant_jobs(config):
+        scan_config = (
+            replace(config, defines=defines) if variant is not None else config
+        )
+        diagnostics.extend(
+            _scan_native_macro_semantic_lines(
+                scan_config,
+                scan_lines,
+                relative_path,
+                source_backend="wgsl",
+                seen=seen,
+                variant=variant,
+            )
+        )
+    return diagnostics
+
+
 def _include_conditionals_active(stack: Sequence[_IncludeConditionalFrame]) -> bool:
     return all(frame.branch_active for frame in stack)
 
@@ -6386,6 +6434,9 @@ def scan_project(
                     location=SourceLocation(file=relative_path),
                     missing_capabilities=["source.discovery"],
                 )
+            )
+            diagnostics.extend(
+                _scan_unsupported_wgsl_macro_semantics(config, path, relative_path)
             )
             continue
 
@@ -19543,6 +19594,7 @@ def _source_backend_contract_reasons(
     value: Any,
     *,
     require_registered: bool,
+    allow_backend_context: bool = False,
 ) -> list[str]:
     if not _is_non_empty_string(value):
         return [f"{prefix} must be a string"]
@@ -19553,6 +19605,10 @@ def _source_backend_contract_reasons(
     discover_backend_plugins()
     canonical_name = SOURCE_REGISTRY.resolve_name(value)
     if canonical_name is None:
+        if allow_backend_context:
+            normalized_backend = normalize_backend_name(value)
+            if normalized_backend == value and value in backend_names():
+                return []
         return [f"{prefix} must be a registered source backend"]
     if canonical_name != value:
         return [f"{prefix} must use canonical source backend name {canonical_name}"]
@@ -24128,6 +24184,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         f"diagnostics[{index}].sourceBackend",
                         diagnostic.get("sourceBackend"),
                         require_registered=has_summary,
+                        allow_backend_context=True,
                     )
                 )
             if "variant" in diagnostic:

@@ -1265,6 +1265,76 @@ def test_scan_project_skips_known_unsupported_source_artifacts(
     )
 
 
+def test_scan_project_reports_wgsl_unsupported_macro_forms_with_variant_context(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            include = ["**/*"]
+
+            [project.variants.debug]
+            ENABLE_WGSL_MACROS = "1"
+            """).strip(),
+        encoding="utf-8",
+    )
+    (shader_dir / "native.wgsl").write_text(
+        textwrap.dedent("""
+            #if ENABLE_WGSL_MACROS
+            #define WGSL_MODE 1
+            #endif
+
+            @compute @workgroup_size(1)
+            fn main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["wgsl"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    diagnostics_by_code = {
+        diagnostic["code"]: diagnostic for diagnostic in payload["diagnostics"]
+    }
+
+    assert validation["success"] is True
+    assert payload["skipped"] == [
+        {"path": "shaders/native.wgsl", "reason": "unsupported-extension"}
+    ]
+    assert set(diagnostics_by_code) == {
+        "project.scan.empty",
+        "project.scan.unsupported-source",
+        "project.scan.unsupported-macro-form",
+    }
+    macro_diagnostic = diagnostics_by_code["project.scan.unsupported-macro-form"]
+    assert macro_diagnostic["sourceBackend"] == "wgsl"
+    assert macro_diagnostic["variant"] == "debug"
+    assert macro_diagnostic["missingCapabilities"] == ["macro.native"]
+    assert macro_diagnostic["location"]["file"] == "shaders/native.wgsl"
+    assert macro_diagnostic["location"]["line"] == 2
+    assert "source frontend does not accept project define forwarding" in (
+        macro_diagnostic["message"]
+    )
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.scan.empty": 1,
+        "project.scan.unsupported-macro-form": 1,
+        "project.scan.unsupported-source": 1,
+    }
+    assert payload["summary"]["diagnosticsBySourceBackend"] == {"wgsl": 1}
+    assert payload["summary"]["diagnosticsByVariant"] == {"debug": 1}
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "macro.native": 1,
+        "repo.scan": 1,
+        "source.discovery": 1,
+    }
+
+
 def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
