@@ -1095,9 +1095,7 @@ def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings(tmp_path):
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
     assert (
-        "struct UniformArrayElementF32 {\n"
-        "    @size(16) value: f32,\n"
-        "};"
+        "struct UniformArrayElementF32 {\n" "    @size(16) value: f32,\n" "};"
     ) in generated
     assert (
         "struct TestBuffer {\n"
@@ -1985,9 +1983,7 @@ def test_translate_metal_half_vector_aliases_to_wgsl_widens_to_f32(tmp_path):
     assert "fn buildViewDir(pair: vec2<f32>, z: f32) -> vec3<f32>" in generated
     assert "var dir: vec3<f32> = vec3<f32>(pair, z);" in generated
     assert "return vec3<f32>(dir.x, dir.yz);" in generated
-    assert (
-        "fn compute_main(@builtin(global_invocation_id) gid: vec3<u32>)" in generated
-    )
+    assert "fn compute_main(@builtin(global_invocation_id) gid: vec3<u32>)" in generated
     assert "var pair: vec2<f32> = vec2<f32>(1.0, 2.0);" in generated
     assert "var viewDir: vec3<f32> = buildViewDir(pair, 3.0);" in generated
     assert "var x: f32 = viewDir.x;" in generated
@@ -2064,8 +2060,8 @@ def test_wgsl_codegen_rejects_do_while_statement():
                 }
             }
             """,
-            "WGSL target does not support CrossGL texture function "
-            "textureGatherCompare yet",
+            r"WGSL target requires textureGatherCompare\(\) to use a shadow/depth "
+            r"texture resource",
         ),
     ),
 )
@@ -2574,6 +2570,84 @@ def test_wgsl_codegen_lowers_texture_gather_component_argument():
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
     assert "return textureGather(2, colorTex, colorTex_sampler, uv);" in generated
+
+
+def test_wgsl_codegen_lowers_texture_gather_compare_calls():
+    shader = """
+    shader WGSLTextureGatherCompare {
+        sampler2DShadow shadowMap;
+        samplerComparisonState compareSampler;
+        vec4 gatherImplicit(sampler2DShadow tex, vec2 uv, float depth) {
+            return textureGatherCompare(tex, uv, depth);
+        }
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0, float depth @ TEXCOORD1) @ gl_FragColor {
+                return textureGatherCompare(shadowMap, compareSampler, uv, depth)
+                    + gatherImplicit(shadowMap, uv, depth);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(0)\nvar shadowMap: texture_depth_2d;" in generated
+    assert (
+        "@group(0) @binding(1)\nvar shadowMap_sampler: sampler_comparison;" in generated
+    )
+    assert "@group(0) @binding(2)\nvar compareSampler: sampler_comparison;" in generated
+    assert (
+        "fn gatherImplicit(tex: texture_depth_2d, tex_sampler: sampler_comparison, "
+        "uv: vec2<f32>, depth: f32) -> vec4<f32>"
+    ) in generated
+    assert "return textureGatherCompare(tex, tex_sampler, uv, depth);" in generated
+    assert "textureGatherCompare(shadowMap, compareSampler, uv, depth)" in generated
+    assert "gatherImplicit(shadowMap, shadowMap_sampler, uv, depth)" in generated
+
+
+def test_wgsl_codegen_rejects_plain_sampler_for_texture_gather_compare():
+    shader = """
+    shader WGSLBadGatherCompareSampler {
+        sampler2DShadow shadowMap;
+        sampler plainSampler;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureGatherCompare(shadowMap, plainSampler, uv, 0.5);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target requires textureGatherCompare\(\) explicit sampler "
+            r"operand to use samplerComparisonState"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_invalid_texture_gather_compare_arity():
+    shader = """
+    shader WGSLBadGatherCompareArity {
+        sampler2DShadow shadowMap;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureGatherCompare(shadowMap, uv);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target supports textureGatherCompare\(\) calls with 3 or "
+            r"4 argument\(s\); got 2"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
 
 
 def test_wgsl_codegen_emits_stage_local_resource_declarations():

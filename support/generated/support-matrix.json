@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 110
+        "test_count": 114
       },
       "translator_codegen": {
         "exists": true,
@@ -4401,10 +4401,14 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_shadow_texture_compare_helper_parameters",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_gather_compare_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_shadow_textures_and_comparison_samplers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_plain_sampler_for_texture_gather_compare",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_nonzero_shadow_compare_lod"
           ],
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
-          "status": "diagnostic"
+          "notes": "Covers depth textures, comparison samplers, implicit and explicit sampler threading, compare offsets, literal-zero compare LOD forms, gather-compare, helper parameters, and deterministic diagnostics for non-depth textures, regular explicit samplers, and target-invalid LOD operands.",
+          "status": "supported"
         }
       }
     },
@@ -15469,9 +15473,9 @@
         "validated_rejection": 9
       },
       "wgsl": {
-        "diagnostic": 19,
+        "diagnostic": 18,
         "partial": 0,
-        "supported": 42,
+        "supported": 43,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 7

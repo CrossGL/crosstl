@@ -870,8 +870,8 @@ class WGSLCodeGen:
         self._uniform_buffer_struct_names = self.uniform_buffer_struct_names(
             cbuffers, global_variable_nodes, stage_resource_parameters
         )
-        self._uniform_scalar_array_wrappers = (
-            self.uniform_scalar_array_wrapper_names(cbuffers, structs)
+        self._uniform_scalar_array_wrappers = self.uniform_scalar_array_wrapper_names(
+            cbuffers, structs
         )
         self._module_storage_access_modes = self.module_storage_access_modes(
             global_variable_nodes, stage_resource_parameters
@@ -1819,9 +1819,7 @@ class WGSLCodeGen:
             else:
                 member_type_name = self.type_name_string(member_type)
             prefix = f"{attributes} " if attributes else ""
-            lines.append(
-                f"    {prefix}{member_name}: {member_type_name},"
-            )
+            lines.append(f"    {prefix}{member_name}: {member_type_name},")
         lines.append("};")
         return "\n".join(lines)
 
@@ -2145,7 +2143,8 @@ class WGSLCodeGen:
             member_name = self.struct_member_identifier_name(node.name, member.name)
             prefix = (
                 "@align(16) "
-                if self.uniform_scalar_array_wrapper_name(member.member_type) is not None
+                if self.uniform_scalar_array_wrapper_name(member.member_type)
+                is not None
                 else ""
             )
             lines.append(
@@ -2486,11 +2485,8 @@ class WGSLCodeGen:
             var_type = self.local_variable_declaration_type(stmt)
             initializer = ""
             if stmt.initial_value is not None:
-                initializer = (
-                    " = "
-                    + self.generate_expression_for_target(
-                        stmt.initial_value, var_type
-                    )
+                initializer = " = " + self.generate_expression_for_target(
+                    stmt.initial_value, var_type
                 )
             variable_name = self.declare_local_identifier(stmt.name)
             line = (
@@ -2590,11 +2586,8 @@ class WGSLCodeGen:
             var_type = self.local_variable_declaration_type(init)
             initializer = ""
             if init.initial_value is not None:
-                initializer = (
-                    " = "
-                    + self.generate_expression_for_target(
-                        init.initial_value, var_type
-                    )
+                initializer = " = " + self.generate_expression_for_target(
+                    init.initial_value, var_type
                 )
             variable_name = self.declare_local_identifier(init.name)
             line = (
@@ -3542,6 +3535,8 @@ class WGSLCodeGen:
             )
         if normalized_name == "texturegather":
             return self.generate_texture_gather_call(function_name, args)
+        if normalized_name == "texturegathercompare":
+            return self.generate_texture_gather_compare_call(function_name, args)
         if normalized_name == "texturesize":
             return self.generate_texture_dimensions_call(args)
         if normalized_name == "imagesize":
@@ -3764,6 +3759,18 @@ class WGSLCodeGen:
             f"{self.generate_expression(texture)}, "
             f"{sampler_expression}, "
             f"{self.generate_expression(coords)})"
+        )
+
+    def generate_texture_gather_compare_call(self, function_name, args):
+        if len(args) not in {3, 4}:
+            raise ValueError(
+                f"WGSL target supports {function_name}() calls with 3 or "
+                f"4 argument(s); got {len(args)}"
+            )
+        self.require_depth_texture_operand(args[0], function_name)
+        self.require_comparison_sampler_operand(args, function_name, implicit=3)
+        return self.generate_texture_builtin_call(
+            "textureGatherCompare", function_name, args, implicit=3, explicit=4
         )
 
     def generate_texture_sample_level_offset_call(self, function_name, args):
@@ -4952,7 +4959,9 @@ class WGSLCodeGen:
             struct_name = self.struct_type_name(object_type)
             if struct_name not in self._uniform_buffer_struct_names:
                 return False
-            member_type = self._struct_member_types.get((struct_name, array_expr.member))
+            member_type = self._struct_member_types.get(
+                (struct_name, array_expr.member)
+            )
             return self.uniform_scalar_array_wrapper_name(member_type) is not None
         return False
 
@@ -6651,9 +6660,9 @@ class WGSLCodeGen:
     def _collect_global_variables(self, ast, target_stage):
         variables = list(getattr(ast, "global_variables", []) or [])
         for stage_node in self._stage_nodes(ast, target_stage):
-            lowered_output_name = (
-                self._stage_output_lowerings.get(id(stage_node), {}).get("source_name")
-            )
+            lowered_output_name = self._stage_output_lowerings.get(
+                id(stage_node), {}
+            ).get("source_name")
             variables.extend(
                 variable
                 for variable in getattr(stage_node, "local_variables", []) or []

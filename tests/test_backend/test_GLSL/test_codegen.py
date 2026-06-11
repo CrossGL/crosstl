@@ -2601,9 +2601,7 @@ def test_codegen_push_constant_scalar_array_to_wgsl_uses_padded_elements(tmp_pat
     assert "cbuffer Material @push_constant {" in crossgl
     assert "float fa[3];" in crossgl
     assert (
-        "struct UniformArrayElementF32 {\n"
-        "    @size(16) value: f32,\n"
-        "};"
+        "struct UniformArrayElementF32 {\n" "    @size(16) value: f32,\n" "};"
     ) in wgsl
     assert "@align(16) fa: array<UniformArrayElementF32, 3>," in wgsl
     assert "_Material.fa[1].value" in wgsl
