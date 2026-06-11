@@ -2848,9 +2848,15 @@ class GLSLCodeGen:
                                 self.generate_legacy_output_declarations(node),
                                 "vertex",
                             )
+                            if self.stage_io_struct_referenced_outside_stage_entries(
+                                ast, node.name
+                            ):
+                                data_struct_nodes.append(node)
                         else:
                             data_struct_nodes.append(node)
-                    elif node.name in self.fragment_output_struct_names:
+                    elif self.should_emit_flattened_stage_io_struct(
+                        ast, node.name, emitted_io, emit_graphics_io
+                    ):
                         data_struct_nodes.append(node)
                 elif node.name in self.vertex_output_struct_names:
                     emitted_io = False
@@ -5946,10 +5952,7 @@ class GLSLCodeGen:
             parameter_qualifiers = self.glsl_parameter_qualifiers(p)
             if parameter_qualifiers:
                 declaration = f"{' '.join(parameter_qualifiers)} {declaration}"
-            semantic_attr = self.map_semantic(semantic)
-            params.append(
-                f"{declaration} {semantic_attr}" if semantic_attr else declaration
-            )
+            params.append(declaration)
             if self.structured_buffer_requires_counter(raw_param_type):
                 counter_name = self.structured_buffer_counter_parameter_name(p.name)
                 self.current_structured_buffer_counter_parameters[p.name] = counter_name
