@@ -31,6 +31,7 @@ from crosstl.project import (
     load_project_config,
     plan_runtime_adapters,
     plan_runtime_host_bindings,
+    plan_runtime_host_integration_execution,
     plan_runtime_host_loader_consumption,
     plan_runtime_integration,
     scan_project,
@@ -295,6 +296,7 @@ def test_project_package_exposes_public_api_surface():
         "prepare_runtime_execution",
         "plan_runtime_adapters",
         "plan_runtime_host_bindings",
+        "plan_runtime_host_integration_execution",
         "plan_runtime_host_loader_consumption",
         "plan_runtime_integration",
         "scan_project",
@@ -4466,6 +4468,84 @@ def test_scan_project_rejects_crossgl_function_like_native_macro_form(tmp_path):
         diagnostic["message"]
     )
     assert "LOCAL_VALUE" not in diagnostic["message"]
+
+
+def test_scan_project_represents_metal_mode_directive_without_macro_warning(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.metal").write_text(
+        textwrap.dedent("""
+            #mode threaded   tile_width=16 // scan payload comment
+            kernel void main0() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["metal"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+    assert payload["nativeDirectives"] == [
+        {
+            "source": "shaders/kernel.metal",
+            "sourceBackend": "metal",
+            "line": 1,
+            "column": 1,
+            "kind": "mode",
+            "payload": "threaded tile_width=16",
+            "handlingStatus": "preserved",
+        }
+    ]
+
+
+def test_scan_project_unknown_metal_directive_keeps_macro_native_warning(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.metal").write_text(
+        textwrap.dedent("""
+            #native_unknown payload
+            kernel void main0() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["metal"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    diagnostic = payload["diagnostics"][0]
+
+    assert validation["success"] is True
+    assert payload["nativeDirectives"] == []
+    assert payload["summary"]["missingCapabilityCounts"] == {"macro.native": 1}
+    assert diagnostic["code"] == "project.scan.unsupported-macro-form"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["macro.native"]
+    assert diagnostic["location"]["file"] == "shaders/kernel.metal"
+    assert diagnostic["location"]["line"] == 1
+    assert "unknown preprocessor directive" in diagnostic["message"]
 
 
 def test_scan_project_scopes_define_shadowing_to_selected_variants(tmp_path):
@@ -8847,26 +8927,87 @@ def test_translate_project_opengl_reports_unresolved_metal_template_kernel(
     artifact = payload["artifacts"][0]
     assert artifact["status"] == "failed"
     assert artifact["target"] == "opengl"
-    assert "unresolved template type 'T'" in artifact["error"]
+    assert "requires concrete template arguments" in artifact["error"]
+    assert artifact["templateMaterialization"] == {
+        "status": "unsupported",
+        "specializationCount": 0,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "specializations": [],
+        "unsupported": [
+            {
+                "name": "raw_template",
+                "parameters": ["T"],
+                "missingParameters": ["T"],
+                "reason": "missing-template-arguments",
+            }
+        ],
+    }
     assert not (repo / artifact["path"]).exists()
     diagnostic = payload["diagnostics"][0]
-    assert diagnostic["code"] == "project.translate.opengl-template-type-unresolved"
+    assert (
+        diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    )
     assert diagnostic["target"] == "opengl"
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
     assert diagnostic["location"]["file"] == "shaders/raw_template.metal"
-    assert diagnostic["location"]["line"] == 4
-    assert diagnostic["location"]["column"] == 1
-    assert "Missing template binding: T." in diagnostic["message"]
-    assert (
-        "Source declaration: raw_template at shaders/raw_template.metal:4:1."
-        in diagnostic["message"]
+    assert "raw_template missing T" in diagnostic["message"]
+
+
+def test_translate_project_opengl_reports_reachable_unresolved_metal_template(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "reachable_template.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            T convert_value(T value) {
+                return T(value);
+            }
+
+            kernel void launch(
+                device float* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = convert_value(1.0);
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
     )
+
+    payload = translate_project(repo, targets=["opengl"], output_dir="out").to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["templateMaterialization"] == {
+        "status": "unsupported",
+        "specializationCount": 0,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "specializations": [],
+        "unsupported": [
+            {
+                "name": "convert_value",
+                "parameters": ["T"],
+                "missingParameters": ["T"],
+                "reason": "missing-template-arguments",
+            }
+        ],
+    }
+    diagnostic = payload["diagnostics"][0]
     assert (
-        "Target artifact: translated/opengl/shaders/raw_template.glsl."
-        in diagnostic["message"]
+        diagnostic["code"] == "project.translate.template-materialization-unsupported"
     )
-    assert "Suggested action:" in diagnostic["message"]
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert "convert_value missing T" in diagnostic["message"]
 
 
 def test_translate_project_forwards_metal_template_specialization_limit(tmp_path):
@@ -11111,6 +11252,14 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
     assert set(artifact["sourceRemap"]) == (
         project_pipeline.REPORT_ARTIFACT_SOURCE_REMAP_FIELDS
     )
+    assert artifact["templateMaterialization"] == {
+        "status": "not-required",
+        "specializationCount": 0,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "specializations": [],
+        "unsupported": [],
+    }
 
     source_map = artifact["sourceMap"]
     assert set(source_map) == project_pipeline.SOURCE_MAP_PAYLOAD_FIELDS
@@ -30523,6 +30672,232 @@ def test_project_cli_inspect_host_integration_handoff_json_writes_output(tmp_pat
     assert payload["generatedFiles"][0]["status"] == "ready"
 
 
+def test_plan_runtime_host_integration_execution_reports_ready_steps(tmp_path):
+    repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+    before_files = sorted(
+        path.relative_to(handoff_dir).as_posix()
+        for path in handoff_dir.rglob("*")
+        if path.is_file()
+    )
+
+    payload = plan_runtime_host_integration_execution(
+        handoff_dir / "host-integration.json",
+        host_root=repo,
+    )
+
+    after_files = sorted(
+        path.relative_to(handoff_dir).as_posix()
+        for path in handoff_dir.rglob("*")
+        if path.is_file()
+    )
+    assert after_files == before_files
+    assert set(payload) == (
+        project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_FIELDS
+    )
+    assert (
+        payload["kind"] == project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_KIND
+    )
+    assert payload["success"] is True
+    assert payload["status"] == "ready"
+    assert (
+        payload["scope"]
+        == project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_SCOPE
+    )
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_NON_GOALS
+    )
+    assert payload["hostRoot"] == str(repo)
+    assert payload["hostRootStatus"] == "ready"
+    assert payload["handoffInspection"]["success"] is True
+    assert payload["handoffInspection"]["status"] == "ready"
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "loaderUnitCount": 1,
+        "readyLoaderUnitCount": 1,
+        "blockedLoaderUnitCount": 0,
+        "failedLoaderUnitCount": 0,
+        "stepCount": 6,
+        "readyStepCount": 6,
+        "blockedStepCount": 0,
+        "failedStepCount": 0,
+        "requiredToolCount": 0,
+        "hostResponsibilityCount": 2,
+    }
+    assert set(payload["targets"][0]) == (
+        project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_TARGET_FIELDS
+    )
+    assert payload["targets"][0]["target"] == "cgl"
+    assert payload["targets"][0]["status"] == "ready"
+    assert payload["targets"][0]["stepCount"] == 6
+    assert payload["targets"][0]["failedStepCount"] == 0
+    assert len(payload["targets"][0]["hostResponsibilities"]) == 2
+    assert [step["kind"] for step in payload["steps"]] == [
+        "consume-host-loader-unit",
+        "load-package-artifact",
+        "load-source-remap",
+        "bind-host-interface",
+        "satisfy-host-responsibility",
+        "satisfy-host-responsibility",
+    ]
+    assert [step["phase"] for step in payload["steps"]] == [
+        "consume-loader",
+        "load-artifact",
+        "run-host-action",
+        "run-host-action",
+        "satisfy-host-responsibility",
+        "satisfy-host-responsibility",
+    ]
+    assert payload["steps"][0]["id"] == "cgl-0001-consume-host-loader-unit"
+    assert all(
+        set(step)
+        == project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_STEP_FIELDS
+        for step in payload["steps"]
+    )
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+
+
+def test_plan_runtime_host_integration_execution_carries_blocked_steps(tmp_path):
+    _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
+        tmp_path, targets=("vulkan",)
+    )
+
+    payload = plan_runtime_host_integration_execution(
+        handoff_dir / "host-integration.json"
+    )
+
+    assert payload["success"] is True
+    assert payload["status"] == "blocked"
+    assert payload["hostRoot"] is None
+    assert payload["hostRootStatus"] == "not-provided"
+    assert payload["summary"]["loaderUnitCount"] == 1
+    assert payload["summary"]["readyLoaderUnitCount"] == 0
+    assert payload["summary"]["blockedLoaderUnitCount"] == 1
+    assert payload["summary"]["stepCount"] == 1
+    assert payload["summary"]["blockedStepCount"] == 1
+    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["status"] == "blocked"
+    assert payload["targets"][0]["blockedStepCount"] == 1
+    assert payload["steps"][0]["kind"] == "resolve-loader-scaffold-blockers"
+    assert payload["steps"][0]["phase"] == "resolve-blockers"
+    assert payload["steps"][0]["status"] == "blocked"
+    assert payload["steps"][0]["severity"] == "warning"
+
+
+def test_plan_runtime_host_integration_execution_rejects_failed_handoff_inspection(
+    tmp_path,
+):
+    _, handoff_dir, handoff_payload = _build_runtime_host_integration_handoff_fixture(
+        tmp_path
+    )
+    target_path = handoff_dir / handoff_payload["targets"][0]["handoffFile"]
+    target_path.unlink()
+
+    payload = plan_runtime_host_integration_execution(
+        handoff_dir / "host-integration.json"
+    )
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["summary"]["targetCount"] == 0
+    assert payload["steps"] == []
+    assert payload["handoffInspection"]["success"] is False
+    assert payload["diagnosticCounts"]["error"] >= 1
+    assert any(
+        diagnostic["code"]
+        == "project.runtime-host-integration-handoff-inspection.target-missing"
+        for diagnostic in payload["diagnostics"]
+    )
+
+
+def test_plan_runtime_host_integration_execution_rejects_missing_host_root(tmp_path):
+    repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+
+    payload = plan_runtime_host_integration_execution(
+        handoff_dir / "host-integration.json",
+        host_root=repo / "missing-host",
+    )
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["hostRoot"] == str(repo / "missing-host")
+    assert payload["hostRootStatus"] == "missing"
+    assert payload["summary"]["stepCount"] == 6
+    assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == (
+        "project.runtime-host-integration-execution-plan.host-root-missing"
+    )
+
+
+def test_project_cli_plan_host_integration_execution_text_outputs_steps(tmp_path):
+    repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+    manifest_path = handoff_dir / "host-integration.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-host-integration-execution",
+            str(manifest_path),
+            "--host-root",
+            str(repo),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Runtime host integration execution plan: {manifest_path}" in result.stdout
+    assert "Status: ready" in result.stdout
+    assert "Host root:" in result.stdout
+    assert "Execution scope: host-integration-execution-planning" in result.stdout
+    assert (
+        "Execution non-goals: host-code-rewriting, device-execution, "
+        "runtime-framework-generation, target-sdk-installation"
+    ) in result.stdout
+    assert "Summary: 1 targets, 6 steps, 6 ready, 0 blocked, 0 failed" in (
+        result.stdout
+    )
+    assert "Runtime host integration execution steps:" in result.stdout
+    assert "consume-host-loader-unit" in result.stdout
+
+
+def test_project_cli_plan_host_integration_execution_json_writes_output(tmp_path):
+    repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+    output_path = repo / "host-integration-execution-plan.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-host-integration-execution",
+            str(handoff_dir / "host-integration.json"),
+            "--host-root",
+            str(repo),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert (
+        payload["kind"] == project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_KIND
+    )
+    assert payload["summary"]["readyStepCount"] == 6
+    assert payload["steps"][0]["kind"] == "consume-host-loader-unit"
+
+
 def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp_path):
     report_path = _write_large_migration_report(tmp_path / "repo")
 
@@ -33122,6 +33497,206 @@ def test_translate_project_metal_matmul_constant_pointer_params_lower_to_resourc
     assert "float* A" not in directx
     assert "float* B" not in directx
     assert "float* X" not in directx
+
+
+def test_translate_project_metal_call_site_template_materializes_for_opengl(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "generic_value.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct Params {
+                float value;
+            };
+
+            template <typename T>
+            T scale_value(T value) {
+                return value + T(1.0);
+            }
+
+            kernel void launch(
+                device float* out [[buffer(0)]],
+                constant Params& params [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = scale_value<float>(params.value);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"] == {
+        "status": "materialized",
+        "specializationCount": 1,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "specializations": [
+            {
+                "name": "scale_value",
+                "materializedName": "scale_value_float",
+                "parameters": {"T": "float"},
+                "source": "call-site",
+            }
+        ],
+        "unsupported": [],
+    }
+
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "float scale_value_float(float value)" in output
+    assert "scale_value<float>" not in output
+    assert re.search(r"\\bT\\b", output) is None
+    assert "out_[gid] = scale_value_float(params.value);" in output
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+
+
+def test_translate_project_metal_variant_template_materializes_for_opengl(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "out"
+
+            [project.variants.f32]
+            T = "float"
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "generic_pointer.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct Params {
+                float value;
+            };
+
+            template <typename T>
+            kernel void write_value(
+                device T* out [[buffer(0)]],
+                constant Params& params [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = T(params.value);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["variant"] == "f32"
+    assert artifact["status"] == "translated"
+    assert artifact["defines"] == {"T": "float"}
+    assert artifact["templateMaterialization"] == {
+        "status": "materialized",
+        "specializationCount": 1,
+        "configuredParameterCount": 1,
+        "configuredParameters": {"T": "float"},
+        "specializations": [
+            {
+                "name": "write_value",
+                "materializedName": "write_value",
+                "parameters": {"T": "float"},
+                "source": "config",
+            }
+        ],
+        "unsupported": [],
+    }
+
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "layout(std430, binding = 0) buffer out_Buffer { float out_[]; };" in output
+    assert "layout(std140, binding = 1) uniform Params" in output
+    assert "out_[gid] = float(params.value);" in output
+    assert re.search(r"\\bT\\b", output) is None
+    assert "float* out" not in output
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+
+
+def test_translate_project_metal_template_without_arguments_reports_metadata(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "generic_pointer.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename U>
+            kernel void write_value(
+                device U* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = U(0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    assert artifact["templateMaterialization"] == {
+        "status": "unsupported",
+        "specializationCount": 0,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "specializations": [],
+        "unsupported": [
+            {
+                "name": "write_value",
+                "parameters": ["U"],
+                "missingParameters": ["U"],
+                "reason": "missing-template-arguments",
+            }
+        ],
+    }
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    diagnostic = payload["diagnostics"][0]
+    assert (
+        diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    )
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert "write_value missing U" in diagnostic["message"]
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
 
 
 def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(

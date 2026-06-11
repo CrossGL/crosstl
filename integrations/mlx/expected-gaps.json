@@ -4,59 +4,113 @@
   "commit": "968d264f2903d578e699c4452a4dbf48633921aa",
   "frontier_status": {
     "status": "passing",
-    "sources": 10,
+    "sources": 8,
     "targets": ["directx", "vulkan"],
-    "artifacts": 20
+    "artifacts": 16
   },
   "full_corpus_scout": {
     "status": "partial",
     "sources": 40,
     "targets": ["directx", "opengl", "vulkan"],
     "artifacts": 120,
-    "translated_artifacts": 75,
-    "failed_artifacts": 45,
+    "translated_artifacts": 64,
+    "failed_artifacts": 56,
     "translated_by_target": {
-      "directx": 38,
+      "directx": 32,
       "opengl": 3,
-      "vulkan": 34
+      "vulkan": 29
     }
   },
   "tracked_issues": [
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1012",
-      "scope": "metal-mode-directive-planning",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1019",
+      "scope": "project-template-materialization-blockers",
       "status": "open",
-      "summary": "Plan Metal mode directives as project variants."
+      "summary": "Resolve project template materialization blockers after variant discovery."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1013",
-      "scope": "metal-generated-specialization-declarators",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1026",
+      "scope": "metal-name-directive-metadata",
       "status": "open",
-      "summary": "Handle generated Metal numeric suffixes in specialized declarators."
+      "summary": "Plan Metal #name directives as project specialization metadata."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1003",
-      "scope": "project-template-variant-materialization",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1027",
+      "scope": "metal-quantization-numeric-declarators",
       "status": "open",
-      "summary": "Materialize concrete project template variants before template-hostile targets."
+      "summary": "Parse generated Metal quantization identifiers with numeric suffix declarators."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1004",
-      "scope": "project-template-specialization-scale",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1028",
+      "scope": "metal-scan-template-streaming",
       "status": "open",
-      "summary": "Scale project template specialization without hard translation limits."
+      "summary": "Stream Metal template materialization for scan-style helper explosions."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1006",
-      "scope": "resource-pointer-provenance",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1029",
+      "scope": "metal-variadic-debug-templates",
       "status": "open",
-      "summary": "Preserve resource pointer provenance through project helper calls."
+      "summary": "Handle variadic Metal debug helper templates during project materialization."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/1007",
-      "scope": "project-runtime-test-execution",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1030",
+      "scope": "metal-reduction-normalization-template-variants",
       "status": "open",
-      "summary": "Run repository test suites against translated project backends."
+      "summary": "Materialize non-type template parameters for reduction and normalization kernels."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1031",
+      "scope": "metal-convolution-gemv-template-variants",
+      "status": "open",
+      "summary": "Materialize convolution and GEMV threadgroup sizing templates from project variants."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1032",
+      "scope": "metal-rotary-embedding-template-variants",
+      "status": "open",
+      "summary": "Materialize rotary embedding Metal templates across project targets."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1033",
+      "scope": "opengl-elementwise-template-bindings",
+      "status": "open",
+      "summary": "Carry Metal source-instantiation bindings into OpenGL elementwise kernels."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1034",
+      "scope": "opengl-reduction-template-bindings",
+      "status": "open",
+      "summary": "Resolve accumulator and auxiliary template bindings for OpenGL reductions."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1035",
+      "scope": "opengl-nested-steel-template-bindings",
+      "status": "open",
+      "summary": "Propagate nested Steel kernel template bindings into OpenGL project output."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1036",
+      "scope": "spirv-index-helper-storage-provenance",
+      "status": "open",
+      "summary": "Preserve storage-buffer provenance through SPIR-V index helper calls."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1037",
+      "scope": "spirv-sort-helper-inlining",
+      "status": "open",
+      "summary": "Inline SPIR-V storage-buffer helpers with reference parameters and thread IDs."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1038",
+      "scope": "runtime-binding-manifest",
+      "status": "open",
+      "summary": "Emit backend-agnostic runtime binding manifests for translated project artifacts."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1039",
+      "scope": "runtime-parity-executors",
+      "status": "open",
+      "summary": "Add project runtime parity executors for translated GPU artifacts."
     }
   ],
   "resolved_issues": [
@@ -75,6 +129,12 @@
     "https://github.com/CrossGL/crosstl/issues/984",
     "https://github.com/CrossGL/crosstl/issues/985",
     "https://github.com/CrossGL/crosstl/issues/1001",
-    "https://github.com/CrossGL/crosstl/issues/1002"
+    "https://github.com/CrossGL/crosstl/issues/1002",
+    "https://github.com/CrossGL/crosstl/issues/1003",
+    "https://github.com/CrossGL/crosstl/issues/1004",
+    "https://github.com/CrossGL/crosstl/issues/1006",
+    "https://github.com/CrossGL/crosstl/issues/1007",
+    "https://github.com/CrossGL/crosstl/issues/1012",
+    "https://github.com/CrossGL/crosstl/issues/1013"
   ]
 }

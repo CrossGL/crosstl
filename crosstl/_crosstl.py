@@ -2077,6 +2077,126 @@ def _run_inspect_host_integration_handoff(args):
     return 0 if payload["success"] else 1
 
 
+def _format_runtime_host_integration_execution_plan(payload):
+    lines = [
+        f"Runtime host integration execution plan: {payload.get('sourceHandoffManifest')}"
+    ]
+    for header_line in (
+        _format_payload_schema_version(payload, "Execution plan schema version"),
+        _format_payload_kind(payload, "Execution plan kind"),
+        _format_payload_generated_at(payload, "Execution plan generated at"),
+        _format_payload_hash(
+            payload, "sourceHandoffManifestHash", "Source handoff manifest hash"
+        ),
+    ):
+        if header_line:
+            lines.append(header_line)
+    lines.append(f"Status: {payload.get('status', 'failed')}")
+    handoff_root = payload.get("handoffRoot")
+    if isinstance(handoff_root, str) and handoff_root:
+        lines.append(f"Handoff root: {handoff_root}")
+    host_root = payload.get("hostRoot")
+    host_root_status = payload.get("hostRootStatus")
+    if isinstance(host_root, str) and host_root:
+        lines.append(f"Host root: {host_root} [{host_root_status}]")
+    scope = payload.get("scope")
+    if isinstance(scope, str) and scope:
+        lines.append(f"Execution scope: {scope}")
+    non_goals = payload.get("nonGoals")
+    if isinstance(non_goals, list):
+        non_goal_labels = [
+            non_goal for non_goal in non_goals if isinstance(non_goal, str) and non_goal
+        ]
+        if non_goal_labels:
+            lines.append(f"Execution non-goals: {', '.join(non_goal_labels)}")
+
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        lines.append(
+            "Summary: "
+            f"{summary.get('targetCount', 0)} targets, "
+            f"{summary.get('stepCount', 0)} steps, "
+            f"{summary.get('readyStepCount', 0)} ready, "
+            f"{summary.get('blockedStepCount', 0)} blocked, "
+            f"{summary.get('failedStepCount', 0)} failed"
+        )
+
+    targets = payload.get("targets", [])
+    if targets:
+        lines.append("Runtime host integration execution targets:")
+        for target in targets:
+            if not isinstance(target, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"{target.get('target', 'unknown')}: "
+                f"{target.get('status', 'unknown')}, "
+                f"{target.get('stepCount', 0)} steps, "
+                f"{target.get('readyStepCount', 0)} ready, "
+                f"{target.get('blockedStepCount', 0)} blocked"
+            )
+
+    steps = payload.get("steps", [])
+    if steps:
+        lines.append("Runtime host integration execution steps:")
+        for step in steps:
+            if not isinstance(step, Mapping):
+                continue
+            details = [
+                f"phase: {step.get('phase', 'unknown')}",
+                f"status: {step.get('status', 'unknown')}",
+            ]
+            step_tools = step.get("tools")
+            tools = (
+                [tool for tool in step_tools if isinstance(tool, str) and tool]
+                if isinstance(step_tools, list)
+                else []
+            )
+            if tools:
+                details.append(f"tools: {', '.join(tools)}")
+            lines.append(
+                "- "
+                f"{step.get('id', '<missing step id>')}: "
+                f"{step.get('target', 'unknown')} "
+                f"{step.get('kind', 'unknown')} "
+                f"[{'; '.join(details)}] - "
+                f"{step.get('message', '')}"
+            )
+
+    diagnostics = payload.get("diagnostics", [])
+    if diagnostics:
+        lines.append("Diagnostics:")
+        for diagnostic in diagnostics:
+            if isinstance(diagnostic, Mapping):
+                lines.append(_format_project_diagnostic_line(diagnostic))
+    return "\n".join(lines) + "\n"
+
+
+def _run_plan_host_integration_execution(args):
+    from .project import plan_runtime_host_integration_execution
+
+    payload = plan_runtime_host_integration_execution(
+        args.handoff_manifest,
+        host_root=args.host_root,
+    )
+    if args.format == "sarif":
+        _write_json_payload(
+            _format_project_diagnostics_sarif(
+                payload,
+                tool_name="CrossTL runtime host integration execution planning",
+            ),
+            args.output,
+        )
+    elif args.format == "text":
+        _write_text_payload(
+            _format_runtime_host_integration_execution_plan(payload),
+            args.output,
+        )
+    else:
+        _write_json_payload(payload, args.output)
+    return 0 if payload["success"] else 1
+
+
 def _format_count_rollup(label, counts, *, include_zero=True):
     if not isinstance(counts, Mapping):
         return None
@@ -5834,6 +5954,32 @@ def _build_parser():
         func=_run_inspect_host_integration_handoff
     )
 
+    host_integration_execution_parser = subparsers.add_parser(
+        "plan-host-integration-execution",
+        help="Build a read-only execution plan from a host integration handoff",
+    )
+    host_integration_execution_parser.add_argument(
+        "handoff_manifest", help="Host integration handoff manifest JSON"
+    )
+    host_integration_execution_parser.add_argument(
+        "--host-root",
+        help="Optional host repository root to include in readiness checks",
+    )
+    host_integration_execution_parser.add_argument(
+        "--format",
+        choices=("json", "text", "sarif"),
+        default="json",
+        help="Host integration execution plan output format",
+    )
+    host_integration_execution_parser.add_argument(
+        "--output",
+        "-o",
+        help="Write host integration execution plan; use '-' for stdout",
+    )
+    host_integration_execution_parser.set_defaults(
+        func=_run_plan_host_integration_execution
+    )
+
     report_parser = subparsers.add_parser(
         "report", help="Emit a scan-only project portability report"
     )
@@ -5872,6 +6018,7 @@ def _use_legacy_cli(argv):
         "plan-host-loader-consumption",
         "host-integration-handoff",
         "inspect-host-integration-handoff",
+        "plan-host-integration-execution",
         "report",
     }
     if not argv or argv[0] in {"-h", "--help"}:

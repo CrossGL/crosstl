@@ -18,24 +18,31 @@ MLX_METAL_KERNEL_ROOT = "mlx/backend/metal/kernels"
 MLX_ARANGE_SOURCE = "mlx/backend/metal/kernels/arange.metal"
 MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/arange.metal",
-    "mlx/backend/metal/kernels/arg_reduce.metal",
     "mlx/backend/metal/kernels/binary.metal",
     "mlx/backend/metal/kernels/binary_two.metal",
     "mlx/backend/metal/kernels/copy.metal",
     "mlx/backend/metal/kernels/fence.metal",
     "mlx/backend/metal/kernels/random.metal",
-    "mlx/backend/metal/kernels/rope.metal",
     "mlx/backend/metal/kernels/ternary.metal",
     "mlx/backend/metal/kernels/unary.metal",
 )
 EXPECTED_METAL_KERNEL_COUNT = 40
 FULL_CORPUS_TRACKED_ISSUES = (
-    "https://github.com/CrossGL/crosstl/issues/1003",
-    "https://github.com/CrossGL/crosstl/issues/1004",
-    "https://github.com/CrossGL/crosstl/issues/1006",
-    "https://github.com/CrossGL/crosstl/issues/1007",
-    "https://github.com/CrossGL/crosstl/issues/1012",
-    "https://github.com/CrossGL/crosstl/issues/1013",
+    "https://github.com/CrossGL/crosstl/issues/1019",
+    "https://github.com/CrossGL/crosstl/issues/1026",
+    "https://github.com/CrossGL/crosstl/issues/1027",
+    "https://github.com/CrossGL/crosstl/issues/1028",
+    "https://github.com/CrossGL/crosstl/issues/1029",
+    "https://github.com/CrossGL/crosstl/issues/1030",
+    "https://github.com/CrossGL/crosstl/issues/1031",
+    "https://github.com/CrossGL/crosstl/issues/1032",
+    "https://github.com/CrossGL/crosstl/issues/1033",
+    "https://github.com/CrossGL/crosstl/issues/1034",
+    "https://github.com/CrossGL/crosstl/issues/1035",
+    "https://github.com/CrossGL/crosstl/issues/1036",
+    "https://github.com/CrossGL/crosstl/issues/1037",
+    "https://github.com/CrossGL/crosstl/issues/1038",
+    "https://github.com/CrossGL/crosstl/issues/1039",
 )
 RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/939",
@@ -54,6 +61,12 @@ RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/985",
     "https://github.com/CrossGL/crosstl/issues/1001",
     "https://github.com/CrossGL/crosstl/issues/1002",
+    "https://github.com/CrossGL/crosstl/issues/1003",
+    "https://github.com/CrossGL/crosstl/issues/1004",
+    "https://github.com/CrossGL/crosstl/issues/1006",
+    "https://github.com/CrossGL/crosstl/issues/1007",
+    "https://github.com/CrossGL/crosstl/issues/1012",
+    "https://github.com/CrossGL/crosstl/issues/1013",
 )
 
 
