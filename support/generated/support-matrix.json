@@ -4311,13 +4311,18 @@
         "wgsl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_implicit_sampler_texture_gather_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_explicit_sampler_texture_gather_calls",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_gather_component_argument",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_gather_compare_calls",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_gather_offset_calls",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_gather_compare_offset_calls",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_texture_gather_offsets"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_plain_sampler_for_texture_gather_compare_offset",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_texture_gather_offsets",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_plain_sampler_for_texture_gather_compare",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_invalid_texture_gather_compare_arity"
           ],
-          "notes": "Covers regular gather, component selection, single-offset gather and gather-compare offset lowering with implicit and explicit sampler threading, and deterministic textureGatherOffsets diagnostics because WGSL textureGather accepts at most one offset operand.",
-          "status": "diagnostic"
+          "notes": "Covers regular gather, explicit-sampler gather, component selection, depth gather-compare, single-offset gather, and gather-compare offset lowering with implicit and explicit sampler threading, plus deterministic diagnostics for textureGatherOffsets and invalid compare sampler/arity forms.",
+          "status": "supported"
         }
       }
     },
@@ -15515,9 +15520,9 @@
         "validated_rejection": 9
       },
       "wgsl": {
-        "diagnostic": 12,
+        "diagnostic": 11,
         "partial": 0,
-        "supported": 49,
+        "supported": 50,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 7
