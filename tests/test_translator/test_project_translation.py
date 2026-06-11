@@ -25925,6 +25925,7 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
                         "variant": 0,
                         "checkKind": "maybe",
                         "missingCapabilities": "repo.scan",
+                        "details": [],
                     }
                 ],
             }
@@ -25974,6 +25975,7 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
     assert "diagnostics[0].missingCapabilities must be a list of strings" in (
         diagnostic["message"]
     )
+    assert "diagnostics[0].details must be an object" in diagnostic["message"]
 
 
 def test_project_diagnostics_preserve_original_locations(tmp_path):
@@ -40260,7 +40262,8 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
         encoding="utf-8",
     )
 
-    payload = translate_project(load_project_config(repo)).to_json()
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
 
     artifact = payload["artifacts"][0]
     assert artifact["status"] == "failed"
@@ -40290,6 +40293,21 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
     assert diagnostic["location"]["line"] == 9
     assert diagnostic["location"]["column"] == 1
     assert "work limit exceeded before GLSL codegen" in diagnostic["message"]
+    assert diagnostic["details"]["templateMaterialization"] == {
+        "limit": 4,
+        "limitSource": "project.source_options.metal.max_template_materialization_work",
+        "requiredWorkItems": 6,
+        "requestedSignature": "3 source instantiations x 2 templates",
+        "suggestedAction": (
+            "raise max_template_materialization_work for this source pattern or "
+            "OpenGL target, or reduce source template instantiations"
+        ),
+    }
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
 
 
 def test_metal_project_materialization_default_work_budget_scales_source_instantiations(
@@ -40561,6 +40579,17 @@ def test_translate_project_metal_implicit_type_environment_budget_diagnostic(
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
     assert "implicit-template-materialization/type-environment" in diagnostic["message"]
     assert "templates=1" in diagnostic["message"]
+    detail = diagnostic["details"]["templateMaterialization"]
+    assert detail["limit"] == 3
+    assert (
+        detail["limitSource"]
+        == "project.source_options.metal.max_template_materialization_work"
+    )
+    assert detail["requiredWorkItems"] > detail["limit"]
+    assert "implicit-template-materialization/type-environment" in (
+        detail["requestedSignature"]
+    )
+    assert "raise max_template_materialization_work" in detail["suggestedAction"]
 
 
 def test_translate_project_metal_type_alias_rewrite_cycle_reports_diagnostic(

@@ -7,6 +7,7 @@ import bisect
 import fnmatch
 import hashlib
 import json
+import math
 import operator
 import os
 import re
@@ -6754,6 +6755,32 @@ class SourceLocation:
         }
 
 
+def _diagnostic_detail_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if isinstance(value, Mapping):
+        return {
+            str(key): _diagnostic_detail_value(item)
+            for key, item in value.items()
+            if isinstance(key, str) and key.strip()
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_diagnostic_detail_value(item) for item in value]
+    return str(value)
+
+
+def _diagnostic_details_payload(details: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        str(key): _diagnostic_detail_value(value)
+        for key, value in details.items()
+        if isinstance(key, str) and key.strip() and value is not None
+    }
+
+
 @dataclass(frozen=True)
 class ProjectDiagnostic:
     """Structured project diagnostic compatible with compiler diagnostics."""
@@ -6768,7 +6795,7 @@ class ProjectDiagnostic:
     check_kind: str | None = None
     missing_capabilities: Sequence[str] = ()
     original_location: SourceLocation | None = None
-    details: Mapping[str, Any] | None = None
+    details: Mapping[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         payload = {
@@ -6790,7 +6817,7 @@ class ProjectDiagnostic:
         if self.missing_capabilities:
             payload["missingCapabilities"] = list(self.missing_capabilities)
         if self.details:
-            payload["details"] = dict(self.details)
+            payload["details"] = _diagnostic_details_payload(self.details)
         return payload
 
 
@@ -9527,6 +9554,7 @@ class _MetalTemplateMaterializationWorkBudget:
             limit=self.limit,
             limit_source=self.limit_source,
             unique_specialization_count=self.used,
+            required_work_items=self.used,
             requested_signature=requested_signature,
             suggested_action=suggested_action,
             source_location=location,
@@ -10471,6 +10499,7 @@ def _raise_metal_type_identifier_rewrite_error(
         limit=pass_limit,
         limit_source=limit_source,
         unique_specialization_count=pass_count,
+        required_work_items=pass_count,
         requested_signature=(
             f"{pass_name}: {pass_count} type identifier rewrite passes for "
             f"'{original_text}'"
@@ -12606,6 +12635,7 @@ def _project_template_materialization_for_artifact(
                 f"Suggested action: {suggested_action}.",
                 limit=materialization_work_limit,
                 limit_source=materialization_work_limit_source,
+                required_work_items=materialization_work_items,
                 requested_signature=requested_signature,
                 suggested_action=suggested_action,
                 source_location=location,
@@ -13152,6 +13182,80 @@ def _translation_failure_missing_capabilities(
     return ["batch.translation"]
 
 
+def _template_materialization_failure_details(exc: Exception) -> dict[str, Any]:
+    limit = getattr(exc, "limit", None)
+    limit_source = getattr(exc, "limit_source", None)
+    required_work_items = getattr(exc, "required_work_items", None)
+    unique_specialization_count = getattr(exc, "unique_specialization_count", None)
+    requested_signature = getattr(exc, "requested_signature", None)
+    suggested_action = getattr(exc, "suggested_action", None)
+
+    template_materialization = {}
+    if isinstance(limit, int) and not isinstance(limit, bool):
+        template_materialization["limit"] = limit
+    if _is_non_empty_string(limit_source):
+        template_materialization["limitSource"] = limit_source
+    if isinstance(required_work_items, int) and not isinstance(
+        required_work_items, bool
+    ):
+        template_materialization["requiredWorkItems"] = required_work_items
+    if isinstance(unique_specialization_count, int) and not isinstance(
+        unique_specialization_count, bool
+    ):
+        template_materialization["requestedSpecializationCount"] = (
+            unique_specialization_count
+        )
+    if _is_non_empty_string(requested_signature):
+        template_materialization["requestedSignature"] = requested_signature
+    if _is_non_empty_string(suggested_action):
+        template_materialization["suggestedAction"] = suggested_action
+
+    if not template_materialization:
+        return {}
+    return {"templateMaterialization": template_materialization}
+
+
+def _opengl_template_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.opengl-template-type-unresolved"
+    ):
+        return {}
+
+    unresolved_parameter = getattr(exc, "unresolved_parameter", None)
+    if not _is_non_empty_string(unresolved_parameter):
+        unresolved_parameter = _metal_template_missing_binding(exc)
+    enclosing_type = getattr(exc, "enclosing_generated_type", None)
+    if not _is_non_empty_string(enclosing_type):
+        enclosing_type = _opengl_template_enclosing_type_from_message(exc)
+
+    details = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    if _is_non_empty_string(unresolved_parameter):
+        details["unresolvedParameter"] = unresolved_parameter
+    if _is_non_empty_string(enclosing_type):
+        details["enclosingGeneratedType"] = enclosing_type
+    return dict(sorted(details.items()))
+
+
+def _translation_failure_details(
+    exc: Exception,
+    target: str,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    del target
+    return {
+        **_opengl_template_failure_details(exc, unit, artifact_path),
+        **_template_materialization_failure_details(exc),
+    }
+
+
 def _translation_failure_project_diagnostics(
     exc: Exception,
     target: str,
@@ -13215,35 +13319,6 @@ def _translation_failure_project_diagnostics(
             details=_translation_failure_details(exc, target, unit, artifact_path),
         )
     ]
-
-
-def _translation_failure_details(
-    exc: Exception,
-    target: str,
-    unit: ProjectTranslationUnit,
-    artifact_path: str | None,
-) -> dict[str, Any] | None:
-    if _translation_failure_diagnostic_code(exc) != (
-        "project.translate.opengl-template-type-unresolved"
-    ):
-        return None
-
-    unresolved_parameter = getattr(exc, "unresolved_parameter", None)
-    if not _is_non_empty_string(unresolved_parameter):
-        unresolved_parameter = _metal_template_missing_binding(exc)
-    enclosing_type = getattr(exc, "enclosing_generated_type", None)
-    if not _is_non_empty_string(enclosing_type):
-        enclosing_type = _opengl_template_enclosing_type_from_message(exc)
-
-    details = {
-        "sourcePath": unit.relative_path,
-        "targetArtifact": artifact_path or "",
-    }
-    if _is_non_empty_string(unresolved_parameter):
-        details["unresolvedParameter"] = unresolved_parameter
-    if _is_non_empty_string(enclosing_type):
-        details["enclosingGeneratedType"] = enclosing_type
-    return dict(sorted(details.items()))
 
 
 def _opengl_template_enclosing_type_from_message(exc: Exception) -> str | None:
@@ -28916,6 +28991,35 @@ def _string_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
     return []
 
 
+def _diagnostic_detail_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return []
+    if isinstance(value, list):
+        reasons: list[str] = []
+        for index, item in enumerate(value):
+            reasons.extend(
+                _diagnostic_detail_contract_reasons(f"{prefix}[{index}]", item)
+            )
+        return reasons
+    if isinstance(value, Mapping):
+        reasons = []
+        for key, item in value.items():
+            if not _is_non_empty_string(key):
+                reasons.append(f"{prefix} keys must be non-empty strings")
+                key_prefix = prefix
+            else:
+                key_prefix = _mapping_key_path(prefix, key)
+            reasons.extend(_diagnostic_detail_contract_reasons(key_prefix, item))
+        return reasons
+    return [f"{prefix} values must be JSON scalar, array, or object values"]
+
+
+def _diagnostic_details_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    return _diagnostic_detail_contract_reasons(prefix, value)
+
+
 def _non_empty_string_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
     reasons = _string_mapping_contract_reasons(prefix, value)
     if reasons:
@@ -33061,10 +33165,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 reasons.append(
                     f"diagnostics[{index}].missingCapabilities must be a list of strings"
                 )
-            if "details" in diagnostic and not isinstance(
-                diagnostic.get("details"), Mapping
-            ):
-                reasons.append(f"diagnostics[{index}].details must be an object")
+            if "details" in diagnostic:
+                reasons.extend(
+                    _diagnostic_details_contract_reasons(
+                        f"diagnostics[{index}].details",
+                        diagnostic.get("details"),
+                    )
+                )
         if has_summary and isinstance(units, list) and isinstance(project, Mapping):
             reasons.extend(
                 _current_project_config_diagnostic_contract_reasons(
