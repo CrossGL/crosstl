@@ -10827,6 +10827,131 @@ def test_plain_metal_helper_call_scan_starts_at_included_body_span():
     assert CountingSource.index_reads < len(function_source) * 4
 
 
+def test_plain_metal_template_replacement_scan_uses_indexed_included_spans(
+    monkeypatch,
+):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    class CountingSource(str):
+        index_reads = 0
+
+        def __getitem__(self, key):
+            if isinstance(key, int):
+                type(self).index_reads += 1
+            return super().__getitem__(key)
+
+    preprocessor = MetalPreprocessor()
+    excluded_spans: list[tuple[int, int]] = []
+    parts: list[str] = []
+    offset = 0
+    for index in range(1200):
+        block = textwrap.dedent(f"""
+            template <typename T>
+            struct ExcludedReplacement{index} {{
+                T value;
+            }};
+            """)
+        parts.append(block)
+        excluded_spans.append((offset, offset + len(block)))
+        offset += len(block)
+    function_source = textwrap.dedent("""
+        uint call_plain(uint value) {
+            return plain_helper(value);
+        }
+        """)
+    source = CountingSource("".join(parts) + function_source)
+    function_start = source.find("uint call_plain")
+    body_start = source.find("{", function_start) + 1
+    body_end = source.find("}", body_start)
+    helper_start = source.find("plain_helper")
+    CountingSource.index_reads = 0
+
+    def fail_linear_span_lookup(*_args):
+        raise AssertionError("plain replacement scan should use indexed spans")
+
+    monkeypatch.setattr(preprocessor, "_containing_span", fail_linear_span_lookup)
+
+    replacements = project_pipeline._plain_template_call_replacements(
+        preprocessor,
+        source,
+        {"plain_helper": "plain_helper_uint"},
+        excluded_spans,
+        [(body_start, body_end)],
+    )
+
+    assert replacements == [
+        (
+            helper_start,
+            helper_start + len("plain_helper"),
+            "plain_helper_uint",
+        )
+    ]
+    assert CountingSource.index_reads < len(function_source) * 4
+
+
+def test_explicit_metal_template_replacement_scan_uses_indexed_included_spans(
+    monkeypatch,
+):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    class CountingSource(str):
+        index_reads = 0
+
+        def __getitem__(self, key):
+            if isinstance(key, int):
+                type(self).index_reads += 1
+            return super().__getitem__(key)
+
+    preprocessor = MetalPreprocessor()
+    excluded_spans: list[tuple[int, int]] = []
+    parts: list[str] = []
+    offset = 0
+    for index in range(1200):
+        block = textwrap.dedent(f"""
+            template <typename T>
+            struct ExcludedExplicitReplacement{index} {{
+                T value;
+            }};
+            """)
+        parts.append(block)
+        excluded_spans.append((offset, offset + len(block)))
+        offset += len(block)
+    function_source = textwrap.dedent("""
+        uint call_explicit(uint value) {
+            return explicit_helper<uint>(value);
+        }
+        """)
+    source = CountingSource("".join(parts) + function_source)
+    function_start = source.find("uint call_explicit")
+    body_start = source.find("{", function_start) + 1
+    body_end = source.find("}", body_start)
+    helper_start = source.find("explicit_helper")
+    angle_end = source.find(">", helper_start)
+    CountingSource.index_reads = 0
+
+    def fail_linear_span_lookup(*_args):
+        raise AssertionError("explicit replacement scan should use indexed spans")
+
+    monkeypatch.setattr(preprocessor, "_containing_span", fail_linear_span_lookup)
+
+    replacements = project_pipeline._explicit_template_call_replacements(
+        preprocessor,
+        source,
+        {"explicit_helper": "explicit_helper_uint"},
+        excluded_spans,
+        [(body_start, body_end)],
+    )
+
+    assert replacements == [
+        (
+            helper_start,
+            angle_end + 1,
+            "explicit_helper_uint",
+        )
+    ]
+    assert CountingSource.index_reads < len(function_source) * 5
+
+
 def test_translate_project_bounds_mlx_like_plain_helper_scan_across_targets(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
@@ -38839,9 +38964,7 @@ def test_translate_project_metal_multi_entry_instantiations_scope_vulkan_binding
         artifact for artifact in payload["artifacts"] if artifact["target"] == "vulkan"
     )
     output = (repo / vulkan_artifact["path"]).read_text(encoding="utf-8")
-    assert sorted(
-        re.findall(r'OpEntryPoint GLCompute %\d+ "([^"]+)"', output)
-    ) == [
+    assert sorted(re.findall(r'OpEntryPoint GLCompute %\d+ "([^"]+)"', output)) == [
         "rope_float32",
         "rope_freqs_float32",
     ]
