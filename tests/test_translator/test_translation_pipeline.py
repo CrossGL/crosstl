@@ -975,6 +975,49 @@ def test_hlsl_legacy_sampler_register_lowers_to_opengl_binding(tmp_path):
     assert "fragColor = texture(Texture, uv);" in generated
 
 
+def test_hlsl_fx_macro_texture_resource_survives_metal_translation(tmp_path):
+    _write_source(
+        tmp_path,
+        "Macros.fxh",
+        """
+        #define DECLARE_TEXTURE(Name, index) \\
+            sampler2D Name : register(s##index);
+        #define SAMPLE_TEXTURE(Name, texCoord) tex2D(Name, texCoord)
+        """,
+    )
+    source_path = _write_source(
+        tmp_path,
+        "SpriteEffect.fx",
+        """
+        #include "Macros.fxh"
+
+        DECLARE_TEXTURE(Texture, 0);
+
+        struct VSOutput {
+            float4 position : SV_Position;
+            float4 color : COLOR0;
+            float2 texCoord : TEXCOORD0;
+        };
+
+        float4 SpritePixelShader(VSOutput input) : SV_Target0 {
+            return SAMPLE_TEXTURE(Texture, input.texCoord) * input.color;
+        }
+        """,
+    )
+
+    crossgl = crosstl.translate(str(source_path), backend="cgl", format_output=False)
+    metal = crosstl.translate(str(source_path), backend="metal", format_output=False)
+
+    assert "@ register(s0)\n    sampler2D Texture;" in crossgl
+    assert "@ hlsl_program_constant\n    @ register(s0)\n    sampler2D Texture;" not in crossgl
+    assert "texture2d<float> Texture [[texture(0)]]" in metal
+    assert (
+        "Texture.sample(sampler(mag_filter::linear, min_filter::linear), input.texCoord)"
+        in metal
+    )
+    _compile_with_metal_if_available(metal, tmp_path)
+
+
 @pytest.mark.parametrize("target", ["metal", "directx", "vulkan"])
 def test_glsl_fragment_invocation_density_rejects_unsupported_targets_before_output(
     tmp_path, target
