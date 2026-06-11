@@ -12,7 +12,7 @@ The current harness verifies:
 - discovery of the MLX Metal kernel project surface under
   `mlx/backend/metal/kernels`;
 - DirectX and Vulkan artifact generation for the current reduced frontier:
-  `arange.metal`, `fence.metal`, and `random.metal`;
+  `arange.metal`, `binary_two.metal`, `random.metal`, and `ternary.metal`;
 - Vulkan assembly validation when SPIR-V tools are available;
 - OpenGL artifact generation for `arange.metal`.
 
@@ -63,11 +63,13 @@ The harness writes reports, generated artifacts, and command logs under
 
 - CrossGL/crosstl#1146 covers the current full-corpus scout blocker: bounded
   plain Metal template helper call-site scanning for large helper graphs. The
-  reproducers include `mlx/backend/metal/kernels/fp_quantized_nax.metal`, which
-  did not complete a single-source DirectX/OpenGL/Vulkan project translation
-  within a 45-second isolation timeout, plus `binary_two.metal` and
-  `ternary.metal`, which did not complete bounded single-source DirectX/Vulkan
-  translations in the reduced frontier.
+  current reproducer is `mlx/backend/metal/kernels/fp_quantized_nax.metal`,
+  which did not complete a single-source DirectX/OpenGL/Vulkan project
+  translation within a 60-second isolation timeout.
+- CrossGL/crosstl#1155 covers a project-batch SPIR-V binding isolation issue:
+  `fence.metal` translates in single-source DirectX/Vulkan isolation, but fails
+  in the reduced multi-source frontier batch with duplicate SPIR-V resource
+  binding `set 0 binding 0`.
 
 These gaps are translator work. Host runtime integration gaps should be handled
 in MLX-specific integration code or downstream runtime adapters, not hidden as

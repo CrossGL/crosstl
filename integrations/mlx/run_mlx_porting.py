@@ -18,12 +18,14 @@ MLX_METAL_KERNEL_ROOT = "mlx/backend/metal/kernels"
 MLX_ARANGE_SOURCE = "mlx/backend/metal/kernels/arange.metal"
 MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/arange.metal",
-    "mlx/backend/metal/kernels/fence.metal",
+    "mlx/backend/metal/kernels/binary_two.metal",
     "mlx/backend/metal/kernels/random.metal",
+    "mlx/backend/metal/kernels/ternary.metal",
 )
 EXPECTED_METAL_KERNEL_COUNT = 40
 FULL_CORPUS_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1146",
+    "https://github.com/CrossGL/crosstl/issues/1155",
 )
 RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/939",

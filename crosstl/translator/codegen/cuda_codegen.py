@@ -26,7 +26,7 @@ from ..ast import (
     VariableNode,
     WaveOpNode,
 )
-from .array_utils import parse_array_type
+from .array_utils import parse_array_type, split_array_type_suffix
 from .generic_function_utils import (
     reject_unsupported_generic_functions as reject_generic_functions_for_target,
 )
@@ -40,7 +40,11 @@ from .match_utils import (
 from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
-from .stage_utils import normalize_stage_name, stage_matches
+from .stage_utils import (
+    is_fragment_output_parameter,
+    normalize_stage_name,
+    stage_matches,
+)
 from .vector_arithmetic import VectorArithmeticMixin
 
 CUDA_WAVE_OP_ARITIES = {
@@ -222,6 +226,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
         self.stage_builtin_aliases = {}
+        self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
         self.builtin_map = {
             "gl_LocalInvocationID": "make_uint3(threadIdx.x, threadIdx.y, threadIdx.z)",
@@ -328,6 +333,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
         self.stage_builtin_aliases = {}
+        self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
         self.current_stage_name = None
         self.cuda_function_capture_params = {}
@@ -1190,6 +1196,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         saved_current_function_name = self.current_function_name
         saved_current_function_return_type = self.current_function_return_type
         saved_stage_builtin_aliases = self.stage_builtin_aliases
+        saved_stage_builtin_alias_types = self.stage_builtin_alias_types
         saved_current_function_is_kernel_entry = self.current_function_is_kernel_entry
         saved_structured_buffer_length_parameters = (
             self.current_structured_buffer_length_parameters
@@ -1198,6 +1205,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.current_structured_buffer_length_parameters = {}
         self.query_metadata_aliases = {}
         self.stage_builtin_aliases = {}
+        self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
         qualifiers = []
         stage_qualifiers = self.function_stage_qualifier_names(node)
@@ -1224,7 +1232,37 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.current_function_return_type = "void"
             return_type = "void"
 
+        param_list = list(getattr(node, "parameters", getattr(node, "params", [])))
+        param_list.extend(self.cuda_function_capture_params.get(node.name, []))
         return_semantic = self.semantic_from_node(node)
+        fragment_output_param = None
+        fragment_output_params = [
+            param
+            for param in param_list
+            if is_fragment_output_parameter(
+                stage_name,
+                param,
+                self.semantic_from_node(param),
+            )
+        ]
+        if (
+            fragment_output_params
+            and return_semantic is None
+            and self.convert_crossgl_type_to_cuda(self.current_function_return_type)
+            == "void"
+        ):
+            fragment_output_param = fragment_output_params[0]
+            self.current_function_return_type = self.get_parameter_type(
+                fragment_output_param
+            )
+            return_type = self.convert_crossgl_type_to_cuda(
+                self.current_function_return_type
+            )
+            return_semantic = self.semantic_from_node(fragment_output_param)
+            param_list = [
+                param for param in param_list if param is not fragment_output_param
+            ]
+
         self.validate_cuda_return_semantic(
             stage_name, self.current_function_return_type, return_semantic
         )
@@ -1238,8 +1276,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         qualifier_str = " ".join(qualifiers)
 
         params = []
-        param_list = list(getattr(node, "parameters", getattr(node, "params", [])))
-        param_list.extend(self.cuda_function_capture_params.get(node.name, []))
         self.validate_cuda_stage_parameter_semantics(stage_name, param_list)
         if stage_name == "geometry":
             self.validate_cuda_geometry_stage(node, param_list)
@@ -1262,6 +1298,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if param_name and builtin_role is not None:
                 self.register_variable_type(param_name, declaration_type, param)
                 self.stage_builtin_aliases[param_name] = builtin_role
+                self.stage_builtin_alias_types[param_name] = declaration_type
                 continue
 
             geometry_stream_declaration = self.format_cuda_geometry_stream_parameter(
@@ -1347,6 +1384,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.current_function_name = saved_current_function_name
             self.current_function_return_type = saved_current_function_return_type
             self.stage_builtin_aliases = saved_stage_builtin_aliases
+            self.stage_builtin_alias_types = saved_stage_builtin_alias_types
             self.current_function_is_kernel_entry = (
                 saved_current_function_is_kernel_entry
             )
@@ -1358,11 +1396,35 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         self.indent_level += 1
 
+        fragment_output_name = None
+        if fragment_output_param is not None:
+            fragment_output_name = getattr(
+                fragment_output_param,
+                "name",
+                getattr(fragment_output_param, "param_name", None),
+            )
+            fragment_output_type = self.resource_type_with_access(
+                self.get_parameter_type(fragment_output_param),
+                fragment_output_param,
+            )
+            self.register_variable_type(
+                fragment_output_name,
+                fragment_output_type,
+                fragment_output_param,
+            )
+            self.emit(
+                f"{self.format_typed_declarator(fragment_output_type, fragment_output_name)};"
+            )
+
         for local_var in getattr(self, "current_stage_local_variables", []) or []:
             if self.is_cuda_shared_variable(local_var):
                 self.visit(local_var)
 
         self.emit_body(body)
+        if fragment_output_name is not None and not self.statement_body_terminates(
+            body
+        ):
+            self.emit(f"return {fragment_output_name};")
 
         self.indent_level -= 1
         self.emit("}")
@@ -1375,6 +1437,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.current_function_name = saved_current_function_name
         self.current_function_return_type = saved_current_function_return_type
         self.stage_builtin_aliases = saved_stage_builtin_aliases
+        self.stage_builtin_alias_types = saved_stage_builtin_alias_types
         self.current_function_is_kernel_entry = saved_current_function_is_kernel_entry
         self.current_structured_buffer_length_parameters = (
             saved_structured_buffer_length_parameters
@@ -2477,7 +2540,25 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         role = self.stage_builtin_aliases.get(name)
         if role is None:
             return None
-        return self.cuda_compute_builtin_expression(role, component)
+        expression = self.cuda_compute_builtin_expression(role, component)
+        if component is not None or expression is None:
+            return expression
+
+        alias_type = self.stage_builtin_alias_types.get(name)
+        if alias_type is None or role != "global_invocation_id":
+            return expression
+        mapped_type = self.convert_crossgl_type_to_cuda(alias_type)
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        if array_suffix:
+            return expression
+        if base_type in {"uint", "unsigned int"}:
+            return self.cuda_compute_builtin_expression(role, "x")
+        if base_type == "uint2":
+            x = self.cuda_compute_builtin_expression(role, "x")
+            y = self.cuda_compute_builtin_expression(role, "y")
+            if x is not None and y is not None:
+                return f"make_uint2({x}, {y})"
+        return expression
 
     def validate_cuda_stage_parameter_semantic_type(
         self, param, semantic, expected_type
@@ -2487,6 +2568,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         )
         actual_type = self.convert_crossgl_type_to_cuda(param_type)
         if actual_type == expected_type:
+            return
+        semantic_key = self.cuda_stage_parameter_semantic_key(semantic)
+        if (
+            expected_type == "uint3"
+            and semantic_key in {"gl_globalinvocationid", "SV_DISPATCHTHREADID"}
+            and actual_type in {"uint", "unsigned int", "uint2"}
+        ):
             return
         raise ValueError(
             f"Unsupported {semantic} stage parameter semantic for CUDA codegen; "

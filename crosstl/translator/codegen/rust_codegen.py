@@ -53,7 +53,11 @@ from ..ast import (
 )
 from .array_utils import get_array_size_from_node
 from .glsl_buffer_layout import glsl_buffer_block_node_type
-from .stage_utils import normalize_stage_name, stage_matches
+from .stage_utils import (
+    is_fragment_output_parameter,
+    normalize_stage_name,
+    stage_matches,
+)
 
 
 class RustCodeGen:
@@ -3677,6 +3681,13 @@ class RustCodeGen:
         actual_type = self.map_type(self.function_parameter_type(parameter))
         if actual_type == expected_type:
             return
+        semantic_key = self.rust_stage_parameter_semantic_key(semantic)
+        if (
+            expected_type == "Vec3<u32>"
+            and semantic_key in {"gl_globalinvocationid", "SV_DISPATCHTHREADID"}
+            and actual_type in {"u32", "Vec2<u32>"}
+        ):
+            return
         raise ValueError(
             f"Unsupported {semantic} stage parameter semantic for Rust codegen; "
             f"expected {expected_type} type"
@@ -4240,6 +4251,20 @@ class RustCodeGen:
             return_type = "void"
         self.current_return_type = return_type
         return_semantic = self.node_semantic(func)
+        fragment_output_info = None
+        if self.map_type(return_type) == "()" and return_semantic is None:
+            for param in param_list:
+                semantic = self.node_semantic(param)
+                if is_fragment_output_parameter(shader_type, param, semantic):
+                    output_type = self.function_parameter_type(param)
+                    fragment_output_info = (param, output_type, semantic)
+                    return_type = output_type
+                    self.current_return_type = return_type
+                    return_semantic = semantic
+                    break
+        if fragment_output_info is not None:
+            output_param = fragment_output_info[0]
+            param_list = [param for param in param_list if param is not output_param]
         if shader_type == "geometry":
             self.validate_rust_geometry_stage(func, param_list)
         if shader_type in {"tessellation_control", "tessellation_evaluation"}:
@@ -4258,10 +4283,33 @@ class RustCodeGen:
         )
 
         params = []
+        local_alias_declarations = []
+        emitted_param_names = set()
+        parameter_names = [p.name for p in param_list if getattr(p, "name", None)]
         for p, param_type in zip(param_list, param_types):
             self.register_glsl_buffer_block_metadata(p)
-            self.register_variable_type(p.name, param_type, scope="local")
             source_param_name = p.name
+            semantic = self.node_semantic(p)
+            if shader_type == "compute":
+                dispatch_thread_id_bridge = (
+                    self.rust_compute_global_invocation_id_parameter_bridge(
+                        p, param_type, semantic, emitted_param_names, parameter_names
+                    )
+                )
+                if dispatch_thread_id_bridge is not None:
+                    param_name, param_rust_type, local_alias = (
+                        dispatch_thread_id_bridge
+                    )
+                    self.register_variable_type(param_name, "uint3", scope="local")
+                    self.register_variable_type(
+                        source_param_name, param_type, scope="local"
+                    )
+                    params.append(f"{param_name}: {param_rust_type}")
+                    local_alias_declarations.append(local_alias)
+                    emitted_param_names.add(param_name)
+                    continue
+
+            self.register_variable_type(source_param_name, param_type, scope="local")
             param_name = self.rust_identifier(source_param_name)
             if source_param_name in self.current_mutated_names or (
                 self.function_parameter_requires_mut_binding(
@@ -4274,6 +4322,7 @@ class RustCodeGen:
                 f"{param_name}: "
                 f"{self.map_function_parameter_type_with_lifetime(param_type, reference_lifetime)}"
             )
+            emitted_param_names.add(param_name)
         params.extend(
             self.generate_rust_resource_parameter(info)
             for info in promoted_resource_params
@@ -4333,14 +4382,40 @@ class RustCodeGen:
             for variable in getattr(stage_node, "local_variables", []) or []:
                 if self.is_rust_shared_variable(variable):
                     code += self.generate_statement(variable, indent + 1)
+        for declaration in local_alias_declarations:
+            code += "    " * (indent + 1) + declaration + "\n"
 
         body = getattr(func, "body", [])
+        body_statements = []
+        if fragment_output_info is not None:
+            output_param, output_type, _semantic = fragment_output_info
+            output_name = self.rust_identifier(getattr(output_param, "name", None))
+            self.register_variable_type(
+                getattr(output_param, "name", None),
+                output_type,
+                scope="local",
+            )
+            code += (
+                "  " * (indent + 1)
+                + f"let mut {output_name}: "
+                + f"{self.map_type_with_lifetime(output_type, reference_lifetime)};\n"
+            )
         if hasattr(body, "statements"):
+            body_statements = body.statements
             for stmt in body.statements:
                 code += self.generate_statement(stmt, indent + 1)
         elif isinstance(body, list):
+            body_statements = body
             for stmt in body:
                 code += self.generate_statement(stmt, indent + 1)
+        if fragment_output_info is not None and not self.statement_body_terminates(
+            body_statements
+        ):
+            output_param = fragment_output_info[0]
+            code += (
+                "  " * (indent + 1)
+                + f"return {self.rust_identifier(getattr(output_param, 'name', None))};\n"
+            )
 
         code += "  " * indent + "}\n\n"
         self.variable_types = saved_variable_types
@@ -4399,6 +4474,49 @@ class RustCodeGen:
         while len(values) < 3:
             values.append("1")
         return tuple(values[:3])
+
+    def rust_compute_global_invocation_id_parameter_bridge(
+        self, parameter, param_type, semantic, emitted_param_names, parameter_names
+    ):
+        if semantic is None:
+            return None
+        semantic_key = self.rust_stage_parameter_semantic_key(semantic)
+        if semantic_key not in {"gl_globalinvocationid", "SV_DISPATCHTHREADID"}:
+            return None
+
+        mapped_type = self.map_type(param_type)
+        if mapped_type not in {"u32", "Vec2<u32>"}:
+            return None
+
+        source_name = getattr(parameter, "name", None)
+        if not isinstance(source_name, str) or not source_name:
+            return None
+
+        local_name = self.rust_identifier(source_name)
+        used_names = set(emitted_param_names)
+        used_names.update(self.rust_identifier(name) for name in parameter_names)
+        used_names.update(self.rust_identifier(name) for name in self.variable_types)
+        used_names.update(
+            self.rust_identifier(name) for name in self.local_variable_names
+        )
+        native_name = self.rust_unique_local_identifier(
+            f"{local_name}_globalInvocationID", used_names
+        )
+        if mapped_type == "u32":
+            alias_value = f"{native_name}.x"
+        else:
+            alias_value = f"Vec2::<u32>::new({native_name}.x, {native_name}.y)"
+        let_keyword = "let mut" if source_name in self.current_mutated_names else "let"
+        local_alias = (
+            f"{let_keyword} {local_name}: {mapped_type} = {alias_value};"
+        )
+        return native_name, "Vec3<u32>", local_alias
+
+    def rust_unique_local_identifier(self, candidate, used_names):
+        candidate = self.rust_identifier(candidate)
+        while candidate in used_names or candidate in self.rust_reserved_identifiers():
+            candidate = f"{candidate}_"
+        return candidate
 
     def function_reference_return_lifetime(self, func, return_type, param_types):
         if self.reference_type_parts_for_type(return_type) is None:

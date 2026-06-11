@@ -77,6 +77,7 @@ from .image_access_contracts import (
     image_format_channel_count,
     image_format_component_kind,
 )
+from .stage_utils import is_fragment_output_parameter
 
 
 def _matrix_aliases(prefix, dtype, *, rows_first):
@@ -5432,6 +5433,16 @@ class MojoCodeGen:
             )
 
         if not self.parameter_semantic_type_matches(expected_type, param_type):
+            normalized_semantic = self.normalized_semantic_key(semantic)
+            if (
+                expected_type == "integer_vec3"
+                and normalized_semantic == "global_invocation_id"
+                and (
+                    self.is_scalar_integer_type(param_type)
+                    or self.is_integer_vector_width(param_type, 2)
+                )
+            ):
+                return
             expected = self.parameter_semantic_expected_type(expected_type)
             raise ValueError(
                 f"Unsupported {semantic} parameter semantic for Mojo codegen; "
@@ -5974,7 +5985,7 @@ class MojoCodeGen:
         previous_shader_type = self.current_shader_type
         self.current_shader_type = shader_type
 
-        param_list = getattr(func, "parameters", getattr(func, "params", []))
+        param_list = list(getattr(func, "parameters", getattr(func, "params", [])))
         param_infos = []
         for p in param_list:
             param_type = self.function_parameter_type_name(p)
@@ -5991,6 +6002,28 @@ class MojoCodeGen:
         for name, type_name in extra_param_infos:
             self.register_variable_type(name, type_name)
 
+        if hasattr(func, "return_type"):
+            return_type = self.convert_type_node_to_string(func.return_type)
+        else:
+            return_type = "void"
+        return_semantic = self.function_return_semantic(func)
+        fragment_output_info = None
+        if self.type_name(return_type) == "void" and return_semantic is None:
+            for p, param_type in param_infos:
+                semantic = self.node_semantic(p)
+                if is_fragment_output_parameter(shader_type, p, semantic):
+                    fragment_output_info = (p, param_type, semantic)
+                    return_type = param_type
+                    return_semantic = semantic
+                    break
+        if fragment_output_info is not None:
+            output_param = fragment_output_info[0]
+            param_infos = [
+                param_info
+                for param_info in param_infos
+                if param_info[0] is not output_param
+            ]
+
         if shader_type == "geometry":
             self.validate_geometry_stage(func, param_infos)
         if shader_type in {"tessellation_control", "tessellation_evaluation"}:
@@ -6004,6 +6037,8 @@ class MojoCodeGen:
             getattr(func, "body", []), param_names
         )
         params = []
+        local_alias_declarations = []
+        emitted_param_names = set()
         parameter_semantic_comments = []
         used_parameter_semantics = {}
         for p, param_type in param_infos:
@@ -6015,6 +6050,32 @@ class MojoCodeGen:
                 semantic,
                 used_parameter_semantics,
             )
+
+            dispatch_thread_id_bridge = (
+                self.mojo_compute_global_invocation_id_parameter_bridge(
+                    p,
+                    param_type,
+                    semantic,
+                    emitted_param_names,
+                    param_names,
+                )
+                if shader_type == "compute"
+                else None
+            )
+            if dispatch_thread_id_bridge is not None:
+                param_name, native_type, local_alias = dispatch_thread_id_bridge
+                self.register_variable_type(param_name, native_type)
+                self.register_variable_type(p.name, param_type)
+                if semantic:
+                    parameter_semantic_comments.append(
+                        self.generate_parameter_semantic_comment(
+                            shader_type, p.name, semantic
+                        )
+                    )
+                params.append(f"{param_name}: {self.map_type(native_type)}")
+                local_alias_declarations.append(local_alias)
+                emitted_param_names.add(param_name)
+                continue
 
             self.register_variable_type(p.name, param_type)
             self.register_resource_access_metadata(p, param_type)
@@ -6036,10 +6097,6 @@ class MojoCodeGen:
 
         params_str = ", ".join(params) if params else ""
 
-        if hasattr(func, "return_type"):
-            return_type = self.convert_type_node_to_string(func.return_type)
-        else:
-            return_type = "void"
         function_name = self.shader_entry_function_name(
             func, shader_type, param_infos, return_type
         )
@@ -6047,7 +6104,6 @@ class MojoCodeGen:
         if function_name != func.name:
             self.function_return_types[function_name] = return_type
         self.current_return_type = return_type
-        return_semantic = self.function_return_semantic(func)
         if return_semantic:
             self.validate_return_semantic(shader_type, return_type, return_semantic)
         self.validate_struct_return_semantics(shader_type, return_type)
@@ -6077,6 +6133,16 @@ class MojoCodeGen:
             code += self.generate_function_local_shared_declarations(
                 stage_node, indent + 1
             )
+        if fragment_output_info is not None:
+            output_param, output_type, _semantic = fragment_output_info
+            output_name = getattr(output_param, "name", None)
+            self.register_variable_type(output_name, output_type)
+            code += (
+                f"{'    ' * (indent + 1)}var {self.mojo_identifier(output_name)}: "
+                f"{self.map_type(output_type)}\n"
+            )
+        for declaration in local_alias_declarations:
+            code += "    " * (indent + 1) + declaration + "\n"
 
         body = getattr(func, "body", [])
         statements = None
@@ -6093,6 +6159,16 @@ class MojoCodeGen:
 
         if statements is not None and not statements:
             code += "    pass\n"
+        if (
+            fragment_output_info is not None
+            and statements is not None
+            and not self.statement_body_terminates_inner_loop(statements)
+        ):
+            output_param = fragment_output_info[0]
+            code += (
+                f"{'    ' * (indent + 1)}return "
+                f"{self.mojo_identifier(getattr(output_param, 'name', None))}\n"
+            )
 
         code += "\n"
         self.variable_types = previous_variable_types
@@ -6135,6 +6211,43 @@ class MojoCodeGen:
             and self.type_name(return_type) == "void"
             and self.current_shader_stage_count <= 1
         )
+
+    def mojo_compute_global_invocation_id_parameter_bridge(
+        self, parameter, param_type, semantic, emitted_param_names, parameter_names
+    ):
+        if semantic is None:
+            return None
+        if self.normalized_semantic_key(semantic) != "global_invocation_id":
+            return None
+
+        mapped_type = self.map_type(param_type)
+        if mapped_type not in {"UInt", "UInt32", "SIMD[DType.uint32, 2]"}:
+            return None
+
+        source_name = getattr(parameter, "name", None)
+        if not isinstance(source_name, str) or not source_name:
+            return None
+
+        local_name = self.mojo_identifier(source_name)
+        used_names = set(emitted_param_names)
+        used_names.update(parameter_names)
+        used_names.update(self.variable_types)
+        native_name = self.mojo_unique_local_identifier(
+            f"{local_name}_globalInvocationID", used_names
+        )
+        if mapped_type in {"UInt", "UInt32"}:
+            alias_value = f"{native_name}[0]"
+        else:
+            alias_value = (
+                f"SIMD[DType.uint32, 2]({native_name}[0], {native_name}[1])"
+            )
+        return native_name, "uint3", f"var {local_name}: {mapped_type} = {alias_value}"
+
+    def mojo_unique_local_identifier(self, candidate, used_names):
+        candidate = self.mojo_identifier(candidate)
+        while candidate in used_names or candidate in self.mojo_reserved_identifiers():
+            candidate = f"{candidate}_"
+        return candidate
 
     def collect_mutated_parameters(self, body, param_names):
         mutated = set()

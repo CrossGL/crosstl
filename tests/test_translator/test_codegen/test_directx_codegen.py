@@ -1810,6 +1810,54 @@ def test_hlsl_stage_local_pointer_storage_buffer_lowers_to_structured_buffer():
     assert "PrimitiveType" not in generated_code
 
 
+def test_hlsl_stage_entry_buffer_pointer_params_promote_to_resources():
+    shader = """
+    shader MatMulPointerParameters {
+        struct MatMulParams {
+            uint row_dim_x;
+            uint col_dim_x;
+            uint inner_dim;
+        }
+
+        compute {
+            @ stage_entry
+            void mat_mul_simple1(
+                ConstantBuffer<MatMulParams> params @buffer(0),
+                float* A @buffer(1),
+                float* B @buffer(2),
+                float* X @buffer(3),
+                uvec3 id_dispatchThreadID @gl_GlobalInvocationID
+            ) {
+                uint row = id_dispatchThreadID.y;
+                uint col = id_dispatchThreadID.x;
+                float sum = 0.0;
+                for (uint k = 0; k < params.inner_dim; k++) {
+                    sum += A[row * params.inner_dim + k] *
+                        B[k * params.col_dim_x + col];
+                }
+                X[row * params.col_dim_x + col] = sum;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "ConstantBuffer<MatMulParams> params : register(b0);" in generated_code
+    assert "RWStructuredBuffer<float> A : register(u1);" in generated_code
+    assert "RWStructuredBuffer<float> B : register(u2);" in generated_code
+    assert "RWStructuredBuffer<float> X : register(u3);" in generated_code
+    assert (
+        "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)"
+        in generated_code
+    )
+    assert "float* A" not in generated_code
+    assert "float* B" not in generated_code
+    assert "float* X" not in generated_code
+    assert "void CSMain(float*" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
 def test_hlsl_default_integer_storage_image_vector_load_store_from_compiler_fixture():
     # Reduced from CrossGL-Compiler
     # tests/frontend/fixtures/StorageImageHIRShader.cgl.

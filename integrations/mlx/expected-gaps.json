@@ -4,12 +4,12 @@
   "commit": "968d264f2903d578e699c4452a4dbf48633921aa",
   "frontier_status": {
     "status": "passing",
-    "sources": 3,
+    "sources": 4,
     "targets": [
       "directx",
       "vulkan"
     ],
-    "artifacts": 6
+    "artifacts": 8
   },
   "full_corpus_scout": {
     "status": "blocked",
@@ -37,6 +37,12 @@
       "scope": "metal-plain-template-helper-call-site-scan-budget",
       "status": "open",
       "summary": "Bound plain Metal template helper call-site scanning for large helper graphs."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/1155",
+      "scope": "spirv-project-artifact-binding-state",
+      "status": "open",
+      "summary": "Reset SPIR-V resource binding allocation between project artifacts."
     }
   ],
   "resolved_issues": [
