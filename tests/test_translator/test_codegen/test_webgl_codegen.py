@@ -754,6 +754,29 @@ def test_webgl_codegen_rejects_storage_image_resources():
         WebGLCodeGen().generate(parse_shader(shader))
 
 
+def test_webgl_codegen_rejects_atomic_counter_resources():
+    shader = """
+    shader WebGLNoAtomicCounter {
+        atomic_uint counter;
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target does not support atomic counter resource "
+            r"'counter' \(atomic_uint\)"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
 @pytest.mark.parametrize(
     "resource_type,diagnostic_type",
     (
@@ -868,6 +891,36 @@ def test_webgl_codegen_rejects_glsl_es_310_texture_gather_intrinsics(call):
         match=(
             "WebGL target requires GLSL ES 3.00 and does not support "
             "texture gather intrinsic"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+@pytest.mark.parametrize(
+    "call",
+    (
+        "float(textureQueryLevels(colorTex))",
+        "textureQueryLod(colorTex, uv).x",
+    ),
+)
+def test_webgl_codegen_rejects_desktop_texture_query_intrinsics(call):
+    shader = f"""
+    shader WebGLNoDesktopTextureQuery {{
+        sampler2D colorTex;
+
+        fragment {{
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {{
+                return vec4({call}, 0.0, 0.0, 1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target requires GLSL ES 3.00 and does not support "
+            "texture query intrinsic"
         ),
     ):
         WebGLCodeGen().generate(parse_shader(shader))

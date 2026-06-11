@@ -313,6 +313,7 @@ class VulkanSPIRVCodeGen:
         self.reserved_resource_bindings = set()
         self.used_resource_bindings = set()
         self.entry_point_resource_binding_baseline = None
+        self.used_resource_binding_owners = {}
 
         self.is_vertex_shader = False
         self.bound_id = 0
@@ -11769,6 +11770,7 @@ class VulkanSPIRVCodeGen:
             attributes=list(getattr(param, "attributes", []) or []),
             qualifiers=list(getattr(param, "qualifiers", []) or []),
         )
+        variable.spirv_entry_point_descriptor_owner = self.current_function_name
         variable.resource_qualifiers = list(
             getattr(param, "resource_qualifiers", []) or []
         )
@@ -11787,6 +11789,7 @@ class VulkanSPIRVCodeGen:
         self.decorate_cbuffer_type(block_type, [(member_type, param_name)])
 
         var_id = self.create_variable(block_type, "Uniform", f"{param_name}Uniform")
+        param.spirv_entry_point_descriptor_owner = self.current_function_name
         descriptor_set, binding = self.resource_descriptor_slot(param)
         self.decorations.append(
             f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
@@ -15123,16 +15126,29 @@ class VulkanSPIRVCodeGen:
 
         if explicit_binding is not None:
             key = (descriptor_set, explicit_binding)
+            owner = getattr(node, "spirv_entry_point_descriptor_owner", None)
             if key in self.used_resource_bindings:
+                owners = self.used_resource_binding_owners.get(key)
+                if (
+                    owner is not None
+                    and isinstance(owners, set)
+                    and owner not in owners
+                ):
+                    owners.add(owner)
+                    return descriptor_set, explicit_binding
                 raise ValueError(
                     f"Duplicate SPIR-V resource binding set {descriptor_set} "
                     f"binding {explicit_binding}"
                 )
             self.used_resource_bindings.add(key)
+            self.used_resource_binding_owners[key] = (
+                {owner} if owner is not None else None
+            )
             return descriptor_set, explicit_binding
 
         binding = self.next_available_resource_binding(descriptor_set)
         self.used_resource_bindings.add((descriptor_set, binding))
+        self.used_resource_binding_owners[(descriptor_set, binding)] = None
         return descriptor_set, binding
 
     def resource_descriptor_set(self, node: VariableNode) -> int:
@@ -15162,6 +15178,10 @@ class VulkanSPIRVCodeGen:
             dict(self.next_resource_bindings),
             set(self.reserved_resource_bindings),
             set(self.used_resource_bindings),
+            {
+                key: set(value) if isinstance(value, set) else value
+                for key, value in self.used_resource_binding_owners.items()
+            },
         )
 
     def restore_resource_binding_state(self, state):
@@ -15170,10 +15190,15 @@ class VulkanSPIRVCodeGen:
             next_resource_bindings,
             reserved_resource_bindings,
             used_resource_bindings,
+            used_resource_binding_owners,
         ) = state
         self.next_resource_bindings = dict(next_resource_bindings)
         self.reserved_resource_bindings = set(reserved_resource_bindings)
         self.used_resource_bindings = set(used_resource_bindings)
+        self.used_resource_binding_owners = {
+            key: set(value) if isinstance(value, set) else value
+            for key, value in used_resource_binding_owners.items()
+        }
 
     def reserve_explicit_resource_bindings(self, ast: ShaderNode):
         for node in self.global_descriptor_binding_nodes(ast):

@@ -133,8 +133,7 @@ def test_wgsl_codegen_narrows_vec4_assignment_to_vec3_with_swizzle():
 
     assert (
         "output.fragPosition = "
-        "(_Uniforms.matModel * vec4<f32>(input.vertexPosition, 1.0)).xyz;"
-        in generated
+        "(_Uniforms.matModel * vec4<f32>(input.vertexPosition, 1.0)).xyz;" in generated
     )
     assert "vec3<f32>((_Uniforms.matModel *" not in generated
 
@@ -1259,17 +1258,11 @@ def test_wgsl_codegen_lowers_glsl_buffer_blocks_to_storage_struct_bindings():
 
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
+    assert ("struct InputBlock {\n" "    values: array<f32>,\n" "};") in generated
+    assert ("struct OutputBlock {\n" "    values: array<f32>,\n" "};") in generated
     assert (
-        "struct InputBlock {\n"
-        "    values: array<f32>,\n"
-        "};"
-    ) in generated
-    assert (
-        "struct OutputBlock {\n"
-        "    values: array<f32>,\n"
-        "};"
-    ) in generated
-    assert "@group(1) @binding(2)\nvar<storage, read> inputBlock: InputBlock;" in generated
+        "@group(1) @binding(2)\nvar<storage, read> inputBlock: InputBlock;" in generated
+    )
     assert (
         "@group(0) @binding(3)\nvar<storage, read_write> outputBlock: OutputBlock;"
         in generated
@@ -1296,9 +1289,7 @@ def test_wgsl_codegen_lowers_layoutless_buffer_blocks_as_std430_storage():
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
     assert (
-        "struct ParticleBuffer {\n"
-        "    positions: array<f32>,\n"
-        "};"
+        "struct ParticleBuffer {\n" "    positions: array<f32>,\n" "};"
     ) in generated
     assert (
         "@group(0) @binding(0)\n"
@@ -1496,14 +1487,8 @@ def test_wgsl_codegen_lowers_stage_resource_parameters_to_module_bindings():
     assert "@group(0) @binding(0)\nvar<uniform> params: MatMulParams;" in generated
     assert "@group(0) @binding(1)\nvar<storage, read> A: array<f32>;" in generated
     assert "@group(0) @binding(2)\nvar<storage, read> B: array<f32>;" in generated
-    assert (
-        "@group(0) @binding(3)\nvar<storage, read_write> X: array<f32>;"
-        in generated
-    )
-    assert (
-        "fn compute_main(@builtin(global_invocation_id) gid: vec3<u32>)"
-        in generated
-    )
+    assert "@group(0) @binding(3)\nvar<storage, read_write> X: array<f32>;" in generated
+    assert "fn compute_main(@builtin(global_invocation_id) gid: vec3<u32>)" in generated
     assert "StructuredBuffer<float> A" not in generated
     assert "RWStructuredBuffer<float> X" not in generated
     assert "constant MatMulParams" not in generated
@@ -2011,7 +1996,7 @@ def test_wgsl_codegen_rejects_do_while_statement():
         (
             """
             shader WGSLImageResource {
-                image2D colorImage;
+                image2DMS colorImage;
                 fragment {
                     vec4 main() @ gl_FragColor {
                         return vec4(1.0);
@@ -2019,8 +2004,8 @@ def test_wgsl_codegen_rejects_do_while_statement():
                 }
             }
             """,
-            "WGSL target requires storage image resource colorImage to declare "
-            "a representable image format",
+            "WGSL target does not support CrossGL resource type image2DMS yet; "
+            "split texture/sampler/storage bindings are required",
         ),
         (
             """
@@ -2028,12 +2013,13 @@ def test_wgsl_codegen_rejects_do_while_statement():
                 sampler2D colorTex;
                 fragment {
                     vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
-                        return textureGather(colorTex, uv);
+                        return textureGatherCompare(colorTex, uv, 0.5);
                     }
                 }
             }
             """,
-            "WGSL target does not support CrossGL texture function textureGather yet",
+            "WGSL target does not support CrossGL texture function "
+            "textureGatherCompare yet",
         ),
     ),
 )
@@ -2267,7 +2253,10 @@ def test_wgsl_codegen_lowers_dynamic_sampled_texture_array_sampling():
     assert "@group(0) @binding(2)\nvar textures_1: texture_2d<f32>;" in generated
     assert "@group(0) @binding(3)\nvar textures_1_sampler: sampler;" in generated
     assert "return textures_sample(i32(index), uv);" in generated
-    assert "fn textures_sample(textures_index: i32, coords: vec2<f32>) -> vec4<f32>" in generated
+    assert (
+        "fn textures_sample(textures_index: i32, coords: vec2<f32>) -> vec4<f32>"
+        in generated
+    )
     assert "case 0:" in generated
     assert "return textureSample(textures_0, textures_0_sampler, coords);" in generated
     assert "case 1:" in generated
@@ -2294,7 +2283,10 @@ def test_wgsl_codegen_dispatches_dynamic_sampled_texture_array_function_argument
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
     assert "return sampleShadow_shadowMaps(i32(index), uv);" in generated
-    assert "fn sampleShadow_shadowMaps(shadowMaps_index: i32, uv: vec2<f32>) -> f32" in generated
+    assert (
+        "fn sampleShadow_shadowMaps(shadowMaps_index: i32, uv: vec2<f32>) -> f32"
+        in generated
+    )
     assert "return sampleShadow(shadowMaps_0, shadowMaps_0_sampler, uv);" in generated
     assert "return sampleShadow(shadowMaps_1, shadowMaps_1_sampler, uv);" in generated
 
@@ -2306,9 +2298,7 @@ def test_wgsl_codegen_covers_universal_pbr_fragment_shadow_map_array():
     generated = WGSLCodeGen().generate_program(ast, target_stage="fragment")
 
     for index in range(4):
-        assert (
-            f"var shadow_maps_{index}: texture_2d<f32>;" in generated
-        )
+        assert f"var shadow_maps_{index}: texture_2d<f32>;" in generated
         assert f"var shadow_maps_{index}_sampler: sampler;" in generated
         assert (
             "return calculateShadow("
@@ -2341,6 +2331,87 @@ def test_wgsl_codegen_covers_universal_pbr_full_translation():
     ) in generated
 
 
+def test_wgsl_codegen_lowers_shadow_texture_compare_helper_parameters():
+    shader = """
+    shader WGSLShadowTextureCompare {
+        sampler2DShadow shadowTex;
+        float sampleShadow(sampler2DShadow tex, vec2 uv, float depth) {
+            return textureCompare(tex, uv, depth);
+        }
+        fragment {
+            vec4 main(vec3 uvw @ TEXCOORD0) @ gl_FragColor {
+                return vec4(sampleShadow(shadowTex, uvw.xy, uvw.z));
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(0)\nvar shadowTex: texture_depth_2d;" in generated
+    assert (
+        "@group(0) @binding(1)\nvar shadowTex_sampler: sampler_comparison;" in generated
+    )
+    assert (
+        "fn sampleShadow(tex: texture_depth_2d, tex_sampler: sampler_comparison, "
+        "uv: vec2<f32>, depth: f32) -> f32"
+    ) in generated
+    assert "return textureSampleCompare(tex, tex_sampler, uv, depth);" in generated
+    assert (
+        "return vec4<f32>(sampleShadow(shadowTex, shadowTex_sampler, uvw.xy, uvw.z));"
+        in generated
+    )
+
+
+def test_wgsl_codegen_lowers_explicit_comparison_sampler_texture_compare_calls():
+    shader = """
+    shader WGSLExplicitComparisonSampler {
+        sampler2DShadow shadowTex;
+        SamplerComparisonState compareSampler;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0, float depth @ TEXCOORD1) @ gl_FragColor {
+                return vec4(textureCompare(shadowTex, compareSampler, uv, depth));
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(0)\nvar shadowTex: texture_depth_2d;" in generated
+    assert (
+        "@group(0) @binding(1)\nvar shadowTex_sampler: sampler_comparison;" in generated
+    )
+    assert "@group(0) @binding(2)\nvar compareSampler: sampler_comparison;" in generated
+    assert (
+        "return vec4<f32>("
+        "textureSampleCompare(shadowTex, compareSampler, uv, depth));" in generated
+    )
+
+
+def test_wgsl_codegen_rejects_regular_sampler_for_texture_compare():
+    shader = """
+    shader WGSLRegularSamplerTextureCompare {
+        sampler2DShadow shadowTex;
+        sampler regularSampler;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0, float depth @ TEXCOORD1) @ gl_FragColor {
+                return vec4(textureCompare(shadowTex, regularSampler, uv, depth));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target requires textureCompare\(\) explicit sampler operand "
+            r"to use samplerComparisonState"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 @pytest.mark.parametrize(
     ("declaration", "resource_type"),
     (
@@ -2350,9 +2421,7 @@ def test_wgsl_codegen_covers_universal_pbr_full_translation():
         ("RWStructuredBuffer<float> values[];", "RWStructuredBuffer"),
     ),
 )
-def test_wgsl_codegen_rejects_resource_array_declarations(
-    declaration, resource_type
-):
+def test_wgsl_codegen_rejects_resource_array_declarations(declaration, resource_type):
     shader = f"""
     shader WGSLResourceArray {{
         {declaration}
@@ -2400,6 +2469,65 @@ def test_wgsl_codegen_rejects_resource_array_parameters():
         ),
     ):
         WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_lowers_implicit_sampler_texture_gather_calls():
+    shader = """
+    shader WGSLTextureGather {
+        sampler2D colorTex;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureGather(colorTex, uv);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(0)\nvar colorTex: texture_2d<f32>;" in generated
+    assert "@group(0) @binding(1)\nvar colorTex_sampler: sampler;" in generated
+    assert "return textureGather(0, colorTex, colorTex_sampler, uv);" in generated
+
+
+def test_wgsl_codegen_lowers_explicit_sampler_texture_gather_calls():
+    shader = """
+    shader WGSLExplicitSamplerTextureGather {
+        sampler2D colorTex;
+        sampler linearSampler;
+        vec4 gatherBlue(vec2 uv) {
+            return textureGather(colorTex, linearSampler, uv, 2);
+        }
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureGather(colorTex, linearSampler, uv);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(2)\nvar linearSampler: sampler;" in generated
+    assert "return textureGather(2, colorTex, linearSampler, uv);" in generated
+    assert "return textureGather(0, colorTex, linearSampler, uv);" in generated
+
+
+def test_wgsl_codegen_lowers_texture_gather_component_argument():
+    shader = """
+    shader WGSLTextureGatherComponent {
+        sampler2D colorTex;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureGather(colorTex, uv, 2);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "return textureGather(2, colorTex, colorTex_sampler, uv);" in generated
 
 
 def test_wgsl_codegen_emits_stage_local_resource_declarations():
@@ -2473,20 +2601,13 @@ def test_wgsl_codegen_lowers_split_sampler_lod_grad_and_offset_calls():
 
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
-    assert (
-        "textureSampleLevel(colorTex, linearSampler, uv, 1.0, offset)"
-        in generated
-    )
+    assert "textureSampleLevel(colorTex, linearSampler, uv, 1.0, offset)" in generated
     assert "textureSampleGrad(colorTex, linearSampler, uv, ddx, ddy)" in generated
     assert (
-        "textureSampleGrad(colorTex, linearSampler, uv, ddx, ddy, offset)"
-        in generated
+        "textureSampleGrad(colorTex, linearSampler, uv, ddx, ddy, offset)" in generated
     )
     assert "textureSample(colorTex, linearSampler, uv, offset)" in generated
-    assert (
-        "textureSampleBias(colorTex, linearSampler, uv, 0.25, offset)"
-        in generated
-    )
+    assert "textureSampleBias(colorTex, linearSampler, uv, 0.25, offset)" in generated
     assert "textureSampleBias(colorTex, colorTex_sampler, uv, 0.5, offset)" in generated
 
 
@@ -2514,8 +2635,7 @@ def test_wgsl_codegen_lowers_shadow_textures_and_comparison_samplers():
 
     assert "@group(0) @binding(0)\nvar shadowMap: texture_depth_2d;" in generated
     assert (
-        "@group(0) @binding(1)\nvar shadowMap_sampler: sampler_comparison;"
-        in generated
+        "@group(0) @binding(1)\nvar shadowMap_sampler: sampler_comparison;" in generated
     )
     assert "@group(0) @binding(2)\nvar compareSampler: sampler_comparison;" in generated
     assert (
@@ -2523,18 +2643,11 @@ def test_wgsl_codegen_lowers_shadow_textures_and_comparison_samplers():
         "uv: vec2<f32>, depth: f32) -> f32"
     ) in generated
     assert "return textureSampleCompare(tex, tex_sampler, uv, depth);" in generated
+    assert "textureSampleCompare(shadowMap, compareSampler, uv, 0.5)" in generated
     assert (
-        "textureSampleCompare(shadowMap, compareSampler, uv, 0.5)"
-        in generated
-    )
-    assert (
-        "textureSampleCompare(shadowMap, compareSampler, uv, 0.25, "
-        "vec2<i32>(1, 0))"
+        "textureSampleCompare(shadowMap, compareSampler, uv, 0.25, " "vec2<i32>(1, 0))"
     ) in generated
-    assert (
-        "textureSampleCompareLevel(shadowMap, compareSampler, uv, 0.75)"
-        in generated
-    )
+    assert "textureSampleCompareLevel(shadowMap, compareSampler, uv, 0.75)" in generated
     assert (
         "textureSampleCompareLevel(shadowMap, compareSampler, uv, 0.875, "
         "vec2<i32>(0, 1))"
@@ -2613,6 +2726,35 @@ def test_wgsl_codegen_lowers_mod_builtin_to_floor_semantics_expression():
         "((vec2<f32>(0.25, 0.5)) * floor((tile) / (vec2<f32>(0.25, 0.5)))));"
     ) in generated
     assert "mod(" not in generated
+
+
+def test_wgsl_codegen_emits_integer_bitwise_operations():
+    shader = """
+    shader WGSLBitwise {
+        compute {
+            void main(uint a, uint b) {
+                uint masked = a & b;
+                uint toggled = (a | b) ^ 3u;
+                uint shifted = (masked << 1u) >> 1u;
+                uint inverted = ~shifted;
+                masked &= 7u;
+                toggled |= masked;
+                shifted ^= toggled;
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var masked: u32 = (a & b);" in generated
+    assert "var toggled: u32 = ((a | b) ^ 3);" in generated
+    assert "var shifted: u32 = ((masked << 1) >> 1);" in generated
+    assert "var inverted: u32 = ~shifted;" in generated
+    assert "masked &= 7;" in generated
+    assert "toggled |= masked;" in generated
+    assert "shifted ^= toggled;" in generated
 
 
 def test_wgsl_codegen_lowers_compute_barrier_to_workgroup_barrier():

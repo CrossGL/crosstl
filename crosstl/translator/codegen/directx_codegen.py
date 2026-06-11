@@ -2968,13 +2968,16 @@ class HLSLCodeGen:
         if self.is_multisample_texture_resource_type(texture_type):
             return None
 
-        comparison = is_texture_compare_operation(
-            func_name
-        ) or is_texture_gather_compare_operation(func_name)
+        comparison = (
+            is_texture_compare_operation(func_name)
+            or is_texture_gather_compare_operation(func_name)
+            or self.shadow_texture_sample_call_uses_compare(func_name, args)
+        )
         regular = (
             is_texture_sample_operation(func_name)
+            and not comparison
             or is_texture_sample_offset_operation(func_name)
-            or is_projected_texture_operation(func_name)
+            or (is_projected_texture_operation(func_name) and not comparison)
             or is_texture_gather_operation(func_name)
         )
         query_lod = is_texture_query_lod_operation(func_name)
@@ -4955,6 +4958,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return "vec2"
             if is_texture_query_lod_operation(func_name):
                 return "vec2"
+            if self.shadow_texture_sample_call_uses_compare(func_name, args):
+                return "float"
             if is_texture_compare_operation(func_name):
                 return "float"
             if (
@@ -7095,14 +7100,27 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 func_expr = getattr(value, "function", getattr(value, "name", None))
                 func_name = self.expression_name(func_expr)
                 args = getattr(value, "arguments", getattr(value, "args", []))
-                if func_name in comparison_funcs and len(args) >= 3:
-                    texture_name = self.expression_name(args[0])
-                    texture_type = global_resource_types.get(texture_name)
+                texture_name = self.expression_name(args[0]) if args else None
+                texture_type = global_resource_types.get(texture_name)
+                shadow_compare = self.shadow_texture_sample_call_uses_compare(
+                    func_name,
+                    args,
+                    self.global_variable_types.get(texture_name),
+                )
+                if (func_name in comparison_funcs and len(args) >= 3) or (
+                    shadow_compare and len(args) >= 2
+                ):
                     if self.texture_call_is_diagnostic_only(func_name, texture_type):
                         return
                     if texture_name:
                         texture_names.add(texture_name)
-                    if len(args) >= 4:
+                    if func_name in comparison_funcs and len(args) >= 4:
+                        sampler_name = self.expression_name(args[1])
+                        if sampler_name:
+                            sampler_names.add(sampler_name)
+                    elif shadow_compare and self.texture_call_uses_explicit_sampler(
+                        args
+                    ):
                         sampler_name = self.expression_name(args[1])
                         if sampler_name:
                             sampler_names.add(sampler_name)
@@ -7248,6 +7266,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         sampler_names = set()
         global_sampler_names = self.collect_global_sampler_names(root)
         global_resource_types = self.collect_global_texture_types(root)
+        comparison_role = texture_funcs == self.comparison_texture_function_names()
         previous_local_variable_types = self.local_variable_types
         try:
             for func in self.collect_functions(root):
@@ -7266,9 +7285,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         continue
                     func_expr = getattr(node, "function", getattr(node, "name", None))
                     func_name = self.expression_name(func_expr)
-                    if func_name not in texture_funcs:
-                        continue
                     args = getattr(node, "arguments", getattr(node, "args", []))
+                    source_type = self.texture_source_type(args[0]) if args else None
+                    shadow_compare = self.shadow_texture_sample_call_uses_compare(
+                        func_name, args, source_type
+                    )
+                    if shadow_compare:
+                        if not comparison_role:
+                            continue
+                    elif func_name not in texture_funcs:
+                        continue
                     if not self.has_explicit_sampler_argument(
                         func_name, args, sampler_scope
                     ):
@@ -8097,6 +8123,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     continue
                 if self.has_explicit_sampler_argument(func_name, args, sampler_names):
                     continue
+                if self.shadow_texture_sample_call_uses_compare(
+                    func_name,
+                    args,
+                    self.global_variable_types.get(texture_name),
+                ):
+                    continue
                 if self.projected_texture_call_is_diagnostic_only(
                     func_name, global_texture_types.get(texture_name)
                 ):
@@ -8515,15 +8547,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 ):
                     continue
 
+                shadow_compare = self.shadow_texture_sample_call_uses_compare(
+                    texture_func, args, texture_param_types[texture_name]
+                )
                 query_lod = is_texture_query_lod_operation(texture_func)
                 regular = (
                     not query_lod
                     and texture_func in self.regular_texture_function_names()
+                    and not shadow_compare
                 )
                 comparison = (
                     not query_lod
                     and texture_func in self.comparison_texture_function_names()
-                )
+                ) or shadow_compare
                 self.add_implicit_texture_sampler_parameter(
                     implicit_params,
                     func_name,
@@ -15234,6 +15270,54 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "samplerCubeArrayShadow",
         }
 
+    def shadow_texture_sample_compare_components(self, vtype):
+        return {
+            "sampler2DShadow": ("xy", "z"),
+            "sampler2DArrayShadow": ("xyz", "w"),
+            "samplerCubeShadow": ("xyz", "w"),
+        }.get(self.resource_base_type(vtype))
+
+    def shadow_texture_sample_compare_coordinate_components(self, vtype):
+        return {
+            "sampler2DShadow": 3,
+            "sampler2DArrayShadow": 4,
+            "samplerCubeShadow": 4,
+        }.get(self.resource_base_type(vtype))
+
+    def shadow_texture_sample_call_uses_compare(self, func_name, args, vtype=None):
+        if not args:
+            return False
+        if self.shadow_texture_projected_sample_call_uses_compare(
+            func_name, args, vtype
+        ):
+            return True
+        if not is_texture_sample_basic_operation(func_name):
+            return False
+        source_type = (
+            vtype if vtype is not None else self.expression_result_type(args[0])
+        )
+        required_components = self.shadow_texture_sample_compare_coordinate_components(
+            source_type
+        )
+        if required_components is None or len(args) < 2:
+            return False
+        coord_components = self.expression_component_count(args[1])
+        if coord_components is None:
+            coord_components = self.value_component_count(
+                self.expression_result_type(args[1])
+            )
+        return coord_components is not None and coord_components >= required_components
+
+    def shadow_texture_projected_sample_call_uses_compare(
+        self, func_name, args, vtype=None
+    ):
+        if func_name != "textureProj" or not args:
+            return False
+        source_type = (
+            vtype if vtype is not None else self.expression_result_type(args[0])
+        )
+        return self.resource_base_type(source_type) == "sampler2DShadow"
+
     def is_multisample_sampler_type(self, vtype):
         return self.resource_base_type(vtype) in {
             "sampler2DMS",
@@ -15800,13 +15884,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         texture_name = self.generate_expression(args[0])
         texture_base_name = self.expression_name(args[0]) or texture_name
+        shadow_compare = self.shadow_texture_sample_call_uses_compare(
+            func_name, args, self.texture_source_type(args[0])
+        )
         if explicit_sampler:
             sampler_name = self.generate_expression(args[1])
-            if self.texture_call_uses_comparison_sampler(func_name):
+            if self.texture_call_uses_comparison_sampler(func_name, args):
                 sampler_name = self.hlsl_comparison_sampler_alias_expression(
                     args[1], sampler_name
                 )
-        elif self.implicit_call_uses_regular_sampler(func_name):
+        elif self.implicit_call_uses_regular_sampler(func_name) and not shadow_compare:
             member_sampler = self.hlsl_implicit_member_sampler_name(
                 args[0],
                 self.hlsl_member_sampler_info_for_call(func_name, args),
@@ -15833,12 +15920,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         extra_args = args[coord_index + 1 :]
         return texture_name, sampler_name, coord, extra_args
 
-    def texture_call_uses_comparison_sampler(self, func_name):
+    def texture_call_uses_comparison_sampler(self, func_name, args=None):
         return bool(
             func_name
             and (
                 is_texture_compare_operation(func_name)
                 or is_texture_gather_compare_operation(func_name)
+                or (
+                    args is not None
+                    and self.shadow_texture_sample_call_uses_compare(func_name, args)
+                )
             )
         )
 
@@ -16017,6 +16108,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if arg_type is None or not self.is_texture_or_image_type(arg_type):
             return None
         return self.map_resource_type_with_format(self.resource_base_type(arg_type))
+
+    def texture_source_type(self, texture_arg):
+        texture_name = self.expression_name(texture_arg)
+        if texture_name:
+            local_type = self.local_variable_types.get(texture_name)
+            if local_type is not None:
+                return local_type
+            global_type = self.global_variable_types.get(texture_name)
+            if global_type is not None:
+                return global_type
+        return self.expression_result_type(texture_arg)
 
     def texture_argument_resource_type(self, texture_arg):
         return self.texture_resource_type(texture_arg)
@@ -17152,6 +17254,79 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if swizzle:
             return self.vector_component(coord, swizzle)
         return coord
+
+    def shadow_texture_sample_compare_arguments(self, texture_arg, coord, vtype=None):
+        components = self.shadow_texture_sample_compare_components(
+            vtype if vtype is not None else self.expression_result_type(texture_arg)
+        )
+        if components is None:
+            return None
+        coord_component, compare_component = components
+        return (
+            self.vector_component(coord, coord_component),
+            self.vector_component(coord, compare_component),
+        )
+
+    def generate_shadow_texture_sample_call(self, func_name, args):
+        parts = self.texture_call_parts(args, func_name)
+        if parts is None:
+            return self.unsupported_texture_compare_call(
+                func_name, texture_coordinate_arguments_error()
+            )
+
+        texture_name, sampler_name, coord, extra_args = parts
+        if extra_args:
+            return self.unsupported_texture_compare_call(
+                func_name, "shadow sampler shorthand accepts no extra arguments"
+            )
+        compare_args = self.shadow_texture_sample_compare_arguments(
+            args[0], coord, self.texture_source_type(args[0])
+        )
+        if compare_args is None:
+            return None
+        sample_coord, compare = compare_args
+        return f"{texture_name}.SampleCmp({sampler_name}, {sample_coord}, {compare})"
+
+    def shadow_texture_projected_sample_compare_arguments(
+        self, texture_arg, coord_arg, coord
+    ):
+        source_type = self.texture_source_type(texture_arg)
+        if self.resource_base_type(source_type) != "sampler2DShadow":
+            return None
+        coord_type = self.resource_base_type(self.expression_result_type(coord_arg))
+        if coord_type not in {"vec4", "float4"}:
+            return None
+        divisor = self.vector_component(coord, "w")
+        return (
+            f"{self.vector_component(coord, 'xy')} / {divisor}",
+            f"{self.vector_component(coord, 'z')} / {divisor}",
+        )
+
+    def generate_shadow_texture_projected_sample_call(self, func_name, args):
+        parts = self.texture_call_parts(args, func_name)
+        if parts is None:
+            return self.unsupported_texture_compare_call(
+                func_name, texture_coordinate_arguments_error()
+            )
+
+        texture_name, sampler_name, coord, extra_args = parts
+        if extra_args:
+            return self.unsupported_texture_compare_call(
+                func_name,
+                "projected shadow sampler shorthand accepts no extra arguments",
+            )
+
+        coord_index = 2 if self.is_explicit_sampler_argument(args) else 1
+        compare_args = self.shadow_texture_projected_sample_compare_arguments(
+            args[0], args[coord_index], coord
+        )
+        if compare_args is None:
+            return self.unsupported_texture_compare_call(
+                func_name,
+                "projected sampler2DShadow shorthand requires a vec4 coordinate",
+            )
+        sample_coord, compare = compare_args
+        return f"{texture_name}.SampleCmp({sampler_name}, {sample_coord}, {compare})"
 
     def is_array_expression(self, node):
         type_name = self.expression_result_type(node)
@@ -21725,8 +21900,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if is_texture_sample_offset_operation(func_name):
             return self.generate_texture_sample_offset_call(func_name, args)
 
+        if self.shadow_texture_projected_sample_call_uses_compare(
+            func_name, args, self.texture_source_type(args[0])
+        ):
+            return self.generate_shadow_texture_projected_sample_call(func_name, args)
+
         if is_projected_texture_operation(func_name):
             return self.generate_texture_projected_call(func_name, args)
+
+        if self.shadow_texture_sample_call_uses_compare(
+            func_name, args, self.texture_source_type(args[0])
+        ):
+            return self.generate_shadow_texture_sample_call(func_name, args)
 
         if is_texture_sample_operation(func_name):
             parts = self.texture_call_parts(args, func_name)

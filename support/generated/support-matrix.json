@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 292,
+        "unsupported_marker_count": 297,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1111
+        "test_count": 1113
       },
       "translator_codegen": {
         "exists": true,
@@ -275,7 +275,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 38,
+        "unsupported_marker_count": 43,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
@@ -295,6 +295,10 @@
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "UNSUPPORTED_OPAQUE_RESOURCE_TYPES = {"
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "if base_type in self.UNSUPPORTED_FLOAT64_TYPES:"
           },
           {
@@ -308,6 +312,10 @@
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "\"WebGL target does not support storage image intrinsic \""
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "\"WebGL target requires GLSL ES 3.00 and does not support \""
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
@@ -348,14 +356,6 @@
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "builtin_name = self.webgl_unsupported_builtin_attribute_name(node)"
-          },
-          {
-            "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "def webgl_unsupported_builtin_attribute_name(self, node):"
-          },
-          {
-            "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "if attr_name in self.UNSUPPORTED_VERTEX_OUTPUT_BUILTINS:"
           }
         ]
       },
@@ -371,7 +371,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_webgl_codegen.py"
         ],
-        "test_count": 39
+        "test_count": 41
       },
       "translator_codegen": {
         "exists": true,
@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 103
+        "test_count": 110
       },
       "translator_codegen": {
         "exists": true,
@@ -6103,10 +6103,10 @@
         },
         "wgsl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_emits_integer_bitwise_operations"
           ],
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
-          "status": "diagnostic"
+          "notes": "WGSL codegen preserves integer bitwise &, |, ^, shifts, unary bitwise not, and bitwise compound assignments in WGSL syntax with focused codegen coverage.",
+          "status": "supported"
         }
       }
     },
@@ -15468,9 +15468,9 @@
         "validated_rejection": 9
       },
       "wgsl": {
-        "diagnostic": 20,
+        "diagnostic": 19,
         "partial": 0,
-        "supported": 41,
+        "supported": 42,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 7

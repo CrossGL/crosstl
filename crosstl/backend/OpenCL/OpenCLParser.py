@@ -316,6 +316,7 @@ class OpenCLParser(HipParser):
                 param_type = self.parse_type()
                 previous_base_type = self.strip_declarator_markers(param_type)
             self.skip_newlines()
+            self.skip_parameter_attributes()
 
             param_name = ""
             function_pointer_name = self.parse_function_pointer_parameter_declarator()

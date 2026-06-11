@@ -1354,10 +1354,6 @@ def _clear_report_diagnostics(payload):
         payload["summary"]["diagnosticsByVariant"] = {}
         payload["summary"]["diagnosticsByCheckKind"] = {}
         payload["summary"]["missingCapabilityCounts"] = {}
-    if "migration" in payload:
-        payload["migration"]["placeholderCount"] = 0
-        payload["migration"]["placeholdersByTarget"] = {}
-        payload["migration"]["placeholdersBySource"] = {}
 
 
 def _write_count_balanced_artifact_gap_report(repo, *, omit_artifact_matrix=False):
@@ -10683,8 +10679,8 @@ def test_translate_project_opengl_materializes_mlx_pointer_and_value_bindings(
     assert "layout(std430, binding = 0) readonly buffer srcBuffer" in output
     assert "layout(std430, binding = 1) buffer dstBuffer" in output
     assert "layout(std140, binding = 2) uniform scalefloat32_factor_Args" in output
-    assert "float factor;" in output
-    assert "dst[gid] = (float(src[gid]) * factor);" in output
+    assert "float scalefloat32_factor_Args_factor;" in output
+    assert "dst[gid] = (float(src[gid]) * scalefloat32_factor_Args_factor);" in output
     assert not re.search(r"\b(?:T|U)\b", output)
 
 
@@ -38103,6 +38099,64 @@ def test_translate_project_opencl_directx_allocates_generated_parameter_bindings
     assert "cbuffer scale_Args : register(b2)" in output
     assert "cbuffer bias_Args : register(b3)" in output
     assert output.count(": register(b2)") == 1
+
+
+def test_translate_project_opencl_image_sampler_params_lower_to_resources(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "filter.cl").write_text(
+        textwrap.dedent("""
+            __kernel void filter(__read_only image2d_t srcImg,
+                                 sampler_t smp,
+                                 __write_only image2d_t dstImg) {
+                int2 coord = (int2)(get_global_id(0), get_global_id(1));
+                float4 color = read_imagef(srcImg, smp, coord);
+                write_imagef(dstImg, coord, color);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl", "directx", "metal"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("opengl", "translated"),
+        ("directx", "translated"),
+        ("metal", "translated"),
+    }
+
+    outputs = {
+        artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in payload["artifacts"]
+    }
+    combined = "\n".join(outputs.values())
+
+    assert "filter_Args" not in combined
+
+    assert (
+        "layout(rgba32f, binding = 0) readonly uniform image2D srcImg;"
+        in outputs["opengl"]
+    )
+    assert (
+        "layout(rgba32f, binding = 2) writeonly uniform image2D dstImg;"
+        in outputs["opengl"]
+    )
+
+    assert "RWTexture2D<float4> srcImg : register(u0);" in outputs["directx"]
+    assert "SamplerState smp : register(s1);" in outputs["directx"]
+    assert "RWTexture2D<float4> dstImg : register(u2);" in outputs["directx"]
+
+    assert "texture2d<float, access::read> srcImg [[texture(0)]]" in outputs["metal"]
+    assert "sampler smp [[sampler(1)]]" in outputs["metal"]
+    assert "texture2d<float, access::write> dstImg [[texture(2)]]" in outputs["metal"]
 
 
 def test_translate_project_metal_directx_relocates_stage_entry_buffer_bindings(

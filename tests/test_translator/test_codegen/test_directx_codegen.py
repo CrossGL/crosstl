@@ -23491,6 +23491,38 @@ def test_directx_implicit_projected_stage_input_members_generate_samplers():
     assert "textureCompareProj" not in generated_code
 
 
+def test_directx_projected_shadow_sampler_shorthand_uses_sample_cmp():
+    shader = """
+    shader ProjectedShadowSamplerShorthand {
+        sampler2DShadow shadowMap @ register(t2, space3);
+
+        fragment {
+            float main(vec4 shadowCoord @ TEXCOORD0) @ gl_FragDepth {
+                return textureProj(shadowMap, shadowCoord);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2D shadowMap : register(t2, space3);" in generated_code
+    assert (
+        "SamplerComparisonState shadowMapSampler : register(s0, space3);"
+        in generated_code
+    )
+    assert "SamplerState shadowMapSampler" not in generated_code
+    assert (
+        "return shadowMap.SampleCmp("
+        "shadowMapSampler, shadowCoord.xy / shadowCoord.w, "
+        "shadowCoord.z / shadowCoord.w);" in generated_code
+    )
+    assert ".Sample(" not in generated_code
+    assert "textureProj(" not in generated_code
+
+
 def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
     shader = """
     shader ProjectedShadowCompareVariants {
@@ -31205,6 +31237,31 @@ def test_directx_implicit_comparison_sampler_for_shadow_texture_parameter():
         "sampleShadow(shadowMap, shadowMapSampler, input.uv, input.depth)"
         in generated_code
     )
+
+
+def test_directx_shadow_texture_shorthand_uses_sample_cmp():
+    shader = """
+    shader ShadowTextureShorthand {
+        sampler2DShadow shadowMap;
+
+        fragment {
+            float main(vec2 uv @ TEXCOORD0, float depth @ TEXCOORD1) @ gl_FragDepth {
+                return texture(shadowMap, vec3(uv, depth));
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Texture2D shadowMap : register(t0);" in generated_code
+    assert "SamplerComparisonState shadowMapSampler : register(s0);" in generated_code
+    assert (
+        "shadowMap.SampleCmp(shadowMapSampler, (float3(uv, depth)).xy, "
+        "(float3(uv, depth)).z)" in generated_code
+    )
+    assert "shadowMap.Sample(" not in generated_code
+    assert "texture(" not in generated_code
 
 
 def test_directx_shadow_compare_sampler_parameter_transitive():

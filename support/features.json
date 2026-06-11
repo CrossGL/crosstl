@@ -4666,10 +4666,10 @@
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "supported",
+          "notes": "WGSL codegen preserves integer bitwise &, |, ^, shifts, unary bitwise not, and bitwise compound assignments in WGSL syntax with focused codegen coverage.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_emits_integer_bitwise_operations"
           ]
         }
       }

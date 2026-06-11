@@ -22,10 +22,10 @@ implicitly supported.
 .. csv-table:: Backend inventory
    :header: "Backend", "Target aliases", "Target profiles", "Ext", "Target generator", "Source kind", "Native frontend", "Tests", "Test count", "Unsupported markers", "Docs source"
 
-   "DirectX / HLSL", "dx11, dx12, d3d11, d3d12", "directx-11, directx-12", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "native", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "1111", "292", "Microsoft Learn HLSL reference; HLSL specification project"
+   "DirectX / HLSL", "dx11, dx12, d3d11, d3d12", "directx-11, directx-12", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "native", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "1113", "297", "Microsoft Learn HLSL reference; HLSL specification project"
    "OpenGL / GLSL", "", "", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "native", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "1188", "186", "GLSL 4.60 specification; OpenGL registry"
-   "WebGL / GLSL ES", "webgl2, essl, glsl-es", "", ".webgl.glsl", "crosstl/translator/codegen/webgl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_webgl_codegen.py", "39", "38", "WebGL 2.0 specification; OpenGL ES Shading Language 3.00 specification"
-   "WebGPU / WGSL", "webgpu", "", ".wgsl", "crosstl/translator/codegen/wgsl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_wgsl_codegen.py", "103", "70", "WGSL specification; WebGPU specification"
+   "WebGL / GLSL ES", "webgl2, essl, glsl-es", "", ".webgl.glsl", "crosstl/translator/codegen/webgl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_webgl_codegen.py", "41", "43", "WebGL 2.0 specification; OpenGL ES Shading Language 3.00 specification"
+   "WebGPU / WGSL", "webgpu", "", ".wgsl", "crosstl/translator/codegen/wgsl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_wgsl_codegen.py", "110", "70", "WGSL specification; WebGPU specification"
    "Metal", "", "", ".metal", "crosstl/translator/codegen/metal_codegen.py", "native", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "1006", "499", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", "", "", ".spvasm", "crosstl/translator/codegen/SPIRV_codegen.py", "native", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "1008", "45", "SPIR-V unified grammar; Khronos SPIR-V headers"
    "CUDA", "", "", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "native", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "780", "194", "CUDA C++ programming guide"
@@ -40,7 +40,7 @@ implicitly supported.
    "DirectX / HLSL", "66", "0", "2", "0", "0", "0"
    "OpenGL / GLSL", "66", "0", "2", "0", "0", "0"
    "WebGL / GLSL ES", "37", "0", "22", "9", "0", "0"
-   "WebGPU / WGSL", "41", "0", "20", "7", "0", "0"
+   "WebGPU / WGSL", "42", "0", "19", "7", "0", "0"
    "Metal", "65", "0", "3", "0", "0", "0"
    "Vulkan SPIR-V", "66", "0", "2", "0", "0", "0"
    "CUDA", "61", "0", "7", "0", "0", "0"
@@ -168,7 +168,7 @@ Each category below uses the status codes from the legend.
    "Wave/subgroup intrinsics", "Y", "Y", "R", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Match/pattern lowering", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Vector and matrix expressions", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Bitwise operations", "Y", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Bitwise operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: validation
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "WebGPU / WGSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"

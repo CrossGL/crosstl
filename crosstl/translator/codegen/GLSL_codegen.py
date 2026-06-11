@@ -7049,7 +7049,7 @@ class GLSLCodeGen:
             )
             if self.is_opaque_resource_type(mapped_type):
                 return None
-            return type_name
+            return mapped_type
 
         qualifiers = {str(q).lower() for q in getattr(param, "qualifiers", []) or []}
         if "constant" not in qualifiers:

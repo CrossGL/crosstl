@@ -62,6 +62,10 @@ class WebGLCodeGen(GLSLCodeGen):
         "textureGatherCompareOffset",
         "textureGatherCompareOffsets",
     }
+    GLSL_DESKTOP_TEXTURE_QUERY_INTRINSIC_NAMES = {
+        "textureQueryLevels",
+        "textureQueryLod",
+    }
     UNSUPPORTED_SAMPLED_RESOURCE_TYPES = {
         "sampler1D",
         "sampler1DArray",
@@ -103,6 +107,9 @@ class WebGLCodeGen(GLSLCodeGen):
         "dmat4x2",
         "dmat4x3",
         "dmat4x4",
+    }
+    UNSUPPORTED_OPAQUE_RESOURCE_TYPES = {
+        "atomic_uint": "atomic counter",
     }
 
     def default_glsl_version_line(self, ast, target_stage=None):
@@ -150,6 +157,11 @@ class WebGLCodeGen(GLSLCodeGen):
                 "WebGL target requires GLSL ES 3.00 and does not support "
                 f"texture gather intrinsic '{func_name}'"
             )
+        if func_name in self.GLSL_DESKTOP_TEXTURE_QUERY_INTRINSIC_NAMES:
+            raise ValueError(
+                "WebGL target requires GLSL ES 3.00 and does not support "
+                f"texture query intrinsic '{func_name}'"
+            )
         if func_name in self.ATOMIC_INTRINSIC_NAMES:
             raise ValueError(
                 f"WebGL target does not support atomic operation '{func_name}'"
@@ -163,7 +175,9 @@ class WebGLCodeGen(GLSLCodeGen):
     def is_webgl_builtin_interface_block(self, node):
         if not self.is_glsl_interface_block_struct(node):
             return False
-        return self.glsl_interface_block_name(node) in self.BUILTIN_INTERFACE_BLOCK_NAMES
+        return (
+            self.glsl_interface_block_name(node) in self.BUILTIN_INTERFACE_BLOCK_NAMES
+        )
 
     def glsl_dynamic_resource_call_dispatch_info(self, expr):
         dispatch = super().glsl_dynamic_resource_call_dispatch_info(expr)
@@ -618,6 +632,14 @@ class WebGLCodeGen(GLSLCodeGen):
                 "WebGL target does not support storage image resource "
                 f"'{self.resource_node_name(node, '<unnamed>')}' "
                 f"({self.type_name_string(self.resource_base_type(node_type))})"
+            )
+        mapped_base_type = self.map_type(self.resource_base_type(node_type))
+        if mapped_base_type in self.UNSUPPORTED_OPAQUE_RESOURCE_TYPES:
+            resource_kind = self.UNSUPPORTED_OPAQUE_RESOURCE_TYPES[mapped_base_type]
+            raise ValueError(
+                f"WebGL target does not support {resource_kind} resource "
+                f"'{self.resource_node_name(node, '<unnamed>')}' "
+                f"({mapped_base_type})"
             )
         sampled_type = self.sampled_image_type(node_type)
         sampled_base_type = self.map_type(self.resource_base_type(sampled_type))
