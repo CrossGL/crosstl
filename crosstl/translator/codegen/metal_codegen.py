@@ -314,6 +314,7 @@ from .stage_utils import (
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
+    stage_layout_entry_value,
     stage_matches,
 )
 
@@ -2295,6 +2296,7 @@ class MetalCodeGen:
                             stage.entry_point,
                             getattr(stage, "local_variables", []),
                         ),
+                        stage_node=stage,
                     )
 
         code += self.generate_image_atomic_compare_helpers()
@@ -3475,6 +3477,7 @@ class MetalCodeGen:
         execution_config=None,
         entry_name=None,
         stage_local_variables=None,
+        stage_node=None,
     ):
         """Render a function or stage entry point with Metal attributes."""
         code = ""
@@ -4339,10 +4342,15 @@ class MetalCodeGen:
                 params_str, self.current_function_name, func
             )
             function_name = entry_name or f"geometry_{func.name}"
-            self.validate_metal_geometry_stage(func, param_list)
+            self.validate_metal_geometry_stage(
+                func,
+                param_list,
+                stage_node=stage_node,
+            )
             code += self.generate_metal_geometry_stage_comments(
                 func,
                 param_list,
+                stage_node=stage_node,
             )
             code += f"{return_type} {function_name}({params_str}) {{\n"
         elif shader_type in {"tessellation_control", "tessellation_evaluation"}:
@@ -14509,15 +14517,29 @@ class MetalCodeGen:
                 return getattr(attr, "arguments", []) or []
         return []
 
-    def metal_geometry_maxvertexcount(self, func):
+    def metal_geometry_maxvertexcount(self, func, stage_node=None):
         arguments = self.metal_stage_attribute_arguments(func, "maxvertexcount")
-        if not arguments:
-            raise ValueError("Metal geometry stage requires maxvertexcount attribute")
-        if len(arguments) != 1:
-            raise ValueError(
-                "Metal geometry stage maxvertexcount requires exactly one argument"
-            )
-        value_text = self.attribute_value_to_string(arguments[0])
+        if arguments:
+            if len(arguments) != 1:
+                raise ValueError(
+                    "Metal geometry stage maxvertexcount requires exactly one argument"
+                )
+            value_text = self.attribute_value_to_string(arguments[0])
+        else:
+            value_text = None
+            if stage_node is not None:
+                value_text = (
+                    stage_layout_entry_value(stage_node, "max_vertices", "out")
+                    or stage_layout_entry_value(
+                        stage_node,
+                        "maxvertexcount",
+                        "out",
+                    )
+                )
+            if value_text is None:
+                raise ValueError(
+                    "Metal geometry stage requires maxvertexcount attribute"
+                )
         value = self.literal_int_value(value_text, self.literal_int_constants)
         if value is not None and value <= 0:
             raise ValueError(
@@ -14629,8 +14651,8 @@ class MetalCodeGen:
                     f"must have {expected_count} element(s), got {array_count}"
                 )
 
-    def validate_metal_geometry_stage(self, func, parameters):
-        self.metal_geometry_maxvertexcount(func)
+    def validate_metal_geometry_stage(self, func, parameters, stage_node=None):
+        self.metal_geometry_maxvertexcount(func, stage_node=stage_node)
 
         if not any(
             self.metal_geometry_stream_info(self.parameter_raw_type(param))
@@ -14651,8 +14673,16 @@ class MetalCodeGen:
 
         self.validate_metal_geometry_input_primitive_arity(parameters)
 
-    def generate_metal_geometry_stage_comments(self, func, parameters):
-        maxvertexcount = self.metal_geometry_maxvertexcount(func)
+    def generate_metal_geometry_stage_comments(
+        self,
+        func,
+        parameters,
+        stage_node=None,
+    ):
+        maxvertexcount = self.metal_geometry_maxvertexcount(
+            func,
+            stage_node=stage_node,
+        )
         input_descriptions = []
         stream_descriptions = []
 
