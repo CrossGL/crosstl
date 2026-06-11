@@ -22,12 +22,6 @@
       "summary": "Disambiguate OpenGL resource bindings for multi-entry MLX kernels."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/853",
-      "scope": "opengl-include-validation",
-      "status": "open",
-      "summary": "Remove Metal include directives from generated OpenGL MLX artifacts."
-    },
-    {
       "issue": "https://github.com/CrossGL/crosstl/issues/854",
       "scope": "vulkan-quantized-literals",
       "status": "open",
@@ -38,6 +32,12 @@
       "scope": "vulkan-sort-recursion",
       "status": "open",
       "summary": "Avoid recursion overflow translating MLX sort.metal to Vulkan."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/862",
+      "scope": "opengl-helper-declarations",
+      "status": "open",
+      "summary": "Emit GLSL-valid MLX helper declarations for OpenGL validation."
     }
   ]
 }

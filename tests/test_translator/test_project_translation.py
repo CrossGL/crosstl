@@ -19869,6 +19869,9 @@ def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
     (repo / "mlx_bf16.metal").write_text(
         textwrap.dedent("""
             #include <metal_stdlib>
+            #include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>
+            #pragma METAL internals : enable
+            #pragma METAL internals : disable
             using namespace metal;
 
             typedef bfloat bfloat16_t;
@@ -19907,6 +19910,9 @@ def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
     generated = (repo / metal_artifact["path"]).read_text(encoding="utf-8")
     assert "uint pack_bfloat16(float value)" in generated
     assert "return (floatBitsToUint(value) >> 16u);" in generated
+    assert "#include <metal" not in generated
+    assert "#include <Metal" not in generated
+    assert "#pragma METAL" not in generated
     assert "bfloat16_t" not in generated
     assert "asuint(" not in generated
 

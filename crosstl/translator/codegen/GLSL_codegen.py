@@ -1535,6 +1535,16 @@ class GLSLCodeGen:
                 extensions.add(extension_name)
         return extensions
 
+    def should_emit_glsl_preprocessor_line(self, line):
+        stripped = line.strip()
+        if stripped.startswith("#pragma METAL"):
+            return False
+        if not stripped.startswith("#include"):
+            return True
+
+        include_target = stripped[len("#include") :].strip()
+        return not include_target.lower().startswith(("<metal", '"metal'))
+
     def glsl_extension_enabled(self, extension_name):
         return extension_name in self.current_glsl_extensions
 
@@ -2434,7 +2444,7 @@ class GLSLCodeGen:
                 line = str(directive).strip()
             if line.startswith("#version") and version_line is None:
                 version_line = line
-            elif line:
+            elif line and self.should_emit_glsl_preprocessor_line(line):
                 extra_lines.append(line)
         if version_line is None:
             version_line = self.default_glsl_version_line(ast, target_stage)

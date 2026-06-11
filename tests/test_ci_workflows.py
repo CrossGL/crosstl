@@ -1784,13 +1784,14 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "https://github.com/CrossGL/crosstl/issues/850" in mlx_porting
     assert "https://github.com/CrossGL/crosstl/issues/851" in mlx_porting
     assert "https://github.com/CrossGL/crosstl/issues/852" in mlx_porting
-    assert "https://github.com/CrossGL/crosstl/issues/853" in mlx_porting
     assert "https://github.com/CrossGL/crosstl/issues/854" in mlx_porting
     assert "https://github.com/CrossGL/crosstl/issues/855" in mlx_porting
+    assert "https://github.com/CrossGL/crosstl/issues/862" in mlx_porting
     assert "MLX_DIRECTX_VULKAN_FRONTIER_SOURCES" in harness
     assert "mlx/backend/metal/kernels/ternary.metal" in harness
     assert "mlx/backend/metal/kernels/unary.metal" in harness
     assert "arange-opengl" in harness
+    assert "metalIncludesFiltered" in harness
 
 
 def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():

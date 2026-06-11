@@ -32,9 +32,9 @@ EXPECTED_METAL_KERNEL_COUNT = 40
 ISSUE_THREADGROUP_METADATA = "https://github.com/CrossGL/crosstl/issues/850"
 ISSUE_RESOURCE_DECL_SCOPE = "https://github.com/CrossGL/crosstl/issues/851"
 ISSUE_OPENGL_BINDINGS = "https://github.com/CrossGL/crosstl/issues/852"
-ISSUE_OPENGL_INCLUDES = "https://github.com/CrossGL/crosstl/issues/853"
 ISSUE_VULKAN_QUANTIZED_LITERAL = "https://github.com/CrossGL/crosstl/issues/854"
 ISSUE_VULKAN_SORT_RECURSION = "https://github.com/CrossGL/crosstl/issues/855"
+ISSUE_OPENGL_HELPER_DECLARATIONS = "https://github.com/CrossGL/crosstl/issues/862"
 
 
 class PortingCheckError(RuntimeError):
@@ -404,12 +404,38 @@ def _check_arange_opengl(
         summary.get("translatedCount") == 1 and summary.get("failedCount") == 0,
         "OpenGL arange translation succeeded but the report did not show one clean artifact",
     )
+    artifacts = payload.get("artifacts", [])
+    artifact = next(
+        (
+            item
+            for item in artifacts
+            if isinstance(item, dict)
+            and item.get("source") == MLX_ARANGE_SOURCE
+            and item.get("target") == "opengl"
+        ),
+        None,
+    )
+    _require(isinstance(artifact, dict), "OpenGL arange artifact is missing")
+    artifact_path = artifact.get("path")
+    _require(isinstance(artifact_path, str), "OpenGL arange artifact path is missing")
+    generated_path = mlx_root / artifact_path
+    _require(
+        generated_path.is_file(), f"OpenGL arange artifact is missing: {artifact_path}"
+    )
+    generated = generated_path.read_text(encoding="utf-8")
+    generated_lower = generated.lower()
+    _require(
+        "#include <metal" not in generated_lower
+        and "#pragma metal" not in generated_lower,
+        "OpenGL arange artifact retained a Metal system preprocessor line",
+    )
     return {
         "name": "arange-opengl",
         "status": "passed",
         "report": _relpath(report_path, mlx_root),
         "source": MLX_ARANGE_SOURCE,
         "target": "opengl",
+        "metalIncludesFiltered": True,
     }
 
 
@@ -469,9 +495,9 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             ISSUE_THREADGROUP_METADATA,
             ISSUE_RESOURCE_DECL_SCOPE,
             ISSUE_OPENGL_BINDINGS,
-            ISSUE_OPENGL_INCLUDES,
             ISSUE_VULKAN_QUANTIZED_LITERAL,
             ISSUE_VULKAN_SORT_RECURSION,
+            ISSUE_OPENGL_HELPER_DECLARATIONS,
         ],
         "checks": checks,
         "status": "passed",

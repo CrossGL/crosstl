@@ -6,9 +6,9 @@ env:
   MLX_THREADGROUP_METADATA_ISSUE: "https://github.com/CrossGL/crosstl/issues/850"
   MLX_RESOURCE_DECL_SCOPE_ISSUE: "https://github.com/CrossGL/crosstl/issues/851"
   MLX_OPENGL_BINDING_ISSUE: "https://github.com/CrossGL/crosstl/issues/852"
-  MLX_OPENGL_INCLUDE_VALIDATION_ISSUE: "https://github.com/CrossGL/crosstl/issues/853"
   MLX_VULKAN_QUANTIZED_LITERAL_ISSUE: "https://github.com/CrossGL/crosstl/issues/854"
   MLX_VULKAN_SORT_RECURSION_ISSUE: "https://github.com/CrossGL/crosstl/issues/855"
+  MLX_OPENGL_HELPER_DECLARATION_ISSUE: "https://github.com/CrossGL/crosstl/issues/862"
 
 on:
   push:

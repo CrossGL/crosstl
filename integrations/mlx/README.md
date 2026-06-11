@@ -63,12 +63,12 @@ The harness writes reports, generated artifacts, and command logs under
   and OpenGL entry point.
 - CrossGL/crosstl#852: disambiguate OpenGL resource bindings for multi-entry
   MLX kernels.
-- CrossGL/crosstl#853: remove Metal include directives from generated OpenGL
-  MLX artifacts before validation.
 - CrossGL/crosstl#854: emit valid SPIR-V literals for MLX quantized
   bit-packing constants.
 - CrossGL/crosstl#855: avoid recursion overflow translating MLX `sort.metal`
   to Vulkan.
+- CrossGL/crosstl#862: emit GLSL-valid MLX helper declarations for OpenGL
+  validation.
 
 These gaps are translator work. Host runtime integration gaps should be handled
 in MLX-specific integration code or downstream runtime adapters, not hidden as
