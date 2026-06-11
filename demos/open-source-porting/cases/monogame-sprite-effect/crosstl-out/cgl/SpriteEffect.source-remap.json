@@ -27,12 +27,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 14,
-        "endOffset": 395,
+        "endLine": 16,
+        "endOffset": 443,
         "file": "crosstl-out/cgl/SpriteEffect.cgl",
         "length": 25,
-        "line": 13,
-        "offset": 370
+        "line": 15,
+        "offset": 418
       },
       "original": {
         "column": 1,
@@ -49,12 +49,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 15,
-        "endOffset": 451,
+        "endLine": 17,
+        "endOffset": 499,
         "file": "crosstl-out/cgl/SpriteEffect.cgl",
         "length": 56,
-        "line": 14,
-        "offset": 395
+        "line": 16,
+        "offset": 443
       },
       "original": {
         "column": 1,
@@ -71,12 +71,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 16,
-        "endOffset": 481,
+        "endLine": 18,
+        "endOffset": 529,
         "file": "crosstl-out/cgl/SpriteEffect.cgl",
         "length": 30,
-        "line": 15,
-        "offset": 451
+        "line": 17,
+        "offset": 499
       },
       "original": {
         "column": 1,
@@ -93,12 +93,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 17,
-        "endOffset": 517,
+        "endLine": 19,
+        "endOffset": 565,
         "file": "crosstl-out/cgl/SpriteEffect.cgl",
         "length": 36,
-        "line": 16,
-        "offset": 481
+        "line": 18,
+        "offset": 529
       },
       "original": {
         "column": 1,
@@ -115,12 +115,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 23,
-        "endOffset": 647,
+        "endLine": 27,
+        "endOffset": 716,
         "file": "crosstl-out/cgl/SpriteEffect.cgl",
-        "length": 62,
-        "line": 22,
-        "offset": 585
+        "length": 76,
+        "line": 26,
+        "offset": 640
       },
       "original": {
         "column": 1,
@@ -137,12 +137,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 24,
-        "endOffset": 710,
+        "endLine": 28,
+        "endOffset": 779,
         "file": "crosstl-out/cgl/SpriteEffect.cgl",
         "length": 63,
-        "line": 23,
-        "offset": 647
+        "line": 27,
+        "offset": 716
       },
       "original": {
         "column": 1,

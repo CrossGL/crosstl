@@ -27,11 +27,6 @@ DIRECTX_DEFAULT_ENTRY_PROFILES = (
 DIRECTX_COMPILE_OVERRIDES = {
     "demos/open-source-porting/cases/diligent-samples-vrs-cube/"
     "crosstl-out/directx/CubeFDM_fs.hlsl": (("PSMain", "ps_6_4"),),
-    "demos/open-source-porting/cases/monogame-sprite-effect/"
-    "crosstl-out/directx/SpriteEffect.hlsl": (
-        ("SpriteVertexShader", "vs_6_0"),
-        ("SpritePixelShader", "ps_6_0"),
-    ),
 }
 
 

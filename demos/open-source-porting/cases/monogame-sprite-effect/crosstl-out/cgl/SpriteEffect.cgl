@@ -9,7 +9,9 @@ shader main {
     @ hlsl_program_constant
     @ register(vs, c0)
     mat4 MatrixTransform;
-    VSOutput SpriteVertexShader(vec4 position @ Position, vec4 color @ Color0, vec2 texCoord @ TexCoord0) {
+    // vertex Shader
+    vertex {
+    VSOutput SpriteVertexShader(vec4 position @ Position, vec4 color @ Color0, vec2 texCoord @ TexCoord0) @ stage_entry {
         VSOutput output;
         output.position = (position * MatrixTransform);
         output.color = color;
@@ -17,9 +19,11 @@ shader main {
         return output;
     }
 
+    }
+
     // fragment Shader
     fragment {
-    vec4 SpritePixelShader(VSOutput input) @ gl_FragData[0] {
+    vec4 SpritePixelShader(VSOutput input) @ gl_FragData[0] @ stage_entry {
         return texture(Texture, input.texCoord) * input.color;
     }
 

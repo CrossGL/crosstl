@@ -49,12 +49,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 12,
-        "endOffset": 349,
+        "endLine": 13,
+        "endOffset": 354,
         "file": "crosstl-out/directx/SpriteEffect.hlsl",
         "length": 21,
-        "line": 11,
-        "offset": 328
+        "line": 12,
+        "offset": 333
       },
       "original": {
         "column": 1,
@@ -71,12 +71,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 13,
-        "endOffset": 403,
+        "endLine": 14,
+        "endOffset": 408,
         "file": "crosstl-out/directx/SpriteEffect.hlsl",
         "length": 54,
-        "line": 12,
-        "offset": 349
+        "line": 13,
+        "offset": 354
       },
       "original": {
         "column": 1,
@@ -93,12 +93,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 14,
-        "endOffset": 429,
+        "endLine": 15,
+        "endOffset": 434,
         "file": "crosstl-out/directx/SpriteEffect.hlsl",
         "length": 26,
-        "line": 13,
-        "offset": 403
+        "line": 14,
+        "offset": 408
       },
       "original": {
         "column": 1,
@@ -115,12 +115,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 15,
-        "endOffset": 461,
+        "endLine": 16,
+        "endOffset": 466,
         "file": "crosstl-out/directx/SpriteEffect.hlsl",
         "length": 32,
-        "line": 14,
-        "offset": 429
+        "line": 15,
+        "offset": 434
       },
       "original": {
         "column": 1,
@@ -137,12 +137,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 19,
-        "endOffset": 538,
+        "endLine": 21,
+        "endOffset": 551,
         "file": "crosstl-out/directx/SpriteEffect.hlsl",
-        "length": 55,
-        "line": 18,
-        "offset": 483
+        "length": 44,
+        "line": 20,
+        "offset": 507
       },
       "original": {
         "column": 1,
@@ -159,12 +159,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 20,
-        "endOffset": 613,
+        "endLine": 22,
+        "endOffset": 626,
         "file": "crosstl-out/directx/SpriteEffect.hlsl",
         "length": 75,
-        "line": 19,
-        "offset": 538
+        "line": 21,
+        "offset": 551
       },
       "original": {
         "column": 1,

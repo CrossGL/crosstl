@@ -1,27 +1,39 @@
 #version 450 core
-out vec4 position;
-out vec4 color;
-out vec2 texCoord;
-struct VSOutput {
-    vec4 position;
-    vec4 color;
-    vec2 texCoord;
-};
-
+#ifdef GL_VERTEX_SHADER
+out vec4 out_color;
+layout(location = 5) out vec2 out_texCoord;
+#endif
+#ifdef GL_FRAGMENT_SHADER
+in vec4 in_out_color;
+layout(location = 5) in vec2 in_out_texCoord;
+#endif
+#ifdef GL_VERTEX_SHADER
+layout(location = 0) in vec4 position;
+#endif
+#ifdef GL_VERTEX_SHADER
+in vec4 color;
+#endif
+#ifdef GL_VERTEX_SHADER
+layout(location = 5) in vec2 texCoord;
+#endif
 layout(binding = 0) uniform sampler2D Texture;
 uniform mat4 MatrixTransform;
-VSOutput SpriteVertexShader(vec4 position, vec4 color, vec2 texCoord) {
-    VSOutput output_;
-    output_.position = (position * MatrixTransform);
-    output_.color = color;
-    output_.texCoord = texCoord;
-    return output_;
-}
-
-// Fragment Shader
-vec4 SpritePixelShader(VSOutput input_) {
-    return (texture(Texture, input_.texCoord) * input_.color);
-}
-
+#ifdef GL_VERTEX_SHADER
+// Vertex Shader
 void main() {
+    gl_Position = (position * MatrixTransform);
+    out_color = color;
+    out_texCoord = texCoord;
+    return;
 }
+
+#endif
+#ifdef GL_FRAGMENT_SHADER
+// Fragment Shader
+layout(location = 0) out vec4 fragColor;
+void main() {
+    fragColor = (texture(Texture, in_out_texCoord) * in_out_color);
+    return;
+}
+
+#endif

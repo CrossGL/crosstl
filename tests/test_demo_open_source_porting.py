@@ -209,9 +209,8 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
         "demos/open-source-porting/cases/monogame-sprite-effect/"
         "crosstl-out/directx/SpriteEffect.hlsl"
     )
-    assert (sprite_path, "SpriteVertexShader", "vs_6_0") in directx_jobs
-    assert (sprite_path, "SpritePixelShader", "ps_6_0") in directx_jobs
-    assert (sprite_path, "PSMain", "ps_6_0") not in directx_jobs
+    assert (sprite_path, "VSMain", "vs_6_0") in directx_jobs
+    assert (sprite_path, "PSMain", "ps_6_0") in directx_jobs
 
 
 def test_open_source_demo_artifact_comparison_normalizes_platform_text(tmp_path):

@@ -4,23 +4,133 @@
     {
       "generated": {
         "column": 1,
-        "endColumn": 14,
-        "endLine": 77,
-        "endOffset": 1932,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 574,
         "file": "crosstl-out/vulkan/SpriteEffect.spvasm",
-        "length": 1932,
-        "line": 1,
-        "offset": 0
+        "length": 60,
+        "line": 18,
+        "offset": 514
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 47,
-        "endOffset": 1100,
+        "endLine": 36,
+        "endOffset": 855,
         "file": "SpriteEffect.fx",
-        "length": 1100,
-        "line": 1,
-        "offset": 0
+        "length": 26,
+        "line": 35,
+        "offset": 829
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 637,
+        "file": "crosstl-out/vulkan/SpriteEffect.spvasm",
+        "length": 63,
+        "line": 19,
+        "offset": 574
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 37,
+        "endOffset": 887,
+        "file": "SpriteEffect.fx",
+        "length": 32,
+        "line": 36,
+        "offset": 855
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 742,
+        "file": "crosstl-out/vulkan/SpriteEffect.spvasm",
+        "length": 40,
+        "line": 22,
+        "offset": 702
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 44,
+        "endOffset": 1032,
+        "file": "SpriteEffect.fx",
+        "length": 66,
+        "line": 43,
+        "offset": 966
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 804,
+        "file": "crosstl-out/vulkan/SpriteEffect.spvasm",
+        "length": 43,
+        "line": 24,
+        "offset": 761
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 44,
+        "endOffset": 1032,
+        "file": "SpriteEffect.fx",
+        "length": 66,
+        "line": 43,
+        "offset": 966
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 970,
+        "file": "crosstl-out/vulkan/SpriteEffect.spvasm",
+        "length": 48,
+        "line": 29,
+        "offset": 922
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 44,
+        "endOffset": 1032,
+        "file": "SpriteEffect.fx",
+        "length": 66,
+        "line": 43,
+        "offset": 966
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 1021,
+        "file": "crosstl-out/vulkan/SpriteEffect.spvasm",
+        "length": 51,
+        "line": 30,
+        "offset": 970
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 44,
+        "endOffset": 1032,
+        "file": "SpriteEffect.fx",
+        "length": 66,
+        "line": 43,
+        "offset": 966
       }
     }
   ],

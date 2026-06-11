@@ -88,28 +88,6 @@
         "line": 35,
         "offset": 1732
       }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 69,
-        "endOffset": 1870,
-        "file": "crosstl-out/vulkan/main.spvasm",
-        "length": 22,
-        "line": 68,
-        "offset": 1848
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 36,
-        "endOffset": 1790,
-        "file": "main.hip",
-        "length": 58,
-        "line": 35,
-        "offset": 1732
-      }
     }
   ],
   "schemaVersion": 1
