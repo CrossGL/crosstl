@@ -80,6 +80,60 @@ def test_wgsl_codegen_emits_vertex_and_fragment_entry_points():
     assert "return vec4<f32>(input.uv, 0.0, 1.0);" in generated
 
 
+def test_wgsl_codegen_narrows_vec4_assignment_to_vec3_with_swizzle():
+    shader = """
+    shader WGSLVectorNarrowAssignment {
+        cbuffer Uniforms {
+            mat4 matModel;
+        };
+        struct VSInput {
+            vec3 vertexPosition @ POSITION;
+        };
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            vec3 fragPosition @ TEXCOORD0;
+        };
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.position = vec4(input.vertexPosition, 1.0);
+                output.fragPosition = matModel * vec4(input.vertexPosition, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "output.fragPosition = "
+        "(_Uniforms.matModel * vec4<f32>(input.vertexPosition, 1.0)).xyz;"
+        in generated
+    )
+    assert "vec3<f32>((_Uniforms.matModel *" not in generated
+
+
+def test_wgsl_codegen_narrows_vec4_constructor_argument_to_vec3_swizzle():
+    shader = """
+    shader WGSLVectorNarrowConstructor {
+        vertex {
+            vec4 main(vec4 position @ POSITION) @ gl_Position {
+                vec3 implicit = vec3(position);
+                vec3 typed = vec3<f32>(position);
+                return vec4(implicit + typed, position.w);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var implicit: vec3<f32> = position.xyz;" in generated
+    assert "var typed: vec3<f32> = position.xyz;" in generated
+    assert "vec3<f32>(position)" not in generated
+
+
 def test_wgsl_codegen_preserves_explicit_io_attributes():
     shader = """
     shader WGSLExplicitAttributes {

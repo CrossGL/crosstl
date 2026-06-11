@@ -610,6 +610,153 @@ def test_translate_project_glslang_spec_constant_vertex_to_directx(tmp_path):
     assert "foo(input.ucol, input, output);" in generated
 
 
+def test_translate_project_glsl_overloaded_vector_helper_to_mojo(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "linear_to_srgb.frag").write_text(
+        textwrap.dedent("""
+        #version 450
+        layout(binding = 0) uniform sampler2D tex;
+        layout(location = 0) in vec2 texcoord;
+        layout(location = 0) out vec4 fragColor;
+
+        float linearToSrgb(float color) {
+            return color;
+        }
+        vec3 linearToSrgb(vec3 color) {
+            return color;
+        }
+        vec4 linearToSrgb(vec4 color) {
+            return color;
+        }
+
+        void main() {
+            vec3 light = vec3(0.5);
+            fragColor = linearToSrgb(light * texture(tex, texcoord.xy));
+        }
+        """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+        [project]
+        source_roots = ["shaders"]
+        include = ["shaders/*.frag"]
+        targets = ["mojo"]
+        output_dir = "translated"
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo), format_output=False)
+    payload = report.to_json()
+    generated = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert not [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if "Invalid aggregate target" in diagnostic.get("message", "")
+    ]
+    assert "fragColor = linearToSrgb((light * sample(tex," in generated
+
+
+def test_translate_project_mojo_gpu_vector_add_filters_host_runtime(tmp_path):
+    repo = tmp_path / "repo"
+    kernel_dir = repo / "kernels"
+    kernel_dir.mkdir(parents=True)
+    (kernel_dir / "vector_addition.mojo").write_text(
+        textwrap.dedent("""
+        from std.math import ceildiv
+        from std.sys import has_accelerator
+        from std.gpu.host import DeviceContext
+        from std.gpu import block_dim, block_idx, thread_idx
+        from layout import TileTensor, row_major
+
+        alias float_dtype = DType.float32
+        alias vector_size = 1000
+        alias layout = row_major[vector_size]()
+        alias block_size = 256
+        alias num_blocks = ceildiv(vector_size, block_size)
+
+        fn vector_addition(
+            lhs_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+            rhs_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+            out_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+        ):
+            var tid = block_idx.x * block_dim.x + thread_idx.x
+            if tid < vector_size:
+                out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid]
+
+        fn main():
+            if not has_accelerator():
+                print("No compatible GPU found")
+            else:
+                ctx = DeviceContext()
+                lhs_device_buffer = ctx.enqueue_create_buffer[float_dtype](vector_size)
+                rhs_device_buffer = ctx.enqueue_create_buffer[float_dtype](vector_size)
+                result_device_buffer = ctx.enqueue_create_buffer[float_dtype](vector_size)
+                lhs_tensor = TileTensor(lhs_device_buffer, layout)
+                rhs_tensor = TileTensor(rhs_device_buffer, layout)
+                result_tensor = TileTensor(result_device_buffer, layout)
+                ctx.enqueue_function[vector_addition](
+                    lhs_tensor,
+                    rhs_tensor,
+                    result_tensor,
+                    grid_dim=num_blocks,
+                    block_dim=block_size,
+                )
+                print("Result vector:", result_device_buffer)
+        """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+        [project]
+        source_roots = ["kernels"]
+        include = ["kernels/*.mojo"]
+        targets = ["opengl", "metal", "vulkan"]
+        output_dir = "translated"
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo), format_output=False)
+    payload = report.to_json()
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["migration"]["actionsByKind"] == {"manual-runtime-integration": 1}
+
+    generated = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+    for source in generated.values():
+        for host_token in (
+            "has_accelerator",
+            "DeviceContext",
+            "enqueue_function",
+            "enqueue_create_buffer",
+            "print",
+            "num_blocks",
+            "block_size",
+        ):
+            assert host_token not in source
+
+    assert "layout(std430, binding = 0) buffer lhs_tensorBuffer" in generated["opengl"]
+    assert "out_tensor[tid] = (lhs_tensor[tid] + rhs_tensor[tid]);" in generated[
+        "opengl"
+    ]
+    assert "kernel void vector_addition" in generated["metal"]
+    assert "out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid];" in generated["metal"]
+    assert 'OpEntryPoint GLCompute' in generated["vulkan"]
+    assert '"vector_addition"' in generated["vulkan"]
+
+
 @pytest.mark.parametrize("target_backend", ("opengl", "metal"))
 def test_translate_project_lowers_slang_default_parameter_calls(
     tmp_path, target_backend
@@ -7891,6 +8038,144 @@ def test_validate_project_report_fails_placeholder_marker_without_diagnostic(
     }
 
 
+def test_translate_project_rust_sampled_texture_uses_entry_resource_parameters(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "sampled.cgl").write_text(
+        textwrap.dedent("""
+            shader ProjectRustSampledTexture {
+                sampler2D colorMap @set(1) @binding(2);
+                sampler linearSampler @set(1) @binding(3);
+
+                fragment {
+                    vec4 main(vec2 uv) @ gl_FragColor {
+                        return texture(colorMap, linearSampler, uv);
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["rust"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    output = repo / "translated" / "rust" / "shaders" / "sampled.rs"
+
+    assert output.exists()
+    rust_code = output.read_text(encoding="utf-8")
+    assert payload["summary"]["translatedCount"] == 1
+    assert (
+        "// CrossGL resource metadata: name=colorMap kind=texture set=1 "
+        "binding=2 binding_source=explicit" in rust_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=linearSampler kind=sampler set=1 "
+        "binding=3 binding_source=explicit" in rust_code
+    )
+    assert (
+        '#[cfg_attr(feature = "crossgl_gpu", '
+        "spirv(descriptor_set = 1, binding = 2))] colorMap: Texture2D<f32>"
+        in rust_code
+    )
+    assert (
+        '#[cfg_attr(feature = "crossgl_gpu", '
+        "spirv(descriptor_set = 1, binding = 3))] linearSampler: Sampler"
+        in rust_code
+    )
+    assert "return sample_sampler(colorMap, linearSampler, uv);" in rust_code
+    assert "CrossGL Rust limitation: resource colorMap" not in rust_code
+    assert "CrossGL Rust limitation: resource linearSampler" not in rust_code
+    assert "static COLOR_MAP" not in rust_code
+    assert "static LINEAR_SAMPLER" not in rust_code
+    assert not [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == project_pipeline.GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE
+        and diagnostic.get("target") == "rust"
+    ]
+
+
+def test_translate_project_rust_storage_buffer_placeholder_has_report_diagnostic(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "storage.cgl").write_text(
+        textwrap.dedent("""
+            shader ProjectRustStorageBuffer {
+                RWStructuredBuffer<int> values @binding(0);
+
+                compute {
+                    void main(uint index) {
+                        int value = buffer_load(values, index);
+                        buffer_store(values, index, value + 1);
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["rust"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    output = repo / "translated" / "rust" / "shaders" / "storage.rs"
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    placeholder_diagnostics = [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == project_pipeline.GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE
+        and diagnostic.get("target") == "rust"
+    ]
+
+    assert output.exists()
+    rust_code = output.read_text(encoding="utf-8")
+    assert "CrossGL Rust limitation: resource values" in rust_code
+    assert "static VALUES: std::sync::LazyLock<RWStructuredBuffer<i32>>" in rust_code
+    assert len(placeholder_diagnostics) == 1
+    assert placeholder_diagnostics[0]["location"]["file"] == (
+        "translated/rust/shaders/storage.rs"
+    )
+    assert "rust-gpu resource binding" in placeholder_diagnostics[0]["message"]
+    assert validate_project_report(report_path)["success"] is True
+
+    missing_payload = copy.deepcopy(payload)
+    _clear_report_diagnostics(missing_payload)
+    missing_report_path = repo / "translated" / "missing-storage-diagnostic.json"
+    missing_report_path.write_text(json.dumps(missing_payload), encoding="utf-8")
+    missing_validation = validate_project_report(missing_report_path)
+
+    assert missing_validation["success"] is False
+    assert (
+        missing_validation["diagnosticsByCode"][
+            project_pipeline.PLACEHOLDER_DIAGNOSTIC_MISSING_CODE
+        ]
+        == 1
+    )
+
+
 def test_translate_project_filters_invalid_include_dirs_before_frontend(
     tmp_path, monkeypatch
 ):
@@ -10019,6 +10304,7 @@ def test_translate_project_opengl_materializes_mlx_accumulator_template_default(
                 "T": "source-instantiation",
             },
             "source": "source-instantiation",
+            "hostName": "softmaxfloat32",
         },
         {
             "name": "reduce_acc",
@@ -10037,6 +10323,151 @@ def test_translate_project_opengl_materializes_mlx_accumulator_template_default(
     assert "float tmp = reduce_acc_float_float(in_[gid]);" in output
     assert not re.search(r"\b(?:T|AccT)\b", output)
     assert "typename" not in output
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_opengl_materializes_mlx_softmax_implicit_helper(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "softmax.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_softmax(name, type) \\
+                instantiate_kernel("softmax" #name, softmax, type, float)
+
+            template <typename T>
+            inline T softmax_exp(T x) {
+                return x;
+            }
+
+            template <typename T, typename AccT = T>
+            [[kernel]] void softmax(
+                const device T* in [[buffer(0)]],
+                device T* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                AccT maxval = AccT(in[gid]);
+                AccT exp_x = softmax_exp(maxval);
+                out[gid] = T(exp_x);
+            }
+
+            instantiate_softmax(int32, int)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["specializations"] == [
+        {
+            "name": "softmax",
+            "materializedName": "softmaxint32",
+            "parameters": {"AccT": "float", "T": "int"},
+            "parameterSources": {
+                "AccT": "source-instantiation",
+                "T": "source-instantiation",
+            },
+            "source": "source-instantiation",
+            "hostName": "softmaxint32",
+        },
+        {
+            "name": "softmax_exp",
+            "materializedName": "softmax_exp_float",
+            "parameters": {"T": "float"},
+            "parameterSources": {"T": "call-site"},
+            "source": "call-site",
+        },
+    ]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "float softmax_exp_float(float x)" in output
+    assert "float exp_x = softmax_exp_float(maxval);" in output
+    assert not re.search(r"\b(?:T|AccT)\b", output)
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_opengl_inlines_mlx_ordering_dependent_aliases(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "sort.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_sort(name, type) \\
+                instantiate_kernel("sort" #name, block_sort, type)
+
+            template <typename T>
+            struct SortKernel {
+                using ValT = T;
+                using IdxT = uint;
+                static constexpr constant int N_PER_BLOCK = 4;
+            };
+
+            template <typename T>
+            [[kernel]] void block_sort(
+                const device T* inp [[buffer(0)]],
+                device uint* out_idxs [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                using sort_kernel = SortKernel<T>;
+                using ValT = typename sort_kernel::ValT;
+                using IdxT = typename sort_kernel::IdxT;
+                threadgroup ValT vals[sort_kernel::N_PER_BLOCK];
+                threadgroup IdxT idxs[sort_kernel::N_PER_BLOCK];
+                vals[gid] = inp[gid];
+                idxs[gid] = IdxT(gid);
+                out_idxs[gid] = idxs[gid];
+            }
+
+            instantiate_sort(float32, float)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "float vals[4];" in output
+    assert "uint idxs[4];" in output
+    assert "sort_kernel" not in output
+    assert "IdxT" not in output
+    assert "ValT" not in output
     assert_compute_glsl_validates_if_available(output, tmp_path)
 
 
@@ -10100,6 +10531,7 @@ def test_translate_project_opengl_materializes_mlx_auxiliary_template_default(
                 "U": "source-default",
             },
             "source": "source-instantiation",
+            "hostName": "attentionfloat32",
         },
         {
             "name": "read_aux",
@@ -10187,6 +10619,7 @@ def test_translate_project_opengl_materializes_quantized_local_template_alias(
                 "group_size": "source-instantiation",
             },
             "source": "source-instantiation",
+            "hostName": "affine_quantize_float_gs_16_b_4",
         },
         {
             "name": "get_pack_factor",
@@ -10278,6 +10711,7 @@ def test_translate_project_opengl_materializes_fft_auxiliary_template_alias(
                 "tg_mem_size": "source-instantiation",
             },
             "source": "source-instantiation",
+            "hostName": "four_step_mem_256_float_float",
         }
     ]
     output = (repo / artifact["path"]).read_text(encoding="utf-8")
@@ -10365,6 +10799,7 @@ def test_translate_project_opengl_materializes_masked_gemv_local_kernel_alias(
                 "out_mask_t": "source-instantiation",
             },
             "source": "source-instantiation",
+            "hostName": "gemv_masked_float_bool_uint",
         }
     ]
     output = (repo / artifact["path"]).read_text(encoding="utf-8")
@@ -10377,6 +10812,340 @@ def test_translate_project_opengl_materializes_masked_gemv_local_kernel_alias(
     assert "GEMVKernel<" not in output
     assert not re.search(r"\b(?:T|out_mask_t|op_mask_t|BM|BN)\b", output)
     assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_opengl_propagates_steel_conv_helper_template_binding(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "steel_conv_general.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_conv(name, type) \\
+                instantiate_kernel("steel_conv_" #name, steel_conv_general, type)
+
+            template <typename T>
+            METAL_FUNC T load_window_value(T value, uint offset) {
+                return value + T(offset);
+            }
+
+            template <typename T>
+            [[kernel]] void steel_conv_general(
+                device const T* src [[buffer(0)]],
+                device T* dst [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                T value = load_window_value(src[gid], gid);
+                dst[gid] = value;
+            }
+
+            instantiate_conv(float32, float)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["specializations"] == [
+        {
+            "name": "steel_conv_general",
+            "materializedName": "steel_conv_float32",
+            "parameters": {"T": "float"},
+            "parameterSources": {"T": "source-instantiation"},
+            "source": "source-instantiation",
+            "hostName": "steel_conv_float32",
+        },
+        {
+            "name": "load_window_value",
+            "materializedName": "load_window_value_float",
+            "parameters": {"T": "float"},
+            "parameterSources": {"T": "source-instantiation"},
+            "source": "source-instantiation",
+        },
+    ]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "float load_window_value_float(float value, uint offset)" in output
+    assert "float value = load_window_value_float(src[gid], gid);" in output
+    assert "load_window_value<" not in output
+    assert not re.search(r"\bT\b", output)
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_opengl_propagates_steel_gemm_accumulator_binding(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "steel_gemm_splitk.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_gemm(name, type) \\
+                instantiate_kernel("steel_gemm_" #name, steel_gemm_splitk, type)
+
+            template <typename U>
+            struct DefaultAccT {
+                using type = float;
+            };
+
+            template <typename T, typename AccT>
+            METAL_FUNC AccT accumulate_tile(AccT acc, T value) {
+                return acc + AccT(value);
+            }
+
+            template <typename T, typename AccT = typename DefaultAccT<T>::type>
+            [[kernel]] void steel_gemm_splitk(
+                device const T* lhs [[buffer(0)]],
+                device AccT* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                AccT acc = AccT(0);
+                acc = accumulate_tile(acc, lhs[gid]);
+                out[gid] = acc;
+            }
+
+            instantiate_gemm(float32, float)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["specializations"] == [
+        {
+            "name": "steel_gemm_splitk",
+            "materializedName": "steel_gemm_float32",
+            "parameters": {"AccT": "float", "T": "float"},
+            "parameterSources": {
+                "AccT": "source-default",
+                "T": "source-instantiation",
+            },
+            "source": "source-instantiation",
+            "hostName": "steel_gemm_float32",
+        },
+        {
+            "name": "accumulate_tile",
+            "materializedName": "accumulate_tile_float_float",
+            "parameters": {"AccT": "float", "T": "float"},
+            "parameterSources": {
+                "AccT": "source-default",
+                "T": "source-instantiation",
+            },
+            "source": "source-default",
+        },
+    ]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "float accumulate_tile_float_float(float acc, float value)" in output
+    assert "acc = accumulate_tile_float_float(acc, lhs[gid]);" in output
+    assert "accumulate_tile<" not in output
+    assert not re.search(r"\b(?:T|AccT)\b", output)
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_metal_project_materialization_concretizes_steel_attention_tile_helper(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    source = textwrap.dedent("""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        #define instantiate_attn(name, type, bq, bk) \\
+            instantiate_kernel("steel_attention_" #name, attention, type, bq, bk, float)
+
+        template <typename T, int M, int N, typename Frag>
+        struct Tile {
+            T value;
+        };
+
+        template <
+            typename Dtype,
+            typename Atype,
+            typename Btype,
+            int M,
+            int N,
+            int K,
+            typename FragD,
+            typename FragA,
+            typename FragB,
+            typename FragC>
+        METAL_FUNC void tile_matmad(
+            thread Tile<Dtype, M, N, FragD>& D,
+            thread Tile<Atype, M, K, FragA>& A,
+            thread Tile<Btype, K, N, FragB>& B,
+            thread Tile<Dtype, M, N, FragC>& C) {
+            D.value = A.value + B.value + C.value;
+        }
+
+        template <typename T, int BQ, int BK, typename AccumType = float>
+        [[kernel]] void attention(
+            device const T* src [[buffer(0)]],
+            device T* dst [[buffer(1)]],
+            uint gid [[thread_position_in_grid]]) {
+            constexpr int kFragSize = 8;
+            constexpr int kWarps = 4;
+            constexpr int TQ = BQ / (kWarps * kFragSize);
+            constexpr int TK = BK / kFragSize;
+            using Frag = Tile<AccumType, kFragSize, kFragSize, int>;
+            Tile<AccumType, TQ, 1, Frag> Qtile;
+            Tile<AccumType, 1, TK, Frag> Ktile;
+            Tile<AccumType, TQ, TK, Frag> Stile;
+            Qtile.value = AccumType(src[gid]);
+            Ktile.value = AccumType(src[gid]);
+            Stile.value = AccumType(0);
+            tile_matmad(Stile, Qtile, Ktile, Stile);
+            dst[gid] = T(Stile.value);
+        }
+
+        instantiate_attn(float32, float, 32, 16)
+        """).strip() + "\n"
+    source_path = shader_dir / "steel_attention.metal"
+    source_path.write_text(source, encoding="utf-8")
+    unit = project_pipeline.ProjectTranslationUnit(
+        path=source_path,
+        relative_path="shaders/steel_attention.metal",
+        source_backend="metal",
+        extension=".metal",
+        source_hash={"sha256": "test"},
+        source_size_bytes=len(source.encode("utf-8")),
+    )
+
+    materialized = project_pipeline._project_template_materialization_for_artifact(
+        unit=unit,
+        target="opengl",
+        variant=None,
+        defines={},
+        define_sources={},
+        include_paths=[],
+        source_options={},
+    )
+
+    assert materialized is not None
+    assert list(materialized.diagnostics) == []
+    specializations = {
+        record["name"]: record for record in materialized.metadata["specializations"]
+    }
+    assert specializations["tile_matmad"]["parameters"] == {
+        "Atype": "float",
+        "Btype": "float",
+        "Dtype": "float",
+        "FragA": "Tile<float,8,8,int>",
+        "FragB": "Tile<float,8,8,int>",
+        "FragC": "Tile<float,8,8,int>",
+        "FragD": "Tile<float,8,8,int>",
+        "K": "1",
+        "M": "1",
+        "N": "2",
+    }
+    assert "tile_matmad_float_float_float_1_2_1" in materialized.text
+    assert not re.search(r"\btile_matmad\s*\(", materialized.text)
+
+
+def test_metal_project_materialization_concretizes_steel_attention_load_helper(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    source = textwrap.dedent("""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        #define instantiate_attn(name, type, rows, cols) \\
+            instantiate_kernel("steel_attention_nax_" #name, attention_nax, type, rows, cols)
+
+        template <typename T, int Rows, int Cols>
+        struct LoadTile {
+            T value;
+        };
+
+        template <typename T, int Rows, int Cols>
+        METAL_FUNC void load(thread LoadTile<T, Rows, Cols>& tile, T value) {
+            tile.value = value;
+        }
+
+        template <typename T, int BQ, int BK>
+        [[kernel]] void attention_nax(
+            device const T* src [[buffer(0)]],
+            device T* dst [[buffer(1)]],
+            uint gid [[thread_position_in_grid]]) {
+            constexpr int Rows = BQ / 32;
+            constexpr int Cols = BK / 16;
+            using qtile_t = LoadTile<T, Rows, Cols>;
+            qtile_t tile;
+            load(tile, src[gid]);
+            dst[gid] = tile.value;
+        }
+
+        instantiate_attn(float32, float, 64, 32)
+        """).strip() + "\n"
+    source_path = shader_dir / "steel_attention_nax.metal"
+    source_path.write_text(source, encoding="utf-8")
+    unit = project_pipeline.ProjectTranslationUnit(
+        path=source_path,
+        relative_path="shaders/steel_attention_nax.metal",
+        source_backend="metal",
+        extension=".metal",
+        source_hash={"sha256": "test"},
+        source_size_bytes=len(source.encode("utf-8")),
+    )
+
+    materialized = project_pipeline._project_template_materialization_for_artifact(
+        unit=unit,
+        target="opengl",
+        variant=None,
+        defines={},
+        define_sources={},
+        include_paths=[],
+        source_options={},
+    )
+
+    assert materialized is not None
+    assert list(materialized.diagnostics) == []
+    specializations = {
+        record["name"]: record for record in materialized.metadata["specializations"]
+    }
+    assert specializations["load"]["parameters"] == {
+        "Cols": "2",
+        "Rows": "2",
+        "T": "float",
+    }
+    assert "load_float_2_2(tile, src[gid]);" in materialized.text
+    assert not re.search(r"\bload\s*\(", materialized.text)
 
 
 def test_translate_project_opengl_missing_accumulator_template_diagnostic(
@@ -25067,6 +25836,84 @@ def test_translate_project_resolves_mlx_sort_vulkan_storage_buffer_overload(
     assert payload["diagnostics"] == []
 
 
+def test_translate_project_resolves_mlx_metal_vulkan_storage_buffer_template_overloads(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "broadcast_overloads.metal"
+    source_path.write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            uint elem_to_loc_broadcast(
+                const device T* source,
+                uint index
+            ) {
+                return uint(source[index]) + index;
+            }
+
+            template <typename T>
+            uint elem_to_loc_broadcast(
+                const device T* source,
+                const device uint* strides,
+                uint index
+            ) {
+                return uint(source[index]) + strides[0] + index;
+            }
+
+            kernel void launch(
+                const device float* weights [[buffer(0)]],
+                const device uint* strides [[buffer(1)]],
+                device uint* out [[buffer(2)]],
+                uint3 gid [[thread_position_in_grid]]
+            ) {
+                uint index = gid.x;
+                uint first = elem_to_loc_broadcast(weights, index);
+                uint second = elem_to_loc_broadcast(weights, strides, index);
+                out[index] = first + second;
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["vulkan"], output_dir="out").to_json()
+
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+    assert payload["diagnosticCounts"]["error"] == 0
+    assert payload["diagnostics"] == []
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["target"] == "vulkan"
+    assert artifact["source"] == "broadcast_overloads.metal"
+    materialization = artifact["templateMaterialization"]
+    assert materialization["status"] == "materialized"
+    materialized_names = [
+        record["materializedName"]
+        for record in materialization["specializations"]
+        if record["name"] == "elem_to_loc_broadcast"
+    ]
+    assert len(materialized_names) == 2
+    assert len(set(materialized_names)) == 2
+
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "elem_to_loc_broadcast" not in generated
+    assert "OpFunctionCall" not in generated
+    assert "storage-buffer-function-overload" not in generated
+    assert "WARNING" not in generated
+    assert "DescriptorSet 0" in generated
+    for binding in ("Binding 0", "Binding 1", "Binding 2"):
+        assert binding in generated
+    assert_spirv_asm_validates_if_available(generated, tmp_path)
+
+
 def test_translate_project_resolves_mlx_sort_reference_thread_ids_for_vulkan(
     tmp_path,
 ):
@@ -35058,6 +35905,100 @@ def test_translate_project_opencl_targets_do_not_leak_resource_parameter_syntax(
     assert "kernel void kernel_scale(" in outputs["metal"]
 
 
+def test_translate_project_cuda_pointer_parameters_lower_to_opengl_buffers(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "vectorAdd.cu").write_text(
+        textwrap.dedent("""
+            extern "C" __global__ void vectorAdd(const float *A,
+                                                  const float *B,
+                                                  float *C,
+                                                  int numElements) {
+                int i = blockDim.x * blockIdx.x + threadIdx.x;
+                if (i < numElements) {
+                    C[i] = A[i] + B[i];
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("opengl", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "layout(std430, binding = 0) buffer ABuffer { float A[]; };" in output
+    assert "layout(std430, binding = 1) buffer BBuffer { float B[]; };" in output
+    assert "layout(std430, binding = 2) buffer CBuffer { float C[]; };" in output
+    assert "uniform vectorAdd_numElements_Args" in output
+    assert "void main()" in output
+    assert "void vectorAdd(float A[]" not in output
+    assert "float A[], float B[]" not in output
+
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_hip_pointer_parameters_lower_to_opengl_buffers(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "add_kernel.hip").write_text(
+        textwrap.dedent("""
+            #include <hip/hip_runtime.h>
+
+            __global__ void addKernel(const float *A,
+                                      const float *B,
+                                      float *C,
+                                      int N) {
+                int i = hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x;
+                if (i < N) {
+                    C[i] = A[i] + B[i];
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("opengl", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert (
+        "layout(std430, binding = 0) readonly buffer ABuffer { float A[]; };"
+        in output
+    )
+    assert (
+        "layout(std430, binding = 1) readonly buffer BBuffer { float B[]; };"
+        in output
+    )
+    assert "layout(std430, binding = 2) buffer CBuffer { float C[]; };" in output
+    assert "layout(std140, binding = 3) uniform addKernel_N_Args" in output
+    assert "void main()" in output
+    assert "void addKernel(float A[]" not in output
+    assert "float A[], float B[]" not in output
+
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
 def test_translate_project_opencl_directx_allocates_generated_parameter_bindings(
     tmp_path,
 ):
@@ -35333,6 +36274,119 @@ def test_translate_project_metal_matmul_device_buffers_do_not_emit_directx_param
     assert "void CSMain(float*" not in output
 
 
+def test_translate_project_metal_matmul_uint2_grid_id_normalizes_for_compute_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "matmul.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct MatMulParams {
+                uint row_dim_x;
+                uint col_dim_x;
+                uint inner_dim;
+            };
+
+            kernel void mat_mul_simple1(
+                constant MatMulParams& params [[buffer(0)]],
+                device const float* A [[buffer(1)]],
+                device const float* B [[buffer(2)]],
+                device float* X [[buffer(3)]],
+                uint2 id [[thread_position_in_grid]]
+            ) {
+                uint row = id.y;
+                uint col = id.x;
+                float sum = 0.0;
+
+                if (row < params.row_dim_x && col < params.col_dim_x) {
+                    for (uint inner = 0; inner < params.inner_dim; inner++) {
+                        uint index_A = (row * params.inner_dim) + inner;
+                        uint index_B = (inner * params.col_dim_x) + col;
+                        sum += A[index_A] * B[index_B];
+                    }
+
+                    uint index = (row * params.col_dim_x) + col;
+                    X[index] = sum;
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["cuda", "hip", "mojo", "rust", "slang"],
+        output_dir="out",
+        validate=True,
+    ).to_json()
+
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticCounts"]["error"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("cuda", "translated"),
+        ("hip", "translated"),
+        ("mojo", "translated"),
+        ("rust", "translated"),
+        ("slang", "translated"),
+    }
+
+    outputs = {
+        artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in payload["artifacts"]
+    }
+
+    cuda = outputs["cuda"]
+    assert (
+        'extern "C" __global__ void mat_mul_simple1(const MatMulParams& params, '
+        "const float* A, const float* B, float* X)"
+    ) in cuda
+    assert "uint row = (blockIdx.y * blockDim.y + threadIdx.y);" in cuda
+    assert "uint col = (blockIdx.x * blockDim.x + threadIdx.x);" in cuda
+    assert "uint2 id" not in cuda
+
+    hip = outputs["hip"]
+    assert (
+        "__global__ void mat_mul_simple1(const MatMulParams& params, "
+        "const float* A, const float* B, float* X)"
+    ) in hip
+    assert "unsigned int row = (blockIdx.y * blockDim.y + threadIdx.y);" in hip
+    assert "unsigned int col = (blockIdx.x * blockDim.x + threadIdx.x);" in hip
+    assert "uint2 id" not in hip
+
+    mojo = outputs["mojo"]
+    assert "id_globalInvocationID: SIMD[DType.uint32, 4]" in mojo
+    assert (
+        "var id: SIMD[DType.uint32, 2] = "
+        "SIMD[DType.uint32, 2](id_globalInvocationID[0], "
+        "id_globalInvocationID[1])"
+    ) in mojo
+    assert "var row: UInt32 = id[1]" in mojo
+    assert "var col: UInt32 = id[0]" in mojo
+
+    rust = outputs["rust"]
+    assert "id_globalInvocationID: Vec3<u32>" in rust
+    assert (
+        "let id: Vec2<u32> = "
+        "Vec2::<u32>::new(id_globalInvocationID.x, id_globalInvocationID.y);"
+    ) in rust
+    assert "let row: u32 = id.y;" in rust
+    assert "let col: u32 = id.x;" in rust
+
+    slang = outputs["slang"]
+    assert "uint3 id_dispatchThreadID : SV_DispatchThreadID" in slang
+    assert "uint2 id = id_dispatchThreadID.xy;" in slang
+    assert "uint row = id.y;" in slang
+    assert "uint col = id.x;" in slang
+
+    for output in outputs.values():
+        assert "thread_position_in_grid" not in output
+
+
 def test_translate_project_metal_matmul_buffers_lower_to_wgsl_resources(
     tmp_path,
 ):
@@ -35536,7 +36590,7 @@ def test_translate_project_metal_opengl_disambiguates_constant_value_members(
     assert "Ambiguous cbuffer member" not in output
     assert (
         "layout(std140, binding = 1) uniform first_value_Args {\n"
-        "    float value;\n"
+        "    float first_value_Args_value;\n"
         "};"
     ) in output
     assert (
@@ -35544,9 +36598,70 @@ def test_translate_project_metal_opengl_disambiguates_constant_value_members(
         "    float second_value_Args_value;\n"
         "};"
     ) in output
-    assert output.count("float value;") == 1
-    assert "out_[0] = value;" in output
+    assert "float value;" not in output
+    assert "out_[0] = first_value_Args_value;" in output
     assert "second_out[0] = (second_value_Args_value + 1.0);" in output
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_metal_opengl_scopes_mlx_style_constant_value_members(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "gemv.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void gemv_a(device float* out [[buffer(0)]],
+                               constant float& alpha [[buffer(1)]],
+                               constant float& beta [[buffer(2)]],
+                               constant uint& batch_ndim [[buffer(3)]]) {
+                out[0] = alpha + beta + float(batch_ndim);
+            }
+
+            kernel void gemv_b(device float* out [[buffer(4)]],
+                               constant float& alpha [[buffer(5)]],
+                               constant float& beta [[buffer(6)]],
+                               constant uint& batch_ndim [[buffer(7)]]) {
+                out[0] = alpha * beta + float(batch_ndim);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("opengl", "translated")}
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "float alpha;" not in output
+    assert "float beta;" not in output
+    assert "uint batch_ndim;" not in output
+    assert "float gemv_a_alpha_Args_alpha;" in output
+    assert "float gemv_a_beta_Args_beta;" in output
+    assert "uint gemv_a_batch_ndim_Args_batch_ndim;" in output
+    assert "float gemv_b_alpha_Args_alpha;" in output
+    assert "float gemv_b_beta_Args_beta;" in output
+    assert "uint gemv_b_batch_ndim_Args_batch_ndim;" in output
+    assert (
+        "out_[0] = ((gemv_a_alpha_Args_alpha + gemv_a_beta_Args_beta) + "
+        "float(gemv_a_batch_ndim_Args_batch_ndim));"
+    ) in output
+    assert (
+        "gemv_b_out[0] = ((gemv_b_alpha_Args_alpha * gemv_b_beta_Args_beta) + "
+        "float(gemv_b_batch_ndim_Args_batch_ndim));"
+    ) in output
     assert_compute_glsl_validates_if_available(output, tmp_path)
 
 
@@ -36462,6 +37577,119 @@ def test_translate_project_variant_materializes_sizing_helper_calls(tmp_path):
     assert validation["success"] is True
 
 
+def test_translate_project_signature_instantiation_materializes_convolution_helpers_to_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["directx", "opengl", "vulkan"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "conv.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, int N>
+            T accumulate_window(T value) {
+                return value + T(N);
+            }
+
+            template <typename T, int N>
+            [[kernel]] void naive_unfold_Nd(
+                const device T* in [[buffer(0)]],
+                device T* out [[buffer(N)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = accumulate_window<T, N>(in[gid]);
+            }
+
+            #define instantiate_naive_unfold_nd(name, itype, n) \\
+                template [[host_name("naive_unfold_nd_" #name "_" #n)]] [[kernel]] void \\
+                naive_unfold_Nd( \\
+                    const device itype* in [[buffer(0)]], \\
+                    device itype* out [[buffer(n)]], \\
+                    uint gid [[thread_position_in_grid]]);
+
+            instantiate_naive_unfold_nd(float32, float, 2)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    expected_materialization = {
+        "status": "materialized",
+        "specializationCount": 2,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "configuredParameterSources": {},
+        "specializations": [
+            {
+                "name": "naive_unfold_Nd",
+                "materializedName": "naive_unfold_nd_float32_2",
+                "parameters": {"N": "2", "T": "float"},
+                "parameterSources": {
+                    "N": "source-instantiation",
+                    "T": "source-instantiation",
+                },
+                "source": "source-instantiation",
+                "hostName": "naive_unfold_nd_float32_2",
+            },
+            {
+                "name": "accumulate_window",
+                "materializedName": "accumulate_window_float_2",
+                "parameters": {"N": "2", "T": "float"},
+                "parameterSources": {"N": "call-site", "T": "call-site"},
+                "source": "call-site",
+            },
+        ],
+        "unsupported": [],
+    }
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+    for artifact in payload["artifacts"]:
+        assert artifact["templateMaterialization"] == expected_materialization
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        if artifact["target"] != "vulkan":
+            assert "accumulate_window_float_2" in output
+        assert "naive_unfold_Nd<" not in output
+        assert "accumulate_window<" not in output
+        assert "template <" not in output
+        assert not re.search(r"\b(?:T|N)\b", output)
+
+    opengl_artifact = next(
+        artifact for artifact in payload["artifacts"] if artifact["target"] == "opengl"
+    )
+    opengl_output = (repo / opengl_artifact["path"]).read_text(encoding="utf-8")
+    assert "layout(std430, binding = 2) buffer out_Buffer { float out_[]; };" in (
+        opengl_output
+    )
+    assert_compute_glsl_validates_if_available(opengl_output, tmp_path)
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+
+
 def test_translate_project_metal_reduction_source_instantiation_records_nontype_sources(
     tmp_path,
 ):
@@ -36535,6 +37763,262 @@ def test_translate_project_metal_reduction_source_instantiation_records_nontype_
         assert artifact["templateMaterialization"] == expected_materialization
         output = (repo / artifact["path"]).read_text(encoding="utf-8")
         assert re.search(r"\\b(?:T|Op|N_READS)\\b", output) is None
+
+
+def test_translate_project_metal_reduction_materializes_shared_helper_templates(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "arg_reduce.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_arg_reduce(name, type, op, reads) \\
+                instantiate_kernel("arg_reduce" #name, arg_reduce_general, type, op, reads)
+
+            struct AddOp {};
+
+            template <typename T, typename U>
+            T ceildiv(T N, U M) {
+                return (N + T(M) - T(1)) / T(M);
+            }
+
+            template <typename U>
+            U simd_shuffle_down(U value, uint offset) {
+                return value + U(offset);
+            }
+
+            template <typename T, typename Op, int N_READS>
+            kernel void arg_reduce_general(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                T acc = ceildiv(T(gid + N_READS), 2u);
+                out[gid] = simd_shuffle_down(acc, 1u);
+            }
+
+            instantiate_arg_reduce(_add_f32_4, float, AddOp, 4)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl", "directx", "vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    expected_materialization = {
+        "status": "materialized",
+        "specializationCount": 3,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "configuredParameterSources": {},
+        "specializations": [
+            {
+                "name": "arg_reduce_general",
+                "materializedName": "arg_reduce_add_f32_4",
+                "parameters": {
+                    "N_READS": "4",
+                    "Op": "AddOp",
+                    "T": "float",
+                },
+                "parameterSources": {
+                    "N_READS": "source-instantiation",
+                    "Op": "source-instantiation",
+                    "T": "source-instantiation",
+                },
+                "source": "source-instantiation",
+                "hostName": "arg_reduce_add_f32_4",
+            },
+            {
+                "name": "ceildiv",
+                "materializedName": "ceildiv_float_uint",
+                "parameters": {"T": "float", "U": "uint"},
+                "parameterSources": {"T": "call-site", "U": "call-site"},
+                "source": "call-site",
+            },
+            {
+                "name": "simd_shuffle_down",
+                "materializedName": "simd_shuffle_down_float",
+                "parameters": {"U": "float"},
+                "parameterSources": {"U": "call-site"},
+                "source": "call-site",
+            },
+        ],
+        "unsupported": [],
+    }
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    for artifact in payload["artifacts"]:
+        assert artifact["status"] == "translated"
+        assert artifact["templateMaterialization"] == expected_materialization
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        assert "ceildiv<" not in output
+        assert "simd_shuffle_down<" not in output
+        assert not re.search(r"\\b(?:T|U|Op|N_READS)\\b", output)
+
+
+def test_translate_project_skips_standalone_metal_template_utility_artifacts(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "common.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, typename U>
+            T ceildiv(T n, U m) {
+                return (n + T(m) - T(1)) / T(m);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "reduce.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            #include "common.metal"
+            using namespace metal;
+
+            #define instantiate_reduce(name, type) \\
+                instantiate_kernel("reduce" #name, reduce_kernel, type)
+
+            template <typename T>
+            kernel void reduce_kernel(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = ceildiv(T(gid), 2u);
+            }
+
+            instantiate_reduce(_f32, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl", "vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["skipped"] == [
+        {"path": "common.metal", "reason": "metal-template-utility"}
+    ]
+    assert payload["summary"]["unitCount"] == 1
+    assert payload["summary"]["artifactCount"] == 3
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert {artifact["source"] for artifact in payload["artifacts"]} == {
+        "reduce.metal"
+    }
+
+    for artifact in payload["artifacts"]:
+        assert artifact["status"] == "translated"
+        assert artifact["templateMaterialization"]["specializations"] == [
+            {
+                "name": "reduce_kernel",
+                "materializedName": "reduce_f32",
+                "parameters": {"T": "float"},
+                "parameterSources": {"T": "source-instantiation"},
+                "source": "source-instantiation",
+                "hostName": "reduce_f32",
+            },
+            {
+                "name": "ceildiv",
+                "materializedName": "ceildiv_float_uint",
+                "parameters": {"T": "float", "U": "uint"},
+                "parameterSources": {"T": "call-site", "U": "call-site"},
+                "source": "call-site",
+            },
+        ]
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        if artifact["target"] in {"directx", "opengl"}:
+            assert "ceildiv_float_uint" in output
+        assert "ceildiv<" not in output
+        assert not re.search(r"\\b(?:T|U)\\b", output)
+
+
+def test_translate_project_metal_norm_materializes_variadic_shared_helper(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "layer_norm.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_norm(name, type, reads) \\
+                instantiate_kernel("layer_norm" #name, layer_norm_single_row, type, reads)
+
+            template <typename T, typename... Args>
+            T pick_first(T value, Args... rest) {
+                return value;
+            }
+
+            template <typename T, int N_READS>
+            kernel void layer_norm_single_row(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                T acc = T(N_READS);
+                out[gid] = pick_first(acc, gid, 1u);
+            }
+
+            instantiate_norm(_f32_8, float, 8)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"] == {
+        "status": "materialized",
+        "specializationCount": 2,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "configuredParameterSources": {},
+        "specializations": [
+            {
+                "name": "layer_norm_single_row",
+                "materializedName": "layer_norm_f32_8",
+                "parameters": {"N_READS": "8", "T": "float"},
+                "parameterSources": {
+                    "N_READS": "source-instantiation",
+                    "T": "source-instantiation",
+                },
+                "source": "source-instantiation",
+                "hostName": "layer_norm_f32_8",
+            },
+            {
+                "name": "pick_first",
+                "materializedName": "pick_first_float_uint_uint",
+                "parameters": {"Args": "uint, uint", "T": "float"},
+                "parameterSources": {"Args": "call-site", "T": "call-site"},
+                "source": "call-site",
+            },
+        ],
+        "unsupported": [],
+    }
+
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "float pick_first_float_uint_uint(" in output
+    assert "out_[gid] = pick_first_float_uint_uint(acc, gid, 1u);" in output
+    assert "pick_first<" not in output
+    assert not re.search(r"\\b(?:T|Args|N_READS)\\b", output)
+    assert_compute_glsl_validates_if_available(output, tmp_path)
 
 
 def test_translate_project_metal_norm_variant_records_config_and_nontype_sources(
@@ -37596,6 +39080,85 @@ def test_translate_project_rust_gpu_graphics_entry_io_lowers_for_targets(
     assert re.search(rf"%\d+ = OpLoad %\d+ {vertex_index_id}", spirv)
     assert re.search(rf"OpStore {fragment_output_id} %\d+", spirv)
     assert re.search(r'OpName %\d+ "output"', spirv) is None
+
+
+def test_translate_project_rust_gpu_mutable_fragment_output_lowers_for_native_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "lib.rs").write_text(
+        textwrap.dedent("""
+            use spirv_std::glam::{vec4, Vec4};
+
+            #[spirv(fragment)]
+            pub fn main_fs(output: &mut Vec4) {
+                *output = vec4(1.0, 0.0, 0.0, 1.0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["cuda", "hip", "mojo", "rust", "slang"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("cuda", "translated"),
+        ("hip", "translated"),
+        ("mojo", "translated"),
+        ("rust", "translated"),
+        ("slang", "translated"),
+    }
+
+    outputs = {
+        artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in payload["artifacts"]
+    }
+
+    cuda = outputs["cuda"]
+    assert "__device__ float4 main_fs()" in cuda
+    assert "float4 output;" in cuda
+    assert "output = make_float4(1.0, 0.0, 0.0, 1.0);" in cuda
+    assert "return output;" in cuda
+    assert "main_fs(float4 output" not in cuda
+    assert "CrossGL parameter semantic: output" not in cuda
+
+    hip = outputs["hip"]
+    assert "__device__ float4 main_fs()" in hip
+    assert "float4 output;" in hip
+    assert "output = make_float4(1.0, 0.0, 0.0, 1.0);" in hip
+    assert "return output;" in hip
+    assert "main_fs(float4 output" not in hip
+    assert "CrossGL parameter semantic: output" not in hip
+
+    mojo = outputs["mojo"]
+    assert "fn main_fs() -> SIMD[DType.float32, 4]:" in mojo
+    assert "var output: SIMD[DType.float32, 4]" in mojo
+    assert "output = SIMD[DType.float32, 4](1.0, 0.0, 0.0, 1.0)" in mojo
+    assert "return output" in mojo
+    assert "fn main_fs(output" not in mojo
+    assert "CrossGL parameter semantic" not in mojo
+
+    rust = outputs["rust"]
+    assert "pub fn main_fs() -> Vec4<f32>" in rust
+    assert "let mut output: Vec4<f32>;" in rust
+    assert "output = Vec4::<f32>::new(1.0, 0.0, 0.0, 1.0);" in rust
+    assert "return output;" in rust
+    assert "pub fn main_fs(output" not in rust
+    assert "CrossGL parameter semantic: output" not in rust
+
+    slang = outputs["slang"]
+    assert "float4 main_fs() : SV_Target" in slang
+    assert "float4 output;" in slang
+    assert "output = float4(1.0, 0.0, 0.0, 1.0);" in slang
+    assert "return output;" in slang
+    assert "main_fs(float4 output" not in slang
 
 
 def test_translate_project_rust_gpu_plain_vertex_input_lowers_to_metal_attribute(

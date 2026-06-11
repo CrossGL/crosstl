@@ -18708,7 +18708,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             str(qualifier).lower()
             for qualifier in getattr(node, "qualifiers", []) or []
         }
-        if not qualifiers.intersection({"device", "constant"}):
+        resource_qualifiers = qualifiers.intersection({"device", "constant", "const"})
+        if qualifiers and not resource_qualifiers:
             return None
 
         element_type = self.hlsl_pointer_element_type(vtype)

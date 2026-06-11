@@ -77,6 +77,7 @@ from .image_access_contracts import (
     image_format_channel_count,
     image_format_component_kind,
 )
+from .stage_utils import is_fragment_output_parameter
 
 
 def _matrix_aliases(prefix, dtype, *, rows_first):
@@ -1223,6 +1224,7 @@ class MojoCodeGen:
         self.struct_types = {}
         self.function_return_types = {}
         self.function_parameter_types = {}
+        self.function_overload_signatures = {}
         self.function_return_resource_aliases = {}
         self.function_return_resource_static_aliases = {}
         self.function_return_resource_field_aliases = {}
@@ -1484,6 +1486,7 @@ class MojoCodeGen:
         self.struct_types = {}
         self.function_return_types = {}
         self.function_parameter_types = {}
+        self.function_overload_signatures = {}
         self.function_return_resource_aliases = {}
         self.function_return_resource_static_aliases = {}
         self.function_return_resource_field_aliases = {}
@@ -2794,11 +2797,23 @@ class MojoCodeGen:
             return_type = self.convert_type_node_to_string(func.return_type)
         else:
             return_type = "void"
-        self.function_return_types[func.name] = return_type
-        self.function_parameter_types[func.name] = [
+        parameter_types = [
             self.function_parameter_type_name(param)
             for param in getattr(func, "parameters", getattr(func, "params", []))
         ]
+        self.function_return_types[func.name] = return_type
+        self.function_parameter_types[func.name] = parameter_types
+        signature = {
+            "return_type": return_type,
+            "parameter_types": parameter_types,
+        }
+        overloads = self.function_overload_signatures.setdefault(func.name, [])
+        if not any(
+            existing["return_type"] == return_type
+            and existing["parameter_types"] == parameter_types
+            for existing in overloads
+        ):
+            overloads.append(signature)
 
     def register_function_return_resource_aliases(self, func):
         if not hasattr(func, "name"):
@@ -5415,6 +5430,16 @@ class MojoCodeGen:
             )
 
         if not self.parameter_semantic_type_matches(expected_type, param_type):
+            normalized_semantic = self.normalized_semantic_key(semantic)
+            if (
+                expected_type == "integer_vec3"
+                and normalized_semantic == "global_invocation_id"
+                and (
+                    self.is_scalar_integer_type(param_type)
+                    or self.is_integer_vector_width(param_type, 2)
+                )
+            ):
+                return
             expected = self.parameter_semantic_expected_type(expected_type)
             raise ValueError(
                 f"Unsupported {semantic} parameter semantic for Mojo codegen; "
@@ -5957,7 +5982,7 @@ class MojoCodeGen:
         previous_shader_type = self.current_shader_type
         self.current_shader_type = shader_type
 
-        param_list = getattr(func, "parameters", getattr(func, "params", []))
+        param_list = list(getattr(func, "parameters", getattr(func, "params", [])))
         param_infos = []
         for p in param_list:
             param_type = self.function_parameter_type_name(p)
@@ -5974,6 +5999,28 @@ class MojoCodeGen:
         for name, type_name in extra_param_infos:
             self.register_variable_type(name, type_name)
 
+        if hasattr(func, "return_type"):
+            return_type = self.convert_type_node_to_string(func.return_type)
+        else:
+            return_type = "void"
+        return_semantic = self.function_return_semantic(func)
+        fragment_output_info = None
+        if self.type_name(return_type) == "void" and return_semantic is None:
+            for p, param_type in param_infos:
+                semantic = self.node_semantic(p)
+                if is_fragment_output_parameter(shader_type, p, semantic):
+                    fragment_output_info = (p, param_type, semantic)
+                    return_type = param_type
+                    return_semantic = semantic
+                    break
+        if fragment_output_info is not None:
+            output_param = fragment_output_info[0]
+            param_infos = [
+                param_info
+                for param_info in param_infos
+                if param_info[0] is not output_param
+            ]
+
         if shader_type == "geometry":
             self.validate_geometry_stage(func, param_infos)
         if shader_type in {"tessellation_control", "tessellation_evaluation"}:
@@ -5987,6 +6034,8 @@ class MojoCodeGen:
             getattr(func, "body", []), param_names
         )
         params = []
+        local_alias_declarations = []
+        emitted_param_names = set()
         parameter_semantic_comments = []
         used_parameter_semantics = {}
         for p, param_type in param_infos:
@@ -5998,6 +6047,32 @@ class MojoCodeGen:
                 semantic,
                 used_parameter_semantics,
             )
+
+            dispatch_thread_id_bridge = (
+                self.mojo_compute_global_invocation_id_parameter_bridge(
+                    p,
+                    param_type,
+                    semantic,
+                    emitted_param_names,
+                    param_names,
+                )
+                if shader_type == "compute"
+                else None
+            )
+            if dispatch_thread_id_bridge is not None:
+                param_name, native_type, local_alias = dispatch_thread_id_bridge
+                self.register_variable_type(param_name, native_type)
+                self.register_variable_type(p.name, param_type)
+                if semantic:
+                    parameter_semantic_comments.append(
+                        self.generate_parameter_semantic_comment(
+                            shader_type, p.name, semantic
+                        )
+                    )
+                params.append(f"{param_name}: {self.map_type(native_type)}")
+                local_alias_declarations.append(local_alias)
+                emitted_param_names.add(param_name)
+                continue
 
             self.register_variable_type(p.name, param_type)
             self.register_resource_access_metadata(p, param_type)
@@ -6019,10 +6094,6 @@ class MojoCodeGen:
 
         params_str = ", ".join(params) if params else ""
 
-        if hasattr(func, "return_type"):
-            return_type = self.convert_type_node_to_string(func.return_type)
-        else:
-            return_type = "void"
         function_name = self.shader_entry_function_name(
             func, shader_type, param_infos, return_type
         )
@@ -6030,7 +6101,6 @@ class MojoCodeGen:
         if function_name != func.name:
             self.function_return_types[function_name] = return_type
         self.current_return_type = return_type
-        return_semantic = self.function_return_semantic(func)
         if return_semantic:
             self.validate_return_semantic(shader_type, return_type, return_semantic)
         self.validate_struct_return_semantics(shader_type, return_type)
@@ -6060,6 +6130,16 @@ class MojoCodeGen:
             code += self.generate_function_local_shared_declarations(
                 stage_node, indent + 1
             )
+        if fragment_output_info is not None:
+            output_param, output_type, _semantic = fragment_output_info
+            output_name = getattr(output_param, "name", None)
+            self.register_variable_type(output_name, output_type)
+            code += (
+                f"{'    ' * (indent + 1)}var {self.mojo_identifier(output_name)}: "
+                f"{self.map_type(output_type)}\n"
+            )
+        for declaration in local_alias_declarations:
+            code += "    " * (indent + 1) + declaration + "\n"
 
         body = getattr(func, "body", [])
         statements = None
@@ -6076,6 +6156,16 @@ class MojoCodeGen:
 
         if statements is not None and not statements:
             code += "    pass\n"
+        if (
+            fragment_output_info is not None
+            and statements is not None
+            and not self.statement_body_terminates_inner_loop(statements)
+        ):
+            output_param = fragment_output_info[0]
+            code += (
+                f"{'    ' * (indent + 1)}return "
+                f"{self.mojo_identifier(getattr(output_param, 'name', None))}\n"
+            )
 
         code += "\n"
         self.variable_types = previous_variable_types
@@ -6118,6 +6208,43 @@ class MojoCodeGen:
             and self.type_name(return_type) == "void"
             and self.current_shader_stage_count <= 1
         )
+
+    def mojo_compute_global_invocation_id_parameter_bridge(
+        self, parameter, param_type, semantic, emitted_param_names, parameter_names
+    ):
+        if semantic is None:
+            return None
+        if self.normalized_semantic_key(semantic) != "global_invocation_id":
+            return None
+
+        mapped_type = self.map_type(param_type)
+        if mapped_type not in {"UInt", "UInt32", "SIMD[DType.uint32, 2]"}:
+            return None
+
+        source_name = getattr(parameter, "name", None)
+        if not isinstance(source_name, str) or not source_name:
+            return None
+
+        local_name = self.mojo_identifier(source_name)
+        used_names = set(emitted_param_names)
+        used_names.update(parameter_names)
+        used_names.update(self.variable_types)
+        native_name = self.mojo_unique_local_identifier(
+            f"{local_name}_globalInvocationID", used_names
+        )
+        if mapped_type in {"UInt", "UInt32"}:
+            alias_value = f"{native_name}[0]"
+        else:
+            alias_value = (
+                f"SIMD[DType.uint32, 2]({native_name}[0], {native_name}[1])"
+            )
+        return native_name, "uint3", f"var {local_name}: {mapped_type} = {alias_value}"
+
+    def mojo_unique_local_identifier(self, candidate, used_names):
+        candidate = self.mojo_identifier(candidate)
+        while candidate in used_names or candidate in self.mojo_reserved_identifiers():
+            candidate = f"{candidate}_"
+        return candidate
 
     def collect_mutated_parameters(self, body, param_names):
         mutated = set()
@@ -10254,7 +10381,7 @@ class MojoCodeGen:
         return args, None
 
     def generate_user_function_call_arguments(self, func_name, args):
-        parameter_types = self.function_parameter_types.get(func_name, [])
+        parameter_types = self.selected_function_parameter_types(func_name, args)
         generated_args = []
         for index, arg in enumerate(args):
             target_type = (
@@ -14465,15 +14592,9 @@ class MojoCodeGen:
         if isinstance(expr, BinaryOpNode):
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
-            left_info = self.vector_type_info(left_type)
-            right_info = self.vector_type_info(right_type)
-            if left_info is not None and right_info is not None:
-                return left_type if left_info == right_info else left_type
-            if left_info is not None:
-                return left_type
-            if right_info is not None:
-                return right_type
-            return left_type if left_type == right_type else left_type or right_type
+            return self.binary_expression_result_type(
+                expr.op, left_type, right_type
+            )
         if isinstance(expr, TernaryOpNode):
             true_type = self.expression_result_type(expr.true_expr)
             false_type = self.expression_result_type(expr.false_expr)
@@ -14502,7 +14623,7 @@ class MojoCodeGen:
             if func_name in MOJO_MATRIX_TYPES:
                 return func_name
             if func_name in self.function_return_types:
-                return self.function_return_types[func_name]
+                return self.selected_function_return_type(func_name, expr.args)
             if func_name in self.scalar_constructor_map:
                 return func_name
             if func_name in {"fract", "frac"} and expr.args:
@@ -14758,6 +14879,113 @@ class MojoCodeGen:
             return func_expr
         return None
 
+    def binary_expression_result_type(self, op, left_type, right_type):
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        mapped_op = self.map_operator(op)
+        if left_info is not None and right_info is not None:
+            if left_info == right_info:
+                return left_type
+            if (
+                mapped_op in MOJO_VECTOR_ARITHMETIC_OPS
+                and left_info[0] == right_info[0]
+                and left_info[2] == right_info[2]
+                and left_info[0] != "DType.bool"
+            ):
+                return self.vector_type_name_for_dtype_width(
+                    left_info[0], max(left_info[1], right_info[1])
+                )
+            return left_type
+        if left_info is not None:
+            return left_type
+        if right_info is not None:
+            return right_type
+        return left_type if left_type == right_type else left_type or right_type
+
+    def selected_function_return_type(self, func_name, args):
+        signature = self.select_function_overload_signature(func_name, args)
+        if signature is not None:
+            return signature["return_type"]
+        return self.function_return_types.get(func_name)
+
+    def selected_function_parameter_types(self, func_name, args):
+        signature = self.select_function_overload_signature(func_name, args)
+        if signature is not None:
+            return signature["parameter_types"]
+        return self.function_parameter_types.get(func_name, [])
+
+    def select_function_overload_signature(self, func_name, args):
+        overloads = self.function_overload_signatures.get(func_name) or []
+        if not overloads:
+            return None
+
+        indexed = list(enumerate(overloads))
+        matching_arity = [
+            item
+            for item in indexed
+            if len(item[1]["parameter_types"]) == len(args)
+        ]
+        candidates = matching_arity or indexed
+        arg_types = [self.expression_result_type(arg) for arg in args]
+        best = None
+        for index, signature in candidates:
+            score = self.function_overload_match_score(
+                arg_types, signature["parameter_types"]
+            )
+            if score is None:
+                continue
+            key = (score, index)
+            if best is None or key < best[0]:
+                best = (key, signature)
+
+        if best is not None:
+            return best[1]
+        return candidates[-1][1] if candidates else None
+
+    def function_overload_match_score(self, arg_types, parameter_types):
+        score = 0
+        for arg_type, parameter_type in zip(arg_types, parameter_types):
+            part_score = self.function_overload_argument_match_score(
+                arg_type, parameter_type
+            )
+            if part_score is None:
+                return None
+            score += part_score
+        return score + abs(len(arg_types) - len(parameter_types)) * 100
+
+    def function_overload_argument_match_score(self, arg_type, parameter_type):
+        if arg_type is None or parameter_type is None:
+            return 10
+
+        arg_name = self.type_name(arg_type)
+        parameter_name = self.type_name(parameter_type)
+        if arg_name == parameter_name:
+            return 0
+
+        arg_vector = self.vector_type_info(arg_name)
+        parameter_vector = self.vector_type_info(parameter_name)
+        if arg_vector is not None or parameter_vector is not None:
+            if arg_vector is None or parameter_vector is None:
+                return None
+            if arg_vector == parameter_vector:
+                return 0
+            if self.compatible_numeric_vector_target(arg_vector, parameter_vector):
+                return 1
+            if self.compatible_storage_vector_target(arg_vector, parameter_vector):
+                return 2
+            return None
+
+        arg_dtype = MOJO_SCALAR_DTYPES.get(arg_name)
+        parameter_dtype = MOJO_SCALAR_DTYPES.get(parameter_name)
+        if arg_dtype is not None or parameter_dtype is not None:
+            if arg_dtype is None or parameter_dtype is None:
+                return None
+            if "DType.bool" in {arg_dtype, parameter_dtype}:
+                return None
+            return 1
+
+        return None
+
     def buffer_op_result_type(self, expr):
         operation = MOJO_BUFFER_OP_ALIASES.get(getattr(expr, "operation", ""))
         if operation is None:
@@ -14942,6 +15170,17 @@ class MojoCodeGen:
         if "DType.bool" in {source_dtype, target_dtype}:
             return False
         return source_dtype in MOJO_DTYPE_SUFFIX and target_dtype in MOJO_DTYPE_SUFFIX
+
+    def compatible_storage_vector_target(self, source_info, target_info):
+        if source_info is None or target_info is None:
+            return False
+        source_dtype, source_width, source_storage_width, _ = source_info
+        target_dtype, target_width, target_storage_width, _ = target_info
+        if source_dtype != target_dtype or source_dtype == "DType.bool":
+            return False
+        if source_storage_width != target_storage_width:
+            return False
+        return source_width <= target_width
 
     def generate_numeric_vector_binary_op(self, expr, target_type, target_context=None):
         op = self.map_operator(expr.op)

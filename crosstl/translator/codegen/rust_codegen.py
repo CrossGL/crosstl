@@ -53,7 +53,11 @@ from ..ast import (
 )
 from .array_utils import get_array_size_from_node
 from .glsl_buffer_layout import glsl_buffer_block_node_type
-from .stage_utils import normalize_stage_name, stage_matches
+from .stage_utils import (
+    is_fragment_output_parameter,
+    normalize_stage_name,
+    stage_matches,
+)
 
 
 class RustCodeGen:
@@ -583,6 +587,9 @@ class RustCodeGen:
         self.glsl_buffer_block_layouts = {}
         self.rust_resource_binding_cursors = {}
         self.rust_used_resource_bindings = {}
+        self.rust_resource_binding_infos = {}
+        self.rust_entry_resource_params_by_function_id = {}
+        self.rust_promoted_resource_node_ids = set()
         self.struct_member_types = {}
         self.struct_member_semantics = {}
         self.struct_generic_params = {}
@@ -636,6 +643,9 @@ class RustCodeGen:
         self.glsl_buffer_block_layouts = {}
         self.rust_resource_binding_cursors = {}
         self.rust_used_resource_bindings = {}
+        self.rust_resource_binding_infos = {}
+        self.rust_entry_resource_params_by_function_id = {}
+        self.rust_promoted_resource_node_ids = set()
         self.struct_member_types = {}
         self.struct_member_semantics = {}
         self.struct_generic_params = {}
@@ -683,6 +693,14 @@ class RustCodeGen:
         self.force_move_lambda_depth = 0
         self.nested_lambda_capture_preclone_depth = 0
         self.reserve_explicit_rust_resource_bindings(ast)
+        self.rust_entry_resource_params_by_function_id = (
+            self.collect_rust_entry_resource_params(ast)
+        )
+        self.rust_promoted_resource_node_ids = {
+            id(info["node"])
+            for params in self.rust_entry_resource_params_by_function_id.values()
+            for info in params
+        }
         code = "// Generated Rust GPU Shader Code\n"
         code += "use gpu::*;\n"
         code += "use math::*;\n\n"
@@ -708,6 +726,12 @@ class RustCodeGen:
         for node in global_vars:
             if isinstance(node, ArrayNode):
                 code += self.generate_global_array_declaration(node)
+                emitted_static_names.add(node.name)
+            elif self.is_promoted_rust_entry_resource(node):
+                var_type = self.rust_variable_source_type(node)
+                self.register_glsl_buffer_block_metadata(node)
+                self.register_variable_type(node.name, var_type, scope="static")
+                code += self.rust_resource_metadata_comment(node, var_type)
                 emitted_static_names.add(node.name)
             else:
                 code += self.generate_variable_static_declaration(node)
@@ -2124,6 +2148,160 @@ class RustCodeGen:
             used_symbols.add(symbol)
         return symbol_names
 
+    def rust_variable_source_type(self, node):
+        """Return the source-level type string used for Rust resource metadata."""
+        if isinstance(node, ArrayNode):
+            element_type_name = self.convert_type_node_to_string(
+                getattr(node, "element_type", "float")
+            )
+            element_type_name = self.resource_type_with_attributes(
+                element_type_name,
+                node,
+            )
+            size = self.format_array_size(getattr(node, "size", None))
+            return (
+                f"{element_type_name}[{size}]"
+                if size is not None
+                else f"{element_type_name}[]"
+            )
+        return self.get_variable_type(node) or "float"
+
+    def rust_function_stage_name(self, func):
+        """Return the normalized shader stage name for a function, if any."""
+        qualifiers = list(getattr(func, "qualifiers", []) or [])
+        qualifier = getattr(func, "qualifier", None)
+        if qualifier:
+            qualifiers.append(qualifier)
+
+        stage_names = {
+            "vertex",
+            "fragment",
+            "compute",
+            "geometry",
+            "tessellation_control",
+            "tessellation_evaluation",
+            *self.rust_mesh_stage_names(),
+            *self.rust_ray_stage_names(),
+        }
+        for qualifier in qualifiers:
+            stage_name = normalize_stage_name(qualifier)
+            if stage_name in stage_names:
+                return stage_name
+        return None
+
+    def rust_global_entry_resource_infos(self, ast):
+        """Collect global resources that can be promoted to entry parameters."""
+        resources = {}
+        for node in getattr(ast, "global_variables", []) or []:
+            name = getattr(node, "name", None)
+            if not name:
+                continue
+            type_name = self.rust_variable_source_type(node)
+            if not self.can_promote_rust_entry_resource(node, type_name):
+                continue
+            resources[name] = {"node": node, "type_name": type_name}
+        return resources
+
+    def can_promote_rust_entry_resource(self, node, type_name):
+        """Return whether a resource can replace a Rust placeholder static."""
+        if isinstance(node, ArrayNode):
+            return False
+        if self.explicit_rust_resource_binding_index(node) is None:
+            return False
+        if getattr(node, "initial_value", getattr(node, "value", None)) is not None:
+            return False
+
+        resource_kind = self.rust_resource_kind(type_name, node=node)
+        if resource_kind not in {"texture", "sampler"}:
+            return False
+
+        _base_type, count = self.rust_resource_base_type_and_count(type_name)
+        return count == 1
+
+    def collect_rust_entry_resource_params(self, ast):
+        """Map stage entry functions to promoted Rust resource parameters."""
+        resources = self.rust_global_entry_resource_infos(ast)
+        if not resources:
+            return {}
+
+        stage_entry_ids = set()
+        for stage in (
+            getattr(ast, "stages", {}).values() if hasattr(ast, "stages") else []
+        ):
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is not None:
+                stage_entry_ids.add(id(entry_point))
+
+        entry_functions = {}
+        entry_refs = {}
+        non_entry_refs = set()
+        seen_functions = set()
+
+        def visit(current):
+            nonlocal non_entry_refs
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    visit(item)
+                return
+            if isinstance(current, FunctionNode):
+                function_id = id(current)
+                if function_id in seen_functions:
+                    return
+                seen_functions.add(function_id)
+                is_entry = (
+                    function_id in stage_entry_ids
+                    or self.rust_function_stage_name(current) is not None
+                )
+                if is_entry:
+                    entry_functions[function_id] = current
+                    entry_refs[function_id] = self.collect_free_identifier_names(
+                        current
+                    )
+                else:
+                    non_entry_refs.update(self.collect_free_identifier_names(current))
+                return
+
+            for function in getattr(current, "functions", []) or []:
+                visit(function)
+            for function in getattr(current, "local_functions", []) or []:
+                visit(function)
+            visit(getattr(current, "entry_point", None))
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    visit(stage)
+
+        visit(ast)
+
+        params_by_function = {}
+        unsafe_names = set(resources) & non_entry_refs
+        for function_id, used_names in entry_refs.items():
+            function = entry_functions[function_id]
+            parameter_names = {
+                param.name
+                for param in getattr(
+                    function,
+                    "parameters",
+                    getattr(function, "params", []),
+                )
+            }
+            params = [
+                info
+                for name, info in resources.items()
+                if name in used_names
+                and name not in unsafe_names
+                and name not in parameter_names
+            ]
+            if params:
+                params_by_function[function_id] = params
+        return params_by_function
+
+    def is_promoted_rust_entry_resource(self, node):
+        """Return whether a global resource is emitted as an entry parameter."""
+        return id(node) in self.rust_promoted_resource_node_ids
+
     def uppercase_static_symbol_name(self, name):
         """Convert a CrossGL identifier to a Rust static identifier."""
         name = str(name)
@@ -2496,8 +2674,23 @@ class RustCodeGen:
                 bound.add(node.name)
                 return
             if isinstance(node, FunctionCallNode):
+                function_expr = getattr(node, "function", getattr(node, "name", None))
+                if isinstance(function_expr, MemberAccessNode):
+                    visit(function_expr, bound)
                 for arg in getattr(node, "arguments", getattr(node, "args", [])) or []:
                     visit(arg, bound)
+                return
+            if isinstance(node, TextureNode):
+                visit(getattr(node, "texture_expr", None), bound)
+                visit(getattr(node, "sampler_expr", None), bound)
+                visit(getattr(node, "coordinates", None), bound)
+                visit(getattr(node, "level", None), bound)
+                visit(getattr(node, "offset", None), bound)
+                return
+            if isinstance(node, TextureOpNode):
+                visit(getattr(node, "texture_expr", None), bound)
+                visit(getattr(node, "sampler_expr", None), bound)
+                visit(getattr(node, "arguments", []), bound)
                 return
             if isinstance(node, MemberAccessNode):
                 visit(
@@ -3488,6 +3681,13 @@ class RustCodeGen:
         actual_type = self.map_type(self.function_parameter_type(parameter))
         if actual_type == expected_type:
             return
+        semantic_key = self.rust_stage_parameter_semantic_key(semantic)
+        if (
+            expected_type == "Vec3<u32>"
+            and semantic_key in {"gl_globalinvocationid", "SV_DISPATCHTHREADID"}
+            and actual_type in {"u32", "Vec2<u32>"}
+        ):
+            return
         raise ValueError(
             f"Unsupported {semantic} stage parameter semantic for Rust codegen; "
             f"expected {expected_type} type"
@@ -4020,11 +4220,22 @@ class RustCodeGen:
         param_list = list(getattr(func, "parameters", getattr(func, "params", [])))
         if extra_params:
             param_list.extend(extra_params)
+        promoted_resource_params = (
+            self.rust_entry_resource_params_by_function_id.get(id(func), [])
+            if shader_type
+            else []
+        )
         for p in param_list:
             self.register_glsl_buffer_block_metadata(p)
             self.register_variable_type(
                 p.name,
                 self.function_parameter_type(p),
+                scope="local",
+            )
+        for resource_info in promoted_resource_params:
+            self.register_variable_type(
+                resource_info["node"].name,
+                resource_info["type_name"],
                 scope="local",
             )
         self.current_mutated_names = self.collect_mutated_binding_names(
@@ -4040,6 +4251,20 @@ class RustCodeGen:
             return_type = "void"
         self.current_return_type = return_type
         return_semantic = self.node_semantic(func)
+        fragment_output_info = None
+        if self.map_type(return_type) == "()" and return_semantic is None:
+            for param in param_list:
+                semantic = self.node_semantic(param)
+                if is_fragment_output_parameter(shader_type, param, semantic):
+                    output_type = self.function_parameter_type(param)
+                    fragment_output_info = (param, output_type, semantic)
+                    return_type = output_type
+                    self.current_return_type = return_type
+                    return_semantic = semantic
+                    break
+        if fragment_output_info is not None:
+            output_param = fragment_output_info[0]
+            param_list = [param for param in param_list if param is not output_param]
         if shader_type == "geometry":
             self.validate_rust_geometry_stage(func, param_list)
         if shader_type in {"tessellation_control", "tessellation_evaluation"}:
@@ -4058,10 +4283,33 @@ class RustCodeGen:
         )
 
         params = []
+        local_alias_declarations = []
+        emitted_param_names = set()
+        parameter_names = [p.name for p in param_list if getattr(p, "name", None)]
         for p, param_type in zip(param_list, param_types):
             self.register_glsl_buffer_block_metadata(p)
-            self.register_variable_type(p.name, param_type, scope="local")
             source_param_name = p.name
+            semantic = self.node_semantic(p)
+            if shader_type == "compute":
+                dispatch_thread_id_bridge = (
+                    self.rust_compute_global_invocation_id_parameter_bridge(
+                        p, param_type, semantic, emitted_param_names, parameter_names
+                    )
+                )
+                if dispatch_thread_id_bridge is not None:
+                    param_name, param_rust_type, local_alias = (
+                        dispatch_thread_id_bridge
+                    )
+                    self.register_variable_type(param_name, "uint3", scope="local")
+                    self.register_variable_type(
+                        source_param_name, param_type, scope="local"
+                    )
+                    params.append(f"{param_name}: {param_rust_type}")
+                    local_alias_declarations.append(local_alias)
+                    emitted_param_names.add(param_name)
+                    continue
+
+            self.register_variable_type(source_param_name, param_type, scope="local")
             param_name = self.rust_identifier(source_param_name)
             if source_param_name in self.current_mutated_names or (
                 self.function_parameter_requires_mut_binding(
@@ -4074,6 +4322,11 @@ class RustCodeGen:
                 f"{param_name}: "
                 f"{self.map_function_parameter_type_with_lifetime(param_type, reference_lifetime)}"
             )
+            emitted_param_names.add(param_name)
+        params.extend(
+            self.generate_rust_resource_parameter(info)
+            for info in promoted_resource_params
+        )
 
         params_str = ", ".join(params) if params else ""
 
@@ -4129,14 +4382,40 @@ class RustCodeGen:
             for variable in getattr(stage_node, "local_variables", []) or []:
                 if self.is_rust_shared_variable(variable):
                     code += self.generate_statement(variable, indent + 1)
+        for declaration in local_alias_declarations:
+            code += "    " * (indent + 1) + declaration + "\n"
 
         body = getattr(func, "body", [])
+        body_statements = []
+        if fragment_output_info is not None:
+            output_param, output_type, _semantic = fragment_output_info
+            output_name = self.rust_identifier(getattr(output_param, "name", None))
+            self.register_variable_type(
+                getattr(output_param, "name", None),
+                output_type,
+                scope="local",
+            )
+            code += (
+                "  " * (indent + 1)
+                + f"let mut {output_name}: "
+                + f"{self.map_type_with_lifetime(output_type, reference_lifetime)};\n"
+            )
         if hasattr(body, "statements"):
+            body_statements = body.statements
             for stmt in body.statements:
                 code += self.generate_statement(stmt, indent + 1)
         elif isinstance(body, list):
+            body_statements = body
             for stmt in body:
                 code += self.generate_statement(stmt, indent + 1)
+        if fragment_output_info is not None and not self.statement_body_terminates(
+            body_statements
+        ):
+            output_param = fragment_output_info[0]
+            code += (
+                "  " * (indent + 1)
+                + f"return {self.rust_identifier(getattr(output_param, 'name', None))};\n"
+            )
 
         code += "  " * indent + "}\n\n"
         self.variable_types = saved_variable_types
@@ -4195,6 +4474,49 @@ class RustCodeGen:
         while len(values) < 3:
             values.append("1")
         return tuple(values[:3])
+
+    def rust_compute_global_invocation_id_parameter_bridge(
+        self, parameter, param_type, semantic, emitted_param_names, parameter_names
+    ):
+        if semantic is None:
+            return None
+        semantic_key = self.rust_stage_parameter_semantic_key(semantic)
+        if semantic_key not in {"gl_globalinvocationid", "SV_DISPATCHTHREADID"}:
+            return None
+
+        mapped_type = self.map_type(param_type)
+        if mapped_type not in {"u32", "Vec2<u32>"}:
+            return None
+
+        source_name = getattr(parameter, "name", None)
+        if not isinstance(source_name, str) or not source_name:
+            return None
+
+        local_name = self.rust_identifier(source_name)
+        used_names = set(emitted_param_names)
+        used_names.update(self.rust_identifier(name) for name in parameter_names)
+        used_names.update(self.rust_identifier(name) for name in self.variable_types)
+        used_names.update(
+            self.rust_identifier(name) for name in self.local_variable_names
+        )
+        native_name = self.rust_unique_local_identifier(
+            f"{local_name}_globalInvocationID", used_names
+        )
+        if mapped_type == "u32":
+            alias_value = f"{native_name}.x"
+        else:
+            alias_value = f"Vec2::<u32>::new({native_name}.x, {native_name}.y)"
+        let_keyword = "let mut" if source_name in self.current_mutated_names else "let"
+        local_alias = (
+            f"{let_keyword} {local_name}: {mapped_type} = {alias_value};"
+        )
+        return native_name, "Vec3<u32>", local_alias
+
+    def rust_unique_local_identifier(self, candidate, used_names):
+        candidate = self.rust_identifier(candidate)
+        while candidate in used_names or candidate in self.rust_reserved_identifiers():
+            candidate = f"{candidate}_"
+        return candidate
 
     def function_reference_return_lifetime(self, func, return_type, param_types):
         if self.reference_type_parts_for_type(return_type) is None:
@@ -5898,6 +6220,20 @@ class RustCodeGen:
             if isinstance(current, FunctionCallNode):
                 collect(current.function)
                 collect(getattr(current, "arguments", getattr(current, "args", [])))
+                return
+
+            if isinstance(current, TextureNode):
+                collect(getattr(current, "texture_expr", None))
+                collect(getattr(current, "sampler_expr", None))
+                collect(getattr(current, "coordinates", None))
+                collect(getattr(current, "level", None))
+                collect(getattr(current, "offset", None))
+                return
+
+            if isinstance(current, TextureOpNode):
+                collect(getattr(current, "texture_expr", None))
+                collect(getattr(current, "sampler_expr", None))
+                collect(getattr(current, "arguments", []))
                 return
 
             if isinstance(current, MemberAccessNode):
@@ -13170,11 +13506,16 @@ class RustCodeGen:
             self.rust_resource_binding_cursors.get(key, 0), end + 1
         )
 
-    def rust_resource_metadata_comment(self, node, type_name, kind=None):
+    def rust_resource_binding_info(self, node, type_name, kind=None):
         name = getattr(node, "name", None)
         resource_kind = self.rust_resource_kind(type_name, node=node, forced_kind=kind)
         if not name or resource_kind is None:
-            return ""
+            return None
+
+        cache_key = (id(node), resource_kind)
+        cached_info = self.rust_resource_binding_infos.get(cache_key)
+        if cached_info is not None:
+            return cached_info
 
         _base_type, count = self.rust_resource_base_type_and_count(type_name)
         validation_count = self.rust_resource_binding_validation_count(
@@ -13197,27 +13538,71 @@ class RustCodeGen:
                 namespace, set_index, binding, validation_count, name
             )
 
+        info = {
+            "name": name,
+            "kind": resource_kind,
+            "set_index": set_index,
+            "binding": binding,
+            "binding_source": binding_source,
+            "count": count,
+            "register": self.rust_resource_register_metadata(node),
+        }
+        self.rust_resource_binding_infos[cache_key] = info
+        return info
+
+    def rust_resource_metadata_comment(self, node, type_name, kind=None):
+        info = self.rust_resource_binding_info(node, type_name, kind=kind)
+        if info is None:
+            return ""
+
         parts = [
             "// CrossGL resource metadata:",
-            f"name={name}",
-            f"kind={resource_kind}",
+            f"name={info['name']}",
+            f"kind={info['kind']}",
         ]
-        if resource_kind == "glsl_buffer_block":
+        if info["kind"] == "glsl_buffer_block":
             parts.append(f"layout={self.glsl_buffer_block_layout(node)}")
             parts.append(f"access={self.explicit_resource_access(node) or 'readwrite'}")
         parts.extend(
             [
-                f"set={set_index}",
-                f"binding={binding}",
-                f"binding_source={binding_source}",
+                f"set={info['set_index']}",
+                f"binding={info['binding']}",
+                f"binding_source={info['binding_source']}",
             ]
         )
-        if count != 1:
-            parts.append(f"count={count}")
-        register_metadata = self.rust_resource_register_metadata(node)
-        if register_metadata:
-            parts.append(f"register={register_metadata}")
+        if info["count"] != 1:
+            parts.append(f"count={info['count']}")
+        if info["register"]:
+            parts.append(f"register={info['register']}")
         return " ".join(parts) + "\n"
+
+    def rust_resource_parameter_attribute(self, node, type_name):
+        info = self.rust_resource_binding_info(node, type_name)
+        if info is None:
+            return ""
+
+        spirv_args = []
+        if info["kind"] == "buffer":
+            spirv_args.append("storage_buffer")
+        spirv_args.extend(
+            [
+                f"descriptor_set = {info['set_index']}",
+                f"binding = {info['binding']}",
+            ]
+        )
+        return (
+            '#[cfg_attr(feature = "crossgl_gpu", '
+            f"spirv({', '.join(spirv_args)}))] "
+        )
+
+    def generate_rust_resource_parameter(self, resource_info):
+        node = resource_info["node"]
+        type_name = resource_info["type_name"]
+        attribute = self.rust_resource_parameter_attribute(node, type_name)
+        return (
+            f"{attribute}{self.rust_identifier(node.name)}: "
+            f"{self.map_function_parameter_type(type_name)}"
+        )
 
     def rust_resource_placeholder_diagnostic_comment(self, node, type_name):
         name = getattr(node, "name", None)

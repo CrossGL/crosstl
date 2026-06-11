@@ -30,6 +30,11 @@ MSL_SOURCE_START_RE = re.compile(
     r")"
 )
 IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+METAL_STRING_LITERAL_PATTERN = r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'"
+METAL_STRING_EXPRESSION_PATTERN = (
+    rf"(?:{METAL_STRING_LITERAL_PATTERN})"
+    rf"(?:\s*(?:{METAL_STRING_LITERAL_PATTERN}))*"
+)
 METAL_ENTRY_FUNCTION_RE = re.compile(
     r"\b(?:kernel|vertex|fragment|compute|mesh|object|amplification|"
     r"intersection|anyhit|closesthit|miss|callable)\b|"
@@ -38,7 +43,8 @@ METAL_ENTRY_FUNCTION_RE = re.compile(
 MLX_INSTANTIATE_KERNEL_RE = re.compile(r"\binstantiate_kernel\s*\(")
 MLX_HOST_NAME_DECL_RE = re.compile(
     r"\btemplate\s+\[\[\s*host_name\s*\(\s*(?P<host>"
-    r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')\s*\)\s*\]\]\s*"
+    + METAL_STRING_EXPRESSION_PATTERN
+    + r")\s*\)\s*\]\]\s*"
     r"\[\[\s*kernel\s*\]\]\s*decltype\s*\(\s*(?P<function>"
     r"[A-Za-z_][A-Za-z0-9_:]*)\s*<",
     re.DOTALL,
@@ -367,25 +373,39 @@ class MetalPreprocessor(HLSLPreprocessor):
         self, code: str
     ) -> List[_MLXKernelInstantiation]:
         instantiations: List[_MLXKernelInstantiation] = []
+        templates_by_name = {
+            template.name: template for template in self._find_template_functions(code)
+        }
         for match in re.finditer(
             r"(?:^|[;\n])\s*(?:(?:template\s+)?\[\[|template\s+(?!<))",
             code,
         ):
             start = match.start()
+            if code[start : start + 1] == ";":
+                start += 1
             declaration_end = self._statement_end(code, start)
             if declaration_end is None:
                 continue
             declaration = code[start:declaration_end]
             if self._find_next_top_level_char(declaration, 0, "{") is not None:
                 continue
-            if "decltype" not in declaration and not re.search(
-                r"\b[A-Za-z_][A-Za-z0-9_:]*\s*<", declaration
+            declared_function_name = self._declared_function_name(declaration)
+            if (
+                "decltype" not in declaration
+                and not re.search(r"\b[A-Za-z_][A-Za-z0-9_:]*\s*<", declaration)
+                and (
+                    declared_function_name is None
+                    or declared_function_name not in templates_by_name
+                )
             ):
                 continue
             host_name = self._host_name_from_attributes(declaration)
-            for function_name, arguments in self._template_id_candidates(declaration):
-                if not arguments:
-                    continue
+            template_id_candidate = self._declared_template_id_candidate(
+                declaration,
+                declared_function_name,
+            )
+            if template_id_candidate is not None:
+                function_name, arguments = template_id_candidate
                 instantiations.append(
                     _MLXKernelInstantiation(
                         host_name=host_name or function_name.split("::")[-1],
@@ -394,7 +414,27 @@ class MetalPreprocessor(HLSLPreprocessor):
                         span=(start, declaration_end),
                     )
                 )
-                break
+                continue
+
+            if declared_function_name is None:
+                continue
+            template = templates_by_name.get(declared_function_name)
+            if template is None:
+                continue
+            arguments = self._infer_declared_template_arguments(
+                template,
+                declaration,
+            )
+            if not arguments:
+                continue
+            instantiations.append(
+                _MLXKernelInstantiation(
+                    host_name=host_name or declared_function_name,
+                    function_name=declared_function_name,
+                    template_arguments=arguments,
+                    span=(start, declaration_end),
+                )
+            )
         return instantiations
 
     def _find_declared_mlx_kernel_instantiations(
@@ -633,7 +673,8 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _host_name_from_attributes(self, declaration: str) -> str:
         match = re.search(
             r"\[\[\s*host_name\s*\(\s*(?P<host>"
-            r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')\s*\)\s*\]\]",
+            + METAL_STRING_EXPRESSION_PATTERN
+            + r")\s*\)\s*\]\]",
             declaration,
             re.DOTALL,
         )
@@ -682,6 +723,232 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             i += 1
         return candidates
+
+    def _declared_function_name(self, declaration: str) -> Optional[str]:
+        function_name = self._function_name_from_header(declaration)
+        if function_name in {"decltype", "static_cast", "as_type"}:
+            return None
+        return function_name
+
+    def _declared_template_id_candidate(
+        self,
+        declaration: str,
+        declared_function_name: Optional[str],
+    ) -> Optional[Tuple[str, List[str]]]:
+        candidates = [
+            (name, arguments)
+            for name, arguments in self._template_id_candidates(declaration)
+            if arguments
+        ]
+        if not candidates:
+            return None
+        if declared_function_name is None:
+            return candidates[0]
+        for name, arguments in candidates:
+            if name.split("::")[-1] == declared_function_name:
+                return name, arguments
+        return None
+
+    def _infer_declared_template_arguments(
+        self,
+        template: _MetalTemplateFunction,
+        declaration: str,
+    ) -> List[str]:
+        template_parameters = list(template.template_parameters)
+        if not template_parameters:
+            return []
+        template_parameter_set = set(template_parameters)
+        template_param_types = self._function_parameter_type_texts(template.source)
+        declaration_param_types = self._function_parameter_type_texts(declaration)
+        if not template_param_types or not declaration_param_types:
+            return []
+
+        bindings: Dict[str, str] = {}
+        for template_type, concrete_type in zip(
+            template_param_types,
+            declaration_param_types,
+        ):
+            self._infer_template_parameter_bindings_from_type(
+                template_type,
+                concrete_type,
+                template_parameter_set,
+                bindings,
+            )
+        if not bindings:
+            return []
+
+        arguments: List[str] = []
+        defaults = getattr(template, "template_parameter_defaults", {}) or {}
+        substitutions: Dict[str, str] = {}
+        last_inferred_index = -1
+        for index, name in enumerate(template_parameters):
+            if name in bindings:
+                argument = bindings[name]
+                last_inferred_index = index
+            else:
+                default_argument = defaults.get(name)
+                if default_argument is None:
+                    return []
+                argument = self._resolve_template_default_argument(
+                    default_argument,
+                    substitutions,
+                    template,
+                )
+            substitutions[name] = argument
+            arguments.append(argument)
+
+        if last_inferred_index == -1:
+            return []
+        return arguments[: last_inferred_index + 1]
+
+    def _function_parameter_type_texts(self, declaration: str) -> List[str]:
+        open_paren = self._function_parameter_start(declaration)
+        if open_paren is None:
+            return []
+        close_paren = self._find_matching_delimiter(declaration, open_paren, "(", ")")
+        if close_paren is None:
+            return []
+        parameters = self._split_top_level_commas(
+            declaration[open_paren + 1 : close_paren]
+        )
+        return [
+            normalized
+            for normalized in (
+                self._normalize_function_parameter_type_text(parameter)
+                for parameter in parameters
+            )
+            if normalized and normalized != "void"
+        ]
+
+    def _normalize_function_parameter_type_text(self, parameter: str) -> str:
+        parameter = self._strip_top_level_default_value(parameter)
+        attributes = " ".join(self._metal_attributes(parameter))
+        type_text = self._strip_metal_attributes(parameter)
+        type_text = re.sub(
+            r"\s+\b[A-Za-z_][A-Za-z0-9_]*\s*$",
+            "",
+            type_text.strip(),
+        )
+        normalized = self._normalize_template_argument_text(type_text)
+        if attributes:
+            normalized_attributes = self._normalize_template_argument_text(attributes)
+            if normalized:
+                return f"{normalized} {normalized_attributes}"
+            return normalized_attributes
+        return normalized
+
+    def _metal_attributes(self, text: str) -> List[str]:
+        attributes: List[str] = []
+        i = 0
+        while i < len(text):
+            if text.startswith("[[", i):
+                end = text.find("]]", i + 2)
+                if end == -1:
+                    break
+                attributes.append(text[i : end + 2])
+                i = end + 2
+                continue
+            i += 1
+        return attributes
+
+    def _strip_metal_attributes(self, text: str) -> str:
+        result = ""
+        i = 0
+        while i < len(text):
+            if text.startswith("[[", i):
+                end = text.find("]]", i + 2)
+                if end == -1:
+                    break
+                i = end + 2
+                continue
+            result += text[i]
+            i += 1
+        return result
+
+    def _strip_top_level_default_value(self, text: str) -> str:
+        paren_depth = 0
+        bracket_depth = 0
+        brace_depth = 0
+        angle_depth = 0
+        i = 0
+        while i < len(text):
+            if text[i] in "\"'":
+                _literal, consumed = self._read_string(text, i)
+                i += consumed
+                continue
+            if text.startswith("//", i):
+                break
+            if text.startswith("/*", i):
+                end = text.find("*/", i + 2)
+                if end == -1:
+                    break
+                i = end + 2
+                continue
+
+            ch = text[i]
+            if ch == "(":
+                paren_depth += 1
+            elif ch == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif ch == "[":
+                bracket_depth += 1
+            elif ch == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif ch == "{":
+                brace_depth += 1
+            elif ch == "}":
+                brace_depth = max(0, brace_depth - 1)
+            elif ch == "<":
+                angle_depth += 1
+            elif ch == ">":
+                angle_depth = max(0, angle_depth - 1)
+            elif (
+                ch == "="
+                and paren_depth == 0
+                and bracket_depth == 0
+                and brace_depth == 0
+                and angle_depth == 0
+            ):
+                return text[:i].strip()
+            i += 1
+        return text.strip()
+
+    def _infer_template_parameter_bindings_from_type(
+        self,
+        template_type: str,
+        concrete_type: str,
+        template_parameters: Set[str],
+        bindings: Dict[str, str],
+    ) -> None:
+        captures: List[str] = []
+        pattern_parts: List[str] = []
+        position = 0
+        for match in IDENTIFIER_RE.finditer(template_type):
+            pattern_parts.append(re.escape(template_type[position : match.start()]))
+            identifier = match.group(0)
+            if identifier in template_parameters:
+                pattern_parts.append("(.+?)")
+                captures.append(identifier)
+            else:
+                pattern_parts.append(re.escape(identifier))
+            position = match.end()
+        pattern_parts.append(re.escape(template_type[position:]))
+        if not captures:
+            return
+
+        match = re.fullmatch("".join(pattern_parts), concrete_type)
+        if match is None:
+            return
+        inferred: Dict[str, str] = {}
+        for index, parameter in enumerate(captures, start=1):
+            value = self._normalize_template_argument_text(match.group(index))
+            if not value:
+                return
+            existing = inferred.get(parameter, bindings.get(parameter))
+            if existing is not None and existing != value:
+                return
+            inferred[parameter] = value
+        bindings.update(inferred)
 
     def _reachable_function_spans(
         self,

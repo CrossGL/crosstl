@@ -566,6 +566,7 @@ class WGSLCodeGen:
         self._cbuffer_member_accesses = {}
         self._function_texture_parameters = {}
         self._function_pointer_parameters = {}
+        self._function_return_types = {}
         self._identifier_scopes = []
         self._identifier_alias_scopes = []
         self._pointer_identifier_scopes = []
@@ -577,6 +578,7 @@ class WGSLCodeGen:
         self._struct_member_identifier_names = {}
         self._structs_by_name = {}
         self._struct_member_types = {}
+        self._cbuffer_member_types = {}
         self._struct_resource_paths = {}
         self._glsl_buffer_block_struct_names = set()
         self._module_variable_types = {}
@@ -605,12 +607,14 @@ class WGSLCodeGen:
         self._pointer_identifier_scopes = []
         self._value_type_scopes = []
         self._resource_alias_scopes = []
+        self._function_return_types = {}
         self._module_identifier_names = {}
         self._function_identifier_names = {}
         self._type_identifier_names = {}
         self._struct_member_identifier_names = {}
         self._structs_by_name = {}
         self._struct_member_types = {}
+        self._cbuffer_member_types = {}
         self._struct_resource_paths = {}
         self._glsl_buffer_block_struct_names = set()
         self._module_variable_types = {}
@@ -655,6 +659,7 @@ class WGSLCodeGen:
         self.collect_struct_type_metadata(structs)
         self.collect_cbuffer_member_identifier_metadata(cbuffers)
         self._cbuffer_member_accesses = self.cbuffer_member_accesses(cbuffers)
+        self._cbuffer_member_types = self.cbuffer_member_types(cbuffers)
         self._function_texture_parameters = self.function_texture_parameters(
             ast, target_stage
         )
@@ -676,6 +681,17 @@ class WGSLCodeGen:
                 if getattr(parameter, "name", "")
             }
         )
+        self._module_variable_types.update(
+            {
+                self.cbuffer_instance_name(cbuffer): NamedType(cbuffer.name)
+                for cbuffer in cbuffers
+            }
+        )
+        self._function_return_types = {
+            getattr(function, "name", ""): getattr(function, "return_type", None)
+            for function in all_function_nodes
+            if getattr(function, "name", "")
+        }
         self._glsl_buffer_block_struct_names = (
             self.collect_glsl_buffer_block_struct_names(
                 global_variable_nodes, all_function_nodes
@@ -1521,11 +1537,34 @@ class WGSLCodeGen:
     def generate_expression_for_target(self, expr, target_type):
         rendered = self.generate_expression(expr)
         source_type = self.expression_type(expr)
+        narrowed = self.vector_narrowing_expression(rendered, target_type, source_type)
+        if narrowed is not None:
+            return narrowed
         target_scalar = self.integer_scalar_type(target_type)
         source_scalar = self.integer_scalar_type(source_type)
         if target_scalar == "i32" and source_scalar == "u32":
             return f"i32({rendered})"
         return rendered
+
+    def generate_vector_narrowing_conversion(self, target_type, expr):
+        return self.vector_narrowing_expression(
+            self.generate_expression(expr), target_type, self.expression_type(expr)
+        )
+
+    def vector_narrowing_expression(self, rendered, target_type, source_type):
+        target_shape = self.vector_shape(target_type)
+        source_shape = self.vector_shape(source_type)
+        if target_shape is None or source_shape is None:
+            return None
+        target_element, target_size = target_shape
+        source_element, source_size = source_shape
+        if source_size <= target_size:
+            return None
+        components = "xyzw"[:target_size]
+        narrowed = f"{rendered}.{components}"
+        if target_element == source_element:
+            return narrowed
+        return f"{self.type_name_string(target_type)}({narrowed})"
 
     def generate_expression(self, expr):
         if expr is None:
@@ -1606,6 +1645,11 @@ class WGSLCodeGen:
                 + ")"
             )
         if isinstance(expr, CastNode):
+            narrowed = self.generate_vector_narrowing_conversion(
+                expr.target_type, expr.expression
+            )
+            if narrowed is not None:
+                return narrowed
             return (
                 f"{self.type_name_string(expr.target_type)}"
                 f"({self.generate_expression(expr.expression)})"
@@ -1679,9 +1723,16 @@ class WGSLCodeGen:
         if function_name == "mod":
             return self.generate_mod_call(node)
 
-        args = self.generate_call_arguments(function_name, node.arguments)
         if self.is_type_constructor_name(function_name):
+            if len(node.arguments) == 1:
+                narrowed = self.generate_vector_narrowing_conversion(
+                    function_name, node.arguments[0]
+                )
+                if narrowed is not None:
+                    return narrowed
+            args = self.generate_call_arguments(function_name, node.arguments)
             return f"{self.type_name_string(function_name)}({args})"
+        args = self.generate_call_arguments(function_name, node.arguments)
         mapped_name = self.FUNCTION_NAME_MAP.get(function_name, function_name)
         if mapped_name == function_name and isinstance(node.function, IdentifierNode):
             mapped_name = self.function_identifier_name(function_name)
@@ -2118,6 +2169,12 @@ class WGSLCodeGen:
         return "workgroupBarrier()"
 
     def generate_constructor(self, node):
+        if len(node.arguments) == 1:
+            narrowed = self.generate_vector_narrowing_conversion(
+                node.constructor_type, node.arguments[0]
+            )
+            if narrowed is not None:
+                return narrowed
         args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
         return f"{self.type_name_string(node.constructor_type)}({args})"
 
@@ -2180,6 +2237,12 @@ class WGSLCodeGen:
                 "WGSL target does not support CrossGL resource type "
                 f"{normalized} yet; split texture/sampler/storage bindings are required"
             )
+
+        wgsl_vector_match = re.fullmatch(r"vec([234])<\s*([^>]+)\s*>", normalized, re.I)
+        if wgsl_vector_match:
+            size = wgsl_vector_match.group(1)
+            element = wgsl_vector_match.group(2)
+            return f"vec{size}<{self.map_type_name(element)}>"
 
         vector_match = self.VECTOR_TYPE_RE.match(lower)
         if vector_match:
@@ -2804,20 +2867,39 @@ class WGSLCodeGen:
             mapped_builtin = self.BUILTIN_IDENTIFIER_ALIASES.get(expr.name)
             if mapped_builtin:
                 return self.INPUT_BUILTIN_TYPE_MAP.get(mapped_builtin)
-            return self.value_type(expr.name) or self._module_variable_types.get(
-                expr.name
-            )
+            value_type = self.value_type(expr.name)
+            if value_type is not None:
+                return value_type
+            module_type = self._module_variable_types.get(expr.name)
+            if module_type is not None:
+                return module_type
+            if not self.is_local_identifier(expr.name):
+                return self._cbuffer_member_types.get(expr.name)
+            return None
         if isinstance(expr, MemberAccessNode):
             object_type = self.array_element_type(
                 self.expression_type(expr.object_expr)
             )
             component_type = self.vector_component_type(object_type)
             if component_type is not None and self.is_vector_member(expr.member):
-                return component_type
+                if len(expr.member) == 1:
+                    return component_type
+                return f"vec{len(expr.member)}<{component_type}>"
             struct_name = self.struct_type_name(object_type)
             if not struct_name:
                 return None
             return self._struct_member_types.get((struct_name, expr.member))
+        if isinstance(expr, BinaryOpNode):
+            return self.binary_expression_type(expr)
+        if isinstance(expr, FunctionCallNode):
+            function_name = self.expression_name(expr.function)
+            if self.is_type_constructor_name(function_name):
+                return self.type_name_string(function_name)
+            return self._function_return_types.get(function_name)
+        if isinstance(expr, ConstructorNode):
+            return expr.constructor_type
+        if isinstance(expr, CastNode):
+            return expr.target_type
         if isinstance(expr, SwizzleNode):
             vector_type = self.expression_type(expr.vector_expr)
             component_type = self.vector_component_type(vector_type)
@@ -2836,6 +2918,71 @@ class WGSLCodeGen:
             if isinstance(array_type, PointerType):
                 return array_type.pointee_type
             return self.array_element_type(array_type)
+        return None
+
+    def binary_expression_type(self, expr):
+        if expr.operator not in {"+", "-", "*", "/", "%"}:
+            return None
+        left_type = self.expression_type(expr.left)
+        right_type = self.expression_type(expr.right)
+        left_vector = self.vector_shape(left_type)
+        right_vector = self.vector_shape(right_type)
+        left_matrix = self.matrix_shape(left_type)
+        right_matrix = self.matrix_shape(right_type)
+        if expr.operator == "*":
+            if left_matrix is not None and right_vector is not None:
+                matrix_element, columns, rows = left_matrix
+                vector_element, vector_size = right_vector
+                if matrix_element == vector_element and columns == vector_size:
+                    return f"vec{rows}<{matrix_element}>"
+            if left_vector is not None and right_matrix is not None:
+                vector_element, vector_size = left_vector
+                matrix_element, columns, rows = right_matrix
+                if matrix_element == vector_element and rows == vector_size:
+                    return f"vec{columns}<{matrix_element}>"
+        if left_vector is not None and right_vector is not None:
+            if left_vector == right_vector:
+                return left_type
+            return None
+        if left_vector is not None and self.scalar_type_name(right_type) is not None:
+            return left_type
+        if right_vector is not None and self.scalar_type_name(left_type) is not None:
+            return right_type
+        if left_type == right_type:
+            return left_type
+        return None
+
+    def scalar_type_name(self, vtype):
+        try:
+            type_name = self.type_name_string(vtype) if vtype is not None else None
+        except ValueError:
+            return None
+        if type_name in {"bool", "f32", "i32", "u32"}:
+            return type_name
+        return None
+
+    def vector_shape(self, vtype):
+        try:
+            type_name = self.type_name_string(vtype) if vtype is not None else None
+        except ValueError:
+            return None
+        if type_name is None:
+            return None
+        match = re.fullmatch(r"vec([234])<([^>]+)>", type_name)
+        if match:
+            return match.group(2), int(match.group(1))
+        return None
+
+    def matrix_shape(self, vtype):
+        try:
+            type_name = self.type_name_string(vtype) if vtype is not None else None
+        except ValueError:
+            return None
+        if type_name is None:
+            return None
+        match = re.fullmatch(r"mat([234])x([234])<([^>]+)>", type_name)
+        if match:
+            return match.group(3), int(match.group(1)), int(match.group(2))
         return None
 
     def integer_scalar_type(self, vtype):
@@ -3090,7 +3237,11 @@ class WGSLCodeGen:
 
     def is_type_constructor_name(self, name):
         lower = str(name).lower()
-        return lower in self.PRIMITIVE_TYPE_MAP or self.TYPE_CONSTRUCTOR_RE.match(lower)
+        return (
+            lower in self.PRIMITIVE_TYPE_MAP
+            or self.TYPE_CONSTRUCTOR_RE.match(lower)
+            or re.fullmatch(r"vec[234]<[^>]+>", lower)
+        )
 
     def expression_name(self, expr):
         if isinstance(expr, IdentifierNode):
@@ -3439,6 +3590,15 @@ class WGSLCodeGen:
                     f"{self.struct_member_identifier_name(cbuffer.name, member_name)}"
                 )
         return accesses
+
+    def cbuffer_member_types(self, cbuffers):
+        member_types = {}
+        for cbuffer in cbuffers:
+            for member in getattr(cbuffer, "members", []) or []:
+                member_name = getattr(member, "name", "")
+                if member_name:
+                    member_types[member_name] = getattr(member, "member_type", None)
+        return member_types
 
     def function_texture_parameters(self, ast, target_stage):
         functions = list(self._helper_functions(ast, target_stage))

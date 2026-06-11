@@ -16920,16 +16920,24 @@ def test_basic_sampled_texture_calls_map_to_rust_helpers_and_compile(tmp_path):
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "static COLOR_MAP: std::sync::LazyLock<Texture2D<Vec4<f32>>>" in generated_code
+        '#[cfg_attr(feature = "crossgl_gpu", '
+        "spirv(descriptor_set = 1, binding = 0))] colorMap: Texture2D<Vec4<f32>>"
+        in generated_code
     )
-    assert "static LINEAR_SAMPLER: std::sync::LazyLock<Sampler>" in generated_code
+    assert (
+        '#[cfg_attr(feature = "crossgl_gpu", '
+        "spirv(descriptor_set = 0, binding = 0))] linearSampler: Sampler"
+        in generated_code
+    )
+    assert "static COLOR_MAP" not in generated_code
+    assert "static LINEAR_SAMPLER" not in generated_code
     assert "let combined: Vec4<f32> = sample(*DIFFUSE_MAP, uv);" in generated_code
     assert (
         "let split: Vec4<f32> = sample_sampler(*DIFFUSE_MAP, *POINT_SAMPLER, uv);"
         in generated_code
     )
     assert (
-        "let hlslSplit: Vec4<f32> = sample_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv);"
+        "let hlslSplit: Vec4<f32> = sample_sampler(colorMap, linearSampler, uv);"
         in generated_code
     )
     assert "Texture2D<float4>" not in generated_code
@@ -17031,35 +17039,35 @@ def test_hlsl_texture_member_helpers_map_to_rust_placeholders_and_compile(tmp_pa
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "let baseOffset: Vec4<f32> = sample_offset_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv, offset);"
+        "let baseOffset: Vec4<f32> = sample_offset_sampler(colorMap, linearSampler, uv, offset);"
         in generated_code
     )
     assert (
-        "let biased: Vec4<f32> = sample_bias_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv, 0.25);"
+        "let biased: Vec4<f32> = sample_bias_sampler(colorMap, linearSampler, uv, 0.25);"
         in generated_code
     )
     assert (
-        "let biasedOffset: Vec4<f32> = sample_offset_bias_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv, offset, 0.5);"
+        "let biasedOffset: Vec4<f32> = sample_offset_bias_sampler(colorMap, linearSampler, uv, offset, 0.5);"
         in generated_code
     )
     assert (
-        "let lodOffset: Vec4<f32> = sample_lod_offset_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv, lod, offset);"
+        "let lodOffset: Vec4<f32> = sample_lod_offset_sampler(colorMap, linearSampler, uv, lod, offset);"
         in generated_code
     )
     assert (
-        "let gradOffset: Vec4<f32> = sample_grad_offset_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv, ddx, ddy, offset);"
+        "let gradOffset: Vec4<f32> = sample_grad_offset_sampler(colorMap, linearSampler, uv, ddx, ddy, offset);"
         in generated_code
     )
-    assert "texture_dimensions(*COLOR_MAP, (width, height));" in generated_code
+    assert "texture_dimensions(colorMap, (width, height));" in generated_code
     assert (
-        "let gatheredRedOffset: Vec4<f32> = texture_gather_offset_component_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv, offset, 0);"
+        "let gatheredRedOffset: Vec4<f32> = texture_gather_offset_component_sampler(colorMap, linearSampler, uv, offset, 0);"
         in generated_code
     )
-    assert "let loaded: Vec4<f32> = texel_fetch(*COLOR_MAP, pixel, 0);" in (
+    assert "let loaded: Vec4<f32> = texel_fetch(colorMap, pixel, 0);" in (
         generated_code
     )
     assert (
-        "let loadedOffset: Vec4<f32> = texel_fetch_offset(*COLOR_MAP, pixel, 0, offset);"
+        "let loadedOffset: Vec4<f32> = texel_fetch_offset(colorMap, pixel, 0, offset);"
         in generated_code
     )
     assert (
@@ -17067,17 +17075,29 @@ def test_hlsl_texture_member_helpers_map_to_rust_placeholders_and_compile(tmp_pa
         in generated_code
     )
     assert (
-        "let detail: f32 = texture_calculate_lod(*COLOR_MAP, *LINEAR_SAMPLER, uv);"
+        "let detail: f32 = texture_calculate_lod(colorMap, linearSampler, uv);"
         in generated_code
     )
     assert (
-        "let cmpGradOffset: f32 = texture_compare_grad_offset_sampler(*SHADOW_MAP, *LINEAR_SAMPLER, uv, depth, ddx, ddy, offset);"
+        "let cmpGradOffset: f32 = texture_compare_grad_offset_sampler(*SHADOW_MAP, linearSampler, uv, depth, ddx, ddy, offset);"
         in generated_code
     )
     assert (
-        "let gatherCmpOffset: Vec4<f32> = texture_gather_compare_offset_sampler(*SHADOW_MAP, *LINEAR_SAMPLER, uv, depth, offset);"
+        "let gatherCmpOffset: Vec4<f32> = texture_gather_compare_offset_sampler(*SHADOW_MAP, linearSampler, uv, depth, offset);"
         in generated_code
     )
+    assert (
+        '#[cfg_attr(feature = "crossgl_gpu", '
+        "spirv(descriptor_set = 0, binding = 0))] colorMap: Texture2D<Vec4<f32>>"
+        in generated_code
+    )
+    assert (
+        '#[cfg_attr(feature = "crossgl_gpu", '
+        "spirv(descriptor_set = 0, binding = 0))] linearSampler: Sampler"
+        in generated_code
+    )
+    assert "static COLOR_MAP" not in generated_code
+    assert "static LINEAR_SAMPLER" not in generated_code
     assert ".Sample" not in generated_code
     assert ".Gather" not in generated_code
     assert ".Load" not in generated_code
@@ -18712,11 +18732,25 @@ def test_texture_and_sampler_binding_namespaces_are_independent_for_rust_codegen
         "// CrossGL resource metadata: name=linearSampler kind=sampler set=0 "
         "binding=2 binding_source=explicit" in generated_code
     )
-    assert "return sample_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv);" in generated_code
+    assert (
+        '#[cfg_attr(feature = "crossgl_gpu", '
+        "spirv(descriptor_set = 0, binding = 2))] colorMap: Texture2D<f32>"
+        in generated_code
+    )
+    assert (
+        '#[cfg_attr(feature = "crossgl_gpu", '
+        "spirv(descriptor_set = 0, binding = 2))] linearSampler: Sampler"
+        in generated_code
+    )
+    assert "return sample_sampler(colorMap, linearSampler, uv);" in generated_code
+    assert "static COLOR_MAP" not in generated_code
+    assert "static LINEAR_SAMPLER" not in generated_code
+    assert "CrossGL Rust limitation: resource colorMap" not in generated_code
+    assert "CrossGL Rust limitation: resource linearSampler" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_rust_resource_placeholders_diagnose_explicit_sampler_sampling(tmp_path):
+def test_rust_resource_parameters_lower_explicit_sampler_sampling(tmp_path):
     code = """
     shader RustExplicitSamplerResourceDiagnostic {
         sampler2D colorMap @set(1) @binding(4);
@@ -18732,21 +18766,20 @@ def test_rust_resource_placeholders_diagnose_explicit_sampler_sampling(tmp_path)
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "return sample_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv);" in generated_code
+    assert "return sample_sampler(colorMap, linearSampler, uv);" in generated_code
     assert "texture(" not in generated_code
     assert (
-        "// CrossGL Rust limitation: resource colorMap is emitted as a "
-        "compile-only placeholder static, not a rust-gpu resource binding"
+        '#[cfg_attr(feature = "crossgl_gpu", '
+        "spirv(descriptor_set = 1, binding = 4))] colorMap: Texture2D<f32>"
     ) in generated_code
     assert (
-        "// CrossGL Rust limitation: resource linearSampler is emitted as a "
-        "compile-only placeholder static, not a rust-gpu resource binding"
+        '#[cfg_attr(feature = "crossgl_gpu", '
+        "spirv(descriptor_set = 1, binding = 5))] linearSampler: Sampler"
     ) in generated_code
-    assert (
-        "resource colorMap is emitted as a compile-only placeholder static"
-        in generated_code
-        and "static COLOR_MAP: std::sync::LazyLock<Texture2D<f32>>" in generated_code
-    )
+    assert "CrossGL Rust limitation: resource colorMap" not in generated_code
+    assert "CrossGL Rust limitation: resource linearSampler" not in generated_code
+    assert "static COLOR_MAP" not in generated_code
+    assert "static LINEAR_SAMPLER" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

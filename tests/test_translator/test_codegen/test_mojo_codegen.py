@@ -5,6 +5,7 @@ from typing import List
 
 import pytest
 
+import crosstl
 import crosstl.translator
 from crosstl.translator.ast import (
     ArrayAccessNode,
@@ -27048,6 +27049,89 @@ def test_texture2d_sampler2d_resource_declarations_produce_mojo_types():
     assert "var envMap: TextureCube" in generated_code
     assert "sample(diffuseMap, uv)" in generated_code
     assert "fn sample(tex: Texture2D" in generated_code
+
+
+def test_vector_helper_overload_uses_wider_binary_result_for_mojo():
+    code = """
+    float linearToSrgb(float color) {
+        return color;
+    }
+    vec3 linearToSrgb(vec3 color) {
+        return color;
+    }
+    vec4 linearToSrgb(vec4 color) {
+        return color;
+    }
+
+    vec4 shade(vec3 light, vec4 texel) {
+        return linearToSrgb(light * texel);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn shade(light: SIMD[DType.float32, 4], texel: SIMD[DType.float32, 4])"
+        in generated_code
+    )
+    assert "return linearToSrgb((light * texel))" in generated_code
+
+
+def test_vector_helper_overload_selects_vec4_after_scalar_multiply_for_mojo():
+    code = """
+    float linearToSrgb(float color) {
+        return color;
+    }
+    vec4 linearToSrgb(vec4 color) {
+        return color;
+    }
+    vec3 linearToSrgb(vec3 color) {
+        return color;
+    }
+
+    vec4 shade(float light, vec4 texel) {
+        return linearToSrgb(light * texel);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn shade(light: Float32, texel: SIMD[DType.float32, 4])" in generated_code
+    assert "return linearToSrgb((light * texel))" in generated_code
+
+
+def test_glsl_overloaded_vector_helper_texture_call_translates_to_mojo(tmp_path):
+    source = """
+    #version 450
+    layout(binding = 0) uniform sampler2D tex;
+    layout(location = 0) in vec2 texcoord;
+    layout(location = 0) out vec4 fragColor;
+
+    float linearToSrgb(float color) {
+        return color;
+    }
+    vec3 linearToSrgb(vec3 color) {
+        return color;
+    }
+    vec4 linearToSrgb(vec4 color) {
+        return color;
+    }
+
+    void main() {
+        vec3 light = vec3(0.5);
+        fragColor = linearToSrgb(light * texture(tex, texcoord.xy));
+    }
+    """
+    source_path = tmp_path / "linear_to_srgb.frag"
+    source_path.write_text(source, encoding="utf-8")
+
+    generated_code = crosstl.translate(
+        str(source_path),
+        backend="mojo",
+        source_backend="opengl",
+        format_output=False,
+    )
+
+    assert "fragColor = linearToSrgb((light * sample(tex," in generated_code
+    assert "Invalid aggregate target" not in generated_code
 
 
 def test_combined_texture_sampler_sampling_in_mojo():
