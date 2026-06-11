@@ -231,7 +231,9 @@ class MetalPreprocessor(HLSLPreprocessor):
 
             replacements: List[Tuple[int, int, str]] = []
             new_materializations: List[str] = []
-            for function_name, template_arguments, span in calls:
+            for function_name, template_arguments, spans in (
+                self._dedupe_explicit_template_function_calls(calls)
+            ):
                 key = self._template_specialization_key(
                     function_name, template_arguments
                 )
@@ -240,7 +242,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                     continue
                 specialized_name = materialized_names.get(key)
                 if specialized_name is not None:
-                    replacements.append((span[0], span[1], specialized_name))
+                    replacements.extend(
+                        (span[0], span[1], specialized_name) for span in spans
+                    )
                     continue
                 unique_count = len(materialized_names) + 1
                 if len(materialized_names) >= self.max_template_specializations:
@@ -275,7 +279,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                     host_name=None,
                 )
                 if materialized:
-                    replacements.append((span[0], span[1], specialized_name))
+                    replacements.extend(
+                        (span[0], span[1], specialized_name) for span in spans
+                    )
                     materialized_names[key] = specialized_name
                     new_materializations.append(materialized)
 
@@ -517,6 +523,23 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             i += 1
         return calls
+
+    def _dedupe_explicit_template_function_calls(
+        self,
+        calls: List[Tuple[str, List[str], Tuple[int, int]]],
+    ) -> List[Tuple[str, List[str], List[Tuple[int, int]]]]:
+        grouped: Dict[
+            Tuple[str, Tuple[str, ...]],
+            Tuple[str, List[str], List[Tuple[int, int]]],
+        ] = {}
+        for function_name, template_arguments, span in calls:
+            key = self._template_specialization_key(function_name, template_arguments)
+            grouped_call = grouped.get(key)
+            if grouped_call is None:
+                grouped[key] = (function_name, template_arguments, [span])
+            else:
+                grouped_call[2].append(span)
+        return list(grouped.values())
 
     def _reachable_function_spans(
         self,
