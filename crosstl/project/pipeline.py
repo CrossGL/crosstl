@@ -8365,6 +8365,37 @@ def _template_parameter_values_from_arguments(
     return parameters
 
 
+def _template_parameter_sources_from_arguments(
+    template: Any,
+    arguments: Sequence[str],
+    *,
+    argument_source: str,
+    default_source: str,
+) -> dict[str, str]:
+    sources: dict[str, str] = {}
+    template_parameters = list(getattr(template, "template_parameters", []) or [])
+    variadic = getattr(template, "variadic_template_parameters", set())
+    argument_index = 0
+    for parameter_index, parameter in enumerate(template_parameters):
+        if parameter in variadic:
+            remaining_fixed = len(template_parameters) - parameter_index - 1
+            variadic_count = max(
+                0,
+                len(arguments) - argument_index - remaining_fixed,
+            )
+            sources[parameter] = (
+                argument_source if variadic_count > 0 else default_source
+            )
+            argument_index += variadic_count
+            continue
+        if argument_index < len(arguments):
+            sources[parameter] = argument_source
+            argument_index += 1
+            continue
+        sources[parameter] = default_source
+    return sources
+
+
 def _template_argument_values_from_parameters(
     preprocessor: Any,
     template: Any,
@@ -8472,24 +8503,42 @@ def _metal_template_parameter_defaults(
     preprocessor: Any,
     source: str,
     template: Any,
+    seed_parameters: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    declaration = source[template.span[0] : template.span[1]]
-    angle_start = declaration.find("<")
-    angle_end = preprocessor._find_matching_angle(declaration, angle_start)
-    if angle_start == -1 or angle_end is None:
-        return {}
+    template_defaults = dict(getattr(template, "template_parameter_defaults", {}) or {})
+    if not template_defaults:
+        declaration = source[template.span[0] : template.span[1]]
+        angle_start = declaration.find("<")
+        angle_end = preprocessor._find_matching_angle(declaration, angle_start)
+        if angle_start == -1 or angle_end is None:
+            return {}
 
+        parameters = preprocessor._split_top_level_commas(
+            declaration[angle_start + 1 : angle_end]
+        )
+        for parameter in parameters:
+            if "=" not in parameter:
+                continue
+            names = preprocessor._template_parameter_names(parameter)
+            if not names:
+                continue
+            template_defaults[names[-1]] = parameter.split("=", 1)[1].strip()
+
+    available_parameters = dict(seed_parameters or {})
     defaults: dict[str, str] = {}
-    parameters = preprocessor._split_top_level_commas(
-        declaration[angle_start + 1 : angle_end]
-    )
-    for parameter in parameters:
-        if "=" not in parameter:
+    for parameter in getattr(template, "template_parameters", []) or []:
+        if parameter in available_parameters:
             continue
-        names = preprocessor._template_parameter_names(parameter)
-        if not names:
+        default_argument = template_defaults.get(parameter)
+        if default_argument is None:
             continue
-        defaults[names[-1]] = parameter.split("=", 1)[1].strip()
+        resolved = preprocessor._resolve_template_default_argument(
+            default_argument,
+            available_parameters,
+            template,
+        )
+        defaults[parameter] = resolved
+        available_parameters[parameter] = resolved
     return defaults
 
 
@@ -8874,18 +8923,20 @@ def _project_template_materialization_for_artifact(
         templates = preprocessor._find_template_functions(preprocessed)
 
     specializations: list[dict[str, Any]] = []
+    source_instantiation_unsupported: list[dict[str, Any]] = []
+    source_instantiation_partial_templates: set[str] = set()
     template_lookup = {template.name: template for template in templates}
     source_instantiations = preprocessor._find_project_template_instantiations(
         preprocessed
     )
     seen_source_instantiations: set[tuple[str, tuple[str, ...], str]] = set()
+    seen_unsupported_source_instantiations: set[
+        tuple[str, tuple[tuple[str, str], ...], str]
+    ] = set()
     for instantiation in source_instantiations:
         template = template_lookup.get(instantiation.function_name)
         arguments = list(instantiation.template_arguments)
-        if template is None or not preprocessor._template_arguments_satisfy_parameters(
-            template,
-            arguments,
-        ):
+        if template is None:
             continue
         normalized_arguments = list(
             preprocessor._template_specialization_key(
@@ -8893,6 +8944,44 @@ def _project_template_materialization_for_artifact(
                 arguments,
             )[1]
         )
+        parameters = _template_parameter_values_from_arguments(
+            preprocessor,
+            template,
+            normalized_arguments,
+        )
+        if not preprocessor._template_arguments_satisfy_parameters(
+            template,
+            arguments,
+        ):
+            source_instantiation_partial_templates.add(template.name)
+            required_signature = _template_required_signature(
+                preprocessor,
+                template,
+                parameters,
+            )
+            unsupported_key = (
+                template.name,
+                tuple(sorted(parameters.items())),
+                required_signature,
+            )
+            if unsupported_key in seen_unsupported_source_instantiations:
+                continue
+            seen_unsupported_source_instantiations.add(unsupported_key)
+            source_instantiation_unsupported.append(
+                _unsupported_template_record(
+                    name=template.name,
+                    parameters=template.template_parameters,
+                    configured_parameters=parameters,
+                    source_declaration=_template_source_declaration_record(
+                        unit,
+                        preprocessed,
+                        template,
+                    ),
+                    target=target,
+                    required_signature=required_signature,
+                )
+            )
+            continue
         key = (
             instantiation.function_name,
             tuple(normalized_arguments),
@@ -8905,13 +8994,14 @@ def _project_template_materialization_for_artifact(
             instantiation.host_name,
             template.name,
         )
-        parameters = _template_parameter_values_from_arguments(
-            preprocessor,
+        parameter_sources = _template_parameter_sources_from_arguments(
             template,
             normalized_arguments,
+            argument_source="source-instantiation",
+            default_source="source-default",
         )
         parameter_sources = {
-            parameter: "source-instantiation" for parameter in parameters
+            parameter: parameter_sources[parameter] for parameter in parameters
         }
         specializations.append(
             _materialized_template_specialization_record(
@@ -8988,7 +9078,7 @@ def _project_template_materialization_for_artifact(
         return None
 
     replacements: list[tuple[int, int, str]] = []
-    unsupported: list[dict[str, Any]] = []
+    unsupported: list[dict[str, Any]] = list(source_instantiation_unsupported)
     used_configured_parameters: dict[str, str] = {}
     used_configured_parameter_sources: dict[str, str] = {}
     default_call_replacements: dict[str, str] = {}
@@ -9004,10 +9094,13 @@ def _project_template_materialization_for_artifact(
         if template.name in explicit_template_names:
             replacements.append((template.span[0], template.span[1], ""))
             continue
+        if template.name in source_instantiation_partial_templates:
+            continue
         default_parameters = _metal_template_parameter_defaults(
             preprocessor,
             materialized,
             template,
+            configured_parameters,
         )
         base_parameters = {
             **default_parameters,
