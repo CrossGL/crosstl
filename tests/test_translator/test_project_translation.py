@@ -13064,6 +13064,173 @@ def test_translate_project_opengl_rejects_post_materialization_template_type_lea
     assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
 
 
+def test_translate_project_opengl_materializes_mlx_sdpa_block_typedef_alias(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "scaled_dot_product_attention.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            [[kernel]] void sdpa_vector(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+              typedef float U;
+              thread U q[2];
+              U score = U(0);
+              q[0] = score + U(gid);
+              out[gid] = T(q[0]);
+            }
+
+            instantiate_kernel("sdpa_vector_float32", sdpa_vector, float)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["opengl"], output_dir="out").to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["status"] == "materialized"
+    assert artifact["templateMaterialization"]["unsupported"] == []
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "float q[2];" in output
+    assert "float score = float(0);" in output
+    assert re.search(r"\bU\b", output) is None
+
+
+@pytest.mark.parametrize(
+    ("source_name", "kernel_name", "host_name"),
+    [
+        (
+            "steel_gemm_gather.metal",
+            "steel_gemm_gather",
+            "steel_gemm_gather_float16",
+        ),
+        (
+            "steel_gemm_segmented.metal",
+            "steel_gemm_segmented",
+            "steel_gemm_segmented_float16",
+        ),
+    ],
+)
+def test_translate_project_opengl_materializes_mlx_steel_gemm_epilogue_default(
+    tmp_path,
+    source_name,
+    kernel_name,
+    host_name,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / source_name).write_text(
+        textwrap.dedent(f"""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename OutT, typename InT>
+            struct TransformNone {{
+              static OutT apply(InT value) {{
+                return OutT(value);
+              }}
+            }};
+
+            template <
+                typename T,
+                typename U,
+                typename AccumType = float,
+                typename Epilogue = TransformNone<U, AccumType>>
+            struct BlockMMA {{
+              U value;
+            }};
+
+            template <
+                typename T,
+                typename U,
+                typename AccumType = float,
+                typename Epilogue = TransformNone<U, AccumType>>
+            struct GEMMKernel {{
+              using mma_t = BlockMMA<T, U, AccumType, Epilogue>;
+            }};
+
+            template <typename T, typename AccumType = float>
+            [[kernel]] void {kernel_name}(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {{
+              using gemm_kernel = GEMMKernel<T, T, AccumType>;
+              using mma_t = typename gemm_kernel::mma_t;
+              thread mma_t mma_op;
+              mma_op.value = T(1);
+              out[gid] = mma_op.value;
+            }}
+
+            instantiate_kernel("{host_name}", {kernel_name}, half)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["opengl"], output_dir="out").to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["status"] == "materialized"
+    assert artifact["templateMaterialization"]["unsupported"] == []
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "Epilogue" not in output
+    assert "BlockMMA<" not in output
+
+
+def test_translate_project_opengl_allows_defaulted_template_type_static_member(
+    tmp_path,
+):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "shader.metal"
+    source = textwrap.dedent("""
+            template <typename OutT, typename InT>
+            struct TransformNone {};
+
+            template <
+                typename T,
+                typename U,
+                typename AccumType = float,
+                typename Epilogue = TransformNone<U, AccumType>>
+            struct GEMMKernel {
+              static void run() {}
+            };
+
+            void host() {
+              GEMMKernel<half, half, float>::run();
+            }
+            """).strip() + "\n"
+    source_path.write_text(source, encoding="utf-8")
+    unit = project_pipeline.ProjectTranslationUnit(
+        path=source_path,
+        relative_path="shader.metal",
+        source_backend="metal",
+        extension=".metal",
+        source_hash=project_pipeline._source_hash(source_path),
+        source_size_bytes=source_path.stat().st_size,
+    )
+
+    records = (
+        project_pipeline._post_materialization_unresolved_metal_template_type_records(
+            preprocessor=MetalPreprocessor(),
+            unit=unit,
+            source=source,
+            target="opengl",
+        )
+    )
+
+    assert [record for record in records if record["name"] == "GEMMKernel"] == []
+
+
 def test_translate_project_forwards_metal_template_specialization_limit(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
