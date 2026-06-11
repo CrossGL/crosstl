@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import difflib
 import json
 import re
 import shutil
@@ -256,10 +257,41 @@ def _compare_artifacts(case_dir: Path, work_dir: Path, targets: list[str]) -> No
         if _comparison_bytes(expected_path) != _comparison_bytes(actual[relative])
     ]
     if changed:
+        _print_artifact_diffs(case_dir, work_dir, changed)
         raise SystemExit(
             f"{case_dir.name}: generated artifacts differ from references: "
             + ", ".join(str(path) for path in changed)
         )
+
+
+def _print_artifact_diffs(
+    case_dir: Path, work_dir: Path, changed: list[Path], *, max_lines: int = 160
+) -> None:
+    for relative in changed:
+        expected_path = case_dir / OUTPUT_DIR_NAME / relative
+        actual_path = work_dir / OUTPUT_DIR_NAME / relative
+        expected_text = _comparison_bytes(expected_path).decode("utf-8", "replace")
+        actual_text = _comparison_bytes(actual_path).decode("utf-8", "replace")
+        diff = list(
+            difflib.unified_diff(
+                expected_text.splitlines(),
+                actual_text.splitlines(),
+                fromfile=f"expected/{relative}",
+                tofile=f"actual/{relative}",
+                lineterm="",
+            )
+        )
+        if not diff:
+            continue
+        print(f"{case_dir.name}: diff for {relative}", file=sys.stderr)
+        truncated = diff[:max_lines]
+        for line in truncated:
+            print(line, file=sys.stderr)
+        if len(diff) > max_lines:
+            print(
+                f"... diff truncated after {max_lines} of {len(diff)} lines",
+                file=sys.stderr,
+            )
 
 
 def _copy_case(case_dir: Path, temp_root: Path) -> Path:

@@ -45,4 +45,3 @@ kernel void kernel_main_cs(uint3 id [[thread_position_in_grid]], device uint* pr
     uint index = uint(id.x);
     prime_indices[index] = collatz_unwrap_or(prime_indices[index], 4294967295u);
 }
-
