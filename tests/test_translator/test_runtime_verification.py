@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,7 @@ from crosstl.project.runtime_verification import (
     RuntimeResourceBinding,
     RuntimeSpecializationConstant,
     RuntimeVerificationError,
+    build_runtime_test_manifest,
     compare_runtime_outputs,
     default_runtime_test_adapters,
     load_runtime_verification_fixtures,
@@ -718,6 +721,178 @@ def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements():
     assert missing_tool in manifest.test_cases[0].platform_requirements.required_tools
     assert manifest.test_cases[0].fixture.executor == "opengl-native"
     assert manifest.to_json()["tests"][0]["adapter"] == "opengl-native"
+
+
+def test_build_runtime_test_manifest_from_mlx_fixture_metadata():
+    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    artifact_report = fixture_dir / "reduced_binary_add.artifacts.json"
+    fixture_metadata = fixture_dir / "reduced_binary_add.fixture-metadata.json"
+
+    manifest = build_runtime_test_manifest(
+        artifact_report,
+        fixture_metadata,
+        project_root=ROOT,
+    )
+
+    assert manifest["kind"] == RUNTIME_TEST_MANIFEST_KIND
+    assert manifest["success"] is True
+    assert manifest["artifactManifest"] == str(artifact_report)
+    assert manifest["projectRoot"] == str(ROOT)
+    assert manifest["summary"]["testCount"] == 1
+    assert manifest["summary"]["testsByTarget"] == {"metal": 1}
+    assert manifest["diagnostics"] == []
+    assert manifest["metadata"]["repository"] == "mlx"
+    assert manifest["metadata"]["fixtureMetadataKind"] == (
+        "crosstl-project-runtime-fixture-metadata"
+    )
+    assert manifest["adapters"] == [
+        {
+            "id": "metal-runtime-probe",
+            "target": "metal",
+            "executor": "metal",
+            "adapterKind": "metal-runtime-probe",
+            "platformRequirements": {
+                "platformClass": "native-graphics",
+                "requiredTools": ["xcrun"],
+                "metadata": {"source": "default-runtime-test-adapter"},
+            },
+        }
+    ]
+    test_case = manifest["tests"][0]
+    assert test_case["adapter"] == "metal-runtime-probe"
+    assert test_case["selector"] == {
+        "source": "mlx/backend/metal/kernels/binary.metal",
+        "target": "metal",
+        "variant": "reduced-add",
+        "path": "tests/fixtures/runtime_verification/mlx/reduced_binary_add.metal",
+    }
+    assert test_case["runtimeAdapter"]["entryPoints"][0]["name"] == (
+        "mlx_binary_add_f32"
+    )
+    assert test_case["runtimeAdapter"]["resourceBindings"][2]["value"] == "out"
+    assert test_case["runtimeAdapter"]["specializationConstants"] == [
+        {
+            "kind": "function-constant",
+            "required": True,
+            "name": "element_count",
+            "id": 0,
+            "dtype": "uint32",
+            "value": 4,
+        }
+    ]
+    assert test_case["runtimeAdapter"]["dispatch"] == {
+        "entryPoint": "mlx_binary_add_f32",
+        "globalSize": [4, 1, 1],
+    }
+    parsed = parse_runtime_test_manifest(manifest)
+    assert parsed.test_cases[0].fixture.id == "mlx-reduced-binary-add-f32"
+
+    plan = plan_runtime_test_manifest(manifest)
+
+    assert plan["kind"] == RUNTIME_TEST_PLAN_KIND
+    assert plan["testCases"][0]["fixture"] == "mlx-reduced-binary-add-f32"
+    assert plan["testCases"][0]["artifact"]["target"] == "metal"
+    assert plan["testCases"][0]["runtimeExecution"]["dispatch"] == {
+        "entryPoint": "mlx_binary_add_f32",
+        "workgroupSize": [4, 1, 1],
+        "workgroupCount": [1, 1, 1],
+        "globalSize": [4, 1, 1],
+        "metadata": {"source": "fixture", "stage": "compute", "status": "available"},
+    }
+
+
+def test_build_runtime_test_manifest_reports_ambiguous_fixture_selector(tmp_path):
+    metadata = {
+        "kind": "crosstl-project-runtime-fixture-metadata",
+        "fixtures": [
+            {
+                "id": "ambiguous-add",
+                "selector": {
+                    "source": "kernels/add.cgl",
+                    "target": "metal",
+                },
+                "inputs": [{"name": "lhs", "values": [1.0]}],
+                "expectedOutputs": [{"name": "out", "values": [2.0]}],
+            }
+        ],
+    }
+    artifact_report = _artifact_report(
+        tmp_path,
+        [
+            _translated_artifact(target="metal", path="out/metal/add-a.metal"),
+            _translated_artifact(target="metal", path="out/metal/add-b.metal"),
+        ],
+    )
+
+    manifest = build_runtime_test_manifest(artifact_report, metadata)
+
+    assert manifest["success"] is False
+    assert manifest["diagnosticCounts"]["error"] == 1
+    assert manifest["diagnostics"][0]["code"] == (
+        "project.runtime-test-manifest.artifact-ambiguous"
+    )
+    assert manifest["diagnostics"][0]["fixture"] == "ambiguous-add"
+    parse_runtime_test_manifest(manifest)
+
+
+def test_build_runtime_test_manifest_reports_incomplete_fixture_data(tmp_path):
+    metadata = {
+        "kind": "crosstl-project-runtime-fixture-metadata",
+        "fixtures": [
+            {
+                "id": "missing-outputs",
+                "selector": {
+                    "source": "kernels/add.cgl",
+                    "target": "opengl",
+                    "variant": "debug",
+                },
+                "inputs": [{"name": "lhs", "values": [1.0]}],
+            }
+        ],
+    }
+
+    manifest = build_runtime_test_manifest(
+        _artifact_report(tmp_path, [_translated_artifact()]),
+        metadata,
+    )
+
+    codes = {diagnostic["code"] for diagnostic in manifest["diagnostics"]}
+    assert manifest["success"] is False
+    assert "project.runtime-test-manifest.fixture-expected-outputs-missing" in codes
+    assert "project.runtime-test-manifest.entry-points-unavailable" in codes
+    parse_runtime_test_manifest(manifest)
+
+
+def test_project_cli_runtime_test_manifest_text_outputs_generated_tests():
+    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    artifact_report = fixture_dir / "reduced_binary_add.artifacts.json"
+    fixture_metadata = fixture_dir / "reduced_binary_add.fixture-metadata.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "runtime-test-manifest",
+            str(artifact_report),
+            str(fixture_metadata),
+            "--project-root",
+            str(ROOT),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Project runtime test manifest: {artifact_report}" in result.stdout
+    assert f"Fixture metadata: {fixture_metadata}" in result.stdout
+    assert "Summary: 1 runtime tests, 1 adapters, 0 diagnostics" in result.stdout
+    assert "Runtime tests by target: metal=1" in result.stdout
+    assert "- mlx-reduced-binary-add-f32" in result.stdout
 
 
 def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs(

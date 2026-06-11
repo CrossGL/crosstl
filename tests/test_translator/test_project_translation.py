@@ -500,6 +500,7 @@ def test_project_package_exposes_public_api_surface():
         "build_runtime_host_integration_handoff",
         "build_runtime_loader_manifest",
         "build_runtime_package",
+        "build_runtime_test_manifest",
         "compare_runtime_outputs",
         "default_runtime_test_adapters",
         "execute_runtime_host_integration",
