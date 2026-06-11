@@ -1050,13 +1050,31 @@ def test_support_project_feature_evidence_references_existing_tests():
     catalog = json.loads(
         (ROOT / "support" / "features.json").read_text(encoding="utf-8")
     )
-    test_file = ROOT / "tests" / "test_translator" / "test_project_translation.py"
-    declared_tests = {
-        line.strip().split("(", 1)[0][len("def ") :]
-        for line in test_file.read_text(encoding="utf-8").splitlines()
-        if line.strip().startswith("def test_")
-    }
-    evidence_prefix = "tests/test_translator/test_project_translation.py::def "
+
+    declared_tests_by_path = {}
+
+    def declared_tests(path_text):
+        if path_text not in declared_tests_by_path:
+            test_file = ROOT / path_text
+            declared_tests_by_path[path_text] = {
+                line.strip().split("(", 1)[0][len("def ") :]
+                for line in test_file.read_text(encoding="utf-8").splitlines()
+                if line.strip().startswith("def test_")
+            }
+        return declared_tests_by_path[path_text]
+
+    def referenced_test(item):
+        if not isinstance(item, str):
+            return None
+        path_text, separator, test_name = item.partition("::def ")
+        if (
+            not separator
+            or not path_text.startswith("tests/")
+            or not path_text.endswith(".py")
+            or not test_name.startswith("test_")
+        ):
+            return None
+        return path_text, test_name
 
     missing_evidence = []
     missing_tests = []
@@ -1068,18 +1086,17 @@ def test_support_project_feature_evidence_references_existing_tests():
             if not evidence:
                 missing_evidence.append(f"{feature.get('id')}:{backend}")
                 continue
-            project_evidence = [
-                item
-                for item in evidence
-                if isinstance(item, str) and item.startswith(evidence_prefix)
-            ]
-            if not project_evidence:
-                missing_evidence.append(f"{feature.get('id')}:{backend}")
-                continue
-            for item in project_evidence:
-                test_name = item[len(evidence_prefix) :]
-                if test_name not in declared_tests:
+            test_evidence = []
+            for item in evidence:
+                test_reference = referenced_test(item)
+                if test_reference is None:
+                    continue
+                path_text, test_name = test_reference
+                test_evidence.append(item)
+                if test_name not in declared_tests(path_text):
                     missing_tests.append(item)
+            if not test_evidence:
+                missing_evidence.append(f"{feature.get('id')}:{backend}")
 
     assert missing_evidence == []
     assert missing_tests == []
