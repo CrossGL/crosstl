@@ -360,6 +360,7 @@ class MetalLexer:
         strict_preprocessor: bool = False,
         file_path: Optional[str] = None,
         max_template_specializations: Optional[int] = None,
+        template_specialization_limit_source: Optional[str] = None,
     ):
         """Initialize the lexer with raw Metal source text."""
         code = code.lstrip("\ufeff")
@@ -373,6 +374,10 @@ class MetalLexer:
             if max_template_specializations is not None:
                 preprocessor_kwargs["max_template_specializations"] = (
                     max_template_specializations
+                )
+            if template_specialization_limit_source is not None:
+                preprocessor_kwargs["template_specialization_limit_source"] = (
+                    template_specialization_limit_source
                 )
             preprocessor = MetalPreprocessor(**preprocessor_kwargs)
             code = preprocessor.preprocess(code, file_path=file_path)

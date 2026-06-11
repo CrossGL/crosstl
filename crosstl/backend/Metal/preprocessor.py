@@ -50,6 +50,23 @@ class MetalTemplateSpecializationError(ValueError):
     project_diagnostic_code = "project.translate.metal-template-specialization"
     missing_capabilities = ("template.specialization",)
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        limit: Optional[int] = None,
+        limit_source: Optional[str] = None,
+        unique_specialization_count: Optional[int] = None,
+        requested_signature: Optional[str] = None,
+        suggested_action: Optional[str] = None,
+    ):
+        super().__init__(message)
+        self.limit = limit
+        self.limit_source = limit_source
+        self.unique_specialization_count = unique_specialization_count
+        self.requested_signature = requested_signature
+        self.suggested_action = suggested_action
+
 
 @dataclass
 class _MetalTemplateFunction:
@@ -89,6 +106,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         max_template_specializations: int = (
             DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
         ),
+        template_specialization_limit_source: Optional[str] = None,
     ):
         super().__init__(
             include_paths=include_paths,
@@ -111,6 +129,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                 "Metal max_template_specializations must be a non-negative integer"
             )
         self.max_template_specializations = specialization_limit
+        self.template_specialization_limit_source = (
+            template_specialization_limit_source
+            or "max_template_specializations"
+        )
         self.macros.setdefault(
             "TARGET_OS_SIMULATOR",
             Macro(name="TARGET_OS_SIMULATOR", replacement="0"),
@@ -181,7 +203,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         return self._apply_text_replacements(code, replacements)
 
     def _materialize_explicit_template_function_calls(self, code: str) -> str:
-        seen_specializations: Set[Tuple[str, Tuple[str, ...]]] = set()
+        materialized_names: Dict[Tuple[str, Tuple[str, ...]], str] = {}
         working = code
 
         while True:
@@ -210,23 +232,42 @@ class MetalPreprocessor(HLSLPreprocessor):
             replacements: List[Tuple[int, int, str]] = []
             new_materializations: List[str] = []
             for function_name, template_arguments, span in calls:
-                key = (function_name, tuple(template_arguments))
+                key = self._template_specialization_key(
+                    function_name, template_arguments
+                )
                 template = templates_by_name[function_name]
                 if len(template_arguments) < len(template.template_parameters):
                     continue
-                specialized_name = self._template_specialization_identifier(
-                    function_name, template_arguments
-                )
-                if key in seen_specializations:
+                specialized_name = materialized_names.get(key)
+                if specialized_name is not None:
                     replacements.append((span[0], span[1], specialized_name))
                     continue
-                if len(seen_specializations) >= self.max_template_specializations:
+                unique_count = len(materialized_names) + 1
+                if len(materialized_names) >= self.max_template_specializations:
+                    requested_signature = self._template_specialization_signature(
+                        function_name, template_arguments
+                    )
+                    suggested_action = (
+                        "raise max_template_specializations for this source pattern "
+                        "or backend, or reduce explicit template helper "
+                        "instantiations"
+                    )
                     raise MetalTemplateSpecializationError(
                         "Metal template specialization limit exceeded while "
-                        f"materializing '{function_name}' with arguments "
-                        f"{', '.join(template_arguments)}; increase the limit or "
-                        "reduce the set of explicit template instantiations"
+                        f"materializing '{requested_signature}'; "
+                        f"{unique_count} unique concrete signatures requested, "
+                        f"limit {self.max_template_specializations} from "
+                        f"{self.template_specialization_limit_source}. "
+                        f"Suggested action: {suggested_action}.",
+                        limit=self.max_template_specializations,
+                        limit_source=self.template_specialization_limit_source,
+                        unique_specialization_count=unique_count,
+                        requested_signature=requested_signature,
+                        suggested_action=suggested_action,
                     )
+                specialized_name = self._template_specialization_identifier(
+                    function_name, list(key[1])
+                )
                 materialized = self._materialize_template_function_with_name(
                     template,
                     template_arguments,
@@ -235,7 +276,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
                 if materialized:
                     replacements.append((span[0], span[1], specialized_name))
-                    seen_specializations.add(key)
+                    materialized_names[key] = specialized_name
                     new_materializations.append(materialized)
 
             if not replacements and not new_materializations:
@@ -466,7 +507,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 template_arguments = self._split_top_level_commas(
                     code[j + 1 : angle_end]
                 )
-                key = (ident, tuple(template_arguments))
+                key = self._template_specialization_key(ident, template_arguments)
                 if key in explicit_specialization_keys:
                     i = angle_end + 1
                     continue
@@ -652,7 +693,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             args = self._split_top_level_commas(
                 before_params[angle_start + 1 : angle_end]
             )
-            keys.add((function_name, tuple(args)))
+            keys.add(self._template_specialization_key(function_name, args))
         return keys
 
     def _containing_span(
@@ -694,6 +735,61 @@ class MetalPreprocessor(HLSLPreprocessor):
         if identifier[0].isdigit():
             identifier = f"{function_name}_{identifier}"
         return identifier
+
+    def _template_specialization_key(
+        self, function_name: str, template_arguments: List[str]
+    ) -> Tuple[str, Tuple[str, ...]]:
+        return (
+            function_name,
+            tuple(
+                self._normalize_template_argument_text(argument)
+                for argument in template_arguments
+            ),
+        )
+
+    def _template_specialization_signature(
+        self, function_name: str, template_arguments: List[str]
+    ) -> str:
+        return (
+            f"{function_name}<"
+            + ", ".join(
+                self._normalize_template_argument_text(argument)
+                for argument in template_arguments
+            )
+            + ">"
+        )
+
+    def _normalize_template_argument_text(self, value: str) -> str:
+        value = self._strip_template_argument_comments(value).strip()
+        if not value:
+            return ""
+        collapsed = re.sub(r"\s+", " ", value)
+        return re.sub(r"\s*([<>,:*&\[\](){}])\s*", r"\1", collapsed).strip()
+
+    def _strip_template_argument_comments(self, value: str) -> str:
+        result = ""
+        i = 0
+        while i < len(value):
+            if value[i] in "\"'":
+                literal, consumed = self._read_string(value, i)
+                result += literal
+                i += consumed
+                continue
+            if value.startswith("//", i):
+                end = value.find("\n", i)
+                if end == -1:
+                    break
+                i = end + 1
+                continue
+            if value.startswith("/*", i):
+                end = value.find("*/", i + 2)
+                if end == -1:
+                    break
+                i = end + 2
+                continue
+            result += value[i]
+            i += 1
+        return result
 
     def _template_parameter_names(self, template_parameters: str) -> List[str]:
         names: List[str] = []

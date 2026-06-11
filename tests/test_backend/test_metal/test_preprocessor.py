@@ -260,6 +260,64 @@ def test_preprocessor_reports_explicit_template_specialization_limit():
     )
 
 
+def test_preprocessor_dedupes_equivalent_explicit_template_helper_signatures():
+    code = """
+    template <typename T, typename IdxT, int Width>
+    T load_value(device const T* src, IdxT index) {
+        return src[index + Width];
+    }
+
+    kernel void copy(device const float* src [[buffer(0)]],
+                     device float* dst [[buffer(1)]],
+                     uint gid [[thread_position_in_grid]]) {
+        dst[0] = load_value<float, uint, 4>(src, gid);
+        dst[1] = load_value< float, uint, 4 >(src, gid);
+        dst[2] = load_value<float /* same concrete type */, uint, 4>(src, gid);
+    }
+    """
+
+    output = MetalPreprocessor(max_template_specializations=1).preprocess(code)
+
+    assert output.count("float load_value_float_uint_4(") == 1
+    assert output.count("load_value_float_uint_4(src, gid)") == 3
+    assert "load_value<" not in output
+
+
+def test_preprocessor_reports_template_specialization_limit_details():
+    code = """
+    template <typename T>
+    T cast_value(float value) {
+        return T(value);
+    }
+
+    kernel void copy(device float* dst [[buffer(0)]]) {
+        dst[0] = cast_value<float>(1.0);
+        dst[1] = cast_value<half>(2.0);
+    }
+    """
+
+    with pytest.raises(MetalTemplateSpecializationError) as exc_info:
+        MetalPreprocessor(
+            max_template_specializations=1,
+            template_specialization_limit_source=(
+                "project.source_options.metal.max_template_specializations"
+            ),
+        ).preprocess(code)
+
+    error = exc_info.value
+    assert error.limit == 1
+    assert error.limit_source == (
+        "project.source_options.metal.max_template_specializations"
+    )
+    assert error.unique_specialization_count == 2
+    assert error.requested_signature == "cast_value<half>"
+    assert "2 unique concrete signatures requested" in str(error)
+    assert "limit 1 from project.source_options.metal.max_template_specializations" in (
+        str(error)
+    )
+    assert "Suggested action:" in str(error)
+
+
 def test_preprocessor_preserves_incomplete_multiline_function_macro_invocation():
     code = """
     #define DECLARE_TYPED(name, type) type name;
