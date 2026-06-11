@@ -2743,6 +2743,130 @@ def _line_preserving_source_map_mappings(
     ]
 
 
+SOURCE_MAP_LINE_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?")
+SOURCE_MAP_LINE_TOKEN_ALIASES = {
+    "bool1": "bool",
+    "bool2": "vec2",
+    "bool3": "vec3",
+    "bool4": "vec4",
+    "double2": "vec2",
+    "double3": "vec3",
+    "double4": "vec4",
+    "float2": "vec2",
+    "float3": "vec3",
+    "float4": "vec4",
+    "half2": "vec2",
+    "half3": "vec3",
+    "half4": "vec4",
+    "int2": "vec2",
+    "int3": "vec3",
+    "int4": "vec4",
+    "uint2": "vec2",
+    "uint3": "vec3",
+    "uint4": "vec4",
+    "vsmain": "main",
+    "vertex_main": "main",
+    "fragment_main": "main",
+    "compute_main": "main",
+}
+SOURCE_MAP_LINE_STOP_TOKENS = frozenset(
+    (
+        "attribute",
+        "buffer",
+        "case",
+        "cbuffer",
+        "centroid",
+        "class",
+        "const",
+        "constant",
+        "core",
+        "device",
+        "else",
+        "for",
+        "if",
+        "in",
+        "include",
+        "inout",
+        "layout",
+        "metal_stdlib",
+        "namespace",
+        "out",
+        "position",
+        "return",
+        "stage_in",
+        "static",
+        "struct",
+        "switch",
+        "uniform",
+        "using",
+        "void",
+        "while",
+    )
+)
+
+
+def _source_map_line_tokens(text: str) -> frozenset[str]:
+    tokens = set()
+    for match in SOURCE_MAP_LINE_TOKEN_RE.finditer(text):
+        raw_token = match.group(0).lower()
+        for part in raw_token.split("_"):
+            token = SOURCE_MAP_LINE_TOKEN_ALIASES.get(part, part)
+            if token and token not in SOURCE_MAP_LINE_STOP_TOKENS:
+                tokens.add(token)
+        token = SOURCE_MAP_LINE_TOKEN_ALIASES.get(raw_token, raw_token)
+        if token and token not in SOURCE_MAP_LINE_STOP_TOKENS:
+            tokens.add(token)
+    return frozenset(tokens)
+
+
+def _derived_line_source_map_mappings(
+    source_path: Path,
+    source_report_path: str,
+    generated_path: Path,
+    generated_report_path: str,
+) -> list[dict[str, Any]]:
+    source_lines = _normalized_line_text(source_path.read_bytes()).splitlines()
+    generated_lines = _normalized_line_text(generated_path.read_bytes()).splitlines()
+    source_line_spans = _line_spans(source_path, source_report_path)
+    generated_line_spans = _line_spans(generated_path, generated_report_path)
+    source_tokens_by_index = [
+        _source_map_line_tokens(line) for line in source_lines[: len(source_line_spans)]
+    ]
+    generated_tokens_by_index = [
+        _source_map_line_tokens(line)
+        for line in generated_lines[: len(generated_line_spans)]
+    ]
+    mappings = []
+    for generated_index, generated_tokens in enumerate(generated_tokens_by_index):
+        if len(generated_tokens) < 2:
+            continue
+        scores = [
+            (len(generated_tokens & source_tokens), source_index)
+            for source_index, source_tokens in enumerate(source_tokens_by_index)
+            if source_tokens
+        ]
+        if not scores:
+            continue
+        best_score = max(score for score, _source_index in scores)
+        if best_score < 2:
+            continue
+        best_source_indexes = [
+            source_index
+            for score, source_index in scores
+            if score == best_score
+        ]
+        if len(best_source_indexes) != 1:
+            continue
+        source_index = best_source_indexes[0]
+        mappings.append(
+            {
+                "source": source_line_spans[source_index].to_json(),
+                "generated": generated_line_spans[generated_index].to_json(),
+            }
+        )
+    return mappings
+
+
 def _artifact_report_path(path: Path, config: ProjectConfig) -> str:
     return (
         _relpath(path, config.root) if _is_relative_to(path, config.root) else str(path)
@@ -6548,6 +6672,13 @@ def _artifact_source_map(
         output_path,
         artifact_path,
     )
+    if not line_mappings:
+        line_mappings = _derived_line_source_map_mappings(
+            unit.path,
+            unit.relative_path,
+            output_path,
+            artifact_path,
+        )
     mapping_granularity = "line" if line_mappings else "file"
     mappings = (
         line_mappings
@@ -6632,6 +6763,25 @@ def _artifact_source_remap(
     }
 
 
+def _attach_artifact_source_remap(
+    config: ProjectConfig,
+    target: str,
+    artifact: dict[str, Any],
+    output_path: Path,
+) -> None:
+    remap_path = _source_remap_path(output_path)
+    remap_payload = _source_remap_payload(artifact["sourceMap"])
+    _write_source_remap_sidecar(remap_path, remap_payload)
+    artifact["sourceRemap"] = _artifact_source_remap(
+        config,
+        target,
+        artifact["path"],
+        remap_path,
+        str(artifact["sourceMap"]["mappingGranularity"]),
+        len(remap_payload["mappings"]),
+    )
+
+
 def _webgl_split_stage_artifacts(
     config: ProjectConfig,
     unit: ProjectTranslationUnit,
@@ -6669,6 +6819,12 @@ def _webgl_split_stage_artifacts(
         stage_artifact["generatedSizeBytes"] = stage_path.stat().st_size
         stage_artifact["sourceMap"] = _artifact_source_map(
             config, unit, str(artifact["target"]), stage_path
+        )
+        _attach_artifact_source_remap(
+            config,
+            str(artifact["target"]),
+            stage_artifact,
+            stage_path,
         )
         stage_artifacts.append(stage_artifact)
 
@@ -7186,18 +7342,8 @@ def translate_project(
                     )
                     if split_artifacts is not None:
                         artifact_records = split_artifacts
-                    if _is_crossgl_target(target):
-                        remap_path = _source_remap_path(output_path)
-                        remap_payload = _source_remap_payload(artifact["sourceMap"])
-                        _write_source_remap_sidecar(remap_path, remap_payload)
-                        artifact["sourceRemap"] = _artifact_source_remap(
-                            config,
-                            target,
-                            artifact["path"],
-                            remap_path,
-                            str(artifact["sourceMap"]["mappingGranularity"]),
-                            len(remap_payload["mappings"]),
-                        )
+                    else:
+                        _attach_artifact_source_remap(config, target, artifact, output_path)
                 except Exception as exc:  # noqa: BLE001
                     # Project translation reports per-artifact failures so one bad
                     # unit does not hide the rest of the repository's migration state.
@@ -7574,6 +7720,55 @@ def _source_map_line_preserving_mapping_reasons(
     ]
 
 
+def _source_map_derived_line_mapping_reasons(
+    prefix: str,
+    source_map: Mapping[str, Any],
+    source_path: Path,
+    source_report_path: str,
+    artifact_path: Path,
+    artifact_report_path: str,
+) -> list[str]:
+    if source_map.get("mappingGranularity") != "line":
+        return []
+    mappings = source_map.get("mappings")
+    if not isinstance(mappings, list):
+        return []
+    if _line_preserving_source_map_mappings(
+        source_path,
+        source_report_path,
+        artifact_path,
+        artifact_report_path,
+    ):
+        return []
+    expected_mappings = _derived_line_source_map_mappings(
+        source_path,
+        source_report_path,
+        artifact_path,
+        artifact_report_path,
+    )
+    if not expected_mappings:
+        return []
+    if mappings == expected_mappings:
+        return []
+    if len(mappings) != len(expected_mappings):
+        return [
+            f"{prefix}.mappings count must match current derived line count "
+            f"({_value_mismatch_context(len(expected_mappings), len(mappings))})"
+        ]
+    for mapping_index, expected_mapping in enumerate(expected_mappings):
+        mapping = mappings[mapping_index]
+        if not isinstance(mapping, Mapping) or dict(mapping) != expected_mapping:
+            return [
+                f"{prefix}.mappings[{mapping_index}] must match current "
+                "derived line span "
+                f"({_value_mismatch_context(expected_mapping, mapping)})"
+            ]
+    return [
+        f"{prefix}.mappings must match current derived line spans "
+        f"({_value_mismatch_context(expected_mappings, mappings)})"
+    ]
+
+
 def _source_map_file_span_validation_diagnostics(
     artifact: Mapping[str, Any],
     config: ProjectConfig,
@@ -7648,6 +7843,16 @@ def _source_map_file_span_validation_diagnostics(
                 artifact_report_path,
             )
         )
+        reasons.extend(
+            _source_map_derived_line_mapping_reasons(
+                "sourceMap",
+                source_map,
+                source_path,
+                source,
+                artifact_path,
+                artifact_report_path,
+            )
+        )
 
     if not reasons:
         return []
@@ -7656,7 +7861,10 @@ def _source_map_file_span_validation_diagnostics(
             severity="error",
             code=(
                 "project.validate.source-map-line-span-mismatch"
-                if any("line-preserving line" in reason for reason in reasons)
+                if any(
+                    "line-preserving line" in reason or "derived line" in reason
+                    for reason in reasons
+                )
                 else "project.validate.source-map-file-span-mismatch"
             ),
             message=(
@@ -12211,16 +12419,12 @@ def _runtime_loader_webgl_program_groups(
         package_path = adapter.get("packagePath")
         if not _is_non_empty_string(package_path):
             continue
-        source_remap = adapter.get("sourceRemap")
         binding_source_path = None
         binding_id = adapter.get("binding")
         if _is_non_empty_string(binding_id):
             binding_source_path = str(binding_id).split("|", 1)[0]
         source_group_path = (
-            source_remap.get("sourcePath")
-            if isinstance(source_remap, Mapping)
-            and _is_non_empty_string(source_remap.get("sourcePath"))
-            else binding_source_path
+            binding_source_path
             or adapter.get("sourcePath")
             or adapter.get("packagePath")
         )
@@ -22995,13 +23199,6 @@ def _source_remap_contract_reasons(
         if require_closed_fields
         else []
     )
-    artifact_target = artifact.get("target")
-    if _is_non_empty_string(artifact_target) and not _is_crossgl_target(
-        artifact_target
-    ):
-        reasons.append(
-            f"{prefix} must be omitted unless artifacts[{index}].target is CrossGL"
-        )
     if source_remap.get("schemaVersion") != SOURCE_REMAP_SCHEMA_VERSION:
         reasons.append(f"{prefix}.schemaVersion must be 1")
 
@@ -23549,12 +23746,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 _source_remap_contract_reasons(
                     index,
                     artifact,
-                    required=(
-                        has_summary
-                        and status == "translated"
-                        and _is_non_empty_string(target)
-                        and _is_crossgl_target(target)
-                    ),
+                    required=has_summary and status == "translated",
                     require_closed_fields=has_summary,
                     declared_targets=(
                         declared_targets
