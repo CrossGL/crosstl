@@ -1009,7 +1009,10 @@ def test_hlsl_fx_macro_texture_resource_survives_metal_translation(tmp_path):
     metal = crosstl.translate(str(source_path), backend="metal", format_output=False)
 
     assert "@ register(s0)\n    sampler2D Texture;" in crossgl
-    assert "@ hlsl_program_constant\n    @ register(s0)\n    sampler2D Texture;" not in crossgl
+    assert (
+        "@ hlsl_program_constant\n    @ register(s0)\n    sampler2D Texture;"
+        not in crossgl
+    )
     assert "texture2d<float> Texture [[texture(0)]]" in metal
     assert (
         "Texture.sample(sampler(mag_filter::linear, min_filter::linear), input.texCoord)"

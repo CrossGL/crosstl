@@ -3561,18 +3561,19 @@ class HLSLToCrossGLConverter:
         base_type = self.raw_type_base(type_name)
         if not base_type:
             return False
-        return (
-            base_type in {"sampler", "comparison_sampler", "accelerationStructure"}
-            or base_type.startswith(
-                (
-                    "sampler",
-                    "isampler",
-                    "usampler",
-                    "image",
-                    "iimage",
-                    "uimage",
-                    "feedbackTexture",
-                )
+        return base_type in {
+            "sampler",
+            "comparison_sampler",
+            "accelerationStructure",
+        } or base_type.startswith(
+            (
+                "sampler",
+                "isampler",
+                "usampler",
+                "image",
+                "iimage",
+                "uimage",
+                "feedbackTexture",
             )
         )
 
