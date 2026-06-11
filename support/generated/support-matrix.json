@@ -245,7 +245,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1180
+        "test_count": 1181
       },
       "translator_codegen": {
         "exists": true,
@@ -615,7 +615,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 975
+        "test_count": 976
       },
       "translator_codegen": {
         "exists": true,
