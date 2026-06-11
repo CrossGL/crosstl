@@ -211,9 +211,7 @@ class MetalPreprocessor(HLSLPreprocessor):
 
             working = self._apply_text_replacements(working, replacements)
             if new_materializations:
-                working = working.rstrip() + "\n\n" + "\n\n".join(
-                    new_materializations
-                )
+                working = working.rstrip() + "\n\n" + "\n\n".join(new_materializations)
                 if not working.endswith("\n"):
                     working += "\n"
 
@@ -457,9 +455,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             declaration_start = angle_end + 1
             body_start = self._find_next_top_level_char(code, declaration_start, "{")
             semicolon = self._find_next_top_level_char(code, declaration_start, ";")
-            if body_start is not None and (
-                semicolon is None or body_start < semicolon
-            ):
+            if body_start is not None and (semicolon is None or body_start < semicolon):
                 body_end = self._find_matching_brace(code, body_start)
                 if body_end is None:
                     pos = body_start + 1
@@ -543,8 +539,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         identifier = "_".join(
             part
             for part in (
-                re.sub(r"[^A-Za-z0-9_]+", "_", str(value)).strip("_")
-                for value in parts
+                re.sub(r"[^A-Za-z0-9_]+", "_", str(value)).strip("_") for value in parts
             )
             if part
         )
