@@ -33874,18 +33874,14 @@ def test_hlsl_vector_constructor_truncates_matrix_vector_result():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert (
-        "output.worldPosition = float3(mul(model, "
-        "float4(input.position, 1.0)).xyz);"
+        "output.worldPosition = float3(mul(model, " "float4(input.position, 1.0)).xyz);"
     ) in generated_code
     assert (
         "output.worldNormal = normalize(float3(mul(normalMatrix, "
         "float4(input.normal, 1.0)).xyz));"
     ) in generated_code
     assert "float3(mul(model, float4(input.position, 1.0)))" not in generated_code
-    assert (
-        "float3(mul(normalMatrix, float4(input.normal, 1.0)))"
-        not in generated_code
-    )
+    assert "float3(mul(normalMatrix, float4(input.normal, 1.0)))" not in generated_code
 
 
 def test_hlsl_local_helpers_capture_stage_input_parameters():

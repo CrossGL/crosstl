@@ -1813,6 +1813,15 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         1238,
         1239,
         1240,
+        1246,
+        1248,
+        1249,
+        1250,
+        1259,
+        1260,
+        1261,
+        1274,
+        1287,
     ):
         assert (
             f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
@@ -1822,7 +1831,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
             f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
             in harness
         )
-    for tracked_issue_number in (1248,):
+    for tracked_issue_number in (1300,):
         assert (
             f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}"
             not in mlx_porting

@@ -157,6 +157,7 @@ void main() {
 }
 """
 
+
 def _write_source(tmp_path, filename, source):
     path = tmp_path / filename
     path.write_text(source, encoding="utf-8")

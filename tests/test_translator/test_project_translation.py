@@ -39774,9 +39774,7 @@ def test_translate_project_applies_metal_target_source_pattern_materialization_w
             "target_options": {
                 "opengl": {
                     "source_patterns": {
-                        "shaders/p.metal": {
-                            "max_template_materialization_work": 8
-                        }
+                        "shaders/p.metal": {"max_template_materialization_work": 8}
                     }
                 }
             },

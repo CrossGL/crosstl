@@ -4389,14 +4389,12 @@ class GLSLCodeGen:
                     used_block_names,
                 )
                 used_block_names.add(block_name)
-                member_name = (
-                    self.stage_entry_constant_value_parameter_member_name(
-                        block_name,
-                        parameter_name,
-                        used_member_names,
-                        parameter_member_name_counts,
-                        force_block_qualified=compute_value_type is not None,
-                    )
+                member_name = self.stage_entry_constant_value_parameter_member_name(
+                    block_name,
+                    parameter_name,
+                    used_member_names,
+                    parameter_member_name_counts,
+                    force_block_qualified=compute_value_type is not None,
                 )
                 used_member_names.add(member_name)
                 if member_name != parameter_name:

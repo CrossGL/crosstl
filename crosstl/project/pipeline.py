@@ -1103,9 +1103,7 @@ METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION = "max_template_specializations"
 METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION = (
     "template_specialization_limit_source"
 )
-METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION = (
-    "max_template_materialization_work"
-)
+METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION = "max_template_materialization_work"
 METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION = (
     "template_materialization_work_limit_source"
 )
@@ -4994,7 +4992,9 @@ def _source_options_for_unit(
                 f"{option_path}.{METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION}"
             )
 
-    def apply_source_patterns(option_values: Mapping[str, Any], option_path: str) -> None:
+    def apply_source_patterns(
+        option_values: Mapping[str, Any], option_path: str
+    ) -> None:
         nonlocal template_limit_source, work_limit_source
         source_patterns = option_values.get(SOURCE_OPTION_PATTERNS_KEY)
         if not isinstance(source_patterns, Mapping):
@@ -9423,9 +9423,7 @@ class _MetalTemplateMaterializationWorkBudget:
             if self.unit is not None
             else None
         )
-        requested_signature = (
-            f"{self.pass_name}: {self.used} work items for {context}"
-        )
+        requested_signature = f"{self.pass_name}: {self.used} work items for {context}"
         suggested_action = (
             "raise max_template_materialization_work for this source pattern "
             "or backend, reduce implicit Metal template helper fan-out, or add "
@@ -10316,9 +10314,7 @@ def _metal_rewrite_identifier_tokens(
                 j += 1
             token = text[i:j]
             replacement = (
-                None
-                if text[max(0, i - 2) : i] == "::"
-                else replacements.get(token)
+                None if text[max(0, i - 2) : i] == "::" else replacements.get(token)
             )
             if replacement is None:
                 parts.append(token)
@@ -28110,18 +28106,17 @@ def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[st
                     continue
                 for target, target_options in option_value.items():
                     if not _is_non_empty_string(target):
-                        reasons.append(
-                            f"{name_prefix} keys must be non-empty strings"
-                        )
+                        reasons.append(f"{name_prefix} keys must be non-empty strings")
                         target_prefix = name_prefix
                     else:
                         target_prefix = _mapping_key_path(name_prefix, target)
                     if not isinstance(target_options, Mapping):
                         reasons.append(f"{target_prefix} must be an object")
                         continue
-                    for target_option_name, target_option_value in (
-                        target_options.items()
-                    ):
+                    for (
+                        target_option_name,
+                        target_option_value,
+                    ) in target_options.items():
                         if not _is_non_empty_string(target_option_name):
                             reasons.append(
                                 f"{target_prefix} keys must be non-empty strings"
@@ -28137,9 +28132,7 @@ def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[st
                                     f"{target_option_prefix} must be an object"
                                 )
                                 continue
-                            for pattern, pattern_options in (
-                                target_option_value.items()
-                            ):
+                            for pattern, pattern_options in target_option_value.items():
                                 if not _is_non_empty_string(pattern):
                                     reasons.append(
                                         f"{target_option_prefix} keys must be "

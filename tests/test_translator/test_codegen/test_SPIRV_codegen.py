@@ -25874,7 +25874,9 @@ class TestVulkanSPIRVCodeGen:
         assert "OpFMul" in spv_code
         assert "WARNING" not in spv_code
 
-    def test_overloaded_user_function_calls_use_matching_parameter_types(self, tmp_path):
+    def test_overloaded_user_function_calls_use_matching_parameter_types(
+        self, tmp_path
+    ):
         source_code = """
         shader OverloadedLinearToSrgb {
             float linearToSrgb(float c) {
