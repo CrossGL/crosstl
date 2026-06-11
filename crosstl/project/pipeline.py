@@ -21,6 +21,11 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
+from crosstl.project.host_reflection import (
+    empty_host_interface_record,
+    host_interface_record,
+    reflect_target_host_interface,
+)
 from crosstl.translator.codegen import (
     backend_names,
     get_backend_extension,
@@ -542,11 +547,15 @@ RUNTIME_HOST_INTERFACE_FIELDS = frozenset(
         "status",
         "source",
         "parser",
+        "artifactFormat",
         "entryPointCount",
         "resourceCount",
+        "constantCount",
         "entryPoints",
         "resources",
+        "constants",
         "diagnostics",
+        "diagnosticRecords",
     )
 )
 RUNTIME_HOST_INTERFACE_ENTRY_POINT_FIELDS = frozenset(
@@ -16123,6 +16132,47 @@ def _runtime_manifest_source_host_interface(
     return host_interface
 
 
+def _runtime_manifest_reflected_host_interface(
+    root_path: Path | None, artifact: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    if root_path is None:
+        return None
+    target = artifact.get("target")
+    path = artifact.get("path")
+    if not (
+        _is_non_empty_string(target)
+        and _is_non_empty_string(path)
+        and _is_report_identity_path(path)
+    ):
+        return None
+    normalized_target = _normalized_targets([str(target)])[0]
+    if normalized_target not in {"directx", "opengl", "webgl", "vulkan"}:
+        return None
+    artifact_path = (root_path / str(path)).resolve()
+    if not _is_relative_to(artifact_path, root_path) or not artifact_path.is_file():
+        return None
+    catalog_entry = _runtime_adapter_catalog_entry(normalized_target)
+    return reflect_target_host_interface(
+        artifact_path,
+        target=normalized_target,
+        artifact_format=catalog_entry.get("artifactFormat"),
+        stage=(
+            str(artifact.get("stage"))
+            if _is_non_empty_string(artifact.get("stage"))
+            else None
+        ),
+    )
+
+
+def _runtime_manifest_host_interface(
+    root_path: Path | None, artifact: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    reflected = _runtime_manifest_reflected_host_interface(root_path, artifact)
+    if isinstance(reflected, Mapping):
+        return dict(reflected)
+    return _runtime_manifest_source_host_interface(root_path, artifact)
+
+
 def _runtime_manifest_group_key(value: Any) -> str:
     if value is None:
         return "default"
@@ -16689,7 +16739,7 @@ def _runtime_manifest_artifact(
     toolchains: Mapping[str, Mapping[str, Any]] | None = None,
     toolchain_runs: Mapping[tuple[Any, ...], Sequence[Mapping[str, Any]]] | None = None,
 ) -> dict[str, Any]:
-    host_interface = _runtime_manifest_source_host_interface(root_path, artifact)
+    host_interface = _runtime_manifest_host_interface(root_path, artifact)
     entry_points = _runtime_manifest_entry_points(host_interface)
     resource_bindings = _runtime_manifest_resource_bindings(host_interface)
     parameter_blocks = _runtime_manifest_parameter_blocks(resource_bindings)
@@ -17115,6 +17165,11 @@ def _runtime_binding_scalar_constants(
 ) -> list[dict[str, Any]]:
     constants = _runtime_binding_define_constants(artifact)
     constants.extend(_runtime_binding_source_scalar_constants(root_path, artifact))
+    host_interface = artifact.get("hostInterface")
+    if isinstance(host_interface, Mapping):
+        for constant in _record_sequence(host_interface.get("constants")):
+            if isinstance(constant, Mapping):
+                constants.append(dict(constant))
     return constants
 
 
@@ -18516,17 +18571,14 @@ def _runtime_host_interface_empty(
     *,
     parser: str | None = None,
     diagnostics: Sequence[str] = (),
+    artifact_format: str | None = None,
 ) -> dict[str, Any]:
-    return {
-        "status": status,
-        "source": "package-artifact",
-        "parser": parser,
-        "entryPointCount": 0,
-        "resourceCount": 0,
-        "entryPoints": [],
-        "resources": [],
-        "diagnostics": list(diagnostics),
-    }
+    return empty_host_interface_record(
+        status,
+        parser=parser,
+        artifact_format=artifact_format,
+        diagnostics=diagnostics,
+    )
 
 
 _RUNTIME_HOST_INTERFACE_STAGE_NAMES = frozenset(
@@ -18903,16 +18955,13 @@ def _runtime_host_interface_from_ast(
 ) -> dict[str, Any]:
     entry_points = _runtime_host_interface_entry_points(ast)
     resources = _runtime_host_interface_resources(ast)
-    return {
-        "status": "ready",
-        "source": source,
-        "parser": parser,
-        "entryPointCount": len(entry_points),
-        "resourceCount": len(resources),
-        "entryPoints": entry_points,
-        "resources": resources,
-        "diagnostics": [],
-    }
+    return host_interface_record(
+        status="ready",
+        source=source,
+        parser=parser,
+        entry_points=entry_points,
+        resources=resources,
+    )
 
 
 def _runtime_host_interface_for_wgsl_target(
@@ -19026,16 +19075,15 @@ def _runtime_host_interface_from_wgsl_source(
     entry_points = _runtime_wgsl_reflect_entry_points(code)
     resources = _runtime_wgsl_reflect_resources(code)
     diagnostics = _runtime_wgsl_symbolic_resource_binding_diagnostics(code)
-    return {
-        "status": "unavailable" if diagnostics else "ready",
-        "source": source,
-        "parser": parser,
-        "entryPointCount": len(entry_points),
-        "resourceCount": len(resources),
-        "entryPoints": entry_points,
-        "resources": resources,
-        "diagnostics": diagnostics,
-    }
+    return host_interface_record(
+        status="unavailable" if diagnostics else "ready",
+        source=source,
+        parser=parser,
+        artifact_format="WGSL source",
+        entry_points=entry_points,
+        resources=resources,
+        diagnostics=diagnostics,
+    )
 
 
 def _runtime_package_inspection_parser_name(target_name: str) -> str | None:
@@ -19054,28 +19102,40 @@ def _runtime_package_artifact_host_interface(
         return None
     if host_interface.get("status") != "ready":
         return None
-    return {
-        "status": host_interface.get("status"),
-        "source": host_interface.get("source"),
-        "parser": host_interface.get("parser"),
-        "entryPointCount": host_interface.get("entryPointCount", 0),
-        "resourceCount": host_interface.get("resourceCount", 0),
-        "entryPoints": [
+    return host_interface_record(
+        status=str(host_interface.get("status") or "ready"),
+        source=str(host_interface.get("source") or "package-artifact"),
+        parser=(
+            str(host_interface.get("parser"))
+            if _is_non_empty_string(host_interface.get("parser"))
+            else None
+        ),
+        artifact_format=(
+            str(host_interface.get("artifactFormat"))
+            if _is_non_empty_string(host_interface.get("artifactFormat"))
+            else None
+        ),
+        entry_points=[
             dict(entry_point)
             for entry_point in _record_sequence(host_interface.get("entryPoints"))
             if isinstance(entry_point, Mapping)
         ],
-        "resources": [
+        resources=[
             dict(resource)
             for resource in _record_sequence(host_interface.get("resources"))
             if isinstance(resource, Mapping)
         ],
-        "diagnostics": [
+        constants=[
+            dict(constant)
+            for constant in _record_sequence(host_interface.get("constants"))
+            if isinstance(constant, Mapping)
+        ],
+        diagnostics=[
             diagnostic
             for diagnostic in _record_sequence(host_interface.get("diagnostics"))
             if _is_non_empty_string(diagnostic)
         ],
-    }
+    )
 
 
 def _runtime_package_inspection_host_interface(
@@ -19095,11 +19155,14 @@ def _runtime_package_inspection_host_interface(
     except Exception:
         parser_name = None
         source_spec = None
+    catalog_entry = _runtime_adapter_catalog_entry(target_name)
+    artifact_format = catalog_entry.get("artifactFormat")
 
     if artifact_diagnostics:
         return _runtime_host_interface_empty(
             "not-inspected",
             parser=parser_name,
+            artifact_format=artifact_format,
             diagnostics=(
                 "project.runtime-package-inspection.host-interface-artifact-not-ready",
             ),
@@ -19110,6 +19173,7 @@ def _runtime_package_inspection_host_interface(
             return _runtime_host_interface_empty(
                 "not-inspected",
                 parser=RUNTIME_WGSL_REFLECTION_PARSER,
+                artifact_format="WGSL source",
                 diagnostics=(
                     "project.runtime-package-inspection.host-interface-artifact-not-ready",
                 ),
@@ -19122,6 +19186,7 @@ def _runtime_package_inspection_host_interface(
             return _runtime_host_interface_empty(
                 "not-inspected",
                 parser=RUNTIME_WGSL_REFLECTION_PARSER,
+                artifact_format="WGSL source",
                 diagnostics=(
                     "project.runtime-package-inspection.host-interface-artifact-not-ready",
                 ),
@@ -19134,6 +19199,7 @@ def _runtime_package_inspection_host_interface(
             return _runtime_host_interface_empty(
                 "not-inspected",
                 parser=RUNTIME_WGSL_REFLECTION_PARSER,
+                artifact_format="WGSL source",
                 diagnostics=(
                     "project.runtime-package-inspection.host-interface-artifact-not-ready",
                 ),
@@ -19145,17 +19211,57 @@ def _runtime_package_inspection_host_interface(
             return _runtime_host_interface_empty(
                 "unavailable",
                 parser=RUNTIME_WGSL_REFLECTION_PARSER,
+                artifact_format="WGSL source",
                 diagnostics=(
                     "project.runtime-package-inspection.host-interface-empty",
                 ),
             )
         return host_interface
+
+    reflected_targets = {"directx", "opengl", "webgl", "vulkan"}
+    if target_name in reflected_targets:
+        if not _is_non_empty_string(package_relative_path):
+            return _runtime_host_interface_empty(
+                "not-inspected",
+                parser=f"{target_name}-reflection",
+                artifact_format=artifact_format,
+                diagnostics=(
+                    "project.runtime-package-inspection.host-interface-artifact-not-ready",
+                ),
+            )
+        artifact_path = (package_root / package_relative_path).resolve()
+        if (
+            not _is_relative_to(artifact_path, package_root)
+            or not artifact_path.is_file()
+        ):
+            return _runtime_host_interface_empty(
+                "not-inspected",
+                parser=f"{target_name}-reflection",
+                artifact_format=artifact_format,
+                diagnostics=(
+                    "project.runtime-package-inspection.host-interface-artifact-not-ready",
+                ),
+            )
+        reflected_interface = reflect_target_host_interface(
+            artifact_path,
+            target=target_name,
+            artifact_format=artifact_format,
+            stage=(
+                str(artifact.get("stage"))
+                if _is_non_empty_string(artifact.get("stage"))
+                else None
+            ),
+        )
+        if isinstance(reflected_interface, Mapping):
+            return dict(reflected_interface)
+
     if source_spec is None:
         source_host_interface = _runtime_package_artifact_host_interface(artifact)
         if source_host_interface is not None:
             return source_host_interface
         return _runtime_host_interface_empty(
             "unavailable",
+            artifact_format=artifact_format,
             diagnostics=(
                 "project.runtime-package-inspection.host-interface-parser-unavailable",
             ),
@@ -19165,6 +19271,7 @@ def _runtime_package_inspection_host_interface(
         return _runtime_host_interface_empty(
             "not-inspected",
             parser=parser_name,
+            artifact_format=artifact_format,
             diagnostics=(
                 "project.runtime-package-inspection.host-interface-artifact-not-ready",
             ),
@@ -19175,6 +19282,7 @@ def _runtime_package_inspection_host_interface(
         return _runtime_host_interface_empty(
             "not-inspected",
             parser=parser_name,
+            artifact_format=artifact_format,
             diagnostics=(
                 "project.runtime-package-inspection.host-interface-artifact-not-ready",
             ),
@@ -19189,6 +19297,7 @@ def _runtime_package_inspection_host_interface(
         return _runtime_host_interface_empty(
             "failed",
             parser=parser_name,
+            artifact_format=artifact_format,
             diagnostics=(
                 "project.runtime-package-inspection.host-interface-parse-failed",
             ),
@@ -19198,6 +19307,7 @@ def _runtime_package_inspection_host_interface(
         return _runtime_host_interface_empty(
             "unavailable",
             parser=parser_name,
+            artifact_format=artifact_format,
             diagnostics=("project.runtime-package-inspection.host-interface-empty",),
         )
     return host_interface
