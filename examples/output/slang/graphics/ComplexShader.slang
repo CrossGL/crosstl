@@ -123,9 +123,9 @@ struct GlobalUniforms
     float noiseValues[1024];
 };
 
-[[vk::binding(0, 0)]] Sampler2D<float4> albedoMap : register(t0);
-[[vk::binding(1, 0)]] Sampler2D<float4> normalMap : register(t1);
-[[vk::binding(2, 0)]] Sampler2D<float4> metallicRoughnessMap : register(t2);
+[[vk::binding(0, 0)]] Sampler2D<float4> Material_albedoMap : register(t0);
+[[vk::binding(1, 0)]] Sampler2D<float4> Material_normalMap : register(t1);
+[[vk::binding(2, 0)]] Sampler2D<float4> Material_metallicRoughnessMap : register(t2);
 float distributionGGX(float3 N, float3 H, float roughness)
 {
     float a = roughness * roughness;
@@ -340,9 +340,9 @@ float shadowCalculation(float4 fragPosLightSpace, int iteration, VertexOutput in
 [shader("fragment")] FragmentOutput PSMain(VertexOutput input) {
     FragmentOutput output;
     Material material = globals.scene.materials[input.materialIndex];
-    float4 albedoValue = albedoMap.Sample(input.texCoord0);
-    float4 normalValue = normalMap.Sample(input.texCoord0);
-    float4 metallicRoughnessValue = metallicRoughnessMap.Sample(input.texCoord0);
+    float4 albedoValue = Material_albedoMap.Sample(input.texCoord0);
+    float4 normalValue = Material_normalMap.Sample(input.texCoord0);
+    float4 metallicRoughnessValue = Material_metallicRoughnessMap.Sample(input.texCoord0);
     float3 normal = normalValue.xyz * 2.0 - 1.0;
     float3 worldNormal = normalize(mul(input.TBN, normal));
     float3 albedo = albedoValue.rgb * material.albedo;

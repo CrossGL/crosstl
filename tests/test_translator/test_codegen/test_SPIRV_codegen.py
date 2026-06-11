@@ -2472,6 +2472,51 @@ class TestVulkanSPIRVCodeGen:
         assert any(f"OpStore {right_var} {rid}" in spv_code for rid in shr_ids)
         assert "WARNING" not in spv_code
 
+    def test_vector_shift_by_scalar_splats_shift_count_for_spirv(self, tmp_path):
+        source_code = """
+        shader VectorScalarShift {
+            compute {
+                void main() {
+                    ivec2 lanes = ivec2(1, 2);
+                    ivec2 shiftedLeft = lanes << 1;
+                    ivec2 shiftedRight = lanes >> 1;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1\b", spv_code)
+        assert int_type is not None
+        ivec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(int_type.group(1))} 2\b",
+            spv_code,
+        )
+        assert ivec2_type is not None
+
+        shift_count_vectors = re.findall(
+            rf"(%\d+) = OpCompositeConstruct {re.escape(ivec2_type.group(1))} "
+            rf"(?P<count>%\d+) (?P=count)\b",
+            spv_code,
+        )
+        assert len(shift_count_vectors) >= 2
+
+        assert re.search(
+            rf"%\d+ = OpShiftLeftLogical {re.escape(ivec2_type.group(1))} "
+            rf"%\d+ {re.escape(shift_count_vectors[0][0])}\b",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpShiftRightLogical {re.escape(ivec2_type.group(1))} "
+            rf"%\d+ {re.escape(shift_count_vectors[1][0])}\b",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_vector_composite_construct_emits_scalar_components(self):
         source_code = """
         shader VectorConstruct {
@@ -20167,6 +20212,32 @@ class TestVulkanSPIRVCodeGen:
         assert re.search(rf"OpConvertSToF {re.escape(float_type_id)} %\d+", spv_code)
         assert re.search(rf"OpConvertUToF {re.escape(float_type_id)} %\d+", spv_code)
         assert "WARNING" not in spv_code
+
+    def test_global_vector_constant_with_negative_component_validates(self, tmp_path):
+        source_code = """
+        shader NegativeVectorConstant {
+            const vec3 GRAVITY_VECTOR = vec3(0.0, -9.81, 0.0);
+
+            compute {
+                void main() {
+                    vec3 force = GRAVITY_VECTOR;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+
+        assert float_type is not None
+        assert re.search(
+            rf"%\d+ = OpConstant {re.escape(float_type.group(1))} -9\.81\b",
+            spv_code,
+        )
+        assert "OpFNegate" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_nested_array_and_struct_member_params_use_spirv_local_copies(self):
         source_code = """

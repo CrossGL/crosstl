@@ -702,6 +702,32 @@ def test_codegen_skips_unexpanded_struct_member_macros_from_unity_builtins():
     assert "vec4 tc;" in crossgl
 
 
+def test_codegen_skips_unexpanded_unity_setup_statement_macros():
+    hlsl = textwrap.dedent("""
+        struct appdata { float4 vertex : POSITION; };
+        struct v2f {
+            float4 position : SV_Position;
+            UNITY_VERTEX_OUTPUT_STEREO
+        };
+
+        v2f vert(appdata v) {
+            v2f o;
+            UNITY_SETUP_INSTANCE_ID(v);
+            UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
+            o.position = v.vertex;
+            return o;
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(hlsl)
+    parse_crossgl(crossgl)
+
+    assert "UNITY_SETUP_INSTANCE_ID" not in crossgl
+    assert "UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO" not in crossgl
+    assert "o.position = v.vertex;" in crossgl
+    assert "return o;" in crossgl
+
+
 def test_codegen_legacy_d3d9_fx_sampler_state_binding_imports_bound_texture_call():
     hlsl = textwrap.dedent("""
         texture g_MeshTexture;

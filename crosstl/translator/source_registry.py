@@ -275,6 +275,10 @@ WGSL_SOURCE_UNSUPPORTED_MESSAGE = (
     "WGSL/WebGPU source files (.wgsl, .wesl) are not supported yet; provide a "
     "registered CrossGL or native backend source file first."
 )
+WEBGL_SOURCE_UNSUPPORTED_MESSAGE = (
+    "WebGL target files (.webgl.glsl) are not supported as native source input; "
+    "provide OpenGL GLSL source (.glsl) or CrossGL source first."
+)
 
 _COMPOUND_UNSUPPORTED_EXTENSION_MESSAGES = {
     ".spv.json": BINARY_SPIRV_UNSUPPORTED_MESSAGE,
@@ -290,6 +294,8 @@ _COMPOUND_UNSUPPORTED_EXTENSION_MESSAGES = {
     ".hsaco.json": HIP_ARTIFACT_UNSUPPORTED_MESSAGE,
     ".wgsl.json": WGSL_SOURCE_UNSUPPORTED_MESSAGE,
     ".wesl.json": WGSL_SOURCE_UNSUPPORTED_MESSAGE,
+    ".webgl.glsl": WEBGL_SOURCE_UNSUPPORTED_MESSAGE,
+    ".webgl.glsl.json": WEBGL_SOURCE_UNSUPPORTED_MESSAGE,
 }
 
 

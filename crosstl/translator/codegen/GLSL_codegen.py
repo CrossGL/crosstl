@@ -279,6 +279,7 @@ from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
     collect_stage_entry_reserved_function_names,
+    collect_stage_local_cbuffers,
     collect_stage_local_structs,
     collect_stage_local_variables,
     compute_local_size,
@@ -2526,7 +2527,7 @@ class GLSLCodeGen:
             )
         )
         self.validate_global_resource_shadows(ast)
-        code = "\n"
+        code = ""
         preprocessors = getattr(ast, "preprocessors", []) or []
         version_line = None
         extra_lines = []
@@ -3067,10 +3068,10 @@ class GLSLCodeGen:
         for node in stage_local_interface_vars:
             code += self.generate_stage_local_interface_variable_declaration(node)
 
-        cbuffers = getattr(ast, "cbuffers", [])
+        cbuffers = self.glsl_cbuffer_nodes(ast, target_stage)
         if cbuffers:
             code += "// Constant Buffers\n"
-            code += self.generate_cbuffers(ast)
+            code += self.generate_cbuffers(ast, target_stage)
 
         combined_stage_entry_names = self.combined_stage_entry_names(ast, target_stage)
         self.prepare_glsl_resource_function_specializations(ast)
@@ -4043,15 +4044,28 @@ class GLSLCodeGen:
                 f"{target_stage} stage entry point"
             )
 
-    def generate_cbuffers(self, ast):
+    def glsl_cbuffer_nodes(self, ast, target_stage=None):
+        return list(getattr(ast, "cbuffers", []) or []) + collect_stage_local_cbuffers(
+            ast, target_stage
+        )
+
+    def generate_cbuffers(self, ast, target_stage=None):
         code = ""
-        cbuffers = getattr(ast, "cbuffers", [])
+        cbuffers = self.glsl_cbuffer_nodes(ast, target_stage)
         duplicate_names = collect_duplicate_cbuffer_names(cbuffers)
         if duplicate_names:
             names = ", ".join(sorted(duplicate_names))
             raise ValueError(f"Duplicate cbuffer name(s) in OpenGL output: {names}")
 
-        declaration_conflicts = collect_cbuffer_declaration_name_conflicts(ast)
+        cbuffer_ast = SimpleNamespace(
+            cbuffers=cbuffers,
+            structs=list(getattr(ast, "structs", []) or [])
+            + collect_stage_local_structs(ast, target_stage),
+            global_variables=getattr(ast, "global_variables", []) or [],
+            constants=getattr(ast, "constants", []) or [],
+        )
+
+        declaration_conflicts = collect_cbuffer_declaration_name_conflicts(cbuffer_ast)
         if declaration_conflicts:
             names = ", ".join(sorted(declaration_conflicts))
             raise ValueError(
@@ -4065,7 +4079,7 @@ class GLSLCodeGen:
                 f"Ambiguous cbuffer member name(s) in OpenGL output: {names}"
             )
 
-        global_member_conflicts = collect_cbuffer_member_global_conflicts(ast)
+        global_member_conflicts = collect_cbuffer_member_global_conflicts(cbuffer_ast)
         if global_member_conflicts:
             names = ", ".join(sorted(global_member_conflicts))
             raise ValueError(
@@ -6760,7 +6774,9 @@ class GLSLCodeGen:
                 param_type,
                 param.name,
             )
-            prefix = self.stage_io_declaration_prefix(param, "in")
+            prefix = self.stage_io_declaration_prefix(
+                param, "in", stage_name=stage_name
+            )
             if self.requires_flat_stage_input(stage_name, param_type):
                 prefix = self.with_flat_stage_input_qualifier(prefix)
             parameter_declaration = format_c_style_array_declaration(
@@ -7392,7 +7408,7 @@ class GLSLCodeGen:
                 member_type,
                 member.name,
             )
-            prefix = self.stage_io_declaration_prefix(member, "in")
+            prefix = self.stage_io_declaration_prefix(member, "in", stage_name="vertex")
             member_decl = format_c_style_array_declaration(member_type, member.name)
             declaration = f"{prefix} {member_decl};"
             if self.reserve_stage_io_declaration(
@@ -7430,7 +7446,9 @@ class GLSLCodeGen:
                 self.member_type_name(member),
                 output_name,
             )
-            prefix = self.stage_io_declaration_prefix(member, "out")
+            prefix = self.stage_io_declaration_prefix(
+                member, "out", stage_name="vertex"
+            )
             member_type = self.member_type_name(member)
             prefix = self.stage_io_prefix_with_required_flat(prefix, member_type)
             member_decl = format_c_style_array_declaration(member_type, output_name)
@@ -7458,7 +7476,9 @@ class GLSLCodeGen:
                 input_name,
             )
             member_type = self.member_type_name(member)
-            prefix = self.stage_io_declaration_prefix(member, "in")
+            prefix = self.stage_io_declaration_prefix(
+                member, "in", stage_name="fragment"
+            )
             prefix = self.stage_io_prefix_with_required_flat(prefix, member_type)
             member_decl = format_c_style_array_declaration(member_type, input_name)
             declaration = f"{prefix} {member_decl};"
@@ -8897,11 +8917,15 @@ class GLSLCodeGen:
             return explicit_layout
         return self.map_semantic(self.semantic_from_node(node))
 
-    def stage_io_declaration_prefix(self, node, direction, layout=None):
+    def stage_io_declaration_prefix(
+        self, node, direction, layout=None, stage_name=None
+    ):
         parts = []
         if layout is None:
             layout = self.stage_io_layout_for_node(node)
-        if layout.startswith("layout("):
+        if layout.startswith("layout(") and self.should_emit_stage_io_layout(
+            stage_name, direction
+        ):
             parts.append(layout)
 
         qualifiers = [
@@ -8923,6 +8947,9 @@ class GLSLCodeGen:
         parts.append(direction)
         parts.extend(precision)
         return " ".join(parts)
+
+    def should_emit_stage_io_layout(self, stage_name, direction):
+        return True
 
     def requires_flat_stage_input(self, stage_name, mapped_type):
         if stage_name != "fragment":
@@ -9230,6 +9257,8 @@ class GLSLCodeGen:
             args = getattr(expr, "arguments", getattr(expr, "args", []))
             if func_name in self.GLSL_WAVE_INTRINSIC_ARITIES:
                 return self.glsl_wave_result_type(func_name, args)
+            if is_resource_size_query_operation(func_name) and args:
+                return self.texture_size_result_type(args[0])
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type:
                 return numeric_result_type
@@ -9326,6 +9355,44 @@ class GLSLCodeGen:
             return None
         if mapped_type.endswith(("2", "3", "4")):
             return f"bvec{mapped_type[-1]}"
+        return None
+
+    def texture_size_result_type(self, texture_arg):
+        texture_type = self.resource_base_type(self.texture_resource_type(texture_arg))
+        if not texture_type:
+            return None
+        if texture_type.endswith(("1D", "Buffer")):
+            return "int"
+        if texture_type.endswith(
+            (
+                "3D",
+                "2DArray",
+                "2DArrayShadow",
+                "2DMSArray",
+                "CubeArray",
+                "CubeArrayShadow",
+            )
+        ):
+            return "ivec3"
+        return "ivec2"
+
+    def expected_float_vector_expression_type(self):
+        expected_type = self.map_type(self.current_expression_expected_type)
+        if expected_type in {"vec2", "vec3", "vec4"}:
+            return expected_type
+        return None
+
+    def cast_integer_vector_expression_for_expected_float(
+        self, expression, expression_type, expected_type
+    ):
+        mapped_type = self.map_type(expression_type)
+        if mapped_type == self.glsl_integer_vector_type_for_float(expected_type):
+            return f"{expected_type}({expression})"
+        return expression
+
+    def glsl_integer_vector_type_for_float(self, vector_type):
+        if vector_type in {"vec2", "vec3", "vec4"}:
+            return f"ivec{vector_type[-1]}"
         return None
 
     def glsl_relational_vector_type(self, left_type, right_type):
@@ -10225,8 +10292,19 @@ class GLSLCodeGen:
             )
             if vector_relational is not None:
                 return vector_relational
+            left_type = self.expression_result_type(expr.left)
+            right_type = self.expression_result_type(expr.right)
             left = self.generate_expression(expr.left)
             right = self.generate_expression(expr.right)
+            if op in {"+", "-", "*", "/"}:
+                expected_vector = self.expected_float_vector_expression_type()
+                if expected_vector:
+                    left = self.cast_integer_vector_expression_for_expected_float(
+                        left, left_type, expected_vector
+                    )
+                    right = self.cast_integer_vector_expression_for_expected_float(
+                        right, right_type, expected_vector
+                    )
             return f"({left} {op} {right})"
         elif hasattr(expr, "__class__") and "AssignmentNode" in str(type(expr)):
             return self.generate_assignment(expr)

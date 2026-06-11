@@ -13,9 +13,9 @@ Slang syntax from the shared translator AST, maps CrossGL types to Slang/HLSL
 style types, preserves stage entry points, emits constant buffers and resources,
 and generates helper functions for selected image and texture operations.
 
-Reverse translation uses ``crosstl.backend.Slang.SlangLexer.SlangLexer`` and
-``crosstl.backend.Slang.SlangParser.SlangParser`` to parse Slang source into the
-Slang backend AST. ``crosstl.backend.Slang.SlangCrossGLCodeGen`` then
+Reverse translation uses ``crosstl.backend.slang.SlangLexer.SlangLexer`` and
+``crosstl.backend.slang.SlangParser.SlangParser`` to parse Slang source into the
+Slang backend AST. ``crosstl.backend.slang.SlangCrossGLCodeGen`` then
 serializes that AST back into CrossGL syntax.
 
 Supported Surface

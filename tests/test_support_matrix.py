@@ -175,6 +175,18 @@ def test_current_supported_rows_have_evidence():
     assert rows == []
 
 
+def test_generated_target_only_backend_aliases_are_visible_as_target_aliases():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    backends = {backend["id"]: backend for backend in matrix["backends"]}
+
+    assert backends["webgl"]["target_aliases"] == ["webgl2", "essl", "glsl-es"]
+    assert backends["wgsl"]["target_aliases"] == ["webgpu"]
+
+
 def test_project_report_inspection_is_first_class_support_feature():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(
@@ -1253,7 +1265,7 @@ def test_project_include_resolution_documents_status_reporting():
     feature = features["project.include_resolution"]
 
     for backend_support in feature["support"].values():
-        assert backend_support["status"] == "partial"
+        assert backend_support["status"] == "supported"
         assert "per-include directory status records and status counts" in (
             backend_support["notes"]
         )
@@ -1313,6 +1325,32 @@ def test_project_include_resolution_documents_status_reporting():
             "Resolved include dependency reports and inspection samples include "
             "byte-size metadata"
         ) in backend_support["notes"]
+        assert "per-artifact includeDependencyProcessing metadata" in (
+            backend_support["notes"]
+        )
+        assert (
+            "backend-native status rollups by status, source backend, target, "
+            "and variant"
+        ) in backend_support["notes"]
+        assert "forwarded for source frontends with include-path support" in (
+            backend_support["notes"]
+        )
+        assert (
+            "preserved for source frontends that delegate them to platform compilers"
+            in backend_support["notes"]
+        )
+        assert (
+            "GLSL/Vulkan and unresolved local/dynamic/outside-project forms "
+            "are reported as rejected"
+        ) in backend_support["notes"]
+        assert (
+            "source frontends without include-path support are explicitly reported"
+            in (backend_support["notes"])
+        )
+        assert (
+            "HLSL-style preprocessing preserves unresolved angle system includes"
+            in (backend_support["notes"])
+        )
         assert (
             "OpenGL/GLSL translation with a resolved angle include and "
             "variant-specific conditional output"
@@ -2702,7 +2740,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
-            "test_validate_project_report_rejects_availability_toolchain_run_"
+            "test_validate_project_report_rejects_directx_artifact_toolchain_run_"
             "argv_mismatch"
         ) in backend_support["evidence"]
         assert (
@@ -2985,6 +3023,46 @@ def test_validate_backend_catalog_rejects_duplicate_aliases():
         module.validate_backend_catalog(backends)
 
 
+def test_validate_backend_catalog_rejects_duplicate_target_aliases():
+    module = load_support_matrix_module()
+    directx = _backend("directx", ["hlsl"], ".hlsl")
+    opengl = _backend("opengl", ["glsl"], ".glsl")
+    directx["target_aliases"] = ["shared"]
+    opengl["target_aliases"] = ["shared"]
+
+    with pytest.raises(module.SupportMatrixError, match="Duplicate backend alias"):
+        module.validate_backend_catalog({"backends": [directx, opengl]})
+
+
+def test_backend_inventory_preserves_target_profiles():
+    module = load_support_matrix_module()
+    directx = _backend("directx", ["hlsl"], ".hlsl")
+    directx["target_aliases"] = ["dx12"]
+    directx["target_profiles"] = ["directx-12", "shader-model-6"]
+
+    matrix = module.build_matrix(
+        {"backends": [directx]},
+        {
+            "statuses": _status_descriptions(module),
+            "features": [
+                {
+                    "id": "target.codegen",
+                    "category": "target",
+                    "name": "Code generation",
+                    "description": "Emit target code.",
+                    "support": {"directx": {"status": "partial"}},
+                }
+            ],
+        },
+    )
+
+    assert matrix["backends"][0]["target_aliases"] == ["dx12"]
+    assert matrix["backends"][0]["target_profiles"] == [
+        "directx-12",
+        "shader-model-6",
+    ]
+
+
 def test_validate_backend_catalog_accepts_target_only_backends():
     module = load_support_matrix_module()
     backends = {"backends": [_target_only_backend("webgl", ["webgl2"], ".webgl.glsl")]}
@@ -3008,6 +3086,7 @@ def test_validate_backend_catalog_accepts_target_only_backends():
 
     assert backend_ids == {"webgl"}
     assert matrix["backends"][0]["source_kind"] == "target-only"
+    assert matrix["backends"][0]["target_aliases"] == ["webgl2"]
     assert matrix["backends"][0]["native_backend"] == {
         "path": None,
         "exists": False,
@@ -3364,6 +3443,7 @@ def test_support_matrix_covers_all_cataloged_backends():
         "rust",
         "slang",
         "webgl",
+        "wgsl",
     }
 
     assert matrix["summary"]["feature_count"] == len(matrix["features"])
@@ -3458,6 +3538,9 @@ def test_support_backend_catalog_matches_codegen_registry():
         spec = codegen.get_backend(backend_id)
         assert spec is not None, f"{backend_id} is not registered"
         assert codegen.get_backend_extension(backend_id) == backend["target_extension"]
+        assert tuple(backend.get("target_profiles", [])) == tuple(
+            codegen.target_profiles(backend_id)
+        )
         if backend_id in native_source_backend_ids:
             assert spec.source_registry_name == backend_id
             assert (
@@ -3476,6 +3559,10 @@ def test_support_backend_catalog_matches_codegen_registry():
                     f"{backend_id} support alias is not accepted by source registry: "
                     f"{alias}"
                 )
+        for alias in backend.get("target_aliases", []):
+            assert (
+                codegen.normalize_backend_name(alias) == backend_id
+            ), f"{backend_id} target alias is not accepted by codegen: {alias}"
 
 
 def test_project_porting_roadmap_is_focused_on_project_category():

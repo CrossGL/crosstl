@@ -79,6 +79,7 @@ from .enum_utils import (
     generate_generic_enum_constructor_functions,
     generate_generic_enum_structs,
     generic_enum_specialized_type_name,
+    sanitize_type_name,
 )
 from .generic_function_utils import (
     reject_unsupported_generic_functions as reject_generic_functions_for_target,
@@ -949,6 +950,7 @@ class SlangCodeGen:
 
     def collect_slang_lowered_struct_resource_members(self, structs):
         lowered_members = {}
+        used_global_names = set(self.user_symbol_names)
         for struct in structs or []:
             struct_name = getattr(struct, "name", None)
             if not struct_name:
@@ -964,9 +966,23 @@ class SlangCodeGen:
                     "member": member,
                     "type": raw_type,
                     "mapped_type": self.map_resource_type_with_format(raw_type, member),
-                    "global_name": member_name,
+                    "global_name": self.slang_lowered_struct_resource_global_name(
+                        struct_name, member_name, used_global_names
+                    ),
                 }
         return lowered_members
+
+    def slang_lowered_struct_resource_global_name(
+        self, struct_name, member_name, used_global_names
+    ):
+        base_name = sanitize_type_name(f"{struct_name}_{member_name}") or member_name
+        global_name = base_name
+        suffix = 1
+        while global_name in used_global_names:
+            global_name = f"{base_name}_{suffix}"
+            suffix += 1
+        used_global_names.add(global_name)
+        return global_name
 
     def slang_struct_member_is_resource(self, raw_type):
         if not raw_type:
@@ -12913,8 +12929,10 @@ class SlangCodeGen:
 
         if spec["mip"]:
             lod = self.generate_expression(args[1]) if len(args) > 1 else "0"
-            return f"{helper_name}({resource_name}, {lod})"
-        return f"{helper_name}({resource_name})"
+            query = f"{helper_name}({resource_name}, {lod})"
+        else:
+            query = f"{helper_name}({resource_name})"
+        return self.coerce_resource_query_result(result_type, query)
 
     def dimension_query_accepts_resource(self, func_name, resource_type):
         if func_name == "textureSize":
@@ -12953,7 +12971,29 @@ class SlangCodeGen:
             return None
         if expected_type == result_type:
             return None
+        if self.resource_query_result_cast_type(result_type) is not None:
+            return None
         return f"returns {result_type} but target expects {expected_type}"
+
+    def resource_query_result_cast_type(self, result_type):
+        expected_type = self.convert_type(self.current_expression_expected_type)
+        result_info = self.vector_value_info(result_type)
+        expected_info = self.vector_value_info(expected_type)
+        if result_info is None or expected_info is None:
+            return None
+        if result_info["component_type"] != "int":
+            return None
+        if expected_info["component_type"] not in {"half", "float", "double"}:
+            return None
+        if result_info["size"] != expected_info["size"]:
+            return None
+        return expected_info["type"]
+
+    def coerce_resource_query_result(self, result_type, query):
+        cast_type = self.resource_query_result_cast_type(result_type)
+        if cast_type is None:
+            return query
+        return f"{cast_type}({query})"
 
     def generate_sample_count_query(self, func_name, args):
         if not args:
@@ -14388,7 +14428,7 @@ class SlangCodeGen:
         return f"int{len(dimensions)}"
 
     def query_local_declarations(self, spec):
-        names = list(spec["dimensions"])
+        names = list(spec.get("query_dimensions", spec["dimensions"]))
         if spec["samples"]:
             names.append("samples")
         if spec["mip"]:
@@ -14399,7 +14439,7 @@ class SlangCodeGen:
         args = []
         if spec["mip"]:
             args.append("mipLevel")
-        args.extend(spec["dimensions"])
+        args.extend(spec.get("query_dimensions", spec["dimensions"]))
         if spec["samples"]:
             args.append("samples")
         if spec["mip"]:
@@ -14452,6 +14492,27 @@ class SlangCodeGen:
             "image3D": (("width", "height", "depth"), False, False),
             "iimage3D": (("width", "height", "depth"), False, False),
             "uimage3D": (("width", "height", "depth"), False, False),
+            "imageCube": (
+                ("width", "height"),
+                False,
+                False,
+                ("width", "height", "elements"),
+            ),
+            "iimageCube": (
+                ("width", "height"),
+                False,
+                False,
+                ("width", "height", "elements"),
+            ),
+            "uimageCube": (
+                ("width", "height"),
+                False,
+                False,
+                ("width", "height", "elements"),
+            ),
+            "imageCubeArray": (("width", "height", "elements"), False, False),
+            "iimageCubeArray": (("width", "height", "elements"), False, False),
+            "uimageCubeArray": (("width", "height", "elements"), False, False),
             "image2DMS": (("width", "height"), False, True),
             "iimage2DMS": (("width", "height"), False, True),
             "uimage2DMS": (("width", "height"), False, True),
@@ -14462,12 +14523,15 @@ class SlangCodeGen:
         spec = specs.get(type_name)
         if spec is None:
             return None
-        dimensions, mip, samples = spec
-        return {
+        dimensions, mip, samples, *rest = spec
+        result = {
             "dimensions": dimensions,
             "mip": mip,
             "samples": samples,
         }
+        if rest:
+            result["query_dimensions"] = rest[0]
+        return result
 
     def is_explicit_sampler_argument(self, args):
         if len(args) < 2:

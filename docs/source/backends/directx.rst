@@ -6,6 +6,12 @@ import. It is selected through the ``directx``, ``hlsl``, or ``dx`` target and
 source aliases, depending on whether the caller is emitting a target shader or
 loading existing HLSL.
 
+For project planning and target selection, ``dx11``, ``dx12``, ``d3d11``, and
+``d3d12`` are accepted as target aliases for the same HLSL emitter. They
+represent Direct3D deployment profiles, not separate DXBC or DXIL binary
+artifact generators. Use the generated ``.hlsl`` output with the appropriate
+Direct3D compiler/toolchain for the final runtime profile.
+
 Pipeline
 --------
 
@@ -27,6 +33,8 @@ The backend is the primary path for DirectX shader integration:
 
 * shader stages including vertex, fragment/pixel, compute, geometry,
   tessellation, mesh, amplification, and ray tracing stages
+* Direct3D 11 and Direct3D 12 target profile aliases that resolve to portable
+  HLSL output
 * HLSL semantics such as ``SV_POSITION``, ``SV_Target``, ``SV_VertexID``, and
   resource-related system values
 * constant buffers, global resources, samplers, comparison samplers, texture
@@ -47,3 +55,7 @@ the DirectX generator unless the rule is shared by multiple targets.
 When extending this backend, add focused tests under the DirectX translator and
 backend test folders. Prefer documenting new public behavior on this page and
 API details in the relevant class or function docstrings.
+
+Keep profile-specific API packaging, root signature generation, bytecode
+container output, and shader compiler invocation outside ``HLSLCodeGen`` until
+the project has an explicit target-profile pipeline for those artifacts.

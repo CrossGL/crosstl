@@ -158,7 +158,7 @@ def translate(
         if normalized_backend in ["cgl", "crossgl"]:
             generated_code = shader_code
         else:
-            codegen = get_codegen(normalized_backend)
+            codegen = get_codegen(requested_backend)
             lower_default_arguments(ast)
             generated_code = codegen.generate(ast)
     else:
@@ -191,7 +191,7 @@ def translate(
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
             if source_spec.name == "cuda" and normalized_backend in {"metal", "vulkan"}:
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
-            codegen = get_codegen(normalized_backend)
+            codegen = get_codegen(requested_backend)
             lower_default_arguments(cgl_ast)
             generated_code = codegen.generate(cgl_ast)
 

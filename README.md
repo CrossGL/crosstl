@@ -56,11 +56,13 @@ CrossTL is a shader and compute program translator built around **CrossGL** — 
 
 ## Supported Translation Targets
 
-CrossTL provides bidirectional translation between CrossGL and:
+CrossTL provides translation from CrossGL to:
 
 - **Metal** - Apple's graphics and compute API
 - **DirectX (HLSL)** - Microsoft's graphics API
 - **OpenGL (GLSL)** - Cross-platform graphics
+- **WebGL (GLSL ES)** - Browser graphics through WebGL 2.0 compatible GLSL ES
+- **WebGPU (WGSL)** - Browser and native WebGPU shader output
 - **Vulkan (SPIRV)** - High-performance graphics and compute
 - **CUDA** - NVIDIA parallel computing
 - **HIP** - AMD GPU computing
@@ -69,12 +71,18 @@ CrossTL provides bidirectional translation between CrossGL and:
 - **Slang** - Real-time shading language
 - **CrossGL (.cgl)** - The IR/interchange format itself
 
+Native source import is available for the bidirectional backends listed in the
+support matrix. WebGL and WGSL are currently target-only outputs; `.webgl.glsl`,
+`.wgsl`, and `.wesl` inputs are rejected until dedicated source frontends
+land.
+
 ## Backend Readiness: DirectX / Metal / OpenGL
 
 We maintain first-class, bidirectional support for the three cornerstone graphics APIs. Each backend is implemented as both a **source** (parse/import) and **codegen** (export) target, so you can round‑trip between native shaders and CrossGL without lossy hops.
 
 - **DirectX / HLSL**
   - Pipeline coverage: vertex, fragment/pixel, compute, geometry, hull/domain (tessellation), mesh/task, full ray‑tracing stages.
+  - Target profile aliases: `dx11`, `dx12`, `d3d11`, and `d3d12` resolve to the HLSL emitter for Direct3D deployment planning; final DXBC/DXIL packaging remains a toolchain step.
   - Resource model: cbuffers, register/space bindings, UAV/RW textures & buffers, structured buffers, Interlocked atomics, wave ops, texture/buffer dimension queries.
   - Semantics map to `SV_*` and user semantics, preserved through CrossGL attributes.
 - **Metal**
@@ -282,6 +290,7 @@ import crosstl
 # Translate to any supported backend
 metal_code = crosstl.translate('shader.cgl', backend='metal', save_shader='shader.metal')
 hlsl_code = crosstl.translate('shader.cgl', backend='directx', save_shader='shader.hlsl')
+dx12_hlsl = crosstl.translate('shader.cgl', backend='dx12', save_shader='shader.hlsl')
 glsl_code = crosstl.translate('shader.cgl', backend='opengl', save_shader='shader.glsl')
 ```
 
@@ -339,6 +348,7 @@ program = 'universal_shader.cgl'
 deployment_targets = {
     'metal': '.metal',
     'directx': '.hlsl',
+    'dx12': '.hlsl',
     'opengl': '.glsl',
     'vulkan': '.spvasm',
     'rust': '.rs',

@@ -412,12 +412,13 @@ fragment_main(VertexOutput input [[stage_in]],
 }
 
 // Compute Shader
-kernel void kernel_main(uint3 gl_GlobalInvocationID [[thread_position_in_grid]],
+kernel void kernel_main(uint3 thread_position_in_grid
+                        [[thread_position_in_grid]],
                         constant GlobalUniforms &globals [[buffer(0)]],
                         texture2d<float> shadowMap [[texture(0)]],
                         texture2d<float, access::read_write> outputImage
                         [[texture(1)]]) {
-  int2 texCoord = int2(gl_GlobalInvocationID.xy);
+  int2 texCoord = int2(thread_position_in_grid.xy);
   float2 screenSize = globals.screenSize;
   if (texCoord.x >= int(screenSize.x) || texCoord.y >= int(screenSize.y)) {
     return;

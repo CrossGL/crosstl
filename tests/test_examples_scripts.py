@@ -3,6 +3,8 @@ import json
 import sys
 from pathlib import Path
 
+import crosstl.translator.codegen as codegen
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "examples" / "test.py"
 
@@ -45,6 +47,12 @@ def test_backend_compatibility_and_skips_reference_scheduled_examples():
     for category, backends in module.BACKEND_COMPATIBILITY.items():
         assert set(backends) <= set(module.BACKENDS), category
     assert set(module.EXAMPLE_BACKEND_SKIPS) <= scheduled
+
+
+def test_examples_runner_schedules_all_registered_backend_targets():
+    module = load_examples_test_module()
+
+    assert set(module.BACKENDS) == set(codegen.backend_names())
 
 
 def test_validate_generated_output_rejects_internal_ast_repr(tmp_path):

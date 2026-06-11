@@ -16,6 +16,7 @@ from crosstl.translator.source_registry import (
     HIP_ARTIFACT_UNSUPPORTED_MESSAGE,
     METAL_BINARY_UNSUPPORTED_MESSAGE,
     SOURCE_REGISTRY,
+    WEBGL_SOURCE_UNSUPPORTED_MESSAGE,
     WGSL_SOURCE_UNSUPPORTED_MESSAGE,
     register_default_sources,
 )
@@ -90,6 +91,16 @@ SOURCE_ONLY_BACKEND_DIRS = {"OpenCL"}
 
 class _DummyCodeGen:
     pass
+
+
+class _ProfileAwareCodeGen:
+    def __init__(self, target_profile=None):
+        self.target_profile = target_profile
+
+
+class _ProfileConstructorFailureCodeGen:
+    def __init__(self, target_profile=None):
+        raise TypeError("internal constructor failure")
 
 
 def _backend_root():
@@ -169,8 +180,67 @@ def test_backend_registry_tracks_target_only_backends_separately():
 
     assert registry.names() == ["wgsl"]
     assert registry.source_backend_names() == []
+    assert registry.target_backend_names_with_source_frontends() == []
     assert registry.resolve_name("shader.WGSL") == "wgsl"
     assert registry.get("webgpu").source_registry_name is None
+
+
+def test_backend_registry_resolves_target_aliases_and_profiles():
+    registry = BackendRegistry()
+    registry.register(
+        BackendSpec(
+            name="directx",
+            codegen_class=_DummyCodeGen,
+            aliases=("hlsl", "dx"),
+            target_aliases=("dx11", "dx12", "d3d11", "d3d12"),
+            target_profiles=("directx-11", "directx-12"),
+            file_extensions=(".hlsl",),
+        )
+    )
+
+    assert registry.resolve_name("dx11") == "directx"
+    assert registry.resolve_name("D3D12") == "directx"
+    assert registry.get("dx12").name == "directx"
+    assert registry.target_profiles("hlsl") == (
+        "directx-11",
+        "directx-12",
+    )
+
+
+def test_backend_registry_passes_target_profile_only_to_supporting_codegen():
+    registry = BackendRegistry()
+    registry.register(
+        BackendSpec(
+            name="directx",
+            codegen_class=_ProfileAwareCodeGen,
+            target_aliases=("dx11",),
+            target_profiles=("directx-11",),
+        )
+    )
+    registry.register(
+        BackendSpec(
+            name="plain",
+            codegen_class=_DummyCodeGen,
+            target_aliases=("plain-profile",),
+        )
+    )
+
+    assert registry.get_codegen("dx11").target_profile == "dx11"
+    assert isinstance(registry.get_codegen("plain-profile"), _DummyCodeGen)
+
+
+def test_backend_registry_does_not_mask_profile_codegen_constructor_type_errors():
+    registry = BackendRegistry()
+    registry.register(
+        BackendSpec(
+            name="directx",
+            codegen_class=_ProfileConstructorFailureCodeGen,
+            target_aliases=("dx11",),
+        )
+    )
+
+    with pytest.raises(TypeError, match="internal constructor failure"):
+        registry.get_codegen("dx11")
 
 
 def test_backend_registry_can_map_target_to_differently_named_source_frontend():
@@ -187,8 +257,78 @@ def test_backend_registry_can_map_target_to_differently_named_source_frontend():
 
     assert registry.names() == ["webgl"]
     assert registry.source_backend_names() == ["webgl"]
+    assert registry.target_backend_names_with_source_frontends() == ["webgl"]
     assert registry.resolve_name("shader.webgl.glsl") == "webgl"
     assert registry.get("glsl-es").source_registry_name == "opengl"
+
+
+def test_global_registry_exposes_clear_source_frontend_target_names():
+    assert codegen.source_backend_names() == (
+        codegen.target_backend_names_with_source_frontends()
+    )
+
+
+def test_directx_target_profile_aliases_are_target_only():
+    register_default_sources()
+
+    assert codegen.normalize_backend_name("dx11") == "directx"
+    assert codegen.normalize_backend_name("dx12") == "directx"
+    assert codegen.normalize_backend_name("d3d11") == "directx"
+    assert codegen.normalize_backend_name("d3d12") == "directx"
+    assert codegen.target_profiles("directx") == (
+        "directx-11",
+        "directx-12",
+    )
+    assert SOURCE_REGISTRY.get("dx11") is None
+    assert SOURCE_REGISTRY.get("dx12") is None
+
+
+def test_directx_target_profile_alias_translate_api_roundtrip(tmp_path):
+    import crosstl
+
+    cgl_file = tmp_path / "test_shader.cgl"
+    cgl_file.write_text(SMOKE_SHADER, encoding="utf-8")
+
+    directx_output = crosstl.translate(str(cgl_file), backend="directx")
+    dx12_output = crosstl.translate(str(cgl_file), backend="dx12")
+
+    assert dx12_output == directx_output
+    assert "VSMain" in dx12_output
+
+
+def test_directx_dx11_alias_preserves_profile_validation(tmp_path):
+    import crosstl
+
+    cgl_file = tmp_path / "wave_shader.cgl"
+    cgl_file.write_text(
+        """
+        shader DxWaveProfile {
+            compute {
+                uint main(uint value) {
+                    return WaveActiveSum(value);
+                }
+            }
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX profile dx11 does not support wave intrinsic "
+            "'WaveActiveSum'.*Shader Model 6.0"
+        ),
+    ):
+        crosstl.translate(str(cgl_file), backend="dx11", format_output=False)
+
+    dx12_output = crosstl.translate(str(cgl_file), backend="dx12", format_output=False)
+    directx_output = crosstl.translate(
+        str(cgl_file), backend="directx", format_output=False
+    )
+
+    assert "WaveActiveSum(value)" in dx12_output
+    assert "WaveActiveSum(value)" in directx_output
 
 
 @pytest.mark.parametrize(
@@ -272,6 +412,7 @@ def test_source_registry_recognizes_opencl_real_world_extensions(extension):
         (".metallib", METAL_BINARY_UNSUPPORTED_MESSAGE),
         (".wgsl", WGSL_SOURCE_UNSUPPORTED_MESSAGE),
         (".wesl", WGSL_SOURCE_UNSUPPORTED_MESSAGE),
+        (".webgl.glsl", WEBGL_SOURCE_UNSUPPORTED_MESSAGE),
         (".cso", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
         (".dxbc", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
         (".dxil", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
@@ -294,6 +435,8 @@ def test_source_registry_known_unsupported_extensions_raise_clear_diagnostic(
     ("filename", "message"),
     (
         ("shader.wgsl.json", WGSL_SOURCE_UNSUPPORTED_MESSAGE),
+        ("shader.webgl.glsl", WEBGL_SOURCE_UNSUPPORTED_MESSAGE),
+        ("shader.webgl.glsl.json", WEBGL_SOURCE_UNSUPPORTED_MESSAGE),
         ("shader.spv.json", BINARY_SPIRV_UNSUPPORTED_MESSAGE),
         ("shader.metallib.json", METAL_BINARY_UNSUPPORTED_MESSAGE),
         ("shader.dxil.json", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
@@ -363,6 +506,7 @@ def test_target_registry_real_world_extensions_match_source_and_formatter(
         ("rust", (".rs", ".rust")),
         ("vulkan", (".spvasm",)),
         ("webgl", (".webgl.glsl",)),
+        ("wgsl", (".wgsl",)),
     ),
 )
 def test_target_registry_resolves_file_extension_backend_spellings(backend, extensions):

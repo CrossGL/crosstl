@@ -1,4 +1,3 @@
-
 #version 450 core
 const int MathError_DivisionByZero = 0;
 const int MathError_InvalidInput = 1;

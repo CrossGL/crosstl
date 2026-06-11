@@ -92,6 +92,29 @@ NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS = {
     ),
 }
 
+WEBGL_NATIVE_COMPUTE_SOURCE_DIAGNOSTICS = frozenset({"cuda", "hip", "opencl"})
+WEBGL_NATIVE_COMPUTE_EXTENSION_ALIAS_DIAGNOSTICS = frozenset(
+    {"cuda_header", "cuda_long", "opencl_long"}
+)
+NATIVE_SOURCE_TO_TARGET_PIPELINE_CASES = tuple(
+    (source_name, target_backend)
+    for source_name in sorted(NATIVE_SOURCE_SNIPPETS)
+    for target_backend in codegen.backend_names()
+    if not (
+        target_backend == "webgl"
+        and source_name in WEBGL_NATIVE_COMPUTE_SOURCE_DIAGNOSTICS
+    )
+)
+NATIVE_SOURCE_EXTENSION_ALIAS_TO_TARGET_PIPELINE_CASES = tuple(
+    (alias_name, target_backend)
+    for alias_name in sorted(NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS)
+    for target_backend in codegen.backend_names()
+    if not (
+        target_backend == "webgl"
+        and alias_name in WEBGL_NATIVE_COMPUTE_EXTENSION_ALIAS_DIAGNOSTICS
+    )
+)
+
 GLSL_FRAGMENT_INVOCATION_DENSITY_SOURCE = """
 #version 450 core
 #extension GL_EXT_fragment_invocation_density : require
@@ -952,6 +975,52 @@ def test_hlsl_legacy_sampler_register_lowers_to_opengl_binding(tmp_path):
     assert "fragColor = texture(Texture, uv);" in generated
 
 
+def test_hlsl_fx_macro_texture_resource_survives_metal_translation(tmp_path):
+    _write_source(
+        tmp_path,
+        "Macros.fxh",
+        """
+        #define DECLARE_TEXTURE(Name, index) \\
+            sampler2D Name : register(s##index);
+        #define SAMPLE_TEXTURE(Name, texCoord) tex2D(Name, texCoord)
+        """,
+    )
+    source_path = _write_source(
+        tmp_path,
+        "SpriteEffect.fx",
+        """
+        #include "Macros.fxh"
+
+        DECLARE_TEXTURE(Texture, 0);
+
+        struct VSOutput {
+            float4 position : SV_Position;
+            float4 color : COLOR0;
+            float2 texCoord : TEXCOORD0;
+        };
+
+        float4 SpritePixelShader(VSOutput input) : SV_Target0 {
+            return SAMPLE_TEXTURE(Texture, input.texCoord) * input.color;
+        }
+        """,
+    )
+
+    crossgl = crosstl.translate(str(source_path), backend="cgl", format_output=False)
+    metal = crosstl.translate(str(source_path), backend="metal", format_output=False)
+
+    assert "@ register(s0)\n    sampler2D Texture;" in crossgl
+    assert (
+        "@ hlsl_program_constant\n    @ register(s0)\n    sampler2D Texture;"
+        not in crossgl
+    )
+    assert "texture2d<float> Texture [[texture(0)]]" in metal
+    assert (
+        "Texture.sample(sampler(mag_filter::linear, min_filter::linear), input.texCoord)"
+        in metal
+    )
+    _compile_with_metal_if_available(metal, tmp_path)
+
+
 @pytest.mark.parametrize("target", ["metal", "directx", "vulkan"])
 def test_glsl_fragment_invocation_density_rejects_unsupported_targets_before_output(
     tmp_path, target
@@ -1198,8 +1267,9 @@ def test_glsl_es_legacy_fragcolor_lowers_to_non_reserved_opengl_output(tmp_path)
     _compile_glslang_if_available(opengl, "fragment")
 
 
-@pytest.mark.parametrize("source_name", sorted(NATIVE_SOURCE_SNIPPETS))
-@pytest.mark.parametrize("target_backend", codegen.backend_names())
+@pytest.mark.parametrize(
+    "source_name,target_backend", NATIVE_SOURCE_TO_TARGET_PIPELINE_CASES
+)
 def test_native_source_to_registered_target_pipeline_is_total(
     tmp_path, source_name, target_backend
 ):
@@ -1213,8 +1283,10 @@ def test_native_source_to_registered_target_pipeline_is_total(
     _assert_generated_output_is_usable(generated)
 
 
-@pytest.mark.parametrize("alias_name", sorted(NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS))
-@pytest.mark.parametrize("target_backend", codegen.backend_names())
+@pytest.mark.parametrize(
+    "alias_name,target_backend",
+    NATIVE_SOURCE_EXTENSION_ALIAS_TO_TARGET_PIPELINE_CASES,
+)
 def test_native_source_extension_alias_to_registered_target_pipeline_is_total(
     tmp_path, alias_name, target_backend
 ):
@@ -1226,3 +1298,31 @@ def test_native_source_extension_alias_to_registered_target_pipeline_is_total(
     )
 
     _assert_generated_output_is_usable(generated)
+
+
+@pytest.mark.parametrize("source_name", sorted(WEBGL_NATIVE_COMPUTE_SOURCE_DIAGNOSTICS))
+def test_native_compute_sources_report_webgl_diagnostics(tmp_path, source_name):
+    filename, source = NATIVE_SOURCE_SNIPPETS[source_name]
+    source_path = _write_source(tmp_path, filename, source)
+
+    with pytest.raises(
+        ValueError,
+        match="WebGL target does not support shader stage\\(s\\): compute",
+    ):
+        crosstl.translate(str(source_path), backend="webgl", format_output=False)
+
+
+@pytest.mark.parametrize(
+    "alias_name", sorted(WEBGL_NATIVE_COMPUTE_EXTENSION_ALIAS_DIAGNOSTICS)
+)
+def test_native_compute_extension_aliases_report_webgl_diagnostics(
+    tmp_path, alias_name
+):
+    filename, source = NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS[alias_name]
+    source_path = _write_source(tmp_path, filename, source)
+
+    with pytest.raises(
+        ValueError,
+        match="WebGL target does not support shader stage\\(s\\): compute",
+    ):
+        crosstl.translate(str(source_path), backend="webgl", format_output=False)

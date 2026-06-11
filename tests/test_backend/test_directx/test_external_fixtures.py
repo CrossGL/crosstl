@@ -20,6 +20,7 @@ class ExternalFixture:
     path: str
     code: str
     contains: tuple[str, ...]
+    absent: tuple[str, ...] = ()
 
     @property
     def source_url(self):
@@ -1862,9 +1863,12 @@ EXTERNAL_FIXTURES = [
         """).strip(),
         contains=(
             "vec2 uv @ TexCoord1;",
-            "UNITY_SETUP_INSTANCE_ID(v);",
             "o.uv = TRANSFORM_TEX(v.texcoord, _MainTex);",
             "vec4 frag(v2f i) @ gl_FragColor",
+        ),
+        absent=(
+            "UNITY_SETUP_INSTANCE_ID",
+            "UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO",
         ),
     ),
     ExternalFixture(
@@ -1938,6 +1942,8 @@ def test_codegen_external_directx_fixture_to_parseable_crossgl(fixture):
 
     for expected in fixture.contains:
         assert expected in crossgl
+    for unexpected in fixture.absent:
+        assert unexpected not in crossgl
     assert parse_crossgl(crossgl) is not None
 
 
