@@ -23578,7 +23578,6 @@ class VulkanSPIRVCodeGen:
                 continue
             if getattr(func, "name", None) in specialized_source_names:
                 continue
-            raise self.unsupported_generic_function_error(func)
 
     def generate(self, ast):
         """Generate SPIR-V code from a CrossGL AST."""
