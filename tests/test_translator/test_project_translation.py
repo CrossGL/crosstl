@@ -39978,7 +39978,7 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
 
     payload = translate_project(
         repo,
-        targets=["cgl", "metal", "vulkan"],
+        targets=["cgl", "metal", "vulkan", "wgsl"],
         output_dir="out",
     ).to_json()
 
@@ -39988,6 +39988,7 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
         ("cgl", "translated"),
         ("metal", "translated"),
         ("vulkan", "translated"),
+        ("wgsl", "translated"),
     }
 
     outputs = {
@@ -40035,6 +40036,17 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     assert "WorkgroupId" in spirv_output
     assert "LocalInvocationId" in spirv_output
     assert_spirv_asm_validates_if_available(spirv_output, tmp_path)
+
+    wgsl_output = outputs["wgsl"]
+    assert (
+        "fn compute_main(@builtin(global_invocation_id) "
+        "global_invocation_id: vec3<u32>"
+    ) in wgsl_output
+    assert "var thread_id: vec3<u32> = global_invocation_id;" in wgsl_output
+    assert "var block_id: vec3<u32> = workgroup_id;" in wgsl_output
+    assert "var thread_local_id: vec3<u32> = local_invocation_id;" in wgsl_output
+    assert "var block_dim: vec3<u32> = vec3<u32>(1u, 1u, 1u);" in wgsl_output
+    assert ": void" not in wgsl_output
 
 
 def test_translate_project_vulkan_compute_bool_parameter_uses_uint_interface(

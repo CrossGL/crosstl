@@ -1413,23 +1413,24 @@ class WGSLCodeGen:
             return self.generate_block(stmt, indent)
         if isinstance(stmt, VariableNode):
             mutable_keyword = "var" if stmt.is_mutable else "let"
+            var_type = self.local_variable_declaration_type(stmt)
             initializer = ""
             if stmt.initial_value is not None:
                 initializer = (
                     " = "
                     + self.generate_expression_for_target(
-                        stmt.initial_value, stmt.var_type
+                        stmt.initial_value, var_type
                     )
                 )
             variable_name = self.declare_local_identifier(stmt.name)
             line = (
                 f"{pad}{mutable_keyword} {variable_name}: "
-                f"{self.type_name_string(stmt.var_type)}{initializer};"
+                f"{self.type_name_string(var_type)}{initializer};"
             )
             self.register_local_identifier(stmt.name)
-            self.register_value_type(stmt.name, stmt.var_type)
+            self.register_value_type(stmt.name, var_type)
             self.register_resource_aliases(
-                stmt.name, stmt.var_type, initializer=stmt.initial_value
+                stmt.name, var_type, initializer=stmt.initial_value
             )
             return line
         if isinstance(stmt, ExpressionStatementNode):
@@ -1511,23 +1512,24 @@ class WGSLCodeGen:
         if init is None:
             return ""
         if isinstance(init, VariableNode):
+            var_type = self.local_variable_declaration_type(init)
             initializer = ""
             if init.initial_value is not None:
                 initializer = (
                     " = "
                     + self.generate_expression_for_target(
-                        init.initial_value, init.var_type
+                        init.initial_value, var_type
                     )
                 )
             variable_name = self.declare_local_identifier(init.name)
             line = (
-                f"var {variable_name}: {self.type_name_string(init.var_type)}"
+                f"var {variable_name}: {self.type_name_string(var_type)}"
                 f"{initializer}"
             )
             self.register_local_identifier(init.name)
-            self.register_value_type(init.name, init.var_type)
+            self.register_value_type(init.name, var_type)
             self.register_resource_aliases(
-                init.name, init.var_type, initializer=init.initial_value
+                init.name, var_type, initializer=init.initial_value
             )
             return line
         if isinstance(init, AssignmentNode):
@@ -1575,6 +1577,29 @@ class WGSLCodeGen:
         if target_scalar == "i32" and source_scalar == "u32":
             return f"i32({rendered})"
         return rendered
+
+    def local_variable_declaration_type(self, node):
+        declared_type = getattr(node, "var_type", None)
+        if not self.is_void_local_declaration_type(declared_type):
+            return declared_type
+        initializer = getattr(node, "initial_value", None)
+        inferred_type = (
+            self.expression_type(initializer) if initializer is not None else None
+        )
+        if inferred_type is not None:
+            return inferred_type
+        raise ValueError(
+            "WGSL target cannot infer a concrete type for local variable "
+            f"{getattr(node, 'name', '<unnamed>')} declared as void"
+        )
+
+    def is_void_local_declaration_type(self, vtype):
+        if vtype is None:
+            return True
+        try:
+            return self.type_name_string(vtype) == "void"
+        except ValueError:
+            return False
 
     def generate_vector_narrowing_conversion(self, target_type, expr):
         return self.vector_narrowing_expression(
@@ -2978,6 +3003,8 @@ class WGSLCodeGen:
 
     def expression_type(self, expr):
         if isinstance(expr, IdentifierNode):
+            if expr.name in self.WORKGROUP_SIZE_IDENTIFIER_ALIASES:
+                return "vec3<u32>"
             mapped_builtin = self.BUILTIN_IDENTIFIER_ALIASES.get(expr.name)
             if mapped_builtin:
                 return self.INPUT_BUILTIN_TYPE_MAP.get(mapped_builtin)
@@ -3014,6 +3041,8 @@ class WGSLCodeGen:
             return expr.constructor_type
         if isinstance(expr, CastNode):
             return expr.target_type
+        if isinstance(expr, LiteralNode):
+            return getattr(expr, "literal_type", None)
         if isinstance(expr, SwizzleNode):
             vector_type = self.expression_type(expr.vector_expr)
             component_type = self.vector_component_type(vector_type)
@@ -3043,6 +3072,8 @@ class WGSLCodeGen:
         right_vector = self.vector_shape(right_type)
         left_matrix = self.matrix_shape(left_type)
         right_matrix = self.matrix_shape(right_type)
+        left_scalar = self.scalar_type_name(left_type)
+        right_scalar = self.scalar_type_name(right_type)
         if expr.operator == "*":
             if left_matrix is not None and right_vector is not None:
                 matrix_element, columns, rows = left_matrix
@@ -3058,10 +3089,12 @@ class WGSLCodeGen:
             if left_vector == right_vector:
                 return left_type
             return None
-        if left_vector is not None and self.scalar_type_name(right_type) is not None:
+        if left_vector is not None and right_scalar is not None:
             return left_type
-        if right_vector is not None and self.scalar_type_name(left_type) is not None:
+        if right_vector is not None and left_scalar is not None:
             return right_type
+        if left_scalar is not None and left_scalar == right_scalar:
+            return left_scalar
         if left_type == right_type:
             return left_type
         return None
