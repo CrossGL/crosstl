@@ -42,6 +42,7 @@ TOOLS = [
                 "host-integration-handoff",
                 "inspect-host-integration-handoff",
                 "plan-host-integration-execution",
+                "execute-host-integration",
                 "report",
             ),
         ),
@@ -214,6 +215,16 @@ TOOLS = [
             (
                 "usage:",
                 "--host-root",
+                "--format",
+                "--output",
+            ),
+        ),
+        (
+            ("execute-host-integration",),
+            (
+                "usage:",
+                "--scaffold-root",
+                "--package-root",
                 "--format",
                 "--output",
             ),

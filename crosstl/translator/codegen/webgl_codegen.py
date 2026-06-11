@@ -163,7 +163,9 @@ class WebGLCodeGen(GLSLCodeGen):
     def is_webgl_builtin_interface_block(self, node):
         if not self.is_glsl_interface_block_struct(node):
             return False
-        return self.glsl_interface_block_name(node) in self.BUILTIN_INTERFACE_BLOCK_NAMES
+        return (
+            self.glsl_interface_block_name(node) in self.BUILTIN_INTERFACE_BLOCK_NAMES
+        )
 
     def glsl_dynamic_resource_call_dispatch_info(self, expr):
         dispatch = super().glsl_dynamic_resource_call_dispatch_info(expr)

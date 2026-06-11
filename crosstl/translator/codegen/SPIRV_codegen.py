@@ -1514,10 +1514,7 @@ class VulkanSPIRVCodeGen:
 
         member_names = [name for _, name in members]
         type_name = str(type_id.type.base_type)
-        if not (
-            type_name.startswith("complex")
-            or member_names == ["real", "imag"]
-        ):
+        if not (type_name.startswith("complex") or member_names == ["real", "imag"]):
             return False
 
         return all(
@@ -2156,10 +2153,7 @@ class VulkanSPIRVCodeGen:
             if expected_vector is None:
                 return None
             if actual_vector is None:
-                if (
-                    expected_vector[0] in numeric_types
-                    and actual_name in numeric_types
-                ):
+                if expected_vector[0] in numeric_types and actual_name in numeric_types:
                     return 2
                 return None
             if expected_vector[1] != actual_vector[1]:
@@ -2193,7 +2187,9 @@ class VulkanSPIRVCodeGen:
             score += arg_score
         return score
 
-    def select_function_reference_for_args(self, function_name: str, args: List[SpirvId]):
+    def select_function_reference_for_args(
+        self, function_name: str, args: List[SpirvId]
+    ):
         candidates = self.function_reference_candidates(function_name)
         if not candidates:
             return None
@@ -2210,7 +2206,9 @@ class VulkanSPIRVCodeGen:
             return scored_candidates[0][1]
         return candidates[-1]
 
-    def resolve_function_reference(self, function_name: str, args: Optional[List] = None):
+    def resolve_function_reference(
+        self, function_name: str, args: Optional[List] = None
+    ):
         if args is not None:
             function_reference = self.select_function_reference_for_args(
                 function_name, args
@@ -2232,7 +2230,9 @@ class VulkanSPIRVCodeGen:
             )
         return None
 
-    def resolve_function_signature(self, function_name: str, args: Optional[List] = None):
+    def resolve_function_signature(
+        self, function_name: str, args: Optional[List] = None
+    ):
         function_reference = self.resolve_function_reference(function_name, args)
         if function_reference is None:
             return None
