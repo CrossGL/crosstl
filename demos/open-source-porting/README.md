@@ -53,9 +53,9 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `lonelydevil-vulkan-tutorial-triangle` | `lonelydevil/vulkan-tutorial-C-implementation` at `780ff146a6eccd7064a10e86363f3c2f7323825d` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream triangle shader pair unchanged. |
 | `monogame-sprite-effect` | `MonoGame/MonoGame` at `d4893ac09e06bc203792d01d6f151f1891cc1ab5` | MS-PL and MIT | DirectX/HLSL | CrossGL, Metal, DirectX, Vulkan | Uses the upstream SpriteEffect source and macro include with whitespace normalization. OpenGL sampler lowering is tracked in issue #900; Metal warning cleanup is tracked in issue #917. |
 | `spirv-cross-round-fragment` | `KhronosGroup/SPIRV-Cross` at `146679ff8255a6068518685599d7fb8761d1b570` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream fragment reference shader unchanged. |
-| `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. DirectX identifier escaping is tracked in issue #922. |
+| `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. |
 | `angle-simple-texture-2d` | `google/angle` at `52232eaf409a28d77947df5622af274e1ef770c6` | BSD-style | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses extracted upstream SimpleTexture2D shader strings. |
-| `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, Metal, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. OpenGL stage-input lowering is tracked in issue #896; DirectX scalar-vector construction lowering is tracked in issue #930. |
+| `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, Metal, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. OpenGL stage-input lowering is tracked in issue #896. |
 | `arm-opengl-es-sdk-cube` | `ARM-software/opengl-es-sdk-for-android` at `c3caf759bb2e71fa9a118b3e3abd996cf00e660a` | MIT | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream cube shader pair unchanged. |
 | `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. OpenGL constant-parameter lowering is tracked in issue #924, and DirectX buffer-resource lowering is tracked in issue #925. |
 | `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, Metal, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. Host launch and memory-management integration remain outside the demo scope. |
@@ -147,10 +147,14 @@ The checked `KhronosGroup/glslang` push-constant vertex shader was retested
 after issue #813 and issue #856 closed and is now checked for DirectX and
 Metal output alongside OpenGL and Vulkan.
 
-The `KhronosGroup/Vulkan-Samples` dynamic line grid fragment shader is checked
-for CrossGL, OpenGL, Metal, and Vulkan output. DirectX remains excluded because
-the generated HLSL currently preserves a user identifier named `line`, which is
-a reserved keyword in HLSL; that translator issue is tracked in issue #922.
+The `KhronosGroup/Vulkan-Samples` dynamic line grid fragment shader was
+retested after issue #922 closed and is now checked for DirectX output
+alongside CrossGL, OpenGL, Metal, and Vulkan.
+
+The `donaldwuid/apple_metal_sample_code` mesh view-direction slice is checked
+for CrossGL, Metal, DirectX, and Vulkan output after issue #930 restored
+scalar-vector constructor lowering for generated HLSL. OpenGL remains excluded
+because stage-input lowering is tracked in issue #896.
 
 The `DiligentGraphics/DiligentSamples` Tutorial02 Cube shaders from
 `Tutorials/Tutorial02_Cube/assets/cube.vsh` and
