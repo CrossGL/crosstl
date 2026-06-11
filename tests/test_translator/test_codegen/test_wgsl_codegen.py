@@ -183,6 +183,32 @@ def test_wgsl_codegen_injects_direct_compute_builtin_references():
     assert "var lane: u32 = global_invocation_id.x;" in generated
 
 
+def test_wgsl_codegen_casts_unsigned_compute_builtin_component_to_signed_local():
+    shader = """
+    shader WGSLSignedComputeBuiltin {
+        buffer float values[4];
+
+        compute {
+            layout(local_size_x = 4) in;
+            void main() {
+                int index = gl_GlobalInvocationID.x;
+                values[index] = values[index] + 1.0;
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "fn compute_main(@builtin(global_invocation_id) "
+        "global_invocation_id: vec3<u32>)"
+    ) in generated
+    assert "var index: i32 = i32(global_invocation_id.x);" in generated
+    assert "values[index] = (values[index] + 1.0);" in generated
+
+
 def test_wgsl_codegen_treats_attribute_compute_functions_as_entry_points():
     shader = """
     shader WGSLAttributeComputeEntry {
