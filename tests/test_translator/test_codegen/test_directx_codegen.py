@@ -25,6 +25,7 @@ from crosstl.translator.ast import (
     create_legacy_shader_node,
 )
 from crosstl.translator.codegen.directx_codegen import (
+    DirectXSemanticArraySizeError,
     DirectXUnresolvedSourceTypeError,
     HLSLCodeGen,
 )
@@ -4952,6 +4953,84 @@ def test_hlsl_struct_array_member_semantics_are_preserved():
     generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
 
     assert "float weights[4]: TEXCOORD0;" in generated
+
+
+def test_hlsl_stage_input_array_semantics_reserve_register_ranges():
+    code = """
+    shader ArrayInputSemantics {
+        struct VertexInput {
+            vec4 ucol[5];
+            vec4 dupUcol[12];
+            float scalar;
+        };
+
+        vertex {
+            vec4 main(VertexInput input) {
+                return input.ucol[0] + input.dupUcol[0] + input.scalar;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "vertex")
+
+    assert "float4 ucol[5]: TEXCOORD0;" in generated
+    assert "float4 dupUcol[12]: TEXCOORD5;" in generated
+    assert "float scalar: TEXCOORD17;" in generated
+
+
+def test_hlsl_declared_stage_array_semantics_reserve_default_ranges():
+    code = """
+    shader ArrayInputDeclaredSemantics {
+        struct FSInput {
+            float weights[4] @ TEXCOORD0;
+            float lod;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return vec4(input.weights[0] + input.lod);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "float weights[4]: TEXCOORD0;" in generated
+    assert "float lod: TEXCOORD4;" in generated
+
+
+def test_hlsl_stage_semantic_array_with_unknown_size_raises_diagnostic():
+    code = """
+    shader UnknownArrayInputSemantics {
+        struct VertexInput {
+            vec4 colors[count];
+            float value;
+        };
+
+        vertex {
+            vec4 main(VertexInput input) {
+                return input.colors[0] + input.value;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXSemanticArraySizeError) as excinfo:
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "vertex")
+
+    diagnostic = excinfo.value
+    assert (
+        diagnostic.project_diagnostic_code
+        == "project.translate.directx-semantic-array-size"
+    )
+    assert diagnostic.missing_capabilities == ("directx.semantic-array-size",)
+    message = str(diagnostic)
+    assert "VertexInput" in message
+    assert "colors" in message
+    assert "TEXCOORD0" in message
+    assert "count" in message
 
 
 def test_hlsl_fragment_entry_input_structs_get_missing_member_semantics():

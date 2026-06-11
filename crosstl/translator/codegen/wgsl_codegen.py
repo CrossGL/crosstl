@@ -42,6 +42,10 @@ from ..ast import (
     VectorType,
     WhileNode,
 )
+from .image_access_contracts import (
+    explicit_image_access,
+    merge_image_access_requirement,
+)
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 
@@ -95,6 +99,7 @@ class WGSLCodeGen:
     }
     BUILTIN_SEMANTICS = {
         "gl_position": "position",
+        "gl_fragcoord": "position",
         "position_builtin": "position",
         "sv_position": "position",
         "frag_depth": "frag_depth",
@@ -121,6 +126,7 @@ class WGSLCodeGen:
     }
     BUILTIN_IDENTIFIER_ALIASES = {
         "gl_Position": "position",
+        "gl_FragCoord": "position",
         "SV_Position": "position",
         "gl_GlobalInvocationID": "global_invocation_id",
         "SV_DispatchThreadID": "global_invocation_id",
@@ -134,6 +140,7 @@ class WGSLCodeGen:
     }
     WORKGROUP_SIZE_IDENTIFIER_ALIASES = {"gl_WorkGroupSize"}
     INPUT_BUILTIN_TYPE_MAP = {
+        "position": "vec4<f32>",
         "vertex_index": "u32",
         "instance_index": "u32",
         "global_invocation_id": "vec3<u32>",
@@ -172,7 +179,7 @@ class WGSLCodeGen:
     }
     STAGE_INPUT_BUILTINS = {
         "vertex": {"instance_index", "vertex_index"},
-        "fragment": set(),
+        "fragment": {"position"},
         "compute": {
             "global_invocation_id",
             "local_invocation_id",
@@ -584,6 +591,7 @@ class WGSLCodeGen:
         self._module_variable_types = {}
         self._module_storage_access_modes = {}
         self._module_storage_texture_access_modes = {}
+        self._inferred_storage_texture_access_modes = {}
         self._module_resource_bindings = {}
         self._function_resource_member_parameters = {}
         self._reserved_bindings_by_group = {}
@@ -620,6 +628,7 @@ class WGSLCodeGen:
         self._module_variable_types = {}
         self._module_storage_access_modes = {}
         self._module_storage_texture_access_modes = {}
+        self._inferred_storage_texture_access_modes = {}
         self._module_resource_bindings = {}
         self._function_resource_member_parameters = {}
         self._reserved_bindings_by_group = {}
@@ -699,6 +708,13 @@ class WGSLCodeGen:
         )
         self._module_storage_access_modes = self.module_storage_access_modes(
             global_variable_nodes, stage_resource_parameters
+        )
+        self._inferred_storage_texture_access_modes = (
+            self.inferred_storage_texture_access_modes(
+                global_variable_nodes,
+                stage_resource_parameters,
+                all_function_nodes,
+            )
         )
         self.reserve_explicit_resource_bindings(
             cbuffers, global_variable_nodes, stage_resource_parameters
@@ -1713,6 +1729,8 @@ class WGSLCodeGen:
                     )
         if normalized_name in self.TEXTURE_FUNCTION_NAMES:
             return self.generate_texture_function_call(node, function_name)
+        if normalized_name == "imageload":
+            return self.generate_image_load_call(node, function_name)
         if normalized_name == "imagestore":
             return self.generate_image_store_call(node, function_name)
         if normalized_name in self.BARRIER_FUNCTION_NAMES:
@@ -2087,6 +2105,19 @@ class WGSLCodeGen:
             f"textureLoad({self.generate_expression(texture)}, "
             f"{self.generate_expression(coords)}, "
             f"{self.generate_expression(level)})"
+        )
+
+    def generate_image_load_call(self, node, function_name):
+        if len(node.arguments) != 2:
+            raise ValueError(
+                "WGSL target supports imageLoad() calls with exactly 2 "
+                f"arguments; got {len(node.arguments)} for {function_name}"
+            )
+        image, coords = node.arguments
+        self.require_readable_storage_texture_resource(image, function_name)
+        return (
+            f"textureLoad({self.generate_expression(image)}, "
+            f"{self.generate_expression(coords)})"
         )
 
     def generate_image_store_call(self, node, function_name):
@@ -2524,6 +2555,55 @@ class WGSLCodeGen:
                 modes[parameter.name] = access
         return modes
 
+    def inferred_storage_texture_access_modes(
+        self, global_variables, stage_resource_parameters, functions
+    ):
+        storage_texture_names = {
+            getattr(node, "name", "")
+            for node in list(global_variables) + list(stage_resource_parameters)
+            if self.STORAGE_TEXTURE_DIMENSION_MAP.get(
+                self.resource_type_name(self.declared_resource_type(node)) or ""
+            )
+            is not None
+        }
+        storage_texture_names.discard("")
+        if not storage_texture_names:
+            return {}
+
+        modes = {}
+        for function in functions:
+            body = getattr(function, "body", None)
+            if body is None or not hasattr(body, "walk"):
+                continue
+            for node in body.walk():
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                access = self.storage_image_operation_access_requirement(
+                    self.expression_name(node.function)
+                )
+                if access is None or not getattr(node, "arguments", None):
+                    continue
+                access_path = self.expression_access_path(node.arguments[0])
+                if access_path is None:
+                    continue
+                root_name, path = access_path
+                if path or root_name not in storage_texture_names:
+                    continue
+                modes[root_name] = merge_image_access_requirement(
+                    modes.get(root_name), access
+                )
+        return modes
+
+    def storage_image_operation_access_requirement(self, function_name):
+        normalized_name = self.semantic_key(function_name)
+        if normalized_name == "imageload":
+            return "read"
+        if normalized_name == "imagestore":
+            return "write"
+        if normalized_name.startswith("imageatomic"):
+            return "read_write"
+        return None
+
     def is_buffer_pointer_type(self, vtype, qualifiers=()):
         if not isinstance(vtype, PointerType):
             return False
@@ -2605,18 +2685,31 @@ class WGSLCodeGen:
         name = getattr(node, "name", "storage texture")
         raise ValueError(
             "WGSL target requires storage image resource "
-            f"{name} to declare a representable image format"
+            f"{name} to declare a representable image format such as "
+            "layout(rgba8) or @rgba8"
         )
 
     def storage_texture_access(self, node):
+        explicit_access = explicit_image_access(node, self.generate_attribute_argument)
+        if explicit_access is not None:
+            return explicit_access
         names = self.resource_qualifier_attribute_names(node)
-        if names & {"write", "writeonly", "write_only"}:
-            return "write"
-        if names & {"read", "readonly", "read_only", "constant"}:
+        if "constant" in names:
             return "read"
-        if names & {"readwrite", "read_write", "rw", "coherent"}:
+        if names & {"rw", "coherent"}:
             return "read_write"
-        return "read_write"
+        name = getattr(node, "name", None)
+        if name:
+            inferred_access = self._inferred_storage_texture_access_modes.get(name)
+            if inferred_access is not None:
+                return inferred_access
+        diagnostic_name = name or "storage texture"
+        raise ValueError(
+            "WGSL target requires storage image resource "
+            f"{diagnostic_name} to declare an access mode "
+            "(@readonly, @writeonly, or @readwrite) or use it in "
+            "imageLoad/imageStore so access can be inferred"
+        )
 
     def resource_qualifier_attribute_names(self, node):
         names = {
@@ -2645,6 +2738,22 @@ class WGSLCodeGen:
         if access == "read":
             raise ValueError(
                 "WGSL target cannot store through read-only storage image "
+                f"resource in {function_name}()"
+            )
+
+    def require_readable_storage_texture_resource(self, resource, function_name):
+        resource_type = self.expression_type(resource)
+        if self.STORAGE_TEXTURE_DIMENSION_MAP.get(
+            self.resource_type_name(resource_type) or ""
+        ) is None:
+            raise ValueError(
+                f"WGSL target requires {function_name}() to use a storage image "
+                "resource"
+            )
+        access = self.storage_texture_access_for_expression(resource)
+        if access == "write":
+            raise ValueError(
+                "WGSL target cannot load from write-only storage image "
                 f"resource in {function_name}()"
             )
 

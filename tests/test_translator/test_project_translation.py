@@ -134,6 +134,58 @@ def assert_directx_vertex_validates_if_available(hlsl_code, tmp_path):
     assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
 
 
+def assert_directx_compute_validates_if_available(hlsl_code, tmp_path):
+    shader_path = tmp_path / "shader.hlsl"
+    shader_path.write_text(hlsl_code, encoding="utf-8")
+
+    glslang = shutil.which("glslangValidator")
+    if glslang:
+        output_path = tmp_path / "shader.spv"
+        compile_result = subprocess.run(
+            [
+                glslang,
+                "-D",
+                "-V",
+                "-S",
+                "comp",
+                "-e",
+                "CSMain",
+                str(shader_path),
+                "-o",
+                str(output_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert compile_result.returncode == 0, (
+            compile_result.stdout + compile_result.stderr
+        )
+        return
+
+    dxc = shutil.which("dxc")
+    if not dxc:
+        return
+
+    output_path = tmp_path / "shader.dxil"
+    compile_result = subprocess.run(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
+
+
 def assert_guarded_glsl_validates_if_available(glsl_code, tmp_path):
     glslang = shutil.which("glslangValidator")
     if not glslang:
@@ -149,6 +201,22 @@ def assert_guarded_glsl_validates_if_available(glsl_code, tmp_path):
             check=False,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+
+
+def assert_glsl_stage_validates_if_available(glsl_code, tmp_path, stage):
+    glslang = shutil.which("glslangValidator")
+    if not glslang:
+        return
+
+    shader_path = tmp_path / f"shader.{stage}.glsl"
+    shader_path.write_text(glsl_code, encoding="utf-8")
+    result = subprocess.run(
+        [glslang, "-S", stage, str(shader_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def assert_compute_glsl_validates_if_available(glsl_code, tmp_path):
@@ -608,6 +676,10 @@ def test_translate_project_glslang_spec_constant_vertex_to_directx(tmp_path):
         "void foo(float4 p[arraySize], VertexInput input, " "inout VertexOutput output)"
     ) in generated
     assert "foo(input.ucol, input, output);" in generated
+    assert "float4 ucol[arraySize]: TEXCOORD0;" in generated
+    assert "float4 dupUcol[dupArraySize]: TEXCOORD5;" in generated
+    assert "float4 dupUcol[dupArraySize]: TEXCOORD1;" not in generated
+    assert_directx_vertex_validates_if_available(generated, tmp_path)
 
 
 def test_translate_project_glsl_overloaded_vector_helper_to_mojo(tmp_path):
@@ -6817,6 +6889,151 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
     assert_spirv_asm_validates_if_available(vulkan, tmp_path)
 
 
+def test_translate_project_lowers_hlsl_struct_main_vsh_psh_pair_to_native_entries(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    (repo / "cube.vsh").parent.mkdir(parents=True, exist_ok=True)
+    (repo / "cube.vsh").write_text(
+        textwrap.dedent("""
+            cbuffer Constants
+            {
+                float4x4 g_WorldViewProj;
+            };
+
+            struct VSInput
+            {
+                float3 Pos   : ATTRIB0;
+                float4 Color : ATTRIB1;
+            };
+
+            struct PSInput
+            {
+                float4 Pos   : SV_POSITION;
+                float4 Color : COLOR0;
+            };
+
+            void main(in  VSInput VSIn,
+                      out PSInput PSIn)
+            {
+                PSIn.Pos   = mul(float4(VSIn.Pos, 1.0), g_WorldViewProj);
+                PSIn.Color = VSIn.Color;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "cube.psh").write_text(
+        textwrap.dedent("""
+            struct PSInput
+            {
+                float4 Pos   : SV_POSITION;
+                float4 Color : COLOR0;
+            };
+
+            struct PSOutput
+            {
+                float4 Color : SV_TARGET;
+            };
+
+            void main(in  PSInput  PSIn,
+                      out PSOutput PSOut)
+            {
+                float4 Color = PSIn.Color;
+                PSOut.Color = Color;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["."]
+            include = ["cube.vsh", "cube.psh"]
+            targets = ["cgl", "opengl", "metal", "vulkan"]
+            output_dir = "translated"
+
+            [project.sources]
+            "cube.vsh" = "directx"
+            "cube.psh" = "directx"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    vertex_cgl = (repo / "translated" / "cgl" / "cube.vsh.cgl").read_text(
+        encoding="utf-8"
+    )
+    fragment_cgl = (repo / "translated" / "cgl" / "cube.psh.cgl").read_text(
+        encoding="utf-8"
+    )
+    vertex_glsl = (repo / "translated" / "opengl" / "cube.vsh.glsl").read_text(
+        encoding="utf-8"
+    )
+    fragment_glsl = (repo / "translated" / "opengl" / "cube.psh.glsl").read_text(
+        encoding="utf-8"
+    )
+    vertex_metal = (repo / "translated" / "metal" / "cube.vsh.metal").read_text(
+        encoding="utf-8"
+    )
+    fragment_metal = (repo / "translated" / "metal" / "cube.psh.metal").read_text(
+        encoding="utf-8"
+    )
+    vertex_vulkan = (
+        repo / "translated" / "vulkan" / "cube.vsh.spvasm"
+    ).read_text(encoding="utf-8")
+    fragment_vulkan = (
+        repo / "translated" / "vulkan" / "cube.psh.spvasm"
+    ).read_text(encoding="utf-8")
+
+    assert payload["summary"]["unitCount"] == 2
+    assert payload["summary"]["translatedCount"] == 8
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticCounts"] == {
+        "note": 0,
+        "warning": 0,
+        "error": 0,
+    }
+    assert len(payload["artifacts"]) == 8
+
+    assert "vertex {" in vertex_cgl
+    assert "fragment {" in fragment_cgl
+
+    assert "void main()" in vertex_glsl
+    assert "void main()" in fragment_glsl
+    assert not re.search(r"void\s+main\s*\([^)]*\bVSInput\b", vertex_glsl)
+    assert not re.search(r"void\s+main\s*\([^)]*\bPSInput\b", vertex_glsl)
+    assert not re.search(r"void\s+main\s*\([^)]*\bPSInput\b", fragment_glsl)
+    assert not re.search(r"void\s+main\s*\([^)]*\bPSOutput\b", fragment_glsl)
+    assert vertex_glsl.splitlines().count("in vec4 VSIn_Color;") == 1
+    assert vertex_glsl.splitlines().count("out vec4 PSIn_Color;") == 1
+    assert fragment_glsl.splitlines().count("in vec4 PSIn_Color;") == 1
+    assert "layout(location = 0) out vec4 fragColor;" in fragment_glsl
+    assert "fragColor = Color;" in fragment_glsl
+
+    assert "vertex vertex_main_Return vertex_main(" in vertex_metal
+    assert "fragment fragment_main_Return fragment_main(" in fragment_metal
+    assert "void main(" not in vertex_metal
+    assert "void main(" not in fragment_metal
+    assert "float3 VSIn_Pos [[attribute(0)]];" in vertex_metal
+    assert "float4 VSIn_Color [[attribute(1)]];" in vertex_metal
+    assert "vertex_main_Input _crossglInput [[stage_in]]" in vertex_metal
+    assert "float4 PSIn_Color [[user(Color0)]];" in vertex_metal
+    assert "fragment_main_Input _crossglInput [[stage_in]]" in fragment_metal
+    assert "float4 PSOut_Color [[color(0)]];" in fragment_metal
+
+    assert "OpEntryPoint Vertex" in vertex_vulkan
+    assert "OpEntryPoint Fragment" in fragment_vulkan
+
+    assert_glsl_stage_validates_if_available(vertex_glsl, tmp_path, "vert")
+    assert_glsl_stage_validates_if_available(fragment_glsl, tmp_path, "frag")
+    assert_metal_validates_if_available(vertex_metal, tmp_path)
+    assert_metal_validates_if_available(fragment_metal, tmp_path)
+    assert_spirv_asm_validates_if_available(vertex_vulkan, tmp_path)
+    assert_spirv_asm_validates_if_available(fragment_vulkan, tmp_path)
+
+
 def test_translate_project_wgsl_hlsl_texture_sampler_register_pair(
     tmp_path,
 ):
@@ -7078,6 +7295,53 @@ def test_translate_project_glsl_alpha_stitch_storage_image_lowers_to_wgsl(
         "binding": 2,
         "access": "write",
     }
+
+
+def test_translate_project_glsl_fragcoord_lowers_to_wgsl_fragment_position(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "noise.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            layout(location = 0) out vec4 fragColor;
+
+            void main() {
+                float xVal = gl_FragCoord.x;
+                fragColor = vec4(xVal, gl_FragCoord.y, 0.0, 1.0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["wgsl"],
+        output_dir="out",
+        validate=True,
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("wgsl", "translated")}
+
+    wgsl = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    assert (
+        "fn fragment_main(@builtin(position) position: vec4<f32>) "
+        "-> @location(0) vec4<f32>"
+    ) in wgsl
+    assert "var xVal: f32 = position.x;" in wgsl
+    assert "fragColor = vec4<f32>(xVal, position.y, 0.0, 1.0);" in wgsl
+    assert "return fragColor;" in wgsl
+    assert "gl_FragCoord" not in wgsl
+
+    if shutil.which("naga"):
+        assert payload["validation"]["artifacts"][0]["status"] == "ok"
+        assert payload["validation"]["toolchainRuns"][0]["status"] == "ok"
 
 
 def test_translate_project_glsl_usampler_texel_fetch_lowers_to_cuda_hip_slang(
@@ -7615,6 +7879,72 @@ def test_translate_project_lowers_glsl_vertex_index_to_metal_vertex_id(tmp_path)
     assert "positions[_crossglVertexID]" in metal
     assert "colors[_crossglVertexID]" in metal
     assert "gl_VertexIndex" not in metal
+
+
+def test_translate_project_glsl_fragment_output_named_fragment_escapes_metal_keyword(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "triangle.vert").write_text(
+        textwrap.dedent("""
+            #version 330
+            uniform mat4 MVP;
+            in vec3 vCol;
+            in vec2 vPos;
+            out vec3 color;
+            void main()
+            {
+                gl_Position = MVP * vec4(vPos, 0.0, 1.0);
+                color = vCol;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (shader_dir / "triangle.frag").write_text(
+        textwrap.dedent("""
+            #version 330
+            in vec3 color;
+            out vec4 fragment;
+            void main()
+            {
+                fragment = vec4(color, 1.0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu"]
+            targets = ["metal"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo), format_output=False)
+    payload = report.to_json()
+    fragment_metal = (
+        repo / "translated" / "metal" / "gpu" / "triangle.frag.metal"
+    ).read_text(encoding="utf-8")
+    fragment_artifact = next(
+        artifact
+        for artifact in payload["artifacts"]
+        if artifact["source"] == "gpu/triangle.frag"
+    )
+
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert fragment_artifact["sourceRemap"]["mappingCount"] >= 1
+    assert re.search(r"^\s*float4\s+fragment\b", fragment_metal, re.MULTILINE) is None
+    assert re.search(r"^\s*fragment\s*=", fragment_metal, re.MULTILINE) is None
+    assert re.search(r"\breturn\s+fragment\s*;", fragment_metal) is None
+    assert "float4 fragment_;" in fragment_metal
+    assert "fragment_ = float4(input.color, 1.0);" in fragment_metal
+    assert "return fragment_;" in fragment_metal
+    assert_metal_validates_if_available(fragment_metal, tmp_path)
 
 
 def test_scan_project_reports_unsupported_source_overrides(tmp_path):
@@ -10235,6 +10565,48 @@ def test_plain_metal_helper_call_scan_uses_indexed_excluded_spans(monkeypatch):
     ]
 
 
+def test_plain_metal_helper_call_scan_starts_at_included_body_span():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    class CountingSource(str):
+        index_reads = 0
+
+        def __getitem__(self, key):
+            if isinstance(key, int):
+                type(self).index_reads += 1
+            return super().__getitem__(key)
+
+    preprocessor = MetalPreprocessor()
+    prefix = "\n".join(f"float ignored_{index};" for index in range(6000))
+    function_source = textwrap.dedent("""
+        uint call_plain(uint value) {
+            return plain_helper(value);
+        }
+        """)
+    source = CountingSource(prefix + "\n" + function_source)
+    function_start = source.find("uint call_plain")
+    body_start = source.find("{", function_start) + 1
+    body_end = source.find("}", body_start)
+
+    calls = project_pipeline._plain_template_helper_call_sites(
+        preprocessor,
+        source,
+        {"plain_helper": [object()]},
+        [],
+        [(body_start, body_end)],
+    )
+
+    helper_start = source.find("plain_helper")
+    assert calls == [
+        (
+            "plain_helper",
+            ["value"],
+            (helper_start, helper_start + len("plain_helper")),
+        )
+    ]
+    assert CountingSource.index_reads < len(function_source) * 4
+
+
 def test_translate_project_bounds_mlx_like_plain_helper_scan_across_targets(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
@@ -10302,6 +10674,79 @@ def test_translate_project_bounds_mlx_like_plain_helper_scan_across_targets(tmp_
             and record["materializedName"] == "dequantize_plain_float"
             for record in materialization["specializations"]
         )
+
+
+def test_translate_project_bounds_mlx_like_large_plain_helper_graph(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    helper_count = 96
+    helper_sources = []
+    for index in range(helper_count):
+        next_call = (
+            f"return graph_helper_{index + 1}(value) + T({index % 7});"
+            if index + 1 < helper_count
+            else "return value + T(1);"
+        )
+        helper_sources.append(textwrap.dedent(f"""
+                template <typename T>
+                T graph_helper_{index}(T value) {{
+                    {next_call}
+                }}
+                """).strip())
+    helper_graph = "\n\n".join(helper_sources)
+    excluded_structs = "\n\n".join(textwrap.dedent(f"""
+            template <typename T>
+            struct QuantizedBlock{index} {{
+                T scales[8];
+                T values[8];
+            }};
+            """).strip() for index in range(500))
+    (shader_dir / "fp_quantized_nax_graph.metal").write_text(
+        textwrap.dedent(f"""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            {excluded_structs}
+
+            {helper_graph}
+
+            [[kernel]] void fp_quantized_nax(
+                device const float* in [[buffer(0)]],
+                device float* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {{
+                float value = in[gid];
+                out[gid] = graph_helper_0(value);
+            }}
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx", "opengl", "vulkan"]
+            output_dir = "translated"
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    for artifact in payload["artifacts"]:
+        materialization = artifact["templateMaterialization"]
+        assert materialization["status"] == "materialized"
+        assert materialization["unsupported"] == []
+        helper_records = [
+            record
+            for record in materialization["specializations"]
+            if record["source"] == "call-site"
+        ]
+        assert len(helper_records) == helper_count
+        assert helper_records[-1]["materializedName"] == "graph_helper_95_float"
 
 
 def test_translate_project_opengl_uses_metal_default_template_helper_type(
@@ -36478,6 +36923,87 @@ def test_translate_project_metal_matmul_device_buffers_do_not_emit_directx_param
     assert "void CSMain(float*" not in output
 
 
+def test_translate_project_metal_matmul_unbound_device_buffers_lower_to_directx_resources(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "ShaderParams.h").write_text(
+        textwrap.dedent("""
+            #ifndef _SHADER_PARAMS_H
+            #define _SHADER_PARAMS_H
+
+            typedef struct
+            {
+                unsigned int row_dim_x;
+                unsigned int col_dim_x;
+                unsigned int inner_dim;
+            } MatMulParams;
+
+            #endif
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "mat_mul_simple1.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            #include "ShaderParams.h"
+            using namespace metal;
+
+            kernel void mat_mul_simple1(device const float* A,
+                                        device const float* B,
+                                        device float* X,
+                                        constant MatMulParams& params,
+                                        uint2 id [[ thread_position_in_grid ]])
+            {
+                const uint row_dim_x = params.row_dim_x;
+                const uint col_dim_x = params.col_dim_x;
+                const uint inner_dim = params.inner_dim;
+
+                if ((id.x < col_dim_x) && (id.y < row_dim_x)) {
+                    const uint index = id.y*col_dim_x + id.x;
+                    float sum = 0;
+                    for (uint k = 0; k < inner_dim; ++k) {
+                        const uint index_A = id.y*inner_dim + k;
+                        const uint index_B = k*col_dim_x + id.x;
+
+                        sum += A[index_A] * B[index_B];
+                    }
+                    X[index] = sum;
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "StructuredBuffer<float> A : register(t0);" in output
+    assert "StructuredBuffer<float> B : register(t1);" in output
+    assert "RWStructuredBuffer<float> X : register(u0);" in output
+    assert "ConstantBuffer<MatMulParams> params : register(b0);" in output
+    assert "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)" in output
+    assert "uint2 id = id_dispatchThreadID.xy;" in output
+    assert "A.Load(index_A)" in output
+    assert "B.Load(index_B)" in output
+    assert "X.Store(index, sum);" in output
+    assert "float* A" not in output
+    assert "float* B" not in output
+    assert "float* X" not in output
+    assert "void CSMain(float*" not in output
+    assert_directx_compute_validates_if_available(output, tmp_path)
+
+
 def test_translate_project_metal_matmul_uint2_grid_id_normalizes_for_compute_targets(
     tmp_path,
 ):
@@ -37009,6 +37535,7 @@ def test_project_cli_metal_matmul_explicit_opengl_target_declares_resources(
             "--report",
             str(report_path),
             "--validate",
+            "--run-toolchains",
             "--no-format",
             "--target",
             "opengl",
@@ -39033,6 +39560,170 @@ def test_translate_project_opencl_local_pointer_helper_reports_contract(
     assert diagnostic["missingCapabilities"] == ["opencl.local-pointer-helper"]
     assert "read_local(shared_: ptr<i32>)" in diagnostic["message"]
     assert "Suggested action:" in diagnostic["message"]
+
+
+def test_translate_project_mojo_vector_add_launch_separates_host_runtime(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "vector_addition.mojo").write_text(
+        textwrap.dedent("""
+            from std.sys import has_accelerator
+            from std.gpu.host import DeviceContext
+            from std.gpu import block_dim, block_idx, thread_idx
+            from layout import TileTensor, row_major
+
+            comptime float_dtype = DType.float32
+            comptime vector_size = 4
+            comptime layout = row_major[vector_size]()
+            comptime block_size = 256
+            comptime num_blocks = 1
+
+            def vector_addition(
+                lhs_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+                rhs_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+                out_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+            ):
+                var tid = block_idx.x * block_dim.x + thread_idx.x
+                if tid < vector_size:
+                    out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid]
+
+            def main() raises:
+                if not has_accelerator():
+                    print("No compatible GPU found")
+                else:
+                    ctx = DeviceContext()
+                    lhs = TileTensor(
+                        ctx.enqueue_create_buffer[float_dtype](vector_size),
+                        layout,
+                    )
+                    rhs = TileTensor(
+                        ctx.enqueue_create_buffer[float_dtype](vector_size),
+                        layout,
+                    )
+                    out = TileTensor(
+                        ctx.enqueue_create_buffer[float_dtype](vector_size),
+                        layout,
+                    )
+                    ctx.enqueue_function[vector_addition](
+                        lhs,
+                        rhs,
+                        out,
+                        grid_dim=num_blocks,
+                        block_dim=block_size,
+                    )
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["cgl", "metal", "vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["diagnosticCounts"]["error"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("cgl", "translated"),
+        ("metal", "translated"),
+        ("vulkan", "translated"),
+    }
+
+    outputs = {
+        artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in payload["artifacts"]
+    }
+    for target in ("cgl", "metal", "vulkan"):
+        assert "DType" not in outputs[target]
+        assert "has_accelerator" not in outputs[target]
+        assert "print(" not in outputs[target]
+        assert "No compatible GPU found" not in outputs[target]
+
+    assert "compute {" in outputs["cgl"]
+    assert "kernel void vector_addition(" in outputs["metal"]
+    assert "void main()" not in outputs["metal"]
+    assert "OpEntryPoint GLCompute" in outputs["vulkan"]
+    assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
+    assert_metal_validates_if_available(outputs["metal"], tmp_path)
+
+
+def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "vector_addition.mojo").write_text(
+        textwrap.dedent("""
+            from std.sys import has_accelerator
+            from std.gpu import block_dim, block_idx, thread_idx
+
+            comptime float_dtype = DType.float32
+            comptime vector_size = 4
+
+            def vector_addition(
+                lhs_tensor: UnsafePointer[Float32],
+                rhs_tensor: UnsafePointer[Float32],
+                out_tensor: UnsafePointer[Float32],
+            ):
+                var tid = block_idx.x * block_dim.x + thread_idx.x
+                if tid < vector_size:
+                    out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid]
+
+            def main() raises:
+                if not has_accelerator():
+                    print("No compatible GPU found")
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["metal", "vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("metal", "failed"),
+        ("vulkan", "failed"),
+    }
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 2
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 2}
+    assert payload["summary"]["diagnosticsByCode"] == {
+        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE: 2,
+    }
+
+    for artifact in payload["artifacts"]:
+        assert not (repo / artifact["path"]).exists()
+        assert "unresolved Mojo host/runtime constructs" in artifact["error"]
+        assert "vector_addition" in artifact["path"]
+        assert "generatedHash" not in artifact
+        assert "generatedSizeBytes" not in artifact
+        assert "sourceMap" not in artifact
+        assert "sourceRemap" not in artifact
+
+    diagnostics_by_target = {
+        diagnostic["target"]: diagnostic for diagnostic in payload["diagnostics"]
+    }
+    assert set(diagnostics_by_target) == {"metal", "vulkan"}
+    for target, diagnostic in diagnostics_by_target.items():
+        assert (
+            diagnostic["code"]
+            == project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE
+        )
+        assert diagnostic["severity"] == "error"
+        assert diagnostic["sourceBackend"] == "mojo"
+        assert diagnostic["location"]["file"].startswith(f"out/{target}/")
+        assert diagnostic["originalLocation"]["file"] == "vector_addition.mojo"
+        assert diagnostic["checkKind"] == "artifact.validation"
+        assert diagnostic["missingCapabilities"] == [
+            project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY
+        ]
 
 
 def test_translate_project_opencl_to_opengl_casts_signed_global_id_local(

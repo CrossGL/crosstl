@@ -13,6 +13,7 @@ from crosstl.translator.ast import (
     LiteralNode,
     NamedType,
     ParameterNode,
+    PointerType,
     PreprocessorNode,
     PrimitiveType,
     ReturnNode,
@@ -264,6 +265,43 @@ def test_structured_buffer_operations_lower_to_ssbo():
     assert "buffer_load" not in generated
     assert "buffer_store" not in generated
     assert "buffer_dimensions" not in generated
+
+
+def test_metal_device_const_stage_pointer_parameter_lowers_to_readonly_ssbo():
+    ast = ShaderNode(
+        "MetalDeviceConstBuffer",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "mat_mul_simple1",
+                PrimitiveType("void"),
+                [
+                    ParameterNode(
+                        "A",
+                        PointerType(PrimitiveType("float"), is_mutable=False),
+                        attributes=[AttributeNode("buffer", [0])],
+                        qualifiers=["device", "const"],
+                    ),
+                    ParameterNode(
+                        "X",
+                        PointerType(PrimitiveType("float")),
+                        attributes=[AttributeNode("buffer", [1])],
+                        qualifiers=["device"],
+                    ),
+                ],
+                BlockNode([]),
+                qualifiers=["compute"],
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert (
+        "layout(std430, binding = 0) readonly buffer ABuffer { float A[]; };"
+        in generated
+    )
+    assert "layout(std430, binding = 1) buffer XBuffer { float X[]; };" in generated
 
 
 def test_compute_stage_validates_builtin_parameter_types():

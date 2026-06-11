@@ -173,6 +173,28 @@ def test_glsl_fragment_fragcoord_lowers_to_metal_position_input(tmp_path):
     compile_with_metal_if_available(generated_code)
 
 
+def test_metal_reserved_stage_keyword_local_identifier_is_escaped():
+    shader = """
+    shader ReservedStageKeywordLocal {
+        fragment {
+            vec4 main() @ gl_FragColor {
+                vec4 fragment = vec4(1.0);
+                return fragment;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert re.search(r"^\s*float4\s+fragment\b", generated_code, re.MULTILINE) is None
+    assert "float4 fragment_ = float4(1.0);" in generated_code
+    assert "return fragment_;" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_glsl_push_constant_vertex_output_synthesizes_metal_position(tmp_path):
     shader = """
     #version 400

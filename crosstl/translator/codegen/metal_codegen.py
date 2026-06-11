@@ -340,6 +340,20 @@ class CharTypeMapper:
 class MetalCodeGen:
     """Emit Metal Shading Language from the shared CrossGL translator AST."""
 
+    METAL_RESERVED_LOCAL_IDENTIFIERS = {
+        "kernel",
+        "vertex",
+        "fragment",
+        "compute",
+        "intersection",
+        "anyhit",
+        "closesthit",
+        "miss",
+        "callable",
+        "mesh",
+        "object",
+        "amplification",
+    }
     METAL_INTERPOLATION_ATTRIBUTES = {
         "center_no_perspective": "center_no_perspective",
         "center_perspective": "center_perspective",
@@ -688,6 +702,7 @@ class MetalCodeGen:
         self.current_generic_function_substitutions = {}
         self.local_variable_types = {}
         self.current_address_space_variables = {}
+        self.current_local_identifier_remaps = {}
         self.struct_member_types = {}
         self.struct_member_address_spaces = {}
         self.structs_by_name = {}
@@ -3444,6 +3459,7 @@ class MetalCodeGen:
         previous_function_name = self.current_function_name
         previous_function_return_type = self.current_function_return_type
         previous_function_return_wrapper = self.current_function_return_wrapper
+        previous_local_identifier_remaps = self.current_local_identifier_remaps
         previous_stage_output_return_active = getattr(
             self, "current_metal_stage_output_return_active", False
         )
@@ -3524,6 +3540,7 @@ class MetalCodeGen:
         )
         self.current_function_name = getattr(func, "name", None)
         self.current_function_return_wrapper = None
+        self.current_local_identifier_remaps = {}
         self.current_metal_stage_output_return_active = False
         self.current_generic_function_substitutions = (
             getattr(func, "_generic_substitutions", {}) or {}
@@ -3919,6 +3936,16 @@ class MetalCodeGen:
         self.cbuffer_member_references = self.collect_cbuffer_member_references(
             self.cbuffer_variables
         )
+        self.current_local_identifier_remaps = (
+            self.collect_metal_local_identifier_remaps(
+                func,
+                param_list,
+                vertex_stage_input_parameters
+                + fragment_stage_input_parameters
+                + stage_output_parameters,
+                stage_local_variables,
+            )
+        )
 
         params_str = ", ".join(params)
         if shader_type is None:
@@ -3994,6 +4021,7 @@ class MetalCodeGen:
             self.current_function_name = previous_function_name
             self.current_function_return_type = previous_function_return_type
             self.current_function_return_wrapper = previous_function_return_wrapper
+            self.current_local_identifier_remaps = previous_local_identifier_remaps
             self.local_variable_types = previous_local_variable_types
             self.current_address_space_variables = previous_address_space_variables
             self.current_generic_function_substitutions = (
@@ -4082,6 +4110,7 @@ class MetalCodeGen:
             self.current_function_name = previous_function_name
             self.current_function_return_type = previous_function_return_type
             self.current_function_return_wrapper = previous_function_return_wrapper
+            self.current_local_identifier_remaps = previous_local_identifier_remaps
             self.local_variable_types = previous_local_variable_types
             self.current_address_space_variables = previous_address_space_variables
             self.current_generic_function_substitutions = (
@@ -4502,6 +4531,7 @@ class MetalCodeGen:
         self.current_function_name = previous_function_name
         self.current_function_return_type = previous_function_return_type
         self.current_function_return_wrapper = previous_function_return_wrapper
+        self.current_local_identifier_remaps = previous_local_identifier_remaps
         self.current_metal_stage_output_return_active = (
             previous_stage_output_return_active
         )
@@ -5260,7 +5290,8 @@ class MetalCodeGen:
             declaration = parameter.get("declaration")
             if declaration is None:
                 declaration = format_c_style_array_declaration(
-                    parameter["mapped_type"], parameter["name"]
+                    parameter["mapped_type"],
+                    self.metal_local_identifier_name(parameter["name"]),
                 )
             declarations.append(
                 f"{declaration} = {input_parameter_name}.{parameter['name']};"
@@ -5288,7 +5319,8 @@ class MetalCodeGen:
         for parameter in parameters:
             default_value = self.metal_default_value_expression(parameter["raw_type"])
             declaration = format_c_style_array_declaration(
-                parameter["mapped_type"], parameter["name"]
+                parameter["mapped_type"],
+                self.metal_local_identifier_name(parameter["name"]),
             )
             code += f"    {declaration} = {default_value};\n"
         return code
@@ -5301,7 +5333,8 @@ class MetalCodeGen:
         result_name = self.unique_metal_generated_name("_crossglOutput", reserved_names)
         code = f"    {struct_name} {result_name};\n"
         for parameter in parameters:
-            code += f"    {result_name}.{parameter['name']} = {parameter['name']};\n"
+            local_name = self.metal_local_identifier_name(parameter["name"])
+            code += f"    {result_name}.{parameter['name']} = {local_name};\n"
         code += f"    return {result_name};\n"
         return code
 
@@ -6117,8 +6150,9 @@ class MetalCodeGen:
                     f"{self.unsupported_glsl_buffer_block_local_variable_placeholder('Metal', var_type, stmt.name)};\n"
                 )
 
+            local_name = self.metal_local_identifier_name(stmt.name)
             declaration = format_c_style_array_declaration(
-                self.map_type(var_type), stmt.name
+                self.map_type(var_type), local_name
             )
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
             declaration = self.maybe_format_unused_local_declaration(
@@ -6129,7 +6163,7 @@ class MetalCodeGen:
                 code += generate_match_expression_assignment(
                     self,
                     initial_value,
-                    stmt.name,
+                    local_name,
                     var_type,
                     indent,
                     "Metal",
@@ -6160,14 +6194,14 @@ class MetalCodeGen:
                 if is_atomic_local:
                     array_initializer = (
                         self.generate_metal_atomic_array_initializer_stores(
-                            stmt.name, var_type, initial_value, indent_str
+                            local_name, var_type, initial_value, indent_str
                         )
                     )
                     if array_initializer is not None:
                         return f"{indent_str}{declaration};\n{array_initializer}"
                     return (
                         f"{indent_str}{declaration};\n"
-                        f"{indent_str}atomic_store_explicit(&{stmt.name}, {init_expr}, "
+                        f"{indent_str}atomic_store_explicit(&{local_name}, {init_expr}, "
                         "memory_order_relaxed);\n"
                     )
                 diagnostic_prefix = (
@@ -6181,17 +6215,18 @@ class MetalCodeGen:
         elif isinstance(stmt, ArrayNode):
             element_type = self.map_type(stmt.element_type)
             size = get_array_size_from_node(stmt)
+            local_name = self.metal_local_identifier_name(stmt.name)
 
             if size is None:
                 # Dynamic arrays in Metal need a size, use a large enough buffer
                 declaration = self.maybe_format_unused_local_declaration(
-                    f"device array<{element_type}, 1024> {stmt.name}",
+                    f"device array<{element_type}, 1024> {local_name}",
                     stmt.name,
                 )
                 return f"{indent_str}{declaration};\n"
             else:
                 declaration = self.maybe_format_unused_local_declaration(
-                    f"array<{element_type}, {size}> {stmt.name}",
+                    f"array<{element_type}, {size}> {local_name}",
                     stmt.name,
                 )
                 return f"{indent_str}{declaration};\n"
@@ -6705,7 +6740,8 @@ class MetalCodeGen:
                 qualifier = f"const {address_space}"
 
         mapped_type = self.map_type(type_name)
-        return f"{qualifier} {mapped_type}& {name} = {rhs}"
+        local_name = self.metal_local_identifier_name(name)
+        return f"{qualifier} {mapped_type}& {local_name} = {rhs}"
 
     def global_variable_qualifier(self, node):
         qualifiers = {
@@ -6909,7 +6945,9 @@ class MetalCodeGen:
         referent_type = self.map_resource_type_with_format(
             raw_type.referenced_type, node
         )
-        value_declaration = format_c_style_array_declaration(referent_type, node.name)
+        value_declaration = format_c_style_array_declaration(
+            referent_type, self.metal_local_identifier_name(node.name)
+        )
         return self.maybe_format_unused_local_declaration(
             f"{address_space} {value_declaration}",
             node.name,
@@ -8421,6 +8459,8 @@ class MetalCodeGen:
                 option_default = self.option_none_default_expression()
                 if option_default is not None:
                     return option_default
+            if expr in self.local_variable_types:
+                return self.metal_local_identifier_name(expr)
             return expr
         elif isinstance(expr, IdentifierNode):
             name = expr.name
@@ -8450,7 +8490,7 @@ class MetalCodeGen:
                 and name in self.cbuffer_member_references
             ):
                 return self.cbuffer_member_references[name]
-            return name
+            return self.metal_local_identifier_name(name)
         elif isinstance(expr, bool):
             return "true" if expr else "false"
         elif isinstance(expr, int) or isinstance(expr, float):
@@ -8483,6 +8523,8 @@ class MetalCodeGen:
                         return option_default
                 if expr.name in self.METAL_RAY_FLAG_VALUES:
                     return f"{self.METAL_RAY_FLAG_VALUES[expr.name]}u"
+                if expr.name in self.local_variable_types:
+                    return self.metal_local_identifier_name(expr.name)
                 return enum_value_expression(self, expr.name)
             else:
                 return str(expr)
@@ -16036,6 +16078,46 @@ class MetalCodeGen:
             if isinstance(node, VariableNode) and getattr(node, "name", None):
                 names.add(node.name)
         return names
+
+    def collect_metal_local_identifier_remaps(
+        self, func, parameters, stage_parameters, stage_local_variables=None
+    ):
+        reserved_names = []
+        for parameter in parameters or []:
+            name = getattr(parameter, "name", None)
+            if name:
+                reserved_names.append(name)
+
+        ordered_names = []
+        for parameter in stage_parameters or []:
+            name = parameter.get("name") if isinstance(parameter, dict) else None
+            if name:
+                ordered_names.append(name)
+        for variable in stage_local_variables or []:
+            name = getattr(variable, "name", None)
+            if name:
+                ordered_names.append(name)
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if isinstance(node, VariableNode) and getattr(node, "name", None):
+                ordered_names.append(node.name)
+
+        used_names = set(reserved_names) | set(ordered_names)
+        remaps = {}
+        for name in ordered_names:
+            if name in remaps or name not in self.METAL_RESERVED_LOCAL_IDENTIFIERS:
+                continue
+            base_name = f"{name}_"
+            candidate = base_name
+            suffix = 2
+            while candidate in used_names:
+                candidate = f"{base_name}{suffix}"
+                suffix += 1
+            remaps[name] = candidate
+            used_names.add(candidate)
+        return remaps
+
+    def metal_local_identifier_name(self, name):
+        return self.current_local_identifier_remaps.get(name, name)
 
     def metal_parameter_mapped_type(self, parameter):
         return self.map_type(self.metal_parameter_raw_type(parameter))

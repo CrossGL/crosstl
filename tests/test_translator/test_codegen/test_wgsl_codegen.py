@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -49,6 +50,10 @@ shader WGSLCompute {
 
 def parse_shader(source):
     return Parser(Lexer(source).get_tokens()).parse()
+
+
+def project_root():
+    return Path(__file__).resolve().parents[3]
 
 
 def test_wgsl_backend_is_target_only():
@@ -236,6 +241,29 @@ def test_wgsl_codegen_injects_direct_compute_builtin_references():
     assert "var lane: u32 = global_invocation_id.x;" in generated
 
 
+def test_wgsl_codegen_injects_fragment_position_for_gl_fragcoord():
+    shader = """
+    shader WGSLFragmentPositionBuiltin {
+        fragment {
+            vec4 main() @ gl_FragColor {
+                float xVal = gl_FragCoord.x;
+                return vec4(xVal, gl_FragCoord.y, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "fn fragment_main(@builtin(position) position: vec4<f32>) "
+        "-> @location(0) vec4<f32>"
+    ) in generated
+    assert "var xVal: f32 = position.x;" in generated
+    assert "return vec4<f32>(xVal, position.y, 0.0, 1.0);" in generated
+    assert "gl_FragCoord" not in generated
+
+
 def test_wgsl_codegen_casts_unsigned_compute_builtin_component_to_signed_local():
     shader = """
     shader WGSLSignedComputeBuiltin {
@@ -379,6 +407,54 @@ def test_wgsl_codegen_lowers_writeonly_uimage2d_to_storage_texture_store():
     assert "imageStore" not in generated
 
 
+def test_wgsl_codegen_infers_image2d_write_access_from_image_store():
+    shader = """
+    shader WGSLStorageImageInferredWrite {
+        compute {
+            layout(local_size_x = 1) in;
+            uniform layout(rgba8) image2D outputImage;
+            void main() {
+                imageStore(outputImage, ivec2(1, 2), vec4(1.0));
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "@group(0) @binding(0)\n"
+        "var outputImage: texture_storage_2d<rgba8unorm, write>;"
+    ) in generated
+    assert "textureStore(outputImage, vec2<i32>(1, 2), vec4<f32>(1.0));" in generated
+
+
+def test_wgsl_codegen_infers_image2d_read_access_from_image_load():
+    shader = """
+    shader WGSLStorageImageInferredRead {
+        compute {
+            layout(local_size_x = 1) in;
+            uniform layout(rgba32f) image2D inputImage;
+            void main() {
+                vec4 color = imageLoad(inputImage, ivec2(1, 2));
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "@group(0) @binding(0)\n"
+        "var inputImage: texture_storage_2d<rgba32float, read>;"
+    ) in generated
+    assert (
+        "var color: vec4<f32> = textureLoad(inputImage, vec2<i32>(1, 2));"
+        in generated
+    )
+    assert "imageLoad" not in generated
+
+
 def test_wgsl_codegen_rejects_storage_image_without_representable_format():
     shader = """
     shader WGSLStorageImageMissingFormat {
@@ -395,10 +471,45 @@ def test_wgsl_codegen_rejects_storage_image_without_representable_format():
         ValueError,
         match=(
             "WGSL target requires storage image resource dstTexture to declare "
-            "a representable image format"
+            r"a representable image format such as layout\(rgba8\) or @rgba8"
         ),
     ):
         WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_storage_image_without_access_metadata():
+    shader = """
+    shader WGSLStorageImageMissingAccess {
+        image2D outputImage @binding(2) @rgba8;
+        compute {
+            void main() {
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target requires storage image resource outputImage to declare "
+            r"an access mode \(@readonly, @writeonly, or @readwrite\) or use it "
+            r"in imageLoad/imageStore so access can be inferred"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_translates_complex_shader_storage_image_contract():
+    shader = (project_root() / "examples/graphics/ComplexShader.cgl").read_text()
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "@group(0) @binding(9)\n"
+        "var outputImage: texture_storage_2d<rgba8unorm, write>;"
+    ) in generated
+    assert "textureStore(outputImage, texCoord, color);" in generated
 
 
 def test_wgsl_auto_bindings_skip_later_explicit_bindings():
