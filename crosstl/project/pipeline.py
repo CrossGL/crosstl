@@ -19,6 +19,7 @@ from collections import Counter
 from dataclasses import dataclass, field, replace
 from importlib import metadata as importlib_metadata
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from types import SimpleNamespace
 from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
@@ -9132,6 +9133,7 @@ class _InheritedTemplateMaterialization:
 class _MetalTemplateTypeDeclaration:
     name: str
     parameters: tuple[str, ...]
+    parameter_defaults: Mapping[str, str]
     span: tuple[int, int]
     location: SourceLocation
     is_functor: bool = False
@@ -10603,7 +10605,7 @@ def _metal_resolve_type_identifiers(
         )
     alias_values = dict(aliases_key)
     constant_values = dict(constants_key)
-    rewrite_pass_limit = max(1, len(alias_values) + len(constant_values) + 1)
+    rewrite_pass_limit = max(2, len(alias_values) + len(constant_values) + 1)
     seen_texts = {text}
     for rewrite_pass in range(1, rewrite_pass_limit + 1):
         previous = text
@@ -11780,15 +11782,38 @@ def _metal_statement_semicolon(
     return None
 
 
-def _metal_concrete_using_alias_type(alias_type: str) -> str | None:
+def _metal_concrete_block_alias_type(alias_type: str) -> str | None:
     alias_type = str(alias_type or "").strip()
     if alias_type.startswith("typename "):
         alias_type = alias_type[len("typename ") :].strip()
-    if "<" not in alias_type or ">" not in alias_type:
+        if re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*",
+            alias_type,
+        ):
+            return None
+    if not alias_type:
         return None
     if any(character in alias_type for character in "{};="):
         return None
     return alias_type
+
+
+def _metal_typedef_alias_parts(
+    preprocessor: Any,
+    source: str,
+    start: int,
+) -> tuple[str, str, int] | None:
+    semicolon = _metal_statement_semicolon(preprocessor, source, start)
+    if semicolon is None:
+        return None
+    declaration = source[start:semicolon].strip()
+    if declaration.startswith("typedef"):
+        declaration = declaration[len("typedef") :].strip()
+    parsed = _metal_declared_type_and_name(declaration)
+    if parsed is None:
+        return None
+    alias_type, alias_name = parsed
+    return alias_name, alias_type, semicolon
 
 
 def _metal_local_integer_constants_before(
@@ -11860,6 +11885,9 @@ def _metal_template_struct_members(
         }
         structs[name] = {
             "parameters": parameters,
+            "parameter_defaults": preprocessor._template_parameter_defaults(
+                parameter_text
+            ),
             "aliases": aliases,
             "constants": constants,
         }
@@ -11890,6 +11918,19 @@ def _metal_concrete_template_struct_members(
         for index, parameter in enumerate(parameters)
         if index < len(arguments)
     }
+    defaults = dict(struct.get("parameter_defaults") or {})
+    default_context = SimpleNamespace(
+        template_type_traits={},
+    )
+    for parameter in parameters[len(arguments) :]:
+        default = defaults.get(parameter)
+        if default is None:
+            continue
+        substitutions[parameter] = preprocessor._resolve_template_default_argument(
+            str(default),
+            substitutions,
+            default_context,
+        )
     members: dict[str, str] = {}
     for member, value in dict(struct.get("aliases") or {}).items():
         members[str(member)] = preprocessor._replace_identifiers(
@@ -11941,29 +11982,38 @@ def _inline_metal_concrete_using_template_aliases(
             continue
 
         ident, consumed = preprocessor._read_identifier(source, i)
-        if ident != "using":
+        if ident not in {"typedef", "using"}:
             i += consumed
             continue
 
         j = i + consumed
-        while j < len(source) and source[j].isspace():
-            j += 1
-        if j >= len(source) or not (source[j].isalpha() or source[j] == "_"):
-            i += consumed
-            continue
-        alias_name, alias_consumed = preprocessor._read_identifier(source, j)
-        j += alias_consumed
-        while j < len(source) and source[j].isspace():
-            j += 1
-        if j >= len(source) or source[j] != "=":
-            i += consumed
-            continue
-        semicolon = _metal_statement_semicolon(preprocessor, source, j + 1)
-        if semicolon is None:
-            i += consumed
-            continue
-        raw_alias_type = source[j + 1 : semicolon]
-        alias_type = _metal_concrete_using_alias_type(raw_alias_type)
+        raw_alias_type = ""
+        if ident == "typedef":
+            typedef_parts = _metal_typedef_alias_parts(preprocessor, source, i)
+            if typedef_parts is None:
+                i += consumed
+                continue
+            alias_name, raw_alias_type, semicolon = typedef_parts
+            alias_type = _metal_concrete_block_alias_type(raw_alias_type)
+        else:
+            while j < len(source) and source[j].isspace():
+                j += 1
+            if j >= len(source) or not (source[j].isalpha() or source[j] == "_"):
+                i += consumed
+                continue
+            alias_name, alias_consumed = preprocessor._read_identifier(source, j)
+            j += alias_consumed
+            while j < len(source) and source[j].isspace():
+                j += 1
+            if j >= len(source) or source[j] != "=":
+                i += consumed
+                continue
+            semicolon = _metal_statement_semicolon(preprocessor, source, j + 1)
+            if semicolon is None:
+                i += consumed
+                continue
+            raw_alias_type = source[j + 1 : semicolon]
+            alias_type = _metal_concrete_block_alias_type(raw_alias_type)
         if alias_type is None:
             dependent_match = re.fullmatch(
                 r"\s*typename\s+([A-Za-z_][A-Za-z0-9_]*)::"
@@ -12338,9 +12388,8 @@ def _metal_template_type_declarations(
             pos = start + len("template")
             continue
 
-        parameters = tuple(
-            preprocessor._template_parameter_names(source[angle_start + 1 : angle_end])
-        )
+        parameter_text = source[angle_start + 1 : angle_end]
+        parameters = tuple(preprocessor._template_parameter_names(parameter_text))
         declaration_start = angle_end + 1
         header = source[declaration_start : declaration_start + 512]
         declaration_match = re.match(
@@ -12385,6 +12434,9 @@ def _metal_template_type_declarations(
             _MetalTemplateTypeDeclaration(
                 name=declaration_match.group("name").split("::")[-1],
                 parameters=parameters,
+                parameter_defaults=preprocessor._template_parameter_defaults(
+                    parameter_text
+                ),
                 span=(start, end),
                 location=location,
                 is_functor=re.search(r"\boperator\s*\(\s*\)", body) is not None,
@@ -12438,6 +12490,52 @@ def _template_argument_missing_parameters(
     return missing
 
 
+def _metal_template_type_missing_parameters(
+    preprocessor: Any,
+    declaration: _MetalTemplateTypeDeclaration,
+    arguments: Sequence[str],
+    template_parameter_names: set[str],
+) -> list[str]:
+    missing: list[str] = []
+    substitutions = {
+        parameter: arguments[index]
+        for index, parameter in enumerate(declaration.parameters)
+        if index < len(arguments)
+    }
+    default_context = SimpleNamespace(
+        template_type_traits={},
+    )
+    for argument in arguments:
+        for parameter in _template_argument_missing_parameters(
+            argument,
+            template_parameter_names,
+        ):
+            if parameter not in missing:
+                missing.append(parameter)
+    for parameter in declaration.parameters[len(arguments) :]:
+        default = declaration.parameter_defaults.get(parameter)
+        if default is None:
+            if parameter not in missing:
+                missing.append(parameter)
+            continue
+        resolved_default = preprocessor._resolve_template_default_argument(
+            str(default),
+            substitutions,
+            default_context,
+        )
+        substitutions[parameter] = resolved_default
+        for default_parameter in _template_argument_missing_parameters(
+            resolved_default,
+            template_parameter_names,
+        ):
+            if (
+                default_parameter not in substitutions
+                and default_parameter not in missing
+            ):
+                missing.append(default_parameter)
+    return missing
+
+
 def _unresolved_metal_template_type_records(
     *,
     preprocessor: Any,
@@ -12485,18 +12583,12 @@ def _unresolved_metal_template_type_records(
                 source[angle_start + 1 : angle_end]
             )
         ]
-        missing: list[str] = []
-        for argument in arguments:
-            for parameter in _template_argument_missing_parameters(
-                argument,
-                template_parameter_names,
-            ):
-                if parameter not in missing:
-                    missing.append(parameter)
-        if len(arguments) < len(declaration.parameters):
-            for parameter in declaration.parameters[len(arguments) :]:
-                if parameter not in missing:
-                    missing.append(parameter)
+        missing = _metal_template_type_missing_parameters(
+            preprocessor,
+            declaration,
+            arguments,
+            template_parameter_names,
+        )
         if _metal_template_arguments_are_local_constants(
             preprocessor,
             source,
