@@ -24526,6 +24526,83 @@ def test_translate_project_resolves_generic_vulkan_storage_buffer_helper_family(
     assert payload["diagnostics"] == []
 
 
+def test_translate_project_resolves_vulkan_index_helper_pointer_alias_provenance(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "index_helper_aliases.cgl"
+    source_path.write_text(
+        textwrap.dedent("""
+            shader IndexHelperPointerAliasProject {
+                compute {
+                    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                    layout(set = 0, binding = 0) buffer int* shape;
+                    layout(set = 0, binding = 1) buffer int* lhsStrides;
+                    layout(set = 0, binding = 2) buffer int* rhsStrides;
+                    layout(set = 0, binding = 3) buffer float* outValues;
+
+                    uint elem_to_loc(
+                        uint elem,
+                        int* shape_arg,
+                        int* strides_arg,
+                        int ndim
+                    ) {
+                        return uint(shape_arg[0]) + uint(strides_arg[0]) + elem + uint(ndim);
+                    }
+
+                    uint elem_to_loc(
+                        uint elem,
+                        int* shape_arg,
+                        int* lhs_strides_arg,
+                        int* rhs_strides_arg,
+                        int ndim
+                    ) {
+                        return uint(shape_arg[0]) + uint(lhs_strides_arg[0])
+                            + uint(rhs_strides_arg[0]) + elem + uint(ndim);
+                    }
+
+                    void main() {
+                        int* shape_alias = shape;
+                        int* lhs_alias = lhsStrides;
+                        int* rhs_alias = rhsStrides + 1;
+                        uint offset = elem_to_loc(
+                            0u,
+                            shape_alias,
+                            lhs_alias,
+                            rhs_alias,
+                            1
+                        );
+                        outValues[0] = float(offset);
+                        return;
+                    }
+                }
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["vulkan"], output_dir="out").to_json()
+
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["diagnosticCounts"]["error"] == 0
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["target"] == "vulkan"
+    assert artifact["source"] == "index_helper_aliases.cgl"
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "elem_to_loc" not in generated
+    assert "OpFunctionCall" not in generated
+    assert "runtime-array aggregate values" not in generated
+    assert "storage-buffer-function-overload" not in generated
+    assert "WARNING" not in generated
+    assert payload["diagnostics"] == []
+
+
 def test_translate_project_resolves_vulkan_resource_pointer_helper_overloads(
     tmp_path,
 ):
