@@ -13361,9 +13361,8 @@ def translate_project(
                             else None
                         ),
                     },
+                    "requiredCapabilities": list(required_capabilities),
                 }
-                if required_capabilities:
-                    artifact["requiredCapabilities"] = list(required_capabilities)
                 if variant is not None:
                     artifact["variant"] = variant
                 if output_dir_blocked:

@@ -8134,7 +8134,7 @@ def test_codegen_control_flow_shadowed_value_types_do_not_leak_to_image_store():
             "void main(bool choose)",
             "if (choose) {\n                    vec2 value = vec2(1.0, 2.0);\n                }",
             "if (choose) {\n        float2 value = float2(1.0, 2.0);\n    }",
-            "if (main_choose_Args_choose) {\n        vec2 value = vec2(1.0, 2.0);\n    }",
+            "if (choose) {\n        vec2 value = vec2(1.0, 2.0);\n    }",
         ),
         (
             "LoopShadowedScalarImageStore",

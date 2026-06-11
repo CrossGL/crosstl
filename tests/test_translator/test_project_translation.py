@@ -1354,6 +1354,10 @@ def _clear_report_diagnostics(payload):
         payload["summary"]["diagnosticsByVariant"] = {}
         payload["summary"]["diagnosticsByCheckKind"] = {}
         payload["summary"]["missingCapabilityCounts"] = {}
+    if "migration" in payload:
+        payload["migration"]["placeholderCount"] = 0
+        payload["migration"]["placeholdersByTarget"] = {}
+        payload["migration"]["placeholdersBySource"] = {}
 
 
 def _write_count_balanced_artifact_gap_report(repo, *, omit_artifact_matrix=False):
@@ -10757,8 +10761,8 @@ def test_translate_project_opengl_materializes_mlx_pointer_and_value_bindings(
     assert "layout(std430, binding = 0) readonly buffer srcBuffer" in output
     assert "layout(std430, binding = 1) buffer dstBuffer" in output
     assert "layout(std140, binding = 2) uniform scalefloat32_factor_Args" in output
-    assert "float scalefloat32_factor_Args_factor;" in output
-    assert "dst[gid] = (float(src[gid]) * scalefloat32_factor_Args_factor);" in output
+    assert "float factor;" in output
+    assert "dst[gid] = (float(src[gid]) * factor);" in output
     assert not re.search(r"\b(?:T|U)\b", output)
 
 
@@ -15378,6 +15382,7 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
         "stage",
         "templateMaterialization",
     }
+    assert artifact["requiredCapabilities"] == []
     assert set(artifact["sourceHash"]) == project_pipeline.REPORT_HASH_FIELDS
     assert isinstance(artifact["sourceSizeBytes"], int)
     assert artifact["sourceSizeBytes"] == unit["sourceSizeBytes"]
