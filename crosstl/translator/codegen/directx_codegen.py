@@ -625,9 +625,8 @@ class HLSLCodeGen:
         self.current_hlsl_dispatch_mesh_payload_types = set()
         self.current_hlsl_has_amplification_stage = False
         self.hlsl_hoisted_groupshared_declarations = []
-        self.hlsl_hoisted_groupshared_aliases_by_function = {}
+        self.hlsl_hoisted_groupshared_aliases_by_declaration = {}
         self.hlsl_hoisted_groupshared_declaration_ids = set()
-        self.hlsl_hoisted_groupshared_types_by_function = {}
         self.vertex_entry_input_struct_names = set()
         self.vertex_entry_output_struct_names = set()
         self.fragment_entry_input_struct_names = set()
@@ -1035,9 +1034,8 @@ class HLSLCodeGen:
         self.current_hlsl_dispatch_mesh_payload_types = set()
         self.current_hlsl_has_amplification_stage = False
         self.hlsl_hoisted_groupshared_declarations = []
-        self.hlsl_hoisted_groupshared_aliases_by_function = {}
+        self.hlsl_hoisted_groupshared_aliases_by_declaration = {}
         self.hlsl_hoisted_groupshared_declaration_ids = set()
-        self.hlsl_hoisted_groupshared_types_by_function = {}
         self.vertex_entry_output_struct_names = set()
         self.fragment_entry_input_struct_names = set()
         self.hlsl_temp_variable_index = 0
@@ -3306,14 +3304,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         self.local_variable_types = {}
         self.current_identifier_aliases = {}
-        self.current_identifier_aliases.update(
-            self.hlsl_hoisted_groupshared_aliases_by_function.get(id(func), {})
-        )
         self.current_identifier_reserved_names = (
             self.collect_hlsl_function_identifier_names(func)
-        )
-        self.local_variable_types.update(
-            self.hlsl_hoisted_groupshared_types_by_function.get(id(func), {})
         )
         if hasattr(func, "qualifiers") and func.qualifiers:
             qualifier = func.qualifiers[0] if func.qualifiers else None
@@ -3710,12 +3702,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         try:
             for statement in parameter_prologue_statements:
                 code += f"{'    ' * (indent + 1)}{statement}\n"
-            if hasattr(body, "statements"):
-                for stmt in body.statements:
-                    code += self.generate_statement(stmt, indent + 1)
-            elif isinstance(body, list):
-                for stmt in body:
-                    code += self.generate_statement(stmt, indent + 1)
+            code += self.generate_statement_body(body, indent + 1)
         finally:
             self.current_hlsl_visible_int_constants = (
                 previous_hlsl_visible_int_constants
@@ -5108,13 +5095,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def generate_statement_body(self, body, indent):
         code = ""
         if hasattr(body, "statements"):
-            for stmt in body.statements:
-                code += self.generate_statement(stmt, indent)
+            statements = body.statements
         elif isinstance(body, list):
-            for stmt in body:
-                code += self.generate_statement(stmt, indent)
+            statements = body
         elif body is not None:
-            code += self.generate_statement(body, indent)
+            statements = [body]
+        else:
+            statements = []
+
+        for stmt in statements:
+            if isinstance(stmt, VariableNode):
+                self.activate_hlsl_hoisted_groupshared_declaration(stmt)
+            code += self.generate_statement(stmt, indent)
         return code
 
     def generate_for_initializer(self, init):
@@ -12366,16 +12358,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         used_names.update(self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES)
         declarations = []
-        aliases_by_function = {}
-        types_by_function = {}
+        aliases_by_declaration = {}
         declaration_ids = set()
 
         for func in self.hlsl_emitted_functions_for_groupshared_lowering(
             ast, target_stage
         ):
-            aliases = {}
-            types = {}
-            declarations_by_name = {}
             func_name = getattr(func, "name", None) or "shader"
             for node in self.walk_ast(getattr(func, "body", [])):
                 if not isinstance(node, VariableNode):
@@ -12386,34 +12374,37 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 name = getattr(node, "name", None)
                 if not name:
                     continue
-                if name in declarations_by_name:
-                    raise ValueError(
-                        "DirectX cannot lower multiple function-local "
-                        f"groupshared/threadgroup declarations named '{name}' "
-                        f"in function '{func_name}'; unique source names are "
-                        "required for shader-scope lowering"
-                    )
 
                 alias_base = f"{func_name}_{name}"
                 alias = self.hlsl_unique_local_identifier(alias_base, used_names)
                 used_names.add(alias)
-                declarations_by_name[name] = node
-                aliases[name] = alias
                 declared_type = self.local_variable_declared_type(node)
                 declared_type_text = self.type_name_string(declared_type)
-                types[name] = declared_type_text
                 self.global_variable_types[alias] = declared_type_text
                 declarations.append((node, alias))
+                aliases_by_declaration[id(node)] = alias
                 declaration_ids.add(id(node))
 
-            if aliases:
-                aliases_by_function[id(func)] = aliases
-                types_by_function[id(func)] = types
-
         self.hlsl_hoisted_groupshared_declarations = declarations
-        self.hlsl_hoisted_groupshared_aliases_by_function = aliases_by_function
+        self.hlsl_hoisted_groupshared_aliases_by_declaration = aliases_by_declaration
         self.hlsl_hoisted_groupshared_declaration_ids = declaration_ids
-        self.hlsl_hoisted_groupshared_types_by_function = types_by_function
+
+    def activate_hlsl_hoisted_groupshared_declaration(self, node):
+        alias = self.hlsl_hoisted_groupshared_aliases_by_declaration.get(id(node))
+        if alias is None:
+            return False
+
+        name = getattr(node, "name", None)
+        if not name:
+            return True
+
+        declared_type = self.local_variable_declared_type(node)
+        declared_type_text = self.type_name_string(declared_type)
+        self.current_identifier_aliases[name] = alias
+        if declared_type_text:
+            self.local_variable_types[name] = declared_type_text
+            self.local_variable_types[alias] = declared_type_text
+        return True
 
     def hlsl_groupshared_declarations_to_emit(self, stage_groupshared_vars):
         declarations = [
