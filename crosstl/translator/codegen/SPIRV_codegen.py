@@ -104,6 +104,17 @@ class SpirvId:
         return f"%{self.id} ({self.type})"
 
 
+class UnsupportedSPIRVFeatureError(ValueError):
+    """Raised when SPIR-V codegen sees a feature it cannot safely lower."""
+
+    project_diagnostic_code = "project.translate.unsupported-feature"
+
+    def __init__(self, feature: str, message: str, *, missing_capabilities=()):
+        super().__init__(message)
+        self.feature = feature
+        self.missing_capabilities = tuple(missing_capabilities)
+
+
 class VulkanSPIRVCodeGen:
     """Generates SPIR-V code from a CrossGL shader AST."""
 
@@ -187,6 +198,7 @@ class VulkanSPIRVCodeGen:
         self.function_storage_buffer_access_requirements = {}
         self.inline_storage_buffer_functions = {}
         self.stage_local_inline_storage_buffer_functions = {}
+        self.inline_storage_buffer_call_stack = []
         self.spirv_skipped_function_parameter_indices = {}
         self.function_stage_input_dependencies = {}
         self.function_stage_output_dependencies = {}
@@ -16548,6 +16560,15 @@ class VulkanSPIRVCodeGen:
         parameters = getattr(
             function_node, "parameters", getattr(function_node, "params", [])
         )
+        if len(call_args) > len(parameters):
+            raise UnsupportedSPIRVFeatureError(
+                "storage-buffer-function-overload",
+                "SPIR-V storage-buffer function inlining resolved call "
+                f"'{func_name}' to a signature with {len(parameters)} parameters, "
+                f"but the call supplies {len(call_args)} arguments; overloaded "
+                "storage-buffer helper calls are not supported",
+                missing_capabilities=("spirv.storage_buffer_function_overload",),
+            )
         if len(call_args) < len(parameters):
             self.emit(
                 f"; WARNING: function call '{func_name}' requires "
@@ -16555,10 +16576,28 @@ class VulkanSPIRVCodeGen:
             )
             return self.default_value_for_function(function_node)
 
+        function_key = id(function_node)
+        if any(
+            key == function_key for key, _name in self.inline_storage_buffer_call_stack
+        ):
+            cycle = [
+                name
+                for key, name in self.inline_storage_buffer_call_stack
+                if key == function_key
+            ]
+            cycle.append(func_name)
+            raise UnsupportedSPIRVFeatureError(
+                "recursive-storage-buffer-function-inline",
+                "SPIR-V storage-buffer function inlining does not support "
+                f"recursive helper calls ({' -> '.join(cycle)})",
+                missing_capabilities=("spirv.recursive_storage_buffer_function",),
+            )
+
         previous_locals = self.local_variables.copy()
         previous_precise_locals = set(self.precise_local_variables)
         previous_return_type = self.current_return_type
         self.current_return_type = self.map_crossgl_type(function_node.return_type)
+        self.inline_storage_buffer_call_stack.append((function_key, func_name))
 
         try:
             for index, param in enumerate(parameters):
@@ -16608,6 +16647,7 @@ class VulkanSPIRVCodeGen:
                 return result
             return self.default_value_for_function(function_node)
         finally:
+            self.inline_storage_buffer_call_stack.pop()
             self.local_variables = previous_locals
             self.precise_local_variables = previous_precise_locals
             self.current_return_type = previous_return_type
