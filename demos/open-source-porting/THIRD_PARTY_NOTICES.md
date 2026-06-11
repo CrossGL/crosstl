@@ -75,7 +75,9 @@ should be treated with the same upstream license context when redistributed.
 
 - Repository: https://github.com/KhronosGroup/glslang
 - Commit: `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515`
-- Source path: `Test/spv.pushConstant.vert`
+- Source paths:
+  - `Test/spv.pushConstant.vert`
+  - `Test/spv.specConstant.vert`
 - License: BSD-style permissive license
 - License URL:
   https://github.com/KhronosGroup/glslang/blob/98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515/LICENSE.txt
