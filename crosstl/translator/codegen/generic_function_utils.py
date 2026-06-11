@@ -4,14 +4,18 @@ from copy import deepcopy
 
 from ..ast import (
     AssignmentNode,
+    BinaryOpNode,
     BlockNode,
     ConstructorNode,
     ExpressionStatementNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
+    IdentifierNode,
     IfNode,
+    LiteralNode,
     MatchNode,
+    MemberAccessNode,
     ReturnNode,
     VariableNode,
 )
@@ -156,11 +160,26 @@ def iter_function_nodes(ast_node):
     yield from visit(ast_node)
 
 
-def reject_unsupported_generic_functions(ast_node, target_name):
+def reject_unsupported_generic_functions(
+    ast_node,
+    target_name,
+    specializations=None,
+    referenced_generic_names=None,
+):
     """Reject generic functions before emitting non-specialized target code."""
+    specialized_source_names = {
+        key[0] for key in specializations or {} if isinstance(key, tuple) and key
+    }
     for func in iter_function_nodes(ast_node):
         generic_params = generic_function_parameters(func)
         if not generic_params:
+            continue
+        if getattr(func, "name", None) in specialized_source_names:
+            continue
+        if (
+            referenced_generic_names is not None
+            and getattr(func, "name", None) not in referenced_generic_names
+        ):
             continue
         suffix = f" ({', '.join(generic_params)})" if generic_params else ""
         raise ValueError(
@@ -185,9 +204,31 @@ def generic_function_emission_list(generator, func):
 def generic_function_call_name(generator, func_name, args):
     """Return a specialized callee name for a generic call, when inferable."""
     key = generic_function_call_key(generator, func_name, args)
-    if key is None:
-        return None
-    return (getattr(generator, "generic_function_specialized_names", {}) or {}).get(key)
+    specialized_names = (
+        getattr(generator, "generic_function_specialized_names", {}) or {}
+    )
+    if key is not None:
+        return specialized_names.get(key)
+    return _compatible_existing_specialized_call_name(generator, func_name, args)
+
+
+def raise_unresolved_generic_function_call(generator, func_name, target_name):
+    """Raise when a target cannot infer a concrete generic helper call."""
+    candidates = (getattr(generator, "generic_function_definitions", {}) or {}).get(
+        func_name,
+        [],
+    )
+    if not candidates:
+        return
+
+    func = candidates[0]
+    generic_params = generic_function_parameters(func)
+    suffix = f" ({', '.join(generic_params)})" if generic_params else ""
+    raise ValueError(
+        f"{target_name} codegen cannot infer concrete template arguments for "
+        f"generic function '{func_name}'{suffix}; specialize the function before "
+        f"{target_name} generation"
+    )
 
 
 def generic_function_call_key(generator, func_name, args):
@@ -225,6 +266,76 @@ def generic_function_call_key(generator, func_name, args):
     return matches[0]["key"]
 
 
+def _compatible_existing_specialized_call_name(generator, func_name, args):
+    specializations = getattr(generator, "generic_function_specializations", {}) or {}
+    specialized_names = (
+        getattr(generator, "generic_function_specialized_names", {}) or {}
+    )
+    matches = []
+    for key, specialized_func in specializations.items():
+        if not isinstance(key, tuple) or not key or key[0] != func_name:
+            continue
+        if _specialized_function_accepts_call(generator, specialized_func, args):
+            specialized_name = specialized_names.get(key)
+            if specialized_name:
+                matches.append(specialized_name)
+    unique_matches = sorted(set(matches))
+    if len(unique_matches) == 1:
+        return unique_matches[0]
+    return None
+
+
+def _specialized_function_accepts_call(generator, func, args):
+    param_list = list(getattr(func, "parameters", getattr(func, "params", [])) or [])
+    if len(args or []) < len(param_list):
+        return False
+
+    saw_informative_argument = False
+    saw_unknown_argument = False
+    for param, arg in zip(param_list, args or []):
+        expected_type = generator.type_name_string(
+            getattr(param, "param_type", getattr(param, "vtype", None))
+        )
+        actual_type = _safe_call_argument_type_name(generator, arg)
+        if not expected_type or not actual_type:
+            saw_unknown_argument = True
+            continue
+        if actual_type == "auto":
+            saw_unknown_argument = True
+            continue
+        saw_informative_argument = True
+        if _call_argument_type_accepts_expected(generator, expected_type, actual_type):
+            continue
+        return False
+    return saw_informative_argument or saw_unknown_argument
+
+
+def _raw_generic_signature_type_name(generator, type_value):
+    saved_substitutions = getattr(
+        generator,
+        "current_generic_function_substitutions",
+        {},
+    )
+    generator.current_generic_function_substitutions = {}
+    try:
+        return generator.type_name_string(type_value)
+    finally:
+        generator.current_generic_function_substitutions = saved_substitutions
+
+
+def _call_argument_type_accepts_expected(generator, expected_type, actual_type):
+    expected_normalized = _normalize_signature_type_name(generator, expected_type)
+    actual_normalized = _normalize_signature_type_name(generator, actual_type)
+    if expected_normalized == actual_normalized:
+        return True
+    if _types_compatible(generator, expected_type, actual_type):
+        return True
+
+    expected_base, _expected_args = generic_type_parts(expected_type)
+    actual_base, actual_args = generic_type_parts(actual_type)
+    return expected_base == actual_base and not actual_args
+
+
 def _generic_function_candidate_call_match(generator, func, func_name, args):
     generic_params = generic_function_parameters(func)
     if not generic_params:
@@ -238,8 +349,9 @@ def _generic_function_candidate_call_match(generator, func, func_name, args):
     compatible_params = 0
 
     for param, arg in zip(param_list, args or []):
-        expected_type = generator.type_name_string(
-            getattr(param, "param_type", getattr(param, "vtype", None))
+        expected_type = _raw_generic_signature_type_name(
+            generator,
+            getattr(param, "param_type", getattr(param, "vtype", None)),
         )
         actual_type = _safe_call_argument_type_name(generator, arg)
         if not actual_type:
@@ -373,8 +485,13 @@ def generate_static_generic_numeric_call(generator, func_name):
         return None
 
     mapped_type = generator.map_type(concrete_type)
+    mapped_type_key = str(mapped_type).lower()
     value = 1 if method == "one" else 0
-    if "float" in mapped_type or "half" in mapped_type or mapped_type == "double":
+    if (
+        "float" in mapped_type_key
+        or "half" in mapped_type_key
+        or mapped_type_key == "double"
+    ):
         return f"{value}.0"
     return str(value)
 
@@ -436,10 +553,11 @@ def _analyze_statement(generator, stmt, substitutions):
             declared_type = generator.type_name_string(
                 _safe_expression_result_type(generator, initial_value)
             )
-        generator.local_variable_types[stmt.name] = substitute_generic_type_name(
-            declared_type or "float",
-            substitutions,
-        )
+        if declared_type:
+            generator.local_variable_types[stmt.name] = substitute_generic_type_name(
+                declared_type,
+                substitutions,
+            )
         return
     if isinstance(stmt, AssignmentNode):
         _analyze_expression(generator, getattr(stmt, "value", None), substitutions)
@@ -488,6 +606,12 @@ def _analyze_expression(generator, expr, substitutions):
             _analyze_expression(generator, arg, substitutions)
         for arg in (getattr(expr, "named_arguments", {}) or {}).values():
             _analyze_expression(generator, arg, substitutions)
+        return
+    if isinstance(expr, MatchNode):
+        _analyze_expression(generator, getattr(expr, "expression", None), substitutions)
+        for arm in getattr(expr, "arms", []) or []:
+            _analyze_expression(generator, getattr(arm, "guard", None), substitutions)
+            _analyze_statement(generator, getattr(arm, "body", None), substitutions)
         return
     if hasattr(expr, "__dict__"):
         for child in vars(expr).values():
@@ -600,12 +724,315 @@ def _collect_type_parameter_bindings(
 
 def _safe_expression_result_type(generator, expr):
     try:
-        return generator.expression_result_type(expr)
+        result_type = generator.expression_result_type(expr)
     except (AttributeError, TypeError, ValueError):
+        result_type = None
+    fallback_type = _fallback_expression_result_type(generator, expr)
+    if fallback_type:
+        return fallback_type
+    if isinstance(expr, ConstructorNode):
+        inferred_type = _infer_generic_constructor_type_name(generator, expr)
+        if inferred_type:
+            return inferred_type
+    if result_type:
+        return result_type
+    return _infer_generic_constructor_type_name(generator, expr)
+
+
+def _fallback_expression_result_type(generator, expr):
+    if expr is None:
         return None
+
+    if isinstance(expr, LiteralNode):
+        return generator.type_name_string(getattr(expr, "literal_type", None))
+
+    if isinstance(expr, IdentifierNode):
+        name = getattr(expr, "name", None)
+        if not name:
+            return None
+        return (getattr(generator, "local_variable_types", {}) or {}).get(name) or (
+            getattr(generator, "variable_types", {}) or {}
+        ).get(name)
+
+    if isinstance(expr, ConstructorNode):
+        return _constructor_result_type(generator, expr)
+
+    if isinstance(expr, MemberAccessNode):
+        return _member_access_result_type(generator, expr)
+
+    if isinstance(expr, FunctionCallNode):
+        return _function_call_result_type(generator, expr)
+
+    if isinstance(expr, BinaryOpNode):
+        return _binary_expression_result_type(generator, expr)
+
+    return None
+
+
+def _constructor_result_type(generator, expr):
+    constructor_type = _constructor_type_name(generator, expr)
+    if constructor_type in {"vec2", "vec3", "vec4", "mat2", "mat3", "mat4"}:
+        return constructor_type
+    if constructor_type in {"float2", "float3", "float4"}:
+        return constructor_type
+    return _infer_generic_constructor_type_name(generator, expr)
+
+
+def _member_access_result_type(generator, expr):
+    member = str(getattr(expr, "member", "") or "")
+    if not member:
+        return None
+
+    object_expr = getattr(expr, "object", getattr(expr, "object_expr", None))
+    object_type = generator.type_name_string(
+        _safe_expression_result_type(generator, object_expr)
+    )
+    if not object_type:
+        return None
+
+    member_type = _struct_member_type_name(generator, object_type, member)
+    if member_type:
+        return member_type
+
+    if set(member) <= set("xyzwrgba") and len(member) <= 4:
+        component_type = _scalar_component_type_name(generator, object_type)
+        if not component_type:
+            return None
+        if len(member) == 1:
+            return component_type
+        return _vector_type_name(component_type, len(member))
+
+    return None
+
+
+def _struct_member_type_name(generator, object_type, member):
+    base_name, generic_args = generic_type_parts(object_type)
+    struct_node = _generic_constructor_struct_node(generator, base_name)
+    field_types = _generic_constructor_field_types(generator, base_name, struct_node)
+    if not field_types:
+        return None
+
+    generic_params = _generic_constructor_struct_parameters(
+        generator,
+        base_name,
+        struct_node,
+    )
+    substitutions = dict(zip(generic_params, generic_args))
+    for field_name, field_type in field_types:
+        if field_name != member:
+            continue
+        return substitute_generic_type_name(
+            generator.type_name_string(field_type),
+            substitutions,
+        )
+    return None
+
+
+def _function_call_result_type(generator, expr):
+    func_expr = getattr(expr, "function", getattr(expr, "name", None))
+    member = getattr(func_expr, "member", None)
+    if member in {"add", "sub", "mul", "div"}:
+        object_expr = getattr(
+            func_expr, "object", getattr(func_expr, "object_expr", None)
+        )
+        return generator.type_name_string(
+            _safe_expression_result_type(generator, object_expr)
+        )
+
+    func_name = _function_call_name(expr)
+    args = list(getattr(expr, "arguments", getattr(expr, "args", [])) or [])
+    if func_name is None:
+        return None
+    func_name = str(func_name)
+
+    if "::" in func_name:
+        type_param, method = func_name.split("::", 1)
+        if method in {"zero", "one"}:
+            return (
+                getattr(generator, "current_generic_function_substitutions", {}) or {}
+            ).get(type_param)
+
+    if func_name in {"vec2", "vec3", "vec4", "mat2", "mat3", "mat4"}:
+        return func_name
+    if func_name in {"float2", "float3", "float4"}:
+        return func_name
+
+    if func_name in {"normalize", "reflect", "cross"} and args:
+        return generator.type_name_string(
+            _safe_expression_result_type(generator, args[0])
+        )
+
+    if func_name in {"dot", "length", "distance"} and args:
+        arg_type = generator.type_name_string(
+            _safe_expression_result_type(generator, args[0])
+        )
+        return _scalar_component_type_name(generator, arg_type) or "float"
+
+    if func_name in {"sqrt", "pow", "max", "min", "clamp", "abs"} and args:
+        return generator.type_name_string(
+            _safe_expression_result_type(generator, args[0])
+        )
+
+    return None
+
+
+def _binary_expression_result_type(generator, expr):
+    left_type = generator.type_name_string(
+        _safe_expression_result_type(generator, getattr(expr, "left", None))
+    )
+    right_type = generator.type_name_string(
+        _safe_expression_result_type(generator, getattr(expr, "right", None))
+    )
+    if _is_vector_type_name(left_type):
+        return left_type
+    if _is_vector_type_name(right_type):
+        return right_type
+    if left_type in {"double", "float"}:
+        return left_type
+    if right_type in {"double", "float"}:
+        return right_type
+    return left_type or right_type
+
+
+def _scalar_component_type_name(generator, type_name):
+    if not type_name:
+        return None
+    try:
+        component_type = generator.scalar_component_type(type_name)
+    except (AttributeError, TypeError, ValueError):
+        component_type = None
+    if component_type:
+        return generator.type_name_string(component_type)
+
+    type_text = str(type_name)
+    if type_text.startswith("vec") and len(type_text) == 4 and type_text[-1].isdigit():
+        return "float"
+    if type_text.startswith("float") and type_text[-1:] in {"2", "3", "4"}:
+        return "float"
+    if type_text.startswith("double") and type_text[-1:] in {"2", "3", "4"}:
+        return "double"
+    if type_text.startswith("int") and type_text[-1:] in {"2", "3", "4"}:
+        return "int"
+    if type_text.startswith("uint") and type_text[-1:] in {"2", "3", "4"}:
+        return "uint"
+    return None
+
+
+def _vector_type_name(component_type, size):
+    if component_type == "float":
+        return f"vec{size}"
+    return f"{component_type}{size}"
+
+
+def _is_vector_type_name(type_name):
+    if not type_name:
+        return False
+    type_text = str(type_name)
+    return (
+        type_text in {"vec2", "vec3", "vec4"}
+        or type_text.endswith(("2", "3", "4"))
+        and type_text.startswith(("float", "double", "int", "uint"))
+    )
+
+
+def _infer_generic_constructor_type_name(generator, expr):
+    if not isinstance(expr, ConstructorNode):
+        return None
+
+    constructor_type = _constructor_type_name(generator, expr)
+    if not constructor_type:
+        return None
+
+    base_name, explicit_args = generic_type_parts(constructor_type)
+    if explicit_args:
+        return constructor_type
+
+    struct_node = _generic_constructor_struct_node(generator, base_name)
+    generic_params = _generic_constructor_struct_parameters(
+        generator, base_name, struct_node
+    )
+    if not generic_params:
+        return constructor_type
+
+    field_types = _generic_constructor_field_types(generator, base_name, struct_node)
+    if not field_types:
+        return None
+
+    substitutions = {}
+    generic_param_set = set(generic_params)
+    named_args = getattr(expr, "named_arguments", {}) or {}
+    positional_args = list(getattr(expr, "arguments", []) or [])
+    for index, (field_name, field_type) in enumerate(field_types):
+        arg = named_args.get(field_name)
+        if arg is None and index < len(positional_args):
+            arg = positional_args[index]
+        if arg is None:
+            continue
+        actual_type = generator.type_name_string(
+            _safe_expression_result_type(generator, arg)
+        )
+        if not actual_type:
+            continue
+        _collect_type_parameter_bindings(
+            generator.type_name_string(field_type),
+            actual_type,
+            substitutions,
+            generic_param_set,
+        )
+
+    if any(param not in substitutions for param in generic_params):
+        return None
+    return f"{base_name}<{', '.join(substitutions[param] for param in generic_params)}>"
+
+
+def _constructor_type_name(generator, expr):
+    return generator.type_name_string(
+        getattr(expr, "constructor_type", None)
+        or getattr(expr, "vtype", None)
+        or getattr(expr, "expression_type", None)
+    )
+
+
+def _generic_constructor_struct_node(generator, base_name):
+    for attr_name in ("structs_by_name", "user_structs_by_name", "struct_declarations"):
+        structs = getattr(generator, attr_name, {}) or {}
+        struct_node = structs.get(base_name)
+        if struct_node is not None:
+            return struct_node
+    return None
+
+
+def _generic_constructor_struct_parameters(generator, base_name, struct_node):
+    if struct_node is not None:
+        return [
+            getattr(param, "name", None)
+            for param in getattr(struct_node, "generic_params", []) or []
+            if getattr(param, "name", None)
+        ]
+    return list(
+        (getattr(generator, "generic_struct_type_params", {}) or {}).get(base_name)
+        or []
+    )
+
+
+def _generic_constructor_field_types(generator, base_name, struct_node):
+    if struct_node is not None:
+        fields = []
+        for member in getattr(struct_node, "members", []) or []:
+            field_name = getattr(member, "name", None)
+            field_type = getattr(member, "member_type", getattr(member, "vtype", None))
+            if field_name and field_type is not None:
+                fields.append((field_name, field_type))
+        return fields
+    return list(
+        ((getattr(generator, "struct_types", {}) or {}).get(base_name) or {}).items()
+    )
 
 
 def _safe_call_argument_type_name(generator, expr):
+    fallback_type = generator.type_name_string(
+        _fallback_expression_result_type(generator, expr)
+    )
     try:
         call_argument_type_name = getattr(generator, "call_argument_type_name")
     except AttributeError:
@@ -616,9 +1043,22 @@ def _safe_call_argument_type_name(generator, expr):
         except (AttributeError, TypeError, ValueError):
             actual_type = None
         if actual_type:
-            return generator.type_name_string(actual_type)
+            actual_type = generator.type_name_string(actual_type)
+            if _is_more_specific_generic_type(fallback_type, actual_type):
+                return fallback_type
+            return actual_type
 
+    if fallback_type:
+        return fallback_type
     return generator.type_name_string(_safe_expression_result_type(generator, expr))
+
+
+def _is_more_specific_generic_type(candidate_type, current_type):
+    if not candidate_type or not current_type:
+        return False
+    candidate_base, candidate_args = generic_type_parts(candidate_type)
+    current_base, current_args = generic_type_parts(current_type)
+    return candidate_base == current_base and candidate_args and not current_args
 
 
 def _normalize_signature_type_name(generator, type_name):

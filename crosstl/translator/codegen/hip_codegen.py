@@ -64,6 +64,17 @@ from .enum_utils import (
     infer_enum_constructor_type,
 )
 from .generic_function_utils import (
+    generate_numeric_trait_method_call,
+    generate_static_generic_numeric_call,
+    generic_function_call_name,
+    generic_function_emission_list,
+    generic_function_parameters,
+    iter_function_nodes,
+    numeric_trait_method_result_type,
+    prepare_generic_function_specializations,
+    raise_unresolved_generic_function_call,
+)
+from .generic_function_utils import (
     reject_unsupported_generic_functions as reject_generic_functions_for_target,
 )
 from .generic_struct_utils import (
@@ -730,7 +741,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.code_lines = []
         self.indent_level = 0
         self.validate_supported_stage_types(node)
-        self.reject_unsupported_generic_functions(node)
         self.variable_types = {}
         self.image_resource_accesses = {}
         self.buffer_resource_accesses = {}
@@ -753,6 +763,22 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.hip_function_capture_params = {}
         self.current_expression_expected_type = None
         self.setup_enum_and_generic_metadata(node)
+        self.generic_function_definitions = {}
+        self.generic_function_definition_ordinals = {}
+        self.generic_function_specializations = {}
+        self.generic_function_specialized_names = {}
+        self.current_generic_function_substitutions = {}
+        generic_function_specializations = prepare_generic_function_specializations(
+            self,
+            list(iter_function_nodes(node)),
+        )
+        self.function_return_types.update(
+            {
+                func.name: self.type_name_string(getattr(func, "return_type", "void"))
+                for func in generic_function_specializations.values()
+            }
+        )
+        self.reject_unsupported_generic_functions(node)
         (
             self.query_resource_names,
             self.query_metadata_function_params,
@@ -805,11 +831,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def reject_unsupported_generic_functions(self, ast_node):
         """Reject generic functions before emitting non-compilable HIP code."""
-        reject_generic_functions_for_target(ast_node, "HIP")
+        reject_generic_functions_for_target(
+            ast_node,
+            "HIP",
+            self.generic_function_specializations,
+            referenced_generic_names=set(),
+        )
 
     def setup_enum_and_generic_metadata(self, ast_node):
         """Collect enum and concrete generic type metadata used by HIP lowering."""
         structs = list(getattr(ast_node, "structs", []) or [])
+        for stage in (getattr(ast_node, "stages", {}) or {}).values():
+            structs.extend(getattr(stage, "local_structs", []) or [])
         self.structs_by_name = {
             node.name: node
             for node in structs
@@ -1674,6 +1707,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         functions = getattr(node, "functions", [])
         for func in functions:
+            if generic_function_parameters(func):
+                for specialized_func in generic_function_emission_list(self, func):
+                    self.visit(specialized_func)
+                continue
             self.visit(func)
 
         # Handle shader stages (new AST structure)
@@ -1711,6 +1748,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                         self.current_stage_name = saved_stage_name
                         for func in getattr(stage, "local_functions", []):
                             if id(func) in emitted_local_functions:
+                                continue
+                            if generic_function_parameters(func):
+                                for specialized_func in generic_function_emission_list(
+                                    self,
+                                    func,
+                                ):
+                                    self.visit(specialized_func)
+                                emitted_local_functions.add(id(func))
                                 continue
                             self.visit(func)
                             emitted_local_functions.add(id(func))
@@ -1830,10 +1875,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         saved_stage_builtin_aliases = self.stage_builtin_aliases
         saved_stage_builtin_alias_types = self.stage_builtin_alias_types
         saved_current_function_is_kernel_entry = self.current_function_is_kernel_entry
+        saved_generic_function_substitutions = (
+            self.current_generic_function_substitutions
+        )
         saved_structured_buffer_length_parameters = (
             self.current_structured_buffer_length_parameters
         )
         self.current_function_name = node.name
+        self.current_generic_function_substitutions = (
+            getattr(node, "_generic_substitutions", {}) or {}
+        )
         self.current_structured_buffer_length_parameters = {}
         self.stage_builtin_aliases = {}
         self.stage_builtin_alias_types = {}
@@ -2066,6 +2117,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.stage_builtin_aliases = saved_stage_builtin_aliases
         self.stage_builtin_alias_types = saved_stage_builtin_alias_types
         self.current_function_is_kernel_entry = saved_current_function_is_kernel_entry
+        self.current_generic_function_substitutions = (
+            saved_generic_function_substitutions
+        )
         self.current_structured_buffer_length_parameters = (
             saved_structured_buffer_length_parameters
         )
@@ -4013,6 +4067,25 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         else:
             callee = self.visit(func_expr)
         raw_args = getattr(node, "args", getattr(node, "arguments", []))
+
+        numeric_trait_call = generate_numeric_trait_method_call(
+            self,
+            func_expr,
+            raw_args,
+        )
+        if numeric_trait_call is not None:
+            return numeric_trait_call
+
+        static_generic_call = generate_static_generic_numeric_call(self, func_name)
+        if static_generic_call is not None:
+            return static_generic_call
+
+        specialized_func_name = generic_function_call_name(self, func_name, raw_args)
+        if specialized_func_name is not None:
+            func_name = specialized_func_name
+            callee = specialized_func_name
+        else:
+            raise_unresolved_generic_function_call(self, func_name, "HIP")
 
         enum_constructor = generate_enum_constructor_call(self, func_name, raw_args)
         if enum_constructor is not None:
@@ -9795,9 +9868,19 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if isinstance(node, FunctionCallNode):
             function_expr = getattr(node, "function", getattr(node, "name", None))
             func_name = getattr(function_expr, "name", function_expr)
+            numeric_result_type = numeric_trait_method_result_type(self, node)
+            if numeric_result_type is not None:
+                return numeric_result_type
+            raw_args = getattr(node, "arguments", getattr(node, "args", [])) or []
+            specialized_func_name = generic_function_call_name(
+                self,
+                func_name,
+                raw_args,
+            )
+            if specialized_func_name in self.function_return_types:
+                return self.function_return_types[specialized_func_name]
             if self.is_user_defined_function(func_name):
                 return self.function_return_types.get(func_name)
-            raw_args = getattr(node, "arguments", getattr(node, "args", [])) or []
             if func_name in HIP_SCALAR_CONSTRUCTOR_TYPE_ALIASES and len(raw_args) <= 1:
                 return func_name
             if func_name in HIP_WAVE_OP_ARITIES:

@@ -70,6 +70,17 @@ from .enum_utils import (
     type_node_contains_generic_parameter,
 )
 from .generic_function_utils import (
+    generate_numeric_trait_method_call,
+    generate_static_generic_numeric_call,
+    generic_function_call_name,
+    generic_function_emission_list,
+    generic_function_parameters,
+    iter_function_nodes,
+    numeric_trait_method_result_type,
+    prepare_generic_function_specializations,
+    raise_unresolved_generic_function_call,
+)
+from .generic_function_utils import (
     reject_unsupported_generic_functions as reject_generic_functions_for_target,
 )
 from .image_access_contracts import (
@@ -1595,9 +1606,20 @@ class MojoCodeGen:
 
         structs = getattr(ast, "structs", [])
         self.prepare_generic_enum_metadata(ast, structs)
+        self.collect_function_return_types(ast)
+        self.generic_function_definitions = {}
+        self.generic_function_definition_ordinals = {}
+        self.generic_function_specializations = {}
+        self.generic_function_specialized_names = {}
+        self.current_generic_function_substitutions = {}
+        generic_function_specializations = prepare_generic_function_specializations(
+            self,
+            list(iter_function_nodes(ast)),
+        )
+        for func in generic_function_specializations.values():
+            self.register_function_return_type(func)
         self.reject_unsupported_generic_functions(ast)
         self.reject_parameterized_generic_enum_specializations(ast)
-        self.collect_function_return_types(ast)
         for node in structs:
             if isinstance(node, EnumNode):
                 code += self.generate_enum(node)
@@ -1679,6 +1701,10 @@ class MojoCodeGen:
 
         functions = getattr(ast, "functions", [])
         for func in functions:
+            if generic_function_parameters(func):
+                for specialized_func in generic_function_emission_list(self, func):
+                    code += self.generate_function(specialized_func)
+                continue
             qualifier = self.function_stage_qualifier(func)
 
             if qualifier == "vertex":
@@ -1727,6 +1753,14 @@ class MojoCodeGen:
                     for func in self.stage_local_functions_to_emit(stage):
                         signature = self.function_signature_key(func)
                         if signature in emitted_local_functions:
+                            continue
+                        if generic_function_parameters(func):
+                            for specialized_func in generic_function_emission_list(
+                                self,
+                                func,
+                            ):
+                                code += self.generate_function(specialized_func)
+                            emitted_local_functions.add(signature)
                             continue
                         code += self.generate_function(func)
                         emitted_local_functions.add(signature)
@@ -3535,7 +3569,12 @@ class MojoCodeGen:
         visit(ast)
 
     def reject_unsupported_generic_functions(self, ast):
-        reject_generic_functions_for_target(ast, "Mojo")
+        reject_generic_functions_for_target(
+            ast,
+            "Mojo",
+            self.generic_function_specializations,
+            referenced_generic_names=set(),
+        )
 
     def maybe_register_generic_enum_type(self, type_value, specializations):
         type_text = self.type_name(type_value)
@@ -6002,7 +6041,13 @@ class MojoCodeGen:
         }
         previous_return_type = self.current_return_type
         previous_shader_type = self.current_shader_type
+        previous_generic_function_substitutions = (
+            self.current_generic_function_substitutions
+        )
         self.current_shader_type = shader_type
+        self.current_generic_function_substitutions = (
+            getattr(func, "_generic_substitutions", {}) or {}
+        )
 
         param_list = list(getattr(func, "parameters", getattr(func, "params", [])))
         param_infos = []
@@ -6027,10 +6072,8 @@ class MojoCodeGen:
                 getattr(param, "name", None) for param, _ in param_infos
             }
             existing_param_names.update(name for name, _ in extra_param_infos)
-            synthetic_compute_builtin_params = (
-                self.compute_gpu_builtin_parameter_infos(
-                    getattr(func, "body", []), existing_param_names
-                )
+            synthetic_compute_builtin_params = self.compute_gpu_builtin_parameter_infos(
+                getattr(func, "body", []), existing_param_names
             )
             for name, type_name in synthetic_compute_builtin_params:
                 self.register_variable_type(name, type_name)
@@ -6220,6 +6263,9 @@ class MojoCodeGen:
         )
         self.current_return_type = previous_return_type
         self.current_shader_type = previous_shader_type
+        self.current_generic_function_substitutions = (
+            previous_generic_function_substitutions
+        )
         return code
 
     def shader_entry_function_name(
@@ -6359,9 +6405,7 @@ class MojoCodeGen:
         if mapped_type in {"UInt", "UInt32"}:
             alias_value = f"{native_name}[0]"
         else:
-            alias_value = (
-                f"SIMD[DType.uint32, 2]({native_name}[0], {native_name}[1])"
-            )
+            alias_value = f"SIMD[DType.uint32, 2]({native_name}[0], {native_name}[1])"
         return native_name, "uint3", f"var {local_name}: {mapped_type} = {alias_value}"
 
     def mojo_unique_local_identifier(self, candidate, used_names):
@@ -8731,6 +8775,9 @@ class MojoCodeGen:
             replacements, lambda: self.generate_expression(expr)
         )
 
+    def generate_expression_with_expected(self, expr, expected_type):
+        return self.generate_expression(expr, expected_type)
+
     def generate_expression(self, expr, target_type=None, target_context=None):
         """Render a CrossGL expression as Mojo expression syntax."""
         if isinstance(expr, str):
@@ -8863,6 +8910,18 @@ class MojoCodeGen:
             else:
                 callee = self.generate_expression(func_expr)
 
+            numeric_trait_call = generate_numeric_trait_method_call(
+                self,
+                func_expr,
+                expr.args,
+            )
+            if numeric_trait_call is not None:
+                return numeric_trait_call
+
+            static_generic_call = generate_static_generic_numeric_call(self, func_name)
+            if static_generic_call is not None:
+                return static_generic_call
+
             if func_name == "lambda":
                 lambda_expr = self.generate_lambda_expression(expr.args)
                 if lambda_expr is not None:
@@ -8873,6 +8932,17 @@ class MojoCodeGen:
             )
             if enum_constructor is not None:
                 return enum_constructor
+
+            specialized_func_name = generic_function_call_name(
+                self,
+                func_name,
+                expr.args,
+            )
+            if specialized_func_name is not None:
+                func_name = specialized_func_name
+                callee = specialized_func_name
+            else:
+                raise_unresolved_generic_function_call(self, func_name, "Mojo")
 
             if self.is_user_defined_function(func_name):
                 args = self.generate_user_function_call_arguments(func_name, expr.args)
@@ -14374,6 +14444,14 @@ class MojoCodeGen:
             return None
         return self.type_name(type_value)
 
+    @property
+    def local_variable_types(self):
+        return self.variable_types
+
+    @local_variable_types.setter
+    def local_variable_types(self, value):
+        self.variable_types = value
+
     def identifier_replacement_result_type(self, name):
         replacement = self.expression_identifier_replacements.get(name)
         if replacement is None:
@@ -14719,9 +14797,7 @@ class MojoCodeGen:
         if isinstance(expr, BinaryOpNode):
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
-            return self.binary_expression_result_type(
-                expr.op, left_type, right_type
-            )
+            return self.binary_expression_result_type(expr.op, left_type, right_type)
         if isinstance(expr, TernaryOpNode):
             true_type = self.expression_result_type(expr.true_expr)
             false_type = self.expression_result_type(expr.false_expr)
@@ -14738,6 +14814,19 @@ class MojoCodeGen:
                 return member_result_type
 
             func_name = self.function_call_name(expr)
+            numeric_result_type = numeric_trait_method_result_type(self, expr)
+            if numeric_result_type is not None:
+                return numeric_result_type
+            specialized_func_name = generic_function_call_name(
+                self,
+                func_name,
+                expr.args,
+            )
+            if specialized_func_name in self.function_return_types:
+                return self.selected_function_return_type(
+                    specialized_func_name,
+                    expr.args,
+                )
             if func_name in self.enum_variant_result_types:
                 return self.enum_variant_result_types[func_name]
             if func_name in self.struct_types:
@@ -15048,9 +15137,7 @@ class MojoCodeGen:
 
         indexed = list(enumerate(overloads))
         matching_arity = [
-            item
-            for item in indexed
-            if len(item[1]["parameter_types"]) == len(args)
+            item for item in indexed if len(item[1]["parameter_types"]) == len(args)
         ]
         candidates = matching_arity or indexed
         arg_types = [self.expression_result_type(arg) for arg in args]

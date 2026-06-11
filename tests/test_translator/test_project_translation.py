@@ -27208,6 +27208,87 @@ def test_translate_project_resolves_mlx_metal_vulkan_storage_buffer_template_ove
     assert_spirv_asm_validates_if_available(generated, tmp_path)
 
 
+def test_translate_project_resolves_vulkan_storage_buffer_overload_with_auto_pointer_alias(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "broadcast_auto_pointer_alias.metal"
+    source_path.write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            uint elem_to_loc_broadcast(
+                uint elem,
+                const device int* shape,
+                const device int64_t* lhs_strides,
+                const device int64_t* rhs_strides,
+                int ndim
+            ) {
+                return elem + uint(shape[0]) + uint(lhs_strides[0])
+                    + uint(rhs_strides[0]) + uint(ndim);
+            }
+
+            uint elem_to_loc_broadcast(
+                uint elem,
+                const device int* shape,
+                const device int* lhs_strides,
+                const device int* rhs_strides,
+                const device int* extra_strides,
+                int ndim
+            ) {
+                return elem + uint(shape[0]) + uint(lhs_strides[0])
+                    + uint(rhs_strides[0]) + uint(extra_strides[0]) + uint(ndim);
+            }
+
+            kernel void launch(
+                const device int* shape [[buffer(0)]],
+                const device int64_t* index_batch_strides [[buffer(1)]],
+                constant int& batch_ndim [[buffer(2)]],
+                device uint* out [[buffer(3)]]
+            ) {
+                const auto* veci_bstrides = index_batch_strides;
+                const auto* mati_bstrides = index_batch_strides + batch_ndim;
+                uint loc = elem_to_loc_broadcast(
+                    0u,
+                    shape,
+                    veci_bstrides,
+                    mati_bstrides,
+                    batch_ndim
+                );
+                out[0] = loc;
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["vulkan"], output_dir="out").to_json()
+
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+    assert payload["diagnosticCounts"]["error"] == 0
+    assert payload["diagnostics"] == []
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["target"] == "vulkan"
+    assert artifact["source"] == "broadcast_auto_pointer_alias.metal"
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "elem_to_loc_broadcast" not in generated
+    assert "OpFunctionCall" not in generated
+    assert "storage-buffer-function-overload" not in generated
+    assert "auto*" not in generated
+    assert "WARNING" not in generated
+    assert "DescriptorSet 0" in generated
+    for binding in ("Binding 0", "Binding 1", "Binding 2", "Binding 3"):
+        assert binding in generated
+    assert_spirv_asm_validates_if_available(generated, tmp_path)
+
+
 def test_translate_project_resolves_mlx_sort_reference_thread_ids_for_vulkan(
     tmp_path,
 ):

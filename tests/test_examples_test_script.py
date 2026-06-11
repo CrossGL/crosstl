@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -102,6 +103,47 @@ def test_write_summary_json_writes_stable_machine_readable_report(tmp_path):
     assert text.endswith("\n")
     assert '"schema_version": 1' in text
     assert '"within_regression_budget": true' in text
+
+
+def test_generic_pattern_matching_cli_specializes_generic_helpers():
+    source = ROOT / "examples" / "advanced" / "GenericPatternMatching.cgl"
+    broad_generic_diagnostics = (
+        "does not support generic functions",
+        "unspecialized generic helper",
+        "cannot infer concrete template arguments for generic function",
+    )
+
+    for backend in ("vulkan", "cuda", "hip", "mojo", "slang"):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "crosstl._crosstl",
+                "translate",
+                str(source),
+                "--backend",
+                backend,
+                "--no-format",
+                "--output",
+                "-",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        combined_output = result.stdout + result.stderr
+
+        for diagnostic in broad_generic_diagnostics:
+            assert diagnostic not in combined_output
+
+        if backend == "mojo":
+            assert result.returncode != 0
+            assert (
+                "generic payload enum specializations must be concrete"
+                in combined_output
+            )
+        else:
+            assert result.returncode == 0, combined_output[-4000:]
 
 
 def test_main_is_independent_of_current_working_directory(monkeypatch, tmp_path):

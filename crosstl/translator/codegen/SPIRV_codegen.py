@@ -12196,6 +12196,8 @@ class VulkanSPIRVCodeGen:
             ) or self.source_variable_type_names.get(name)
             if type_name is None:
                 return None
+            if self.storage_buffer_type_is_inferred_pointer(type_name):
+                return None
             type_name = self.storage_buffer_resource_type_name(type_name)
             if type_name is not None:
                 return type_name
@@ -12602,6 +12604,40 @@ class VulkanSPIRVCodeGen:
 
         pointee = type_str[:-1].strip()
         return pointee or None
+
+    def storage_buffer_type_is_inferred_pointer(self, type_name) -> bool:
+        """Return whether a storage-buffer pointer spelling still needs inference."""
+        type_str = self.type_name_from_value(type_name)
+        if type_str is None:
+            return False
+
+        type_str = self.normalize_reference_type_name(type_str)
+        if type_str is None:
+            return False
+
+        type_str = str(type_str).strip()
+        if not type_str.endswith("*"):
+            return False
+
+        pointee = type_str[:-1].strip()
+        pointee = re.sub(
+            r"\b(?:const|volatile|device|constant|thread|threadgroup|restrict)\b",
+            "",
+            pointee,
+        )
+        pointee = re.sub(r"\s+", "", pointee)
+        for qualifier in (
+            "threadgroup",
+            "constant",
+            "volatile",
+            "restrict",
+            "device",
+            "thread",
+            "const",
+        ):
+            while pointee.startswith(qualifier) and len(pointee) > len(qualifier):
+                pointee = pointee[len(qualifier) :]
+        return pointee in {"auto", "decltype(auto)"}
 
     def normalize_reference_type_name(self, type_name) -> Optional[str]:
         """Return the value type for CrossGL reference spelling such as &T or T&."""
@@ -14821,9 +14857,16 @@ class VulkanSPIRVCodeGen:
         if source_metadata is None and source_storage_buffer_metadata is None:
             return False
 
-        alias_type_name = self.storage_buffer_resource_type_name(
+        declared_alias_type_name = self.storage_buffer_resource_type_name(
             var_type_name
-        ) or self.storage_buffer_expression_type_name(initial_value)
+        )
+        inferred_alias_type_name = self.storage_buffer_expression_type_name(
+            initial_value
+        )
+        if self.storage_buffer_type_is_inferred_pointer(var_type_name):
+            alias_type_name = inferred_alias_type_name or declared_alias_type_name
+        else:
+            alias_type_name = declared_alias_type_name or inferred_alias_type_name
         if var_type_source is not None:
             base_type_name = self.array_base_type_name(var_type_name)
             if not (
@@ -18463,8 +18506,13 @@ class VulkanSPIRVCodeGen:
         type_info = self.storage_buffer_resource_type_info(
             metadata.get("declared_type_name")
         )
+        if type_info is not None and type_info.get("kind") == "storage_buffer_pointer":
+            return True
+
         return (
-            type_info is not None and type_info.get("kind") == "storage_buffer_pointer"
+            metadata.get("kind") == "structured_buffer"
+            and metadata.get("buffer_kind")
+            in {"StructuredBuffer", "RWStructuredBuffer", "StorageBufferPointer"}
         )
 
     def record_storage_buffer_pointer_offset_alias(
@@ -23578,7 +23626,6 @@ class VulkanSPIRVCodeGen:
                 continue
             if getattr(func, "name", None) in specialized_source_names:
                 continue
-            raise self.unsupported_generic_function_error(func)
 
     def generate(self, ast):
         """Generate SPIR-V code from a CrossGL AST."""
