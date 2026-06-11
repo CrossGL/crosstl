@@ -419,6 +419,62 @@ def test_webgl_codegen_lowers_nested_direct_dynamic_sampler_array_texture_call()
     assert "color = (crossgl_dynamic_sampler_value + vec4(0.25));" in generated
 
 
+def test_webgl_codegen_lowers_direct_dynamic_shadow_compare_sampler_array():
+    shader = """
+    shader WebGLDynamicShadowCompareArray {
+        const int MAP_COUNT = 2;
+
+        fragment {
+            uniform sampler2DShadow shadowMaps[MAP_COUNT];
+            uniform int shadowIndex;
+
+            vec4 main(vec2 uv @ TEXCOORD0, float depth @ TEXCOORD1) @ gl_FragColor {
+                float shadow = textureCompare(shadowMaps[shadowIndex], uv, depth);
+                return vec4(shadow);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "textureCompare(shadowMaps[shadowIndex]" not in generated
+    assert "textureCompare(shadowMaps[0]" not in generated
+    assert "switch (shadowIndex)" in generated
+    assert "shadow = texture(shadowMaps[0], vec3(uv, depth));" in generated
+    assert "shadow = texture(shadowMaps[1], vec3(uv, depth));" in generated
+    assert "shadow = 0.0;" in generated
+
+
+def test_webgl_codegen_dynamic_sampler_array_texture_offset_keeps_diagnostic():
+    shader = """
+    shader WebGLDynamicTextureOffsetArray {
+        const int MAP_COUNT = 2;
+
+        fragment {
+            uniform sampler2D colorMaps[MAP_COUNT];
+            uniform int colorIndex;
+            uniform ivec2 dynamicOffset;
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureOffset(colorMaps[colorIndex], uv, dynamicOffset);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "textureOffset(colorMaps[colorIndex]" not in generated
+    assert "textureOffset(colorMaps[0]" not in generated
+    assert "switch (colorIndex)" in generated
+    assert (
+        "unsupported GLSL texture offset: textureOffset texel offsets must be "
+        "compile-time integer constants"
+    ) in generated
+    assert "fragColor = vec4(0.0);" in generated
+
+
 def test_webgl_codegen_lowers_dynamic_sampler_array_stage_return():
     shader = """
     shader WebGLDynamicSamplerReturn {

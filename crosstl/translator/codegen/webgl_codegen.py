@@ -195,15 +195,23 @@ class WebGLCodeGen(GLSLCodeGen):
             return None
 
         cases = []
+        direct_texture_call = dynamic_info.get("direct_texture_call", False)
         for index in range(dynamic_info["array_size"]):
             static_args = list(args)
             static_args[dynamic_info["arg_index"]] = (
                 self.glsl_static_array_access_argument(dynamic_info, index)
             )
-            rendered_args = ", ".join(
-                self.generate_function_call_arguments(func_name, static_args)
-            )
-            cases.append((index, f"{func_name}({rendered_args})"))
+            if direct_texture_call:
+                rendered_call = self.webgl_render_static_dynamic_sampler_call(
+                    expr,
+                    static_args,
+                )
+            else:
+                rendered_args = ", ".join(
+                    self.generate_function_call_arguments(func_name, static_args)
+                )
+                rendered_call = f"{func_name}({rendered_args})"
+            cases.append((index, rendered_call))
 
         return {
             "index_expr": dynamic_info["index_expr"],
@@ -240,8 +248,15 @@ class WebGLCodeGen(GLSLCodeGen):
 
         return {
             "arg_index": 0,
+            "direct_texture_call": True,
             **dynamic_info,
         }
+
+    def webgl_render_static_dynamic_sampler_call(self, expr, static_args):
+        static_call = copy(expr)
+        static_call.arguments = list(static_args)
+        static_call.args = static_call.arguments
+        return self.generate_expression(static_call)
 
     def webgl_dynamic_sampler_array_call_info(self, func_name, args):
         callee = self.function_definitions.get(func_name)
