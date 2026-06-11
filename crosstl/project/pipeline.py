@@ -11829,8 +11829,24 @@ def _inline_metal_concrete_using_template_aliases(
     block_spans = _metal_block_spans(preprocessor, source)
     template_structs = _metal_template_struct_members(preprocessor, source)
     aliases: list[dict[str, Any]] = []
+    constants: list[dict[str, Any]] = []
     alias_spans: list[tuple[int, int]] = []
     excluded = list(excluded_spans)
+
+    def active_constants(position: int) -> dict[str, str]:
+        return {
+            str(constant["name"]): str(constant["value"])
+            for constant in constants
+            if constant["end"] <= position < constant["scope_end"]
+        }
+
+    def active_aliases(position: int) -> dict[str, str]:
+        return {
+            str(alias["name"]): str(alias["type"])
+            for alias in aliases
+            if alias["end"] <= position < alias["scope_end"]
+        }
+
     i = 0
     while i < len(source):
         if source[i] in "\"'":
@@ -11858,6 +11874,27 @@ def _inline_metal_concrete_using_template_aliases(
             continue
 
         ident, consumed = preprocessor._read_identifier(source, i)
+        scope_end = _metal_enclosing_block_end(block_spans, i)
+        if scope_end is not None:
+            semicolon = _metal_statement_semicolon(preprocessor, source, i)
+            if semicolon is not None:
+                constant = _metal_local_constant_declaration(
+                    source[i : semicolon + 1],
+                    active_constants(i),
+                )
+                if constant is not None:
+                    name, value = constant
+                    constants.append(
+                        {
+                            "name": name,
+                            "value": value,
+                            "end": semicolon + 1,
+                            "scope_end": scope_end,
+                        }
+                    )
+                    i = semicolon + 1
+                    continue
+
         if ident != "using":
             i += consumed
             continue
@@ -11880,7 +11917,16 @@ def _inline_metal_concrete_using_template_aliases(
             i += consumed
             continue
         raw_alias_type = source[j + 1 : semicolon]
+        scoped_constants = active_constants(i)
+        scoped_aliases = active_aliases(i)
         alias_type = _metal_concrete_using_alias_type(raw_alias_type)
+        if alias_type is not None:
+            alias_type = _metal_resolve_type_identifiers(
+                preprocessor,
+                alias_type,
+                aliases=scoped_aliases,
+                constants=scoped_constants,
+            )
         if alias_type is None:
             dependent_match = re.fullmatch(
                 r"\s*typename\s+([A-Za-z_][A-Za-z0-9_]*)::"
@@ -11891,11 +11937,21 @@ def _inline_metal_concrete_using_template_aliases(
             if dependent_match is not None:
                 owner, member = dependent_match.groups()
                 for candidate in reversed(aliases):
-                    if candidate["name"] != owner:
+                    if (
+                        candidate["name"] != owner
+                        or candidate["end"] > i
+                        or i >= candidate["scope_end"]
+                    ):
                         continue
                     alias_type = (candidate.get("members") or {}).get(member)
                     break
-        scope_end = _metal_enclosing_block_end(block_spans, i)
+            if alias_type is not None:
+                alias_type = _metal_resolve_type_identifiers(
+                    preprocessor,
+                    alias_type,
+                    aliases=scoped_aliases,
+                    constants=scoped_constants,
+                )
         if alias_type is None or scope_end is None:
             i = semicolon + 1
             continue
@@ -12107,6 +12163,7 @@ def _template_materialization_unsupported_details(
     target: str,
     unit: ProjectTranslationUnit,
     unsupported: Sequence[Mapping[str, Any]],
+    target_artifact: str | None = None,
 ) -> dict[str, Any]:
     missing_parameters: list[str] = []
     declarations: list[dict[str, Any]] = []
@@ -12141,13 +12198,20 @@ def _template_materialization_unsupported_details(
                 declaration_payload["declarationLocation"] = location
         declarations.append(declaration_payload)
 
-    return {
+    details = {
         "sourcePath": unit.relative_path,
         "targetBackend": target,
         "missingTemplateParameters": missing_parameters,
         "sourceDeclarations": declarations,
         "suggestedRemediation": _template_materialization_suggested_remediation(target),
     }
+    if target_artifact:
+        details["targetArtifact"] = target_artifact
+        if len(missing_parameters) == 1:
+            details["unresolvedParameterName"] = missing_parameters[0]
+        elif missing_parameters:
+            details["unresolvedParameterNames"] = missing_parameters
+    return details
 
 
 def _template_materialization_unsupported_location(
@@ -12391,6 +12455,179 @@ def _unresolved_metal_template_type_records(
     return records
 
 
+def _metal_template_parameter_name_set(
+    preprocessor: Any,
+    unit: ProjectTranslationUnit,
+    source: str,
+) -> set[str]:
+    names = set(_metal_template_parameter_names(source))
+    for declaration in _metal_template_type_declarations(preprocessor, unit, source):
+        names.update(declaration.parameters)
+    return {name for name in names if name}
+
+
+def _metal_looks_like_template_placeholder_identifier(identifier: str) -> bool:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", identifier):
+        return False
+    return (
+        re.fullmatch(r"[A-Z][A-Za-z0-9_]{0,2}", identifier) is not None
+        or re.fullmatch(r"[A-Z][A-Za-z0-9_]*T", identifier) is not None
+        or re.fullmatch(r"[A-Z][A-Z0-9_]*_T", identifier) is not None
+    )
+
+
+def _unresolved_metal_template_placeholders_in_type(
+    type_text: str,
+    template_parameter_names: set[str],
+) -> list[str]:
+    normalized = _strip_metal_type_qualifiers(type_text)
+    if "." in normalized or "->" in normalized:
+        return []
+
+    missing: list[str] = []
+    for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", normalized):
+        if (
+            token in template_parameter_names
+            or _metal_looks_like_template_placeholder_identifier(token)
+        ) and token not in missing:
+            missing.append(token)
+    return missing
+
+
+def _unresolved_metal_standalone_template_type_records(
+    *,
+    preprocessor: Any,
+    unit: ProjectTranslationUnit,
+    source: str,
+    target: str,
+) -> list[dict[str, Any]]:
+    template_parameter_names = _metal_template_parameter_name_set(
+        preprocessor,
+        unit,
+        source,
+    )
+    template_spans = preprocessor._find_template_declaration_spans(source)
+    functions = preprocessor._find_non_template_function_definitions(
+        source,
+        list(template_spans),
+    )
+    records: list[dict[str, Any]] = []
+    seen_records: set[tuple[str, tuple[str, ...], str]] = set()
+    declared_template_type_names = {
+        declaration.name
+        for declaration in _metal_template_type_declarations(preprocessor, unit, source)
+    }
+    return_types = {
+        str(function.name): return_type
+        for function in functions
+        if (
+            return_type := _metal_function_return_type(
+                preprocessor,
+                _metal_function_header(source, function),
+                function.name,
+            )
+        )
+    }
+
+    def append_record(function: Any, type_text: str) -> None:
+        missing = _unresolved_metal_template_placeholders_in_type(
+            type_text,
+            template_parameter_names,
+        )
+        if not missing:
+            return
+        required_signature = _normalize_metal_type_text(type_text)
+        declared_type_check = _strip_metal_type_qualifiers(required_signature)
+        while declared_type_check.endswith(("*", "&")):
+            declared_type_check = declared_type_check[:-1].strip()
+        base_name, generic_args = _metal_generic_type_parts(
+            preprocessor,
+            declared_type_check,
+        )
+        if generic_args and base_name.split("::")[-1] in declared_template_type_names:
+            return
+        key = (str(function.name), tuple(missing), required_signature)
+        if key in seen_records:
+            return
+        seen_records.add(key)
+        location = _source_location_at_offset(
+            unit,
+            source,
+            int(function.span[0]),
+            max(int(function.span[1]) - int(function.span[0]), 0),
+        )
+        records.append(
+            {
+                "name": str(function.name),
+                "parameters": missing,
+                "missingParameters": missing,
+                "reason": "missing-template-arguments",
+                "sourceDeclaration": {
+                    "file": location.file,
+                    "line": location.line,
+                    "column": location.column,
+                    "name": str(function.name),
+                },
+                "target": target,
+                "requiredSignature": required_signature,
+            }
+        )
+
+    for function in functions:
+        header = _metal_function_header(source, function)
+        return_type = return_types.get(str(function.name))
+        if return_type:
+            append_record(function, return_type)
+        for type_text, _name, _variadic in _metal_function_parameter_declarations(
+            preprocessor,
+            header,
+        ):
+            append_record(function, type_text)
+
+        body_start, body_end = function.body_span
+        environment = _metal_function_type_environment(
+            preprocessor,
+            source,
+            function,
+            return_types,
+        )
+        for start, end in _metal_statement_spans(source, body_start, body_end):
+            declaration = _metal_local_variable_declaration(
+                preprocessor,
+                source[start:end],
+                environment,
+                return_types,
+            )
+            if declaration is None:
+                continue
+            _name, type_text = declaration
+            append_record(function, type_text)
+    return records
+
+
+def _post_materialization_unresolved_metal_template_type_records(
+    *,
+    preprocessor: Any,
+    unit: ProjectTranslationUnit,
+    source: str,
+    target: str,
+) -> list[dict[str, Any]]:
+    return [
+        *_unresolved_metal_template_type_records(
+            preprocessor=preprocessor,
+            unit=unit,
+            source=source,
+            target=target,
+        ),
+        *_unresolved_metal_standalone_template_type_records(
+            preprocessor=preprocessor,
+            unit=unit,
+            source=source,
+            target=target,
+        ),
+    ]
+
+
 def _unmaterialized_metal_template_functor_records(
     *,
     preprocessor: Any,
@@ -12482,6 +12719,7 @@ def _project_template_materialization_for_artifact(
     define_sources: Mapping[str, str] | None = None,
     include_paths: Sequence[str],
     source_options: Mapping[str, Any],
+    target_artifact: str | None = None,
 ) -> ProjectTemplateMaterializedSource | None:
     if unit.source_backend != "metal" or not _is_template_hostile_target(target):
         return None
@@ -13121,6 +13359,18 @@ def _project_template_materialization_for_artifact(
         materialized,
         preprocessor._find_template_declaration_spans(materialized),
     )
+    post_materialization_unsupported = (
+        _post_materialization_unresolved_metal_template_type_records(
+            preprocessor=preprocessor,
+            unit=unit,
+            source=materialized,
+            target=target,
+        )
+    )
+    unsupported.extend(post_materialization_unsupported)
+    unsupported_target_artifact = (
+        target_artifact if post_materialization_unsupported else None
+    )
     if not materialized.endswith("\n"):
         materialized += "\n"
 
@@ -13162,6 +13412,7 @@ def _project_template_materialization_for_artifact(
                     target,
                     unit,
                     unsupported,
+                    target_artifact=unsupported_target_artifact,
                 ),
             )
         ]
@@ -13833,6 +14084,7 @@ def translate_project(
                             define_sources=_variant_define_sources(config, variant),
                             include_paths=include_paths,
                             source_options=source_options,
+                            target_artifact=artifact.get("path"),
                         )
                     )
                 except Exception as exc:  # noqa: BLE001
