@@ -5,7 +5,7 @@
 OpCapability Shader
 %1 = OpExtInstImport "GLSL.std.450"
 OpMemoryModel Logical GLSL450
-OpEntryPoint GLCompute %23 "vectorAdd" %33 %37
+OpEntryPoint GLCompute %23 "vectorAdd" %28 %34
 OpExecutionMode %23 LocalSize 1 1 1
 OpName %9 "vectorAdd_Args"
 OpMemberName %9 0 "numElements"
@@ -19,10 +19,10 @@ OpName %18 "B"
 OpName %19 "CBuffer"
 OpMemberName %19 0 "C"
 OpName %21 "C"
-OpName %26 "i"
-OpName %30 "gl_WorkGroupSize"
-OpName %33 "gl_WorkGroupID"
-OpName %37 "gl_LocalInvocationID"
+OpName %28 "gl_LocalInvocationID"
+OpName %30 "i"
+OpName %32 "gl_WorkGroupSize"
+OpName %34 "gl_WorkGroupID"
 OpDecorate %9 Block
 OpMemberDecorate %9 0 Offset 0
 OpDecorate %11 DescriptorSet 0
@@ -40,9 +40,9 @@ OpDecorate %19 BufferBlock
 OpMemberDecorate %19 0 Offset 0
 OpDecorate %21 DescriptorSet 0
 OpDecorate %21 Binding 2
-OpDecorate %30 BuiltIn WorkgroupSize
-OpDecorate %33 BuiltIn WorkgroupId
-OpDecorate %37 BuiltIn LocalInvocationId
+OpDecorate %28 BuiltIn LocalInvocationId
+OpDecorate %32 BuiltIn WorkgroupSize
+OpDecorate %34 BuiltIn WorkgroupId
 %2 = OpTypeVoid
 %3 = OpTypeBool
 %4 = OpTypeInt 32 1
@@ -60,12 +60,12 @@ OpDecorate %37 BuiltIn LocalInvocationId
 %19 = OpTypeStruct %12
 %20 = OpTypePointer Uniform %19
 %22 = OpTypeFunction %2
-%25 = OpTypePointer Function %4
-%27 = OpTypeInt 32 0
-%28 = OpTypeVector %27 3
-%29 = OpConstant %27 1
-%30 = OpConstantComposite %28 %29 %29 %29
-%32 = OpTypePointer Input %28
+%25 = OpTypeInt 32 0
+%26 = OpTypeVector %25 3
+%27 = OpTypePointer Input %26
+%29 = OpTypePointer Function %4
+%31 = OpConstant %25 1
+%32 = OpConstantComposite %26 %31 %31 %31
 %43 = OpConstant %4 0
 %44 = OpTypePointer Uniform %4
 %52 = OpTypePointer Uniform %5
@@ -73,35 +73,35 @@ OpDecorate %37 BuiltIn LocalInvocationId
 %15 = OpVariable %14 Uniform
 %18 = OpVariable %17 Uniform
 %21 = OpVariable %20 Uniform
-%33 = OpVariable %32 Input
-%37 = OpVariable %32 Input
+%28 = OpVariable %27 Input
+%34 = OpVariable %27 Input
 %23 = OpFunction %2 None %22
 %24 = OpLabel
-%26 = OpVariable %25 Function
-%31 = OpCompositeExtract %27 %30 0
-%34 = OpLoad %28 %33
-%35 = OpCompositeExtract %27 %34 0
-%36 = OpIMul %27 %31 %35
-%38 = OpLoad %28 %37
-%39 = OpCompositeExtract %27 %38 0
-%40 = OpIAdd %27 %36 %39
+%30 = OpVariable %29 Function
+%33 = OpCompositeExtract %25 %32 0
+%35 = OpLoad %26 %34
+%36 = OpCompositeExtract %25 %35 0
+%37 = OpIMul %25 %33 %36
+%38 = OpLoad %26 %28
+%39 = OpCompositeExtract %25 %38 0
+%40 = OpIAdd %25 %37 %39
 %41 = OpBitcast %4 %40
-OpStore %26 %41
-%42 = OpLoad %4 %26
+OpStore %30 %41
+%42 = OpLoad %4 %30
 %45 = OpAccessChain %44 %11 %43
 %46 = OpLoad %4 %45
 %47 = OpSLessThan %3 %42 %46
 OpSelectionMerge %48 None
 OpBranchConditional %47 %49 %50
 %49 = OpLabel
-%51 = OpLoad %4 %26
+%51 = OpLoad %4 %30
 %53 = OpAccessChain %52 %15 %43 %51
 %54 = OpLoad %5 %53
-%55 = OpLoad %4 %26
+%55 = OpLoad %4 %30
 %56 = OpAccessChain %52 %18 %43 %55
 %57 = OpLoad %5 %56
 %58 = OpFAdd %5 %54 %57
-%59 = OpLoad %4 %26
+%59 = OpLoad %4 %30
 %60 = OpAccessChain %52 %21 %43 %59
 OpStore %60 %58
 OpBranch %48

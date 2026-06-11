@@ -18424,7 +18424,9 @@ class VulkanSPIRVCodeGen:
         type_info = self.storage_buffer_resource_type_info(
             metadata.get("declared_type_name")
         )
-        return type_info is not None and type_info.get("kind") == "storage_buffer_pointer"
+        return (
+            type_info is not None and type_info.get("kind") == "storage_buffer_pointer"
+        )
 
     def record_storage_buffer_pointer_offset_alias(
         self, source_pointer: SpirvId, alias_pointer: SpirvId, index: SpirvId
@@ -19566,8 +19568,9 @@ class VulkanSPIRVCodeGen:
             return self.create_member_access_pointer(base_pointer, expr.member)
         elif isinstance(expr, BinaryOpNode) and expr.op == "+":
             left_pointer = self.variable_pointer_from_expression(expr.left)
-            if left_pointer is not None and self.is_storage_buffer_pointer_arithmetic_base(
-                left_pointer
+            if (
+                left_pointer is not None
+                and self.is_storage_buffer_pointer_arithmetic_base(left_pointer)
             ):
                 index = self.process_expression(expr.right)
                 if index is None:
@@ -19582,8 +19585,9 @@ class VulkanSPIRVCodeGen:
                 return access
 
             right_pointer = self.variable_pointer_from_expression(expr.right)
-            if right_pointer is not None and self.is_storage_buffer_pointer_arithmetic_base(
-                right_pointer
+            if (
+                right_pointer is not None
+                and self.is_storage_buffer_pointer_arithmetic_base(right_pointer)
             ):
                 index = self.process_expression(expr.left)
                 if index is None:

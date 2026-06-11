@@ -459,9 +459,7 @@ def _run_translate_project(args):
     from .project import build_runtime_binding_manifest, translate_project
 
     binding_manifest_path = getattr(args, "runtime_binding_manifest", None)
-    if binding_manifest_path and (
-        not args.report or _is_stdout_output(args.report)
-    ):
+    if binding_manifest_path and (not args.report or _is_stdout_output(args.report)):
         print(
             "Error: --runtime-binding-manifest requires --report with a file path",
             file=sys.stderr,

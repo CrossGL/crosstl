@@ -6,9 +6,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 4,
-        "endOffset": 55,
+        "endOffset": 56,
         "file": "crosstl-out/directx/shader.vert.hlsl",
-        "length": 32,
+        "length": 33,
         "line": 3,
         "offset": 23
       },
@@ -28,11 +28,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 5,
-        "endOffset": 92,
+        "endOffset": 93,
         "file": "crosstl-out/directx/shader.vert.hlsl",
         "length": 37,
         "line": 4,
-        "offset": 55
+        "offset": 56
       },
       "original": {
         "column": 1,
@@ -50,11 +50,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 7,
-        "endOffset": 116,
+        "endOffset": 117,
         "file": "crosstl-out/directx/shader.vert.hlsl",
         "length": 21,
         "line": 6,
-        "offset": 95
+        "offset": 96
       },
       "original": {
         "column": 1,
@@ -72,11 +72,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 8,
-        "endOffset": 134,
+        "endOffset": 135,
         "file": "crosstl-out/directx/shader.vert.hlsl",
         "length": 18,
         "line": 7,
-        "offset": 116
+        "offset": 117
       },
       "original": {
         "column": 1,
@@ -94,11 +94,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 12,
-        "endOffset": 303,
+        "endOffset": 304,
         "file": "crosstl-out/directx/shader.vert.hlsl",
         "length": 70,
         "line": 11,
-        "offset": 233
+        "offset": 234
       },
       "original": {
         "column": 1,
@@ -116,11 +116,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 13,
-        "endOffset": 350,
+        "endOffset": 351,
         "file": "crosstl-out/directx/shader.vert.hlsl",
         "length": 47,
         "line": 12,
-        "offset": 303
+        "offset": 304
       },
       "original": {
         "column": 1,

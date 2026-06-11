@@ -3047,8 +3047,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def referenced_hlsl_glsl_builtin_int_constants(self, ast):
         declared_names = {
-            getattr(node, "name", None)
-            for node in getattr(ast, "constants", []) or []
+            getattr(node, "name", None) for node in getattr(ast, "constants", []) or []
         }
         declared_names.update(
             getattr(node, "name", getattr(node, "variable_name", None))

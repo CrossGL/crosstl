@@ -1,7 +1,7 @@
 ; SPIR-V
 ; Version: 1.0
 ; Generator: CrossGL Vulkan SPIR-V Generator
-; Bound: 92
+; Bound: 93
 OpCapability Shader
 %1 = OpExtInstImport "GLSL.std.450"
 OpMemoryModel Logical GLSL450
@@ -21,7 +21,7 @@ OpName %51 "CrossGL_fragment_input_input_farPoint"
 OpName %55 "input"
 OpName %57 "outColor"
 OpName %58 "t"
-OpName %77 "pos"
+OpName %78 "pos"
 OpDecorate %47 Location 0
 OpDecorate %49 Location 0
 OpDecorate %51 Location 1
@@ -88,7 +88,7 @@ OpFunctionEnd
 %55 = OpVariable %54 Function
 %57 = OpVariable %56 Function
 %58 = OpVariable %31 Function
-%77 = OpVariable %60 Function
+%78 = OpVariable %60 Function
 %50 = OpLoad %7 %49
 %52 = OpLoad %7 %51
 %53 = OpCompositeConstruct %9 %50 %52
@@ -109,22 +109,23 @@ OpStore %55 %53
 %75 = OpFSub %5 %70 %74
 %76 = OpFDiv %5 %65 %75
 OpStore %58 %76
-%78 = OpAccessChain %60 %55 %59
-%79 = OpLoad %7 %78
-%80 = OpLoad %5 %58
-%81 = OpAccessChain %60 %55 %66
-%82 = OpLoad %7 %81
-%83 = OpAccessChain %60 %55 %59
-%84 = OpLoad %7 %83
-%85 = OpFSub %7 %82 %84
-%86 = OpCompositeConstruct %7 %80 %80 %80
-%87 = OpFMul %7 %86 %85
-%88 = OpFAdd %7 %79 %87
-OpStore %77 %88
-%89 = OpLoad %7 %77
-%90 = OpFunctionCall %8 %11 %89
-OpStore %57 %90
-%91 = OpLoad %8 %57
-OpStore %47 %91
+%77 = OpAccessChain %60 %55 %59
+%79 = OpAccessChain %60 %55 %59
+%80 = OpLoad %7 %79
+%81 = OpLoad %5 %58
+%82 = OpAccessChain %60 %55 %66
+%83 = OpLoad %7 %82
+%84 = OpAccessChain %60 %55 %59
+%85 = OpLoad %7 %84
+%86 = OpFSub %7 %83 %85
+%87 = OpCompositeConstruct %7 %81 %81 %81
+%88 = OpFMul %7 %87 %86
+%89 = OpFAdd %7 %80 %88
+OpStore %78 %89
+%90 = OpLoad %7 %78
+%91 = OpFunctionCall %8 %11 %90
+OpStore %57 %91
+%92 = OpLoad %8 %57
+OpStore %47 %92
 OpReturn
 OpFunctionEnd

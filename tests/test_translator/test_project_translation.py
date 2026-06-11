@@ -605,8 +605,7 @@ def test_translate_project_glslang_spec_constant_vertex_to_directx(tmp_path):
     assert payload["summary"]["translatedCount"] == 1
     assert "static const int gl_MaxImageUnits = 8;" in generated
     assert (
-        "void foo(float4 p[arraySize], VertexInput input, "
-        "inout VertexOutput output)"
+        "void foo(float4 p[arraySize], VertexInput input, " "inout VertexOutput output)"
     ) in generated
     assert "foo(input.ucol, input, output);" in generated
 
@@ -6962,13 +6961,9 @@ def test_translate_project_glsl_usampler_texel_fetch_lowers_to_cuda_hip_slang(
         ("slang", "translated"),
     }
 
-    cuda = (repo / "out" / "cuda" / "alpha_stitch.cu").read_text(
-        encoding="utf-8"
-    )
+    cuda = (repo / "out" / "cuda" / "alpha_stitch.cu").read_text(encoding="utf-8")
     hip = (repo / "out" / "hip" / "alpha_stitch.hip").read_text(encoding="utf-8")
-    slang = (repo / "out" / "slang" / "alpha_stitch.slang").read_text(
-        encoding="utf-8"
-    )
+    slang = (repo / "out" / "slang" / "alpha_stitch.slang").read_text(encoding="utf-8")
 
     assert "cudaTextureObject_t srcRGB;" in cuda
     assert "cudaTextureObject_t srcAlpha;" in cuda
@@ -9749,8 +9744,7 @@ def test_translate_project_opengl_materializes_mlx_accumulator_template_default(
             }
 
             instantiate_softmax(float32, float)
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -9759,8 +9753,7 @@ def test_translate_project_opengl_materializes_mlx_accumulator_template_default(
             source_roots = ["shaders"]
             targets = ["opengl"]
             output_dir = "translated"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -9832,8 +9825,7 @@ def test_translate_project_opengl_materializes_mlx_auxiliary_template_default(
             }
 
             instantiate_attention(float32, float)
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -9842,8 +9834,7 @@ def test_translate_project_opengl_materializes_mlx_auxiliary_template_default(
             source_roots = ["shaders"]
             targets = ["opengl"]
             output_dir = "translated"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -9905,8 +9896,7 @@ def test_translate_project_opengl_missing_accumulator_template_diagnostic(
             }
 
             instantiate_reduce(float32, float)
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -9915,8 +9905,7 @@ def test_translate_project_opengl_missing_accumulator_template_diagnostic(
             source_roots = ["shaders"]
             targets = ["opengl"]
             output_dir = "translated"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -9943,8 +9932,7 @@ def test_translate_project_opengl_missing_accumulator_template_diagnostic(
     ]
     diagnostic = payload["diagnostics"][0]
     assert (
-        diagnostic["code"]
-        == "project.translate.template-materialization-unsupported"
+        diagnostic["code"] == "project.translate.template-materialization-unsupported"
     )
     assert "reduce_values missing AccT" in diagnostic["message"]
     assert "reduce_values missing T" not in diagnostic["message"]
@@ -11170,8 +11158,7 @@ def test_translate_project_rust_option_helpers_lower_to_opengl_compute(tmp_path)
             pub fn main() {
                 let value = read_option(collatz(7u32));
             }
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
@@ -11186,9 +11173,9 @@ def test_translate_project_rust_option_helpers_lower_to_opengl_compute(tmp_path)
 
     report = translate_project(load_project_config(repo))
     payload = report.to_json()
-    opengl_output = (
-        repo / "translated" / "opengl" / "src" / "collatz.glsl"
-    ).read_text(encoding="utf-8")
+    opengl_output = (repo / "translated" / "opengl" / "src" / "collatz.glsl").read_text(
+        encoding="utf-8"
+    )
 
     assert payload["summary"]["translatedCount"] == 1
     assert "struct Option_u32" in opengl_output
@@ -35565,8 +35552,7 @@ def test_translate_project_nested_metal_include_variant_template_materializes_fo
 
             [project.variants.f32]
             T = "float"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (module_dir / "templated_kernel.h").write_text(
@@ -35578,8 +35564,7 @@ def test_translate_project_nested_metal_include_variant_template_materializes_fo
             ) {
                 out[gid] = T(1.0);
             }
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (kernel_dir / "launch.metal").write_text(
@@ -35593,8 +35578,7 @@ def test_translate_project_nested_metal_include_variant_template_materializes_fo
             }
 
             #include "templated_kernel.h"
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 

@@ -13004,9 +13004,7 @@ def build_runtime_artifact_manifest(
 
 
 def _runtime_binding_payload_hash(payload: Mapping[str, Any]) -> dict[str, str]:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
-    )
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return {
         "algorithm": "sha256",
         "value": hashlib.sha256(encoded).hexdigest(),
@@ -13439,9 +13437,7 @@ def _runtime_binding_manifest_summary(
             and entry["dispatchDimensions"].get("status") == "available"
         ),
         "entriesBySource": _runtime_manifest_artifact_counter(entries, "sourceFile"),
-        "entriesByTarget": _runtime_manifest_artifact_counter(
-            entries, "targetBackend"
-        ),
+        "entriesByTarget": _runtime_manifest_artifact_counter(entries, "targetBackend"),
         "entriesByVariant": _runtime_manifest_artifact_counter(entries, "variant"),
     }
 
@@ -13522,9 +13518,7 @@ def build_runtime_binding_manifest(
         ),
         "diagnosticCounts": runtime_manifest.get("diagnosticCounts", {}),
         "diagnostics": runtime_manifest.get("diagnostics", []),
-        "runtimeDiagnosticCounts": runtime_manifest.get(
-            "runtimeDiagnosticCounts", {}
-        ),
+        "runtimeDiagnosticCounts": runtime_manifest.get("runtimeDiagnosticCounts", {}),
         "runtimeDiagnostics": runtime_manifest.get("runtimeDiagnostics", []),
     }
 

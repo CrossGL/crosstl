@@ -959,9 +959,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 names.append(tokens[-1])
         return names
 
-    def _template_parameter_defaults(
-        self, template_parameters: str
-    ) -> Dict[str, str]:
+    def _template_parameter_defaults(self, template_parameters: str) -> Dict[str, str]:
         defaults: Dict[str, str] = {}
         for parameter in self._split_top_level_commas(template_parameters):
             if "=" not in parameter:
