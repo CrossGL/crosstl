@@ -3531,9 +3531,11 @@ class HLSLToCrossGLConverter:
         base_type = self.raw_type_base(type_name)
         if not base_type:
             return False
+        mapped_base_type = self.raw_type_base(self.map_type(type_name))
         if (
             self.is_uav_resource_type(type_name)
             or self.is_buffer_resource_type(type_name)
+            or self.is_crossgl_resource_type(mapped_base_type)
             or base_type.startswith(("Texture", "FeedbackTexture"))
             or base_type
             in {
@@ -3554,6 +3556,26 @@ class HLSLToCrossGLConverter:
         ):
             return False
         return True
+
+    def is_crossgl_resource_type(self, type_name):
+        base_type = self.raw_type_base(type_name)
+        if not base_type:
+            return False
+        return base_type in {
+            "sampler",
+            "comparison_sampler",
+            "accelerationStructure",
+        } or base_type.startswith(
+            (
+                "sampler",
+                "isampler",
+                "usampler",
+                "image",
+                "iimage",
+                "uimage",
+                "feedbackTexture",
+            )
+        )
 
     def collect_hlsl_program_constant_global_ids(self, ast):
         candidates = {
