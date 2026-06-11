@@ -4267,13 +4267,17 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         bit_width = self.hip_integer_bit_width(source_type)
         unsigned_cast_type = "unsigned long long" if bit_width == 64 else "unsigned int"
         signed_cast_type = "long long" if bit_width == 64 else "int"
+        popc_intrinsic = "__popcll" if bit_width == 64 else "__popc"
+        ffs_intrinsic = "__ffsll" if bit_width == 64 else "__ffs"
+        clz_intrinsic = "__clzll" if bit_width == 64 else "__clz"
+        high_bit_index = 63 if bit_width == 64 else 31
         unsigned_value = (
             f"static_cast<{unsigned_cast_type}>({value})"
             if source_component == "int"
             else value
         )
         if operation == "bitCount":
-            return f"__popc({unsigned_value})"
+            return f"{popc_intrinsic}({unsigned_value})"
         if operation == "bitfieldReverse":
             intrinsic_name = "__brevll" if bit_width == 64 else "__brev"
             reversed_value = f"{intrinsic_name}({unsigned_value})"
@@ -4281,14 +4285,29 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 return f"static_cast<{signed_cast_type}>({reversed_value})"
             return reversed_value
         if operation == "findLSB":
-            return f"(__ffs({value}) - 1)"
+            return f"({ffs_intrinsic}({value}) - 1)"
         if operation == "findMSB":
+            clz_value = (
+                f"static_cast<{unsigned_cast_type}>({value})"
+                if bit_width == 64 and source_component == "int"
+                else value
+            )
             if source_component == "int":
-                return (
-                    f"(({value}) < 0 ? (31 - __clz(~({value}))) : "
-                    f"(({value}) == 0 ? -1 : (31 - __clz({value}))))"
+                inverted_value = (
+                    f"static_cast<{unsigned_cast_type}>(~({value}))"
+                    if bit_width == 64
+                    else f"~({value})"
                 )
-            return f"(({value}) == 0 ? -1 : (31 - __clz({value})))"
+                return (
+                    f"(({value}) < 0 ? ({high_bit_index} - "
+                    f"{clz_intrinsic}({inverted_value})) : "
+                    f"(({value}) == 0 ? -1 : ({high_bit_index} - "
+                    f"{clz_intrinsic}({clz_value}))))"
+                )
+            return (
+                f"(({value}) == 0 ? -1 : "
+                f"({high_bit_index} - {clz_intrinsic}({value})))"
+            )
         return f"{operation}({value})"
 
     def hip_integer_bit_width(self, type_name):

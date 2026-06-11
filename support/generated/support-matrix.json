@@ -245,7 +245,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1182
+        "test_count": 1183
       },
       "translator_codegen": {
         "exists": true,
@@ -971,7 +971,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 826
+        "test_count": 827
       },
       "translator_codegen": {
         "exists": true,
@@ -1205,7 +1205,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 983
+        "test_count": 984
       },
       "translator_codegen": {
         "exists": true,

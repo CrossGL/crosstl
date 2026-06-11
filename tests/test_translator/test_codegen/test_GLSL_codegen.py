@@ -347,6 +347,24 @@ def test_glsl_hlsl_graphics_builtin_parameter_aliases_to_glsl_builtins():
     assert "SV_InstanceID" not in generated
 
 
+def test_glsl_unsigned_sample_mask_input_alias_indexes_builtin_array():
+    code = """
+    shader SampleMaskInputAlias {
+        fragment {
+            void main(uint coverage @ SV_Coverage) {
+                uint value = coverage;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "uint coverage = uint(gl_SampleMaskIn[0]);" in generated
+    assert "uint(gl_SampleMaskIn);" not in generated
+    assert "uint value = coverage;" in generated
+
+
 def test_glsl_vertex_index_identifier_lowers_to_vertex_id_builtin():
     code = """
     shader VertexIndexAlias {

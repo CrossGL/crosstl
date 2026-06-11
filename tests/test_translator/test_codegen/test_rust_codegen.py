@@ -26262,6 +26262,7 @@ def test_rust_swizzle_assignments_emit_component_writes(tmp_path):
     code = """
     shader RustSwizzleAssignments {
         vec4 adjust(vec4 color, vec3 delta, float scale) {
+            color.bgr = delta;
             color.rgb += delta;
             color.rgb *= scale;
             return color;
@@ -26272,9 +26273,27 @@ def test_rust_swizzle_assignments_emit_component_writes(tmp_path):
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "Vec3::<f32>::new(color.x, color.y, color.z) +=" not in generated_code
-    assert "color.x += __cgl_swizzle_" in generated_code
-    assert "color.y *= __cgl_swizzle_" in generated_code
+    assert (
+        "color.z = __cgl_swizzle_0.x; color.y = __cgl_swizzle_0.y; "
+        "color.x = __cgl_swizzle_0.z" in generated_code
+    )
+    assert "color.x += __cgl_swizzle_1.x" in generated_code
+    assert "color.y *= __cgl_swizzle_2" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_rejects_duplicate_swizzle_assignment_components():
+    code = """
+    shader RustInvalidSwizzleAssignment {
+        vec4 adjust(vec4 color) {
+            color.xx = vec2(1.0, 2.0);
+            return color;
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="swizzle assignment.*repeat components"):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 def test_rust_plain_struct_constructor_calls_lower_to_new_and_compile(tmp_path):

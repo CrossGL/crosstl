@@ -1373,7 +1373,9 @@ RUNTIME_REFERENCE_EXTENSIONS = frozenset(
         ".hpp",
         ".hxx",
         ".jsx",
+        ".java",
         ".js",
+        ".kt",
         ".m",
         ".mm",
         ".mjs",
@@ -1609,7 +1611,7 @@ RUNTIME_REFERENCE_RULES = (
         "opengl",
         "runtime-api",
         re.compile(
-            r"\b(gl(?:ActiveTexture|AttachShader|Bind(?:Buffer|Texture|VertexArray)|"
+            r"(?<![\w.])(gl(?:ActiveTexture|AttachShader|Bind(?:Buffer|Texture|VertexArray)|"
             r"BufferData|CompileShader|CreateProgram|CreateShader|DeleteShader|"
             r"DispatchCompute|Draw(?:Arrays|Elements)|EnableVertexAttribArray|"
             r"Gen(?:Buffers|Textures|VertexArrays)|GetUniformLocation|LinkProgram|"
@@ -1626,6 +1628,30 @@ RUNTIME_REFERENCE_RULES = (
             r"glfw(?:GetProcAddress|MakeContextCurrent|SwapBuffers)|"
             r"SDL_GL_(?:CreateContext|MakeCurrent|SwapWindow|GetProcAddress)|"
             r"egl(?:CreateContext|GetProcAddress|MakeCurrent|SwapBuffers)))(?!\w)"
+        ),
+        None,
+    ),
+    (
+        "opengl",
+        "runtime-api",
+        re.compile(
+            r"^\s*import\s+android\.opengl\."
+            r"(GLES(?:10|11|20|30|31|32)|GLSurfaceView)\b"
+        ),
+        None,
+    ),
+    (
+        "opengl",
+        "runtime-api",
+        re.compile(
+            r"(?<![\w.])GLES(?:10|11|20|30|31|32)\."
+            r"(gl(?:ActiveTexture|AttachShader|Bind(?:Buffer|Texture|VertexArray)|"
+            r"BufferData|CompileShader|CreateProgram|CreateShader|DeleteShader|"
+            r"Draw(?:Arrays|Elements)|EnableVertexAttribArray|"
+            r"Gen(?:Buffers|Textures|VertexArrays)|GetUniformLocation|LinkProgram|"
+            r"ShaderSource|Tex(?:Image2D|Parameteri)|Uniform(?:Matrix[2-4]fv|"
+            r"[1-4][fi](?:v)?)|UseProgram|VertexAttribPointer))"
+            r"(?![A-Za-z0-9_])(?=\s*\()"
         ),
         None,
     ),
