@@ -34270,6 +34270,165 @@ def test_translate_project_metal_variant_template_materializes_for_opengl(
     assert validation["success"] is True
 
 
+def test_translate_project_source_instantiation_materializes_sizing_templates(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "sizing.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_sizing(name, type, bm, bn, sm, sn, tm, tn, batch, axpby) \\
+                instantiate_kernel("sizing" #name, sizing, type, bm, bn, sm, sn, tm, tn, batch, axpby)
+
+            template <int BM, int BN, int TM, int TN>
+            METAL_FUNC uint tile_columns(uint gid) {
+                return gid % uint(BN * TN + TM);
+            }
+
+            template <typename T, int BM, int BN, int SM, int SN, int TM, int TN, bool kDoNCBatch, bool kDoAxpby>
+            [[kernel, max_total_threads_per_threadgroup(BM * BN)]]
+            void sizing(
+                device const T* in [[buffer(0)]],
+                device T* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                uint lane_count = tile_columns<BM, BN, TM, TN>(gid) + uint(SN);
+                T value = in[gid] + T(SM + lane_count);
+                if (kDoNCBatch) { value += T(1); }
+                if (kDoAxpby) { value += T(2); }
+                out[gid] = value;
+            }
+
+            instantiate_sizing(f32, float, 8, 16, 2, 4, 1, 2, true, false)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx", "opengl", "vulkan"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert {artifact["target"] for artifact in payload["artifacts"]} == {
+        "directx",
+        "opengl",
+        "vulkan",
+    }
+    for artifact in payload["artifacts"]:
+        materialization = artifact["templateMaterialization"]
+        assert materialization["status"] == "materialized"
+        assert materialization["unsupported"] == []
+        assert {
+            specialization["source"]
+            for specialization in materialization["specializations"]
+        } == {"call-site", "source-instantiation"}
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        assert "max_total_threads_per_threadgroup" not in output
+        assert "tile_columns<" not in output
+        assert not re.search(
+            r"\b(?:T|BM|BN|SM|SN|TM|TN|kDoNCBatch|kDoAxpby)\b",
+            output,
+        )
+
+
+def test_translate_project_variant_materializes_sizing_helper_calls(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "translated"
+
+            [project.variants.conv2]
+            T = "float"
+            N = "2"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "unfold.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, int N>
+            METAL_FUNC T accumulate_window(T value) {
+                return value + T(N);
+            }
+
+            template <typename T, int N>
+            [[kernel, max_total_threads_per_threadgroup(N * 32)]]
+            void naive_unfold_Nd(
+                device const T* in [[buffer(0)]],
+                device T* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = accumulate_window<T, N>(in[gid]);
+            }
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["variant"] == "conv2"
+    assert artifact["templateMaterialization"] == {
+        "status": "materialized",
+        "specializationCount": 2,
+        "configuredParameterCount": 2,
+        "configuredParameters": {"N": "2", "T": "float"},
+        "specializations": [
+            {
+                "name": "accumulate_window",
+                "materializedName": "accumulate_window",
+                "parameters": {"N": "2", "T": "float"},
+                "source": "config",
+            },
+            {
+                "name": "naive_unfold_Nd",
+                "materializedName": "naive_unfold_Nd",
+                "parameters": {"N": "2", "T": "float"},
+                "source": "config",
+            },
+        ],
+        "unsupported": [],
+    }
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "float accumulate_window(float value)" in output
+    assert "out_[gid] = accumulate_window(in_[gid]);" in output
+    assert "accumulate_window<" not in output
+    assert "max_total_threads_per_threadgroup" not in output
+    assert not re.search(r"\b(?:T|N)\b", output)
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+
+
 def test_translate_project_metal_template_without_arguments_reports_metadata(
     tmp_path,
 ):
