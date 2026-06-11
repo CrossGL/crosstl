@@ -16845,6 +16845,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if not self.hlsl_expression_is_repeatable(args[0]):
                     return self.hlsl_scalar_splat_cast(mapped_type, rendered_arg)
                 rendered_args = [rendered_arg] * component_count
+            elif arg_component_count and arg_component_count > component_count:
+                rendered_args = [
+                    f"{rendered_args[0]}.{self.hlsl_vector_swizzle(component_count)}"
+                ]
         return f"{mapped_type}({', '.join(rendered_args)})"
 
     def hlsl_constructor_expression(self, constructor_type, args):
