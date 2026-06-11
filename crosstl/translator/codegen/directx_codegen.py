@@ -19,6 +19,7 @@ from ..ast import (
     ForInNode,
     ForNode,
     FunctionCallNode,
+    FunctionNode,
     IdentifierNode,
     IfNode,
     LoopNode,
@@ -680,6 +681,7 @@ class HLSLCodeGen:
         self.hlsl_hoisted_groupshared_declarations = []
         self.hlsl_hoisted_groupshared_aliases_by_declaration = {}
         self.hlsl_hoisted_groupshared_declaration_ids = set()
+        self.hlsl_compute_num_workgroups_uniform = None
         self.vertex_entry_input_struct_names = set()
         self.vertex_entry_output_struct_names = set()
         self.fragment_entry_input_struct_names = set()
@@ -1220,6 +1222,7 @@ class HLSLCodeGen:
         self.hlsl_hoisted_groupshared_declarations = []
         self.hlsl_hoisted_groupshared_aliases_by_declaration = {}
         self.hlsl_hoisted_groupshared_declaration_ids = set()
+        self.hlsl_compute_num_workgroups_uniform = None
         self.vertex_entry_output_struct_names = set()
         self.fragment_entry_input_struct_names = set()
         self.hlsl_temp_variable_index = 0
@@ -1323,6 +1326,11 @@ class HLSLCodeGen:
         self.global_variable_types = self.collect_global_variable_types(global_vars)
         self.global_variable_types.update(self.collect_cbuffer_member_types(cbuffers))
         functions = self.collect_functions(ast)
+        self.hlsl_compute_num_workgroups_uniform = (
+            self.hlsl_compute_num_workgroups_uniform_names(
+                ast, target_stage, cbuffers, global_vars, functions
+            )
+        )
         self.collect_hlsl_function_local_groupshared_declarations(ast, target_stage)
         self.hlsl_function_name_aliases = self.collect_hlsl_function_name_aliases(
             functions
@@ -2188,6 +2196,16 @@ class HLSLCodeGen:
                 texture_registers,
                 cbuffer_registers,
             )
+        compute_num_workgroups_cbuffer = (
+            self.generate_hlsl_compute_num_workgroups_cbuffer(
+                used_resource_registers,
+                cbuffer_registers,
+            )
+        )
+        if compute_num_workgroups_cbuffer:
+            if not cbuffers:
+                code += "// Constant Buffers\n"
+            code += compute_num_workgroups_cbuffer
 
         stage_entry_names = self.stage_entry_names(ast, target_stage)
         self.current_hlsl_hull_output_control_points = (
@@ -14825,7 +14843,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 None,
                 self.hlsl_compute_workgroup_size_expression(execution_config),
             ),
-            ("gl_NumWorkGroups", "numWorkGroups", "uint3", None),
+            (
+                "gl_NumWorkGroups",
+                None,
+                None,
+                None,
+                self.hlsl_compute_num_workgroups_expression(),
+            ),
         ]
         reserved_names = set(self.local_variable_types)
         reserved_names.update(self.global_variable_types)
@@ -14851,6 +14875,116 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_compute_workgroup_size_expression(self, execution_config=None):
         x, y, z = compute_local_size(execution_config)
         return f"uint3({x}, {y}, {z})"
+
+    def hlsl_compute_num_workgroups_expression(self):
+        uniform = self.hlsl_compute_num_workgroups_uniform or {}
+        return uniform.get("member_name")
+
+    def hlsl_compute_num_workgroups_uniform_names(
+        self, ast, target_stage, cbuffers, global_vars, functions
+    ):
+        if not self.hlsl_compute_target_uses_num_workgroups(
+            ast, target_stage, functions
+        ):
+            return None
+
+        used_names = set(self.global_variable_types)
+        used_names.update(self.collect_hlsl_program_identifier_names(ast))
+        used_names.update(
+            getattr(cbuffer, "name", None)
+            for cbuffer in cbuffers or []
+            if getattr(cbuffer, "name", None)
+        )
+        used_names.update(
+            getattr(node, "name", getattr(node, "variable_name", None))
+            for node in global_vars or []
+            if getattr(node, "name", getattr(node, "variable_name", None))
+        )
+
+        buffer_name = self.hlsl_unique_local_identifier(
+            "CrossGLDispatchInfo", used_names
+        )
+        used_names.add(buffer_name)
+        member_name = self.hlsl_unique_local_identifier(
+            "crossglNumWorkGroups", used_names
+        )
+        self.global_variable_types[member_name] = "uint3"
+        return {"buffer_name": buffer_name, "member_name": member_name}
+
+    def hlsl_compute_target_uses_num_workgroups(self, ast, target_stage, functions):
+        for func in functions or []:
+            if function_stage_name(func) != "compute":
+                continue
+            if not should_emit_qualified_function(target_stage, "compute"):
+                continue
+            if "gl_NumWorkGroups" in self.used_hlsl_compute_builtin_names(
+                getattr(func, "body", [])
+            ):
+                return True
+
+        for stage_type, stage in (getattr(ast, "stages", {}) or {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if stage_name != "compute" or not stage_matches(target_stage, stage_name):
+                continue
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is None:
+                continue
+            if "gl_NumWorkGroups" in self.used_hlsl_compute_builtin_names(
+                getattr(entry_point, "body", [])
+            ):
+                return True
+
+        return False
+
+    def collect_hlsl_program_identifier_names(self, ast):
+        names = set()
+        for node in self.walk_ast(ast):
+            name = None
+            if isinstance(node, (FunctionNode, StructNode, VariableNode)):
+                name = getattr(node, "name", None)
+            elif isinstance(node, ForInNode):
+                name = getattr(node, "pattern", None)
+            elif hasattr(node, "__class__") and "Identifier" in str(node.__class__):
+                name = getattr(node, "name", None)
+            if name:
+                names.add(name)
+            if isinstance(node, StructNode):
+                for member in getattr(node, "members", []) or []:
+                    member_name = getattr(member, "name", None)
+                    if member_name:
+                        names.add(member_name)
+        return names
+
+    def generate_hlsl_compute_num_workgroups_cbuffer(
+        self, used_resource_registers, cbuffer_registers
+    ):
+        uniform = self.hlsl_compute_num_workgroups_uniform
+        if not uniform:
+            return ""
+
+        space = None
+        binding = self.next_available_resource_register(
+            used_resource_registers,
+            "b",
+            cbuffer_registers,
+            space,
+            1,
+        )
+        self.reserve_resource_register_range(
+            used_resource_registers,
+            "b",
+            binding,
+            1,
+            uniform["buffer_name"],
+            space,
+        )
+        self.advance_resource_register(cbuffer_registers, space, binding, 1)
+        register = self.resource_register_suffix_for_space("b", binding, space)
+        return (
+            f"cbuffer {uniform['buffer_name']}{register} {{\n"
+            f"    uint3 {uniform['member_name']};\n"
+            "};\n"
+        )
 
     def collect_resource_array_size_hints(self, ast):
         return collect_resource_array_size_hints(
