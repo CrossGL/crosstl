@@ -1570,11 +1570,14 @@
           ]
         },
         "wgsl": {
-          "status": "partial",
-          "notes": "CrossGL cbuffers lower to WGSL uniform structs with deterministic @group/@binding allocation, HLSL register/space metadata handling, and bare cbuffer-member access rewriting. Layout-specific packing metadata, duplicate explicit binding diagnostics, and target-invalid uniform-buffer shapes remain covered by deterministic diagnostics or future validation work.",
+          "status": "supported",
+          "notes": "WGSL resource declarations use deterministic @group/@binding allocation, preserve explicit @set/@group/@space/@binding and HLSL register/space metadata, reserve later explicit bindings before automatic allocation, assign non-colliding companion sampler bindings for sampled textures, and reject duplicate explicit resource bindings with deterministic diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_does_not_rewrite_shadowed_cbuffer_member_identifiers"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_preserves_explicit_set_and_binding_resources",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_auto_bindings_skip_later_explicit_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_synthetic_sampler_skips_occupied_binding",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_duplicate_explicit_resource_bindings_raise",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_duplicate_hlsl_register_space_resource_bindings_raise"
           ]
         }
       }

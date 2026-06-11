@@ -25,7 +25,7 @@ implicitly supported.
    "DirectX / HLSL", "dx11, dx12, d3d11, d3d12", "directx-11, directx-12", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "native", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "1091", "292", "Microsoft Learn HLSL reference; HLSL specification project"
    "OpenGL / GLSL", "", "", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "native", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "1184", "186", "GLSL 4.60 specification; OpenGL registry"
    "WebGL / GLSL ES", "webgl2, essl, glsl-es", "", ".webgl.glsl", "crosstl/translator/codegen/webgl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_webgl_codegen.py", "37", "23", "WebGL 2.0 specification; OpenGL ES Shading Language 3.00 specification"
-   "WebGPU / WGSL", "webgpu", "", ".wgsl", "crosstl/translator/codegen/wgsl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_wgsl_codegen.py", "42", "34", "WGSL specification; WebGPU specification"
+   "WebGPU / WGSL", "webgpu", "", ".wgsl", "crosstl/translator/codegen/wgsl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_wgsl_codegen.py", "44", "34", "WGSL specification; WebGPU specification"
    "Metal", "", "", ".metal", "crosstl/translator/codegen/metal_codegen.py", "native", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "985", "496", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", "", "", ".spvasm", "crosstl/translator/codegen/SPIRV_codegen.py", "native", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "994", "46", "SPIR-V unified grammar; Khronos SPIR-V headers"
    "CUDA", "", "", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "native", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "778", "194", "CUDA C++ programming guide"
@@ -40,7 +40,7 @@ implicitly supported.
    "DirectX / HLSL", "64", "0", "2", "0", "0", "0"
    "OpenGL / GLSL", "64", "0", "2", "0", "0", "0"
    "WebGL / GLSL ES", "35", "0", "22", "9", "0", "0"
-   "WebGPU / WGSL", "33", "7", "19", "7", "0", "0"
+   "WebGPU / WGSL", "34", "6", "19", "7", "0", "0"
    "Metal", "63", "0", "3", "0", "0", "0"
    "Vulkan SPIR-V", "64", "0", "2", "0", "0", "0"
    "CUDA", "59", "0", "7", "0", "0", "0"
@@ -130,7 +130,7 @@ Each category below uses the status codes from the legend.
 .. csv-table:: resources
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "WebGPU / WGSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
-   "Explicit and automatic resource bindings", "Y", "Y", "D", "P", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Explicit and automatic resource bindings", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Constant/uniform buffers", "Y", "Y", "D", "P", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Structured/storage buffers", "Y", "Y", "D", "P", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Resource arrays", "Y", "Y", "D", "P", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
@@ -216,7 +216,6 @@ implementation work can be scoped accurately.
 .. csv-table:: Actionable backlog rows
    :header: "Backend", "Category", "Feature", "Status", "Current gap", "Next scope", "Notes"
 
-   "WebGPU / WGSL", "resources", "Explicit and automatic resource bindings", "partial", "CrossGL cbuffers lower to WGSL uniform structs with deterministic @group/@binding allocation, HLSL register/space metadata handling, and bare cbuffer-member access rewriting. Layout-specific packing metadata, duplicate explicit binding diagnostics, and target-invalid uniform-buffer shapes remain covered by deterministic diagnostics or future validation work.", "", "CrossGL cbuffers lower to WGSL uniform structs with deterministic @group/@binding allocation, HLSL register/space metadata handling, and bare cbuffer-member access rewriting. Layout-specific packing metadata, duplicate explicit binding diagnostics, and target-invalid uniform-buffer shapes remain covered by deterministic diagnostics or future validation work."
    "WebGPU / WGSL", "resources", "Constant/uniform buffers", "partial", "StructuredBuffer and RWStructuredBuffer declarations lower to WGSL storage-buffer arrays with read/read_write access modes and deterministic binding allocation. Append/consume buffers, byte-address buffers, helper methods, and richer storage-resource layouts remain future work or deterministic diagnostics.", "", "StructuredBuffer and RWStructuredBuffer declarations lower to WGSL storage-buffer arrays with read/read_write access modes and deterministic binding allocation. Append/consume buffers, byte-address buffers, helper methods, and richer storage-resource layouts remain future work or deterministic diagnostics."
    "WebGPU / WGSL", "resources", "Structured/storage buffers", "partial", "CrossGL sampled texture globals lower to WGSL texture bindings plus companion sampler bindings, standalone sampler globals lower to sampler bindings, stage-local resource declarations are emitted at module scope, and texture parameters receive companion sampler parameters with call-site sampler injection. Resource arrays, texture handles inside user structs, comparison samplers, storage images, and duplicate binding diagnostics remain deterministic diagnostics or future work.", "", "CrossGL sampled texture globals lower to WGSL texture bindings plus companion sampler bindings, standalone sampler globals lower to sampler bindings, stage-local resource declarations are emitted at module scope, and texture parameters receive companion sampler parameters with call-site sampler injection. Resource arrays, texture handles inside user structs, comparison samplers, storage images, and duplicate binding diagnostics remain deterministic diagnostics or future work."
    "WebGPU / WGSL", "resources", "Resource arrays", "partial", "Basic sampled texture calls lower to WGSL textureSample for combined texture/coords and explicit texture/sampler/coords forms, including helper texture parameters with companion sampler threading. Shadow comparison sampling, texture arrays, struct-held handles, and advanced sampling forms remain deterministic diagnostics or future work.", "", "Basic sampled texture calls lower to WGSL textureSample for combined texture/coords and explicit texture/sampler/coords forms, including helper texture parameters with companion sampler threading. Shadow comparison sampling, texture arrays, struct-held handles, and advanced sampling forms remain deterministic diagnostics or future work."
