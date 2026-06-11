@@ -7001,6 +7001,127 @@ def test_translate_project_records_include_forwarding_for_all_source_frontends(
         }
 
 
+def test_translate_project_records_include_dependency_processing_for_all_source_frontends(
+    tmp_path, monkeypatch
+):
+    register_default_sources()
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    include_dir = repo / "includes"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir()
+    include_dir.joinpath("shared.inc").write_text("// shared\n", encoding="utf-8")
+    scenarios = {
+        "resolved": "#include <shared.inc>\n",
+        "system": "#include <runtime_system.h>\n",
+        "missing": '#include "missing.inc"\n',
+    }
+    source_names = sorted(SOURCE_REGISTRY.names())
+    source_overrides = []
+    for source_name in source_names:
+        for scenario, source_text in scenarios.items():
+            shader_path = shader_dir / f"{source_name}-{scenario}.shader"
+            shader_path.write_text(source_text, encoding="utf-8")
+            source_overrides.append(
+                f'"shaders/{source_name}-{scenario}.shader" = "{source_name}"'
+            )
+    source_override_text = "\n".join(source_overrides)
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(f"""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["cgl"]
+            output_dir = "translated"
+            include_dirs = ["includes"]
+
+            [project.sources]
+            {source_override_text}
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    def write_shader(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del file_path, backend, format_output, source_backend, include_paths, defines
+        Path(save_shader).write_text("// translated\n", encoding="utf-8")
+        return "// translated\n"
+
+    monkeypatch.setattr(project_pipeline, "translate", write_shader)
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    inspection = inspect_project_report(report_path)
+
+    expected_by_status = {}
+    expected_by_source = {}
+    artifacts_by_source = {
+        artifact["source"]: artifact for artifact in payload["artifacts"]
+    }
+    preserving_sources = (
+        project_pipeline.SOURCE_FRONTENDS_PRESERVING_UNRESOLVED_SYSTEM_INCLUDES
+    )
+    for source_name in source_names:
+        supports_include_paths = SOURCE_REGISTRY.get(
+            source_name
+        ).supports_lexer_keyword("include_paths")
+        expected_source_counts = {}
+        for scenario in scenarios:
+            if not supports_include_paths:
+                expected_status = "not-supported"
+            elif scenario == "resolved":
+                expected_status = "forwarded"
+            elif scenario == "system" and source_name in preserving_sources:
+                expected_status = "preserved"
+            else:
+                expected_status = "rejected"
+            expected_by_status[expected_status] = (
+                expected_by_status.get(expected_status, 0) + 1
+            )
+            expected_source_counts[expected_status] = (
+                expected_source_counts.get(expected_status, 0) + 1
+            )
+            artifact = artifacts_by_source[f"shaders/{source_name}-{scenario}.shader"]
+            assert artifact["includeDependencyProcessing"]["status"] == expected_status
+            assert artifact["includeDependencyProcessing"]["frontend"] == "lexer"
+            assert (
+                artifact["includeDependencyProcessing"]["supportsIncludePaths"]
+                is supports_include_paths
+            )
+            assert artifact["includeDependencyProcessing"]["dependencyCount"] == 1
+        expected_by_source[source_name] = dict(sorted(expected_source_counts.items()))
+
+    assert validation["success"] is True
+    assert payload["summary"]["translatedCount"] == len(source_names) * len(scenarios)
+    assert payload["summary"]["includeDependencyCount"] == (
+        len(source_names) * len(scenarios)
+    )
+    assert payload["summary"]["includeDependencyProcessingByStatus"] == dict(
+        sorted(expected_by_status.items())
+    )
+    assert (
+        payload["summary"]["includeDependencyProcessingBySourceBackend"]
+        == expected_by_source
+    )
+    assert payload["summary"]["includeDependencyProcessingByTarget"] == {
+        "cgl": dict(sorted(expected_by_status.items()))
+    }
+    assert inspection["includeDependencyProcessing"]["available"] is True
+    assert inspection["includeDependencyProcessing"]["byStatus"] == dict(
+        sorted(expected_by_status.items())
+    )
+
+
 def test_translate_project_records_define_forwarding_for_all_source_frontends(
     tmp_path, monkeypatch
 ):

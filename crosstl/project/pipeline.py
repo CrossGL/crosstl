@@ -170,6 +170,7 @@ REPORT_INSPECTION_FIELDS = frozenset(
         "skippedSources",
         "includeDependencies",
         "includePathProcessing",
+        "includeDependencyProcessing",
         "artifactMatrix",
         "diagnosticCount",
         "truncatedDiagnosticCount",
@@ -994,6 +995,10 @@ REPORT_SUMMARY_FIELDS = frozenset(
         "includePathProcessingBySourceBackend",
         "includePathProcessingByTarget",
         "includePathProcessingByVariant",
+        "includeDependencyProcessingByStatus",
+        "includeDependencyProcessingBySourceBackend",
+        "includeDependencyProcessingByTarget",
+        "includeDependencyProcessingByVariant",
     )
 )
 REPORT_MIGRATION_FIELDS = frozenset(
@@ -1103,6 +1108,7 @@ REPORT_ARTIFACT_FIELDS = frozenset(
         "defines",
         "defineProcessing",
         "includePathProcessing",
+        "includeDependencyProcessing",
         "sourceHash",
         "sourceSizeBytes",
         "provenance",
@@ -1126,6 +1132,19 @@ REPORT_ARTIFACT_DEFINE_PROCESSING_FIELDS = frozenset(
 )
 REPORT_ARTIFACT_INCLUDE_PATH_PROCESSING_FIELDS = frozenset(
     ("status", "frontend", "supportsIncludePaths", "includePathCount")
+)
+REPORT_ARTIFACT_INCLUDE_DEPENDENCY_PROCESSING_FIELDS = frozenset(
+    (
+        "status",
+        "frontend",
+        "supportsIncludePaths",
+        "dependencyCount",
+        "resolvedDependencyCount",
+        "systemDependencyCount",
+        "missingDependencyCount",
+        "dynamicDependencyCount",
+        "outsideProjectDependencyCount",
+    )
 )
 REPORT_HASH_FIELDS = frozenset(("algorithm", "value"))
 REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(("pipeline", "intermediate"))
@@ -2028,6 +2047,12 @@ DEFINE_PROCESSING_STATUSES = frozenset(("forwarded", "not-requested", "not-suppo
 INCLUDE_PATH_PROCESSING_STATUSES = frozenset(
     ("forwarded", "not-requested", "not-supported")
 )
+INCLUDE_DEPENDENCY_PROCESSING_STATUSES = frozenset(
+    ("forwarded", "not-requested", "not-supported", "preserved", "rejected")
+)
+SOURCE_FRONTENDS_PRESERVING_UNRESOLVED_SYSTEM_INCLUDES = frozenset(
+    ("cgl", "crossgl", "directx", "metal", "slang", "cuda", "hip", "opencl")
+)
 VALIDATION_TOOLCHAIN_RUN_STATUSES = frozenset(("ok", "failed"))
 VARIANT_OUTPUT_SAFE_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
@@ -2490,6 +2515,68 @@ def _artifact_include_path_processing(
         "frontend": "lexer",
         "supportsIncludePaths": supports_include_paths,
         "includePathCount": include_path_count,
+    }
+
+
+def _include_dependencies_for_artifact(
+    dependencies: Sequence[Mapping[str, Any]], variant: str | None
+) -> list[Mapping[str, Any]]:
+    if variant is None:
+        return [
+            dependency for dependency in dependencies if "variant" not in dependency
+        ]
+    return [
+        dependency
+        for dependency in dependencies
+        if dependency.get("variant") == variant
+    ]
+
+
+def _artifact_include_dependency_processing(
+    source_backend: str,
+    dependencies: Sequence[Mapping[str, Any]],
+    *,
+    supports_include_paths: bool | None = None,
+) -> dict[str, Any]:
+    if supports_include_paths is None:
+        supports_include_paths = _source_frontend_supports_lexer_keyword(
+            source_backend, "include_paths"
+        )
+
+    dependency_count = len(dependencies)
+    status_counts = Counter(
+        dependency.get("status")
+        for dependency in dependencies
+        if isinstance(dependency.get("status"), str)
+    )
+    if dependency_count == 0:
+        status = "not-requested"
+    elif not supports_include_paths:
+        status = "not-supported"
+    elif any(
+        status_counts.get(rejected_status, 0)
+        for rejected_status in ("dynamic", "missing", "outside-project")
+    ):
+        status = "rejected"
+    elif status_counts.get("system", 0) and (
+        source_backend in SOURCE_FRONTENDS_PRESERVING_UNRESOLVED_SYSTEM_INCLUDES
+    ):
+        status = "preserved"
+    elif status_counts.get("system", 0):
+        status = "rejected"
+    else:
+        status = "forwarded"
+
+    return {
+        "status": status,
+        "frontend": "lexer",
+        "supportsIncludePaths": supports_include_paths,
+        "dependencyCount": dependency_count,
+        "resolvedDependencyCount": status_counts.get("resolved", 0),
+        "systemDependencyCount": status_counts.get("system", 0),
+        "missingDependencyCount": status_counts.get("missing", 0),
+        "dynamicDependencyCount": status_counts.get("dynamic", 0),
+        "outsideProjectDependencyCount": status_counts.get("outside-project", 0),
     }
 
 
@@ -3449,6 +3536,106 @@ def _include_path_processing_rollups(
         ),
         "includePathProcessingByVariant": _include_path_processing_counts_by_variant(
             artifacts
+        ),
+    }
+
+
+def _include_dependency_processing_status_counts(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts = {status: 0 for status in sorted(INCLUDE_DEPENDENCY_PROCESSING_STATUSES)}
+    counts["unknown"] = 0
+    for artifact in artifacts:
+        processing = artifact.get("includeDependencyProcessing")
+        status = processing.get("status") if isinstance(processing, Mapping) else None
+        if isinstance(status, str) and status in counts:
+            counts[status] += 1
+        else:
+            counts["unknown"] += 1
+    return {status: count for status, count in counts.items() if count}
+
+
+def _include_dependency_processing_counts_by_source_backend(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for artifact in artifacts:
+        source_backend = artifact.get("sourceBackend")
+        key = source_backend if _is_non_empty_string(source_backend) else "unknown"
+        processing = artifact.get("includeDependencyProcessing")
+        status = (
+            processing.get("status") if isinstance(processing, Mapping) else "unknown"
+        )
+        if (
+            not isinstance(status, str)
+            or status not in INCLUDE_DEPENDENCY_PROCESSING_STATUSES
+        ):
+            status = "unknown"
+        row = counts.setdefault(key, {})
+        row[status] = row.get(status, 0) + 1
+    return {source: dict(sorted(row.items())) for source, row in sorted(counts.items())}
+
+
+def _include_dependency_processing_counts_by_target(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for artifact in artifacts:
+        target = artifact.get("target")
+        key = target if _is_non_empty_string(target) else "unknown"
+        processing = artifact.get("includeDependencyProcessing")
+        status = (
+            processing.get("status") if isinstance(processing, Mapping) else "unknown"
+        )
+        if (
+            not isinstance(status, str)
+            or status not in INCLUDE_DEPENDENCY_PROCESSING_STATUSES
+        ):
+            status = "unknown"
+        row = counts.setdefault(key, {})
+        row[status] = row.get(status, 0) + 1
+    return {target: dict(sorted(row.items())) for target, row in sorted(counts.items())}
+
+
+def _include_dependency_processing_counts_by_variant(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for artifact in artifacts:
+        variant = artifact.get("variant")
+        if not _is_non_empty_string(variant):
+            continue
+        processing = artifact.get("includeDependencyProcessing")
+        status = (
+            processing.get("status") if isinstance(processing, Mapping) else "unknown"
+        )
+        if (
+            not isinstance(status, str)
+            or status not in INCLUDE_DEPENDENCY_PROCESSING_STATUSES
+        ):
+            status = "unknown"
+        row = counts.setdefault(variant, {})
+        row[status] = row.get(status, 0) + 1
+    return {
+        variant: dict(sorted(row.items())) for variant, row in sorted(counts.items())
+    }
+
+
+def _include_dependency_processing_rollups(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "includeDependencyProcessingByStatus": (
+            _include_dependency_processing_status_counts(artifacts)
+        ),
+        "includeDependencyProcessingBySourceBackend": (
+            _include_dependency_processing_counts_by_source_backend(artifacts)
+        ),
+        "includeDependencyProcessingByTarget": (
+            _include_dependency_processing_counts_by_target(artifacts)
+        ),
+        "includeDependencyProcessingByVariant": (
+            _include_dependency_processing_counts_by_variant(artifacts)
         ),
     }
 
@@ -5546,6 +5733,9 @@ class ProjectPortabilityReport:
         include_path_processing_rollups = _include_path_processing_rollups(
             self.artifacts
         )
+        include_dependency_processing_rollups = _include_dependency_processing_rollups(
+            self.artifacts
+        )
         source_root_status = _source_root_status_records(self.config)
         include_dir_status = _include_dir_status_records(self.config)
         external_corpus = _external_corpus_report(
@@ -5651,6 +5841,7 @@ class ProjectPortabilityReport:
                 **source_map_rollups,
                 **define_processing_rollups,
                 **include_path_processing_rollups,
+                **include_dependency_processing_rollups,
             },
             "units": [unit.to_json() for unit in self.units],
             "skipped": list(self.skipped),
@@ -6866,6 +7057,10 @@ def translate_project(
             include_path_forwarding_diagnostics.add(unit.source_backend)
         for target in selected_targets:
             for variant, defines in variant_jobs:
+                artifact_include_dependencies = _include_dependencies_for_artifact(
+                    unit.include_dependencies,
+                    variant,
+                )
                 output_path = _artifact_path(
                     config,
                     unit,
@@ -6890,6 +7085,13 @@ def translate_project(
                         unit.source_backend,
                         include_paths,
                         supports_include_paths=source_supports_include_paths,
+                    ),
+                    "includeDependencyProcessing": (
+                        _artifact_include_dependency_processing(
+                            unit.source_backend,
+                            artifact_include_dependencies,
+                            supports_include_paths=source_supports_include_paths,
+                        )
                     ),
                     "sourceHash": dict(unit.source_hash),
                     "sourceSizeBytes": unit.source_size_bytes,
@@ -8199,6 +8401,7 @@ def inspect_project_report(
         "skippedSources": {"available": False},
         "includeDependencies": {"available": False},
         "includePathProcessing": {"available": False},
+        "includeDependencyProcessing": {"available": False},
         "artifactMatrix": {"available": False},
         "migration": _empty_inspection_migration_summary(),
         "externalCorpus": {"available": False},
@@ -8394,6 +8597,13 @@ def inspect_project_report(
         report.get("artifacts"),
         project=project,
         sample_limit=include_path_processing_artifact_limit,
+    )
+    payload["includeDependencyProcessing"] = (
+        _inspection_include_dependency_processing_summary(
+            summary,
+            report.get("artifacts"),
+            sample_limit=include_path_processing_artifact_limit,
+        )
     )
     payload["artifactMatrix"] = _inspection_artifact_matrix_summary(
         report.get("artifactMatrix"),
@@ -15471,6 +15681,112 @@ def _inspection_include_path_processing_summary(
     }
 
 
+def _inspection_include_dependency_processing_artifact(
+    artifact: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    processing = artifact.get("includeDependencyProcessing")
+    if not isinstance(processing, Mapping):
+        return None
+
+    sample = {
+        "source": artifact.get("source"),
+        "sourceBackend": artifact.get("sourceBackend"),
+        "target": artifact.get("target"),
+        "path": artifact.get("path"),
+        "status": processing.get("status"),
+        "frontend": processing.get("frontend"),
+        "supportsIncludePaths": processing.get("supportsIncludePaths"),
+    }
+    for field_name in (
+        "dependencyCount",
+        "resolvedDependencyCount",
+        "systemDependencyCount",
+        "missingDependencyCount",
+        "dynamicDependencyCount",
+        "outsideProjectDependencyCount",
+    ):
+        value = processing.get(field_name)
+        if _is_non_negative_int(value):
+            sample[field_name] = value
+    if "variant" in artifact:
+        sample["variant"] = artifact.get("variant")
+    return {key: value for key, value in sample.items() if value is not None}
+
+
+def _inspection_include_dependency_processing_summary(
+    summary: Any,
+    artifacts: Any = None,
+    *,
+    sample_limit: int = INCLUDE_PATH_PROCESSING_INSPECTION_SAMPLE_LIMIT,
+) -> dict[str, Any]:
+    sample_limit = max(0, sample_limit)
+    if not isinstance(summary, Mapping):
+        return {"available": False}
+
+    by_status = summary.get("includeDependencyProcessingByStatus")
+    by_source_backend = summary.get("includeDependencyProcessingBySourceBackend")
+    by_target = summary.get("includeDependencyProcessingByTarget")
+    by_variant = summary.get("includeDependencyProcessingByVariant")
+    if not isinstance(by_status, Mapping) or not isinstance(by_source_backend, Mapping):
+        return {"available": False}
+
+    samples = []
+    preserved_artifacts = []
+    rejected_artifacts = []
+    for artifact in _record_sequence(artifacts):
+        if not isinstance(artifact, Mapping):
+            continue
+        sample = _inspection_include_dependency_processing_artifact(artifact)
+        if not sample:
+            continue
+        samples.append(sample)
+        if sample.get("status") == "preserved":
+            preserved_artifacts.append(sample)
+        elif sample.get("status") == "rejected":
+            rejected_artifacts.append(sample)
+
+    return {
+        "available": True,
+        "byStatus": dict(by_status),
+        "bySourceBackend": {
+            source_backend: dict(counts)
+            for source_backend, counts in by_source_backend.items()
+            if isinstance(source_backend, str) and isinstance(counts, Mapping)
+        },
+        "byTarget": (
+            {
+                target: dict(counts)
+                for target, counts in by_target.items()
+                if isinstance(target, str) and isinstance(counts, Mapping)
+            }
+            if isinstance(by_target, Mapping)
+            else {}
+        ),
+        "byVariant": (
+            {
+                variant: dict(counts)
+                for variant, counts in by_variant.items()
+                if isinstance(variant, str) and isinstance(counts, Mapping)
+            }
+            if isinstance(by_variant, Mapping)
+            else {}
+        ),
+        "artifactCount": len(samples),
+        "truncatedArtifactCount": max(0, len(samples) - sample_limit),
+        "artifacts": samples[:sample_limit],
+        "preservedArtifactCount": len(preserved_artifacts),
+        "truncatedPreservedArtifactCount": max(
+            0, len(preserved_artifacts) - sample_limit
+        ),
+        "preservedArtifacts": preserved_artifacts[:sample_limit],
+        "rejectedArtifactCount": len(rejected_artifacts),
+        "truncatedRejectedArtifactCount": max(
+            0, len(rejected_artifacts) - sample_limit
+        ),
+        "rejectedArtifacts": rejected_artifacts[:sample_limit],
+    }
+
+
 def _inspection_include_dependency_sample(
     unit_path: Any,
     source_backend: Any,
@@ -19209,6 +19525,119 @@ def _artifact_include_path_processing_contract_reasons(
     return reasons
 
 
+def _artifact_include_dependency_processing_contract_reasons(
+    index: int,
+    artifact: Mapping[str, Any],
+    *,
+    required: bool,
+) -> list[str]:
+    if not required and "includeDependencyProcessing" not in artifact:
+        return []
+
+    prefix = f"artifacts[{index}].includeDependencyProcessing"
+    processing = artifact.get("includeDependencyProcessing")
+    if not isinstance(processing, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    if required:
+        reasons.extend(
+            _unsupported_mapping_field_reasons(
+                prefix,
+                processing,
+                REPORT_ARTIFACT_INCLUDE_DEPENDENCY_PROCESSING_FIELDS,
+            )
+        )
+    status = processing.get("status")
+    if (
+        not isinstance(status, str)
+        or status not in INCLUDE_DEPENDENCY_PROCESSING_STATUSES
+    ):
+        reasons.append(
+            f"{prefix}.status must be one of "
+            f"{', '.join(sorted(INCLUDE_DEPENDENCY_PROCESSING_STATUSES))}"
+        )
+    frontend = processing.get("frontend")
+    if frontend != "lexer":
+        reasons.append(f"{prefix}.frontend must be lexer")
+    supports_include_paths = processing.get("supportsIncludePaths")
+    if not isinstance(supports_include_paths, bool):
+        reasons.append(f"{prefix}.supportsIncludePaths must be a boolean")
+
+    count_fields = (
+        "dependencyCount",
+        "resolvedDependencyCount",
+        "systemDependencyCount",
+        "missingDependencyCount",
+        "dynamicDependencyCount",
+        "outsideProjectDependencyCount",
+    )
+    counts = {}
+    for field_name in count_fields:
+        value = processing.get(field_name)
+        if not _is_non_negative_int(value):
+            reasons.append(f"{prefix}.{field_name} must be a non-negative integer")
+        else:
+            counts[field_name] = value
+
+    if len(counts) == len(count_fields):
+        classified_count = sum(
+            counts[field_name]
+            for field_name in count_fields
+            if field_name != "dependencyCount"
+        )
+        if classified_count > counts["dependencyCount"]:
+            reasons.append(
+                f"{prefix} classified dependency counts must not exceed dependencyCount"
+            )
+        expected_status = None
+        if counts["dependencyCount"] == 0:
+            expected_status = "not-requested"
+        elif supports_include_paths is False:
+            expected_status = "not-supported"
+        elif any(
+            counts[field_name]
+            for field_name in (
+                "missingDependencyCount",
+                "dynamicDependencyCount",
+                "outsideProjectDependencyCount",
+            )
+        ):
+            expected_status = "rejected"
+        elif (
+            counts["systemDependencyCount"]
+            and _is_non_empty_string(artifact.get("sourceBackend"))
+            and (
+                artifact.get("sourceBackend")
+                in SOURCE_FRONTENDS_PRESERVING_UNRESOLVED_SYSTEM_INCLUDES
+            )
+        ):
+            expected_status = "preserved"
+        elif counts["systemDependencyCount"]:
+            expected_status = "rejected"
+        elif supports_include_paths is True:
+            expected_status = "forwarded"
+        if isinstance(status, str) and expected_status and status != expected_status:
+            reasons.append(
+                f"{prefix}.status must match include dependency counts and "
+                "source frontend support"
+            )
+
+    source_backend = artifact.get("sourceBackend")
+    if _is_non_empty_string(source_backend) and isinstance(
+        supports_include_paths, bool
+    ):
+        expected_support = _source_frontend_supports_lexer_keyword(
+            source_backend, "include_paths"
+        )
+        if supports_include_paths != expected_support:
+            reasons.append(
+                f"{prefix}.supportsIncludePaths must match "
+                f"artifacts[{index}].sourceBackend"
+            )
+    return reasons
+
+
 def _project_root_path(project: Mapping[str, Any]) -> Path | None:
     root = project.get("root")
     if not _is_non_empty_string(root):
@@ -21383,6 +21812,49 @@ def _summary_contract_reasons(
                 "artifact include path processing",
             )
         )
+        include_dependency_processing_rollups = _include_dependency_processing_rollups(
+            artifact_records
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.includeDependencyProcessingByStatus",
+                summary.get("includeDependencyProcessingByStatus"),
+                include_dependency_processing_rollups[
+                    "includeDependencyProcessingByStatus"
+                ],
+                "artifact include dependency processing",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.includeDependencyProcessingBySourceBackend",
+                summary.get("includeDependencyProcessingBySourceBackend"),
+                include_dependency_processing_rollups[
+                    "includeDependencyProcessingBySourceBackend"
+                ],
+                "artifact include dependency processing",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.includeDependencyProcessingByTarget",
+                summary.get("includeDependencyProcessingByTarget"),
+                include_dependency_processing_rollups[
+                    "includeDependencyProcessingByTarget"
+                ],
+                "artifact include dependency processing",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.includeDependencyProcessingByVariant",
+                summary.get("includeDependencyProcessingByVariant"),
+                include_dependency_processing_rollups[
+                    "includeDependencyProcessingByVariant"
+                ],
+                "artifact include dependency processing",
+            )
+        )
         source_map_rollups = _source_map_rollups(artifact_records)
         reasons.extend(
             _count_field_contract_reasons(
@@ -22297,6 +22769,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         required=has_summary,
                     )
                 )
+            reasons.extend(
+                _artifact_include_dependency_processing_contract_reasons(
+                    index,
+                    artifact,
+                    required=has_summary,
+                )
+            )
             identity = _artifact_identity(artifact)
             if identity is not None:
                 previous_index = artifact_identities.get(identity)

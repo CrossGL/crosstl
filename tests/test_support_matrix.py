@@ -1265,7 +1265,7 @@ def test_project_include_resolution_documents_status_reporting():
     feature = features["project.include_resolution"]
 
     for backend_support in feature["support"].values():
-        assert backend_support["status"] == "partial"
+        assert backend_support["status"] == "supported"
         assert "per-include directory status records and status counts" in (
             backend_support["notes"]
         )
@@ -1325,6 +1325,32 @@ def test_project_include_resolution_documents_status_reporting():
             "Resolved include dependency reports and inspection samples include "
             "byte-size metadata"
         ) in backend_support["notes"]
+        assert "per-artifact includeDependencyProcessing metadata" in (
+            backend_support["notes"]
+        )
+        assert (
+            "backend-native status rollups by status, source backend, target, "
+            "and variant"
+        ) in backend_support["notes"]
+        assert "forwarded for source frontends with include-path support" in (
+            backend_support["notes"]
+        )
+        assert (
+            "preserved for source frontends that delegate them to platform compilers"
+            in backend_support["notes"]
+        )
+        assert (
+            "GLSL/Vulkan and unresolved local/dynamic/outside-project forms "
+            "are reported as rejected"
+        ) in backend_support["notes"]
+        assert (
+            "source frontends without include-path support are explicitly reported"
+            in (backend_support["notes"])
+        )
+        assert (
+            "HLSL-style preprocessing preserves unresolved angle system includes"
+            in (backend_support["notes"])
+        )
         assert (
             "OpenGL/GLSL translation with a resolved angle include and "
             "variant-specific conditional output"
