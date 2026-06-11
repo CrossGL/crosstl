@@ -7,6 +7,7 @@ from typing import List
 
 import pytest
 
+import crosstl
 import crosstl.translator
 from crosstl.translator.ast import (
     BlockNode,
@@ -13801,6 +13802,91 @@ def test_compute_direct_builtin_references_inject_metal_parameters():
         "gl_NumWorkGroups",
     ]:
         assert gl_builtin not in generated
+
+
+def test_compute_direct_subgroup_builtin_references_inject_metal_parameters():
+    code = """
+    shader MetalGLSLSubgroupBuiltins {
+        compute {
+            void main() {
+                uint subgroupSize = gl_SubgroupSize;
+                uint subgroupInvocation = gl_SubgroupInvocationID;
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+    generated = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "uint threads_per_simdgroup [[threads_per_simdgroup]]" in generated
+    assert "uint thread_index_in_simdgroup [[thread_index_in_simdgroup]]" in generated
+    assert "uint subgroupSize = threads_per_simdgroup;" in generated
+    assert "uint subgroupInvocation = thread_index_in_simdgroup;" in generated
+    assert "gl_SubgroupSize" not in generated
+    assert "gl_SubgroupInvocationID" not in generated
+
+
+def test_compute_subgroup_builtins_share_wave_lane_parameters():
+    code = """
+    shader MetalGLSLSubgroupAndWaveBuiltins {
+        compute {
+            void main() {
+                uint subgroupSize = gl_SubgroupSize;
+                uint subgroupInvocation = gl_SubgroupInvocationID;
+                uint waveSize = WaveGetLaneCount();
+                uint waveInvocation = WaveGetLaneIndex();
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+    generated = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert generated.count("[[threads_per_simdgroup]]") == 1
+    assert generated.count("[[thread_index_in_simdgroup]]") == 1
+    assert "uint subgroupSize = threads_per_simdgroup;" in generated
+    assert "uint subgroupInvocation = thread_index_in_simdgroup;" in generated
+    assert "uint waveSize = threads_per_simdgroup;" in generated
+    assert "uint waveInvocation = thread_index_in_simdgroup;" in generated
+    assert "crossglWaveLaneCount" not in generated
+    assert "crossglWaveLaneIndex" not in generated
+    assert "gl_SubgroupSize" not in generated
+    assert "gl_SubgroupInvocationID" not in generated
+
+
+def test_glsl_fragment_subgroup_builtins_emit_metal_diagnostics(tmp_path):
+    shader_path = tmp_path / "glsl.es320.subgroup.frag"
+    shader_path.write_text(
+        "\n".join(
+            [
+                "#version 320 es",
+                "#extension GL_KHR_shader_subgroup_basic: enable",
+                "layout(location = 0) out uvec4 data;",
+                "void main (void)",
+                "{",
+                "  data = uvec4(gl_SubgroupSize, gl_SubgroupInvocationID, 0, 0);",
+                "}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+    )
+
+    assert "fragment uint4 fragment_main()" in generated
+    assert "unsupported Metal GLSL subgroup builtin: gl_SubgroupSize" in generated
+    assert "unsupported Metal GLSL subgroup builtin: gl_SubgroupInvocationID" in generated
+    assert "requires compute-stage threads_per_simdgroup value" in generated
+    assert "requires compute-stage thread_index_in_simdgroup value" in generated
+    assert "[[threads_per_simdgroup]]" not in generated
+    assert "[[thread_index_in_simdgroup]]" not in generated
+    assert "uint4(gl_SubgroupSize" not in generated
+    assert "gl_SubgroupInvocationID, 0" not in generated
 
 
 def test_graphics_builtin_parameter_semantics_roundtrip():
