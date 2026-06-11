@@ -37258,9 +37258,14 @@ def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(
     } == {(target, "failed") for target in expected_targets}
     assert payload["summary"]["translatedCount"] == 0
     assert payload["summary"]["failedCount"] == 4
-    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 4}
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 24}
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "opencl.target.pointer-helper-parameter": 4,
+        "opencl.target.unresolved-helper": 12,
+        "opencl.target.unsupported-builtin": 8,
+    }
     assert payload["summary"]["diagnosticsByTarget"] == {
-        target: 1 for target in expected_targets
+        target: 6 for target in expected_targets
     }
 
     for artifact in payload["artifacts"]:
@@ -37272,13 +37277,92 @@ def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(
         ) in artifact["error"]
         assert "read_local(shared_: ptr<i32>)" in artifact["error"]
 
-    assert len(payload["diagnostics"]) == 4
+    assert len(payload["diagnostics"]) == 24
+    for target in expected_targets:
+        target_diagnostics = [
+            diagnostic
+            for diagnostic in payload["diagnostics"]
+            if diagnostic["target"] == target
+        ]
+        assert len(target_diagnostics) == 6
+        assert {
+            diagnostic["code"] for diagnostic in target_diagnostics
+        } == {
+            "opencl.target.unresolved-helper",
+            "opencl.target.pointer-helper-parameter",
+            "opencl.target.unsupported-builtin",
+        }
+        assert sum(
+            diagnostic["code"] == "opencl.target.unresolved-helper"
+            for diagnostic in target_diagnostics
+        ) == 3
+        assert sum(
+            diagnostic["code"] == "opencl.target.pointer-helper-parameter"
+            for diagnostic in target_diagnostics
+        ) == 1
+        assert sum(
+            diagnostic["code"] == "opencl.target.unsupported-builtin"
+            for diagnostic in target_diagnostics
+        ) == 2
+
     for diagnostic in payload["diagnostics"]:
-        assert diagnostic["code"] == "project.translate.failed"
         assert diagnostic["sourceBackend"] == "opencl"
         assert diagnostic["location"]["file"] == "reduce.cl"
         assert diagnostic["target"] in expected_targets
-        assert "opencl.target.unsupported" in diagnostic["message"]
+        assert "Suggested action:" in diagnostic["message"]
+
+    messages = [diagnostic["message"] for diagnostic in payload["diagnostics"]]
+    assert any("op(lhs: i32, rhs: i32) -> i32" in message for message in messages)
+    assert any(
+        "work_group_reduce_op(val: i32) -> i32" in message
+        for message in messages
+    )
+    assert any(
+        "sub_group_reduce_op(val: i32) -> i32" in message
+        for message in messages
+    )
+    assert any("read_local(shared_: ptr<i32>)" in message for message in messages)
+    assert any("async_work_group_copy(...)" in message for message in messages)
+    assert any("wait_group_events(...)" in message for message in messages)
+
+
+def test_translate_project_opencl_local_pointer_helper_reports_contract(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "local_helper.cl").write_text(
+        textwrap.dedent("""
+            int read_local(local int* shared, size_t i) {
+                return shared[i];
+            }
+
+            kernel void copy(global int* out, local int* shared) {
+                size_t lid = get_local_id(0);
+                out[lid] = read_local(shared, lid);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["opengl"], output_dir="out").to_json()
+
+    assert payload["artifacts"][0]["status"] == "failed"
+    assert not (repo / payload["artifacts"][0]["path"]).exists()
+    assert "read_local(shared_: ptr<i32>)" in payload["artifacts"][0]["error"]
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "opencl.target.pointer-helper-parameter": 1
+    }
+
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "opencl.target.pointer-helper-parameter"
+    assert diagnostic["sourceBackend"] == "opencl"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["location"]["file"] == "local_helper.cl"
+    assert diagnostic["missingCapabilities"] == ["opencl.local-pointer-helper"]
+    assert "read_local(shared_: ptr<i32>)" in diagnostic["message"]
+    assert "Suggested action:" in diagnostic["message"]
 
 
 def test_translate_project_opencl_to_opengl_casts_signed_global_id_local(

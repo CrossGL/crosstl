@@ -1,16 +1,27 @@
+import pytest
+
 import crosstl
 from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import OpenCLToCrossGLConverter
 from crosstl.backend.OpenCL.OpenCLLexer import OpenCLLexer
 from crosstl.backend.OpenCL.OpenCLParser import OpenCLParser
+from crosstl.backend.OpenCL.target_lowering import (
+    OpenCLTargetUnsupportedError,
+    validate_opencl_intermediate_for_target,
+)
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
 
-def generate_crossgl(source):
+def parse_crossgl_from_opencl(source):
     tokens = OpenCLLexer(source).tokenize()
     ast = OpenCLParser(tokens).parse()
     crossgl = OpenCLToCrossGLConverter().generate(ast)
-    CrossGLParser(CrossGLLexer(crossgl).tokens).parse()
+    cgl_ast = CrossGLParser(CrossGLLexer(crossgl).tokens).parse()
+    return cgl_ast, crossgl
+
+
+def generate_crossgl(source):
+    _cgl_ast, crossgl = parse_crossgl_from_opencl(source)
     return crossgl
 
 
@@ -138,6 +149,57 @@ def test_opencl_local_pointer_kernel_param_uses_workgroup_storage():
     assert "@group(0) @binding(0) var<storage, read_write> out: array<f32>" in crossgl
     assert "var<storage, read_write> scratch" not in crossgl
     assert "@binding(1) var<storage, read_write> out" not in crossgl
+
+
+def test_opencl_reduce_helpers_report_structured_target_contracts():
+    cgl_ast, _crossgl = parse_crossgl_from_opencl("""
+        int op(int lhs, int rhs);
+        int work_group_reduce_op(int val);
+        int sub_group_reduce_op(int val);
+
+        int read_local(local int* shared, size_t i) {
+            return shared[i];
+        }
+
+        kernel void reduce(global int* front, global int* back, local int* shared) {
+            event_t read;
+            async_work_group_copy(shared, front, 1, read);
+            wait_group_events(1, &read);
+            int temp = work_group_reduce_op(
+                op(read_local(shared, 0), read_local(shared, 1))
+            );
+            back[0] = sub_group_reduce_op(temp);
+        }
+        """)
+
+    with pytest.raises(OpenCLTargetUnsupportedError) as error:
+        validate_opencl_intermediate_for_target(cgl_ast, "opengl")
+
+    contracts = [contract.to_json() for contract in error.value.contracts]
+
+    assert str(error.value).startswith(
+        "opencl.target.unsupported: cannot lower OpenCL source to opengl"
+    )
+    assert {
+        contract["signature"]
+        for contract in contracts
+        if contract["code"] == "opencl.target.unresolved-helper"
+    } == {
+        "op(lhs: i32, rhs: i32) -> i32",
+        "work_group_reduce_op(val: i32) -> i32",
+        "sub_group_reduce_op(val: i32) -> i32",
+    }
+    assert {
+        contract["signature"]
+        for contract in contracts
+        if contract["code"] == "opencl.target.pointer-helper-parameter"
+    } == {"read_local(shared_: ptr<i32>)"}
+    assert {
+        contract["signature"]
+        for contract in contracts
+        if contract["code"] == "opencl.target.unsupported-builtin"
+    } == {"async_work_group_copy(...)", "wait_group_events(...)"}
+    assert all(contract["action"] for contract in contracts)
 
 
 def test_opencl_vector_constructor_cast_codegen_reparse():
