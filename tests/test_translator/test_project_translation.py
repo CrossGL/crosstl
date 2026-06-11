@@ -6873,10 +6873,25 @@ def test_translate_project_glsl_alpha_stitch_storage_image_lowers_to_wgsl(
         run_toolchains=True,
     )
     payload = report.to_json()
+    naga_available = shutil.which("naga") is not None
 
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
-    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    expected_diagnostic_counts = {"note": 0, "warning": 0, "error": 0}
+    if not naga_available:
+        expected_diagnostic_counts["warning"] = 1
+    assert payload["diagnosticCounts"] == expected_diagnostic_counts
+    unexpected_diagnostics = [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if not (
+            diagnostic.get("code") == "project.validate.toolchain-unavailable"
+            and diagnostic.get("severity") == "warning"
+            and diagnostic.get("target") == "wgsl"
+            and diagnostic.get("missingCapabilities") == ["toolchain.validation"]
+        )
+    ]
+    assert unexpected_diagnostics == []
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("wgsl", "translated")}
@@ -6896,7 +6911,7 @@ def test_translate_project_glsl_alpha_stitch_storage_image_lowers_to_wgsl(
     assert "uimage2D" not in wgsl
     assert "imageStore" not in wgsl
 
-    if shutil.which("naga"):
+    if naga_available:
         assert payload["validation"]["artifacts"][0]["status"] == "ok"
         assert payload["validation"]["toolchainRuns"][0]["status"] == "ok"
 
