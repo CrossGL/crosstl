@@ -23086,6 +23086,96 @@ def test_translate_project_resolves_mlx_sort_vulkan_storage_buffer_overload(
     assert payload["diagnostics"] == []
 
 
+def test_translate_project_resolves_generic_vulkan_storage_buffer_helper_family(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "generic_helpers.cgl"
+    source_path.write_text(
+        textwrap.dedent("""
+            shader GenericStorageBufferProjectHelpers {
+                StructuredBuffer<float> weights @binding(0);
+                StructuredBuffer<uint> counters @binding(1);
+                RWStructuredBuffer<float> values @binding(2);
+
+                generic<T> fn elem_to_loc(
+                    StructuredBuffer<T> source,
+                    RWStructuredBuffer<float> target,
+                    uint index,
+                    uvec3 tid
+                ) -> void {
+                    target.Store(index + tid.x, float(source.Load(index)));
+                }
+
+                generic<T> fn elem_to_loc(
+                    StructuredBuffer<T> source,
+                    RWStructuredBuffer<float> target,
+                    uint base,
+                    uint index,
+                    uvec3 tid
+                ) -> void {
+                    target.Store(base + index + tid.x, float(source.Load(index)));
+                }
+
+                generic<T> fn elem_to_loc_broadcast(
+                    StructuredBuffer<T> source,
+                    RWStructuredBuffer<float> target,
+                    uint index,
+                    uvec3 lane
+                ) -> void {
+                    target.Store(index + lane.x, float(source.Load(index)));
+                }
+
+                compute {
+                    void main() {
+                        uint staticScratch = 7u;
+                        uint dynamicScratch = 5u;
+                        elem_to_loc(
+                            weights,
+                            values,
+                            1u,
+                            0u,
+                            staticScratch,
+                            dynamicScratch,
+                            uvec3(0u, 0u, 0u)
+                        );
+                        elem_to_loc(
+                            counters,
+                            values,
+                            2u,
+                            1u,
+                            staticScratch,
+                            dynamicScratch,
+                            uvec3(1u, 0u, 0u)
+                        );
+                        elem_to_loc_broadcast(weights, values, 3u, 2u);
+                    }
+                }
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["vulkan"], output_dir="out").to_json()
+
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["diagnosticCounts"]["error"] == 0
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "elem_to_loc" not in generated
+    assert "elem_to_loc_broadcast" not in generated
+    assert "OpFunctionCall" not in generated
+    assert "OpConvertUToF" in generated
+    assert "WARNING" not in generated
+    assert payload["diagnostics"] == []
+
+
 def test_translate_project_drops_mlx_metal_system_includes_for_opengl(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
