@@ -6980,12 +6980,12 @@ def test_translate_project_lowers_hlsl_struct_main_vsh_psh_pair_to_native_entrie
     fragment_metal = (repo / "translated" / "metal" / "cube.psh.metal").read_text(
         encoding="utf-8"
     )
-    vertex_vulkan = (
-        repo / "translated" / "vulkan" / "cube.vsh.spvasm"
-    ).read_text(encoding="utf-8")
-    fragment_vulkan = (
-        repo / "translated" / "vulkan" / "cube.psh.spvasm"
-    ).read_text(encoding="utf-8")
+    vertex_vulkan = (repo / "translated" / "vulkan" / "cube.vsh.spvasm").read_text(
+        encoding="utf-8"
+    )
+    fragment_vulkan = (repo / "translated" / "vulkan" / "cube.psh.spvasm").read_text(
+        encoding="utf-8"
+    )
 
     assert payload["summary"]["unitCount"] == 2
     assert payload["summary"]["translatedCount"] == 8

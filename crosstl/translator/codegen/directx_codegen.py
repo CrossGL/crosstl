@@ -13089,9 +13089,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             mapped_type = self.map_type(self.hlsl_struct_member_type_name(member))
             normalized_name = str(member_name).replace("_", "").lower()
             if normalized_name in {"depth", "fragdepth", "glfragdepth"}:
-                if (
-                    mapped_type == "float"
-                    and not self.hlsl_semantic_range_is_used(used_ranges, "SV_DEPTH")
+                if mapped_type == "float" and not self.hlsl_semantic_range_is_used(
+                    used_ranges, "SV_DEPTH"
                 ):
                     defaults[member_name] = "SV_DEPTH"
                     self.hlsl_reserve_semantic_range(

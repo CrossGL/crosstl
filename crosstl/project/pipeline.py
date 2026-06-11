@@ -1701,9 +1701,7 @@ MOJO_UNRESOLVED_TARGET_CONSTRUCT_RULES = (
     (
         "spirv-unresolved-warning",
         "SPIR-V unresolved-lowering warning",
-        re.compile(
-            r";\s*WARNING:.*\b(?:Unknown|unknown|unresolved|Could not find)\b"
-        ),
+        re.compile(r";\s*WARNING:.*\b(?:Unknown|unknown|unresolved|Could not find)\b"),
     ),
 )
 MOJO_SPIRV_BLOCK_ONLY_OPS = frozenset(
@@ -12624,9 +12622,7 @@ def translate_project(
                                 config, target, artifact, output_path
                             )
                         diagnostics.extend(
-                            _generated_placeholder_diagnostics(
-                                artifact_records, config
-                            )
+                            _generated_placeholder_diagnostics(artifact_records, config)
                         )
                     diagnostics.extend(mojo_host_diagnostics)
                 except Exception as exc:  # noqa: BLE001
@@ -13490,10 +13486,8 @@ def _mojo_unresolved_target_construct_diagnostics(
                 offset=int(first_finding["offset"]),
                 length=int(first_finding["length"]),
                 end_line=int(first_finding["line"]),
-                end_column=int(first_finding["column"])
-                + int(first_finding["length"]),
-                end_offset=int(first_finding["offset"])
-                + int(first_finding["length"]),
+                end_column=int(first_finding["column"]) + int(first_finding["length"]),
+                end_offset=int(first_finding["offset"]) + int(first_finding["length"]),
             ),
             original_location=SourceLocation(file=str(artifact.get("source", ""))),
             **_artifact_diagnostic_context(artifact),

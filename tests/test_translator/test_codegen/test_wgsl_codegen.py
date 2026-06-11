@@ -449,8 +449,7 @@ def test_wgsl_codegen_infers_image2d_read_access_from_image_load():
         "var inputImage: texture_storage_2d<rgba32float, read>;"
     ) in generated
     assert (
-        "var color: vec4<f32> = textureLoad(inputImage, vec2<i32>(1, 2));"
-        in generated
+        "var color: vec4<f32> = textureLoad(inputImage, vec2<i32>(1, 2));" in generated
     )
     assert "imageLoad" not in generated
 
