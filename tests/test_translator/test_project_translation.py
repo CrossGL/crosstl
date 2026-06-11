@@ -37980,6 +37980,8 @@ def test_translate_project_cuda_pointer_parameters_lower_to_opengl_buffers(
     assert {
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {("opengl", "translated")}
+    assert payload["summary"]["sourceRemapMappingCount"] == 6
+    assert payload["artifacts"][0]["sourceRemap"]["mappingCount"] == 6
 
     output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
 
@@ -37987,6 +37989,9 @@ def test_translate_project_cuda_pointer_parameters_lower_to_opengl_buffers(
     assert "layout(std430, binding = 1) buffer BBuffer { float B[]; };" in output
     assert "layout(std430, binding = 2) buffer CBuffer { float C[]; };" in output
     assert "uniform vectorAdd_numElements_Args" in output
+    assert "int vectorAdd_numElements_Args_numElements;" in output
+    assert "if ((i < vectorAdd_numElements_Args_numElements))" in output
+    assert not re.search(r"(?<!_)\bnumElements\b(?!_)", output)
     assert "void main()" in output
     assert "void vectorAdd(float A[]" not in output
     assert "float A[], float B[]" not in output
