@@ -12456,6 +12456,124 @@ def test_translate_project_opengl_reports_unresolved_metal_template_kernel(
     assert "raw_template missing T" in diagnostic["message"]
 
 
+@pytest.mark.parametrize(
+    (
+        "file_name",
+        "source",
+        "expected_name",
+        "expected_parameters",
+        "expected_missing",
+        "expected_signature",
+    ),
+    [
+        (
+            "steel_gemm.metal",
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, typename Epilogue>
+            struct BlockMMA {
+                T value;
+            };
+
+            kernel void steel(
+                device BlockMMA<float, Epilogue>* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid].value = 1.0;
+            }
+            """,
+            "BlockMMA",
+            ["T", "Epilogue"],
+            ["Epilogue"],
+            "BlockMMA<float, Epilogue>",
+        ),
+        (
+            "tile.metal",
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <int N>
+            struct Tile {
+                float value[N];
+            };
+
+            kernel void write_tile(
+                device Tile<N>* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid].value[0] = 1.0;
+            }
+            """,
+            "Tile",
+            ["N"],
+            ["N"],
+            "Tile<N>",
+        ),
+    ],
+)
+def test_translate_project_opengl_rejects_unresolved_metal_template_type_before_codegen(
+    tmp_path,
+    file_name,
+    source,
+    expected_name,
+    expected_parameters,
+    expected_missing,
+    expected_signature,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / file_name).write_text(
+        textwrap.dedent(source).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["opengl"], output_dir="out").to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    diagnostic_codes = {diagnostic["code"] for diagnostic in payload["diagnostics"]}
+    assert diagnostic_codes == {
+        "project.translate.template-materialization-unsupported"
+    }
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    assert "Target artifact" not in artifact["error"]
+    assert "requires concrete template arguments" in artifact["error"]
+
+    materialization = artifact["templateMaterialization"]
+    assert materialization["status"] == "unsupported"
+    assert materialization["specializations"] == []
+    assert materialization["unsupported"] == [
+        {
+            "name": expected_name,
+            "parameters": expected_parameters,
+            "missingParameters": expected_missing,
+            "reason": "missing-template-arguments",
+            "sourceDeclaration": {
+                "file": file_name,
+                "line": 4,
+                "column": 1,
+                "name": expected_name,
+            },
+            "target": "opengl",
+            "requiredSignature": expected_signature,
+        }
+    ]
+
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert f"{expected_name} missing {', '.join(expected_missing)}" in diagnostic[
+        "message"
+    ]
+
+
 def test_translate_project_forwards_metal_template_specialization_limit(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
