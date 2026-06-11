@@ -12064,8 +12064,67 @@ def _template_materialization_unsupported_message(
             )
     return (
         f"Template-hostile target '{target}' requires concrete template arguments "
-        f"before translating '{unit.relative_path}': " + "; ".join(details)
+        f"before translating '{unit.relative_path}': "
+        + "; ".join(details)
+        + ". Suggested action: "
+        + _template_materialization_suggested_remediation(target)
+        + "."
     )
+
+
+def _template_materialization_suggested_remediation(target: str) -> str:
+    return (
+        "add a concrete Metal template instantiation, supply explicit template "
+        "arguments, or configure project.source_options.metal.template_variants "
+        f"for the {target} target"
+    )
+
+
+def _template_materialization_unsupported_details(
+    target: str,
+    unit: ProjectTranslationUnit,
+    unsupported: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    missing_parameters: list[str] = []
+    declarations: list[dict[str, Any]] = []
+    for record in unsupported:
+        missing = [
+            str(parameter)
+            for parameter in record.get("missingParameters", [])
+            if str(parameter)
+        ]
+        for parameter in missing:
+            if parameter not in missing_parameters:
+                missing_parameters.append(parameter)
+
+        declaration = record.get("sourceDeclaration")
+        declaration_payload: dict[str, Any] = {
+            "name": str(record.get("name") or "<unknown>"),
+            "missingTemplateParameters": missing,
+            "requiredSignature": str(record.get("requiredSignature") or ""),
+            "reason": str(record.get("reason") or "missing-template-arguments"),
+            "targetBackend": target,
+        }
+        if isinstance(declaration, Mapping):
+            file_name = declaration.get("file")
+            line = declaration.get("line")
+            column = declaration.get("column")
+            if isinstance(file_name, str) and file_name:
+                location: dict[str, Any] = {"file": file_name}
+                if isinstance(line, int):
+                    location["line"] = line
+                if isinstance(column, int):
+                    location["column"] = column
+                declaration_payload["declarationLocation"] = location
+        declarations.append(declaration_payload)
+
+    return {
+        "sourcePath": unit.relative_path,
+        "targetBackend": target,
+        "missingTemplateParameters": missing_parameters,
+        "sourceDeclarations": declarations,
+        "suggestedRemediation": _template_materialization_suggested_remediation(target),
+    }
 
 
 def _template_materialization_unsupported_location(
@@ -12520,6 +12579,11 @@ def _project_template_materialization_for_artifact(
                     source_backend=unit.source_backend,
                     variant=variant,
                     missing_capabilities=["template.specialization"],
+                    details=_template_materialization_unsupported_details(
+                        target,
+                        unit,
+                        unsupported_type_records,
+                    ),
                 )
             ],
             blocked=True,
@@ -13070,6 +13134,11 @@ def _project_template_materialization_for_artifact(
                 source_backend=unit.source_backend,
                 variant=variant,
                 missing_capabilities=["template.specialization"],
+                details=_template_materialization_unsupported_details(
+                    target,
+                    unit,
+                    unsupported,
+                ),
             )
         ]
         return ProjectTemplateMaterializedSource(
