@@ -8927,26 +8927,30 @@ def test_translate_project_opengl_reports_unresolved_metal_template_kernel(
     artifact = payload["artifacts"][0]
     assert artifact["status"] == "failed"
     assert artifact["target"] == "opengl"
-    assert "unresolved template type 'T'" in artifact["error"]
+    assert "requires concrete template arguments" in artifact["error"]
+    assert artifact["templateMaterialization"] == {
+        "status": "unsupported",
+        "specializationCount": 0,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "specializations": [],
+        "unsupported": [
+            {
+                "name": "raw_template",
+                "parameters": ["T"],
+                "missingParameters": ["T"],
+                "reason": "missing-template-arguments",
+            }
+        ],
+    }
     assert not (repo / artifact["path"]).exists()
     diagnostic = payload["diagnostics"][0]
-    assert diagnostic["code"] == "project.translate.opengl-template-type-unresolved"
+    assert diagnostic["code"] == "project.translate.template-materialization-unsupported"
     assert diagnostic["target"] == "opengl"
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
     assert diagnostic["location"]["file"] == "shaders/raw_template.metal"
-    assert diagnostic["location"]["line"] == 4
-    assert diagnostic["location"]["column"] == 1
-    assert "Missing template binding: T." in diagnostic["message"]
-    assert (
-        "Source declaration: raw_template at shaders/raw_template.metal:4:1."
-        in diagnostic["message"]
-    )
-    assert (
-        "Target artifact: translated/opengl/shaders/raw_template.glsl."
-        in diagnostic["message"]
-    )
-    assert "Suggested action:" in diagnostic["message"]
+    assert "raw_template missing T" in diagnostic["message"]
 
 
 def test_translate_project_forwards_metal_template_specialization_limit(tmp_path):
@@ -33392,6 +33396,204 @@ def test_translate_project_metal_matmul_constant_pointer_params_lower_to_resourc
     assert "float* A" not in directx
     assert "float* B" not in directx
     assert "float* X" not in directx
+
+
+def test_translate_project_metal_call_site_template_materializes_for_opengl(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "generic_value.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct Params {
+                float value;
+            };
+
+            template <typename T>
+            T scale_value(T value) {
+                return value + T(1.0);
+            }
+
+            kernel void launch(
+                device float* out [[buffer(0)]],
+                constant Params& params [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = scale_value<float>(params.value);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"] == {
+        "status": "materialized",
+        "specializationCount": 1,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "specializations": [
+            {
+                "name": "scale_value",
+                "materializedName": "scale_value_float",
+                "parameters": {"T": "float"},
+                "source": "call-site",
+            }
+        ],
+        "unsupported": [],
+    }
+
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "float scale_value_float(float value)" in output
+    assert "scale_value<float>" not in output
+    assert re.search(r"\\bT\\b", output) is None
+    assert "out_[gid] = scale_value_float(params.value);" in output
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+
+
+def test_translate_project_metal_variant_template_materializes_for_opengl(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "out"
+
+            [project.variants.f32]
+            T = "float"
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "generic_pointer.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct Params {
+                float value;
+            };
+
+            template <typename T>
+            kernel void write_value(
+                device T* out [[buffer(0)]],
+                constant Params& params [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = T(params.value);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["variant"] == "f32"
+    assert artifact["status"] == "translated"
+    assert artifact["defines"] == {"T": "float"}
+    assert artifact["templateMaterialization"] == {
+        "status": "materialized",
+        "specializationCount": 1,
+        "configuredParameterCount": 1,
+        "configuredParameters": {"T": "float"},
+        "specializations": [
+            {
+                "name": "write_value",
+                "materializedName": "write_value",
+                "parameters": {"T": "float"},
+                "source": "config",
+            }
+        ],
+        "unsupported": [],
+    }
+
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "layout(std430, binding = 0) buffer out_Buffer { float out_[]; };" in output
+    assert "layout(std140, binding = 1) uniform Params" in output
+    assert "out_[gid] = float(params.value);" in output
+    assert re.search(r"\\bT\\b", output) is None
+    assert "float* out" not in output
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+
+
+def test_translate_project_metal_template_without_arguments_reports_metadata(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "generic_pointer.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename U>
+            kernel void write_value(
+                device U* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = U(0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    assert artifact["templateMaterialization"] == {
+        "status": "unsupported",
+        "specializationCount": 0,
+        "configuredParameterCount": 0,
+        "configuredParameters": {},
+        "specializations": [],
+        "unsupported": [
+            {
+                "name": "write_value",
+                "parameters": ["U"],
+                "missingParameters": ["U"],
+                "reason": "missing-template-arguments",
+            }
+        ],
+    }
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.template-materialization-unsupported"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert "write_value missing U" in diagnostic["message"]
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {
+        diagnostic["code"] for diagnostic in validation["diagnostics"]
+    }.isdisjoint({"project.validate.invalid-report"})
 
 
 def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(
