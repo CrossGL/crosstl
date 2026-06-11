@@ -1570,6 +1570,83 @@ class GLSLCodeGen:
         """Generate GLSL source for a single requested shader stage."""
         return self.generate_program(ast, target_stage=shader_type)
 
+    def with_glsl_builtin_option_prelude(self, ast):
+        if not self.glsl_ast_needs_builtin_option(ast):
+            return ast
+        if self.glsl_ast_declares_type(ast, "Option"):
+            return ast
+
+        ast = deepcopy(ast)
+        prelude_ast = self.parse_glsl_builtin_option_prelude()
+        ast.structs = list(getattr(prelude_ast, "structs", []) or []) + list(
+            getattr(ast, "structs", []) or []
+        )
+        ast.functions = list(getattr(prelude_ast, "functions", []) or []) + list(
+            getattr(ast, "functions", []) or []
+        )
+        return ast
+
+    def parse_glsl_builtin_option_prelude(self):
+        from ..lexer import Lexer
+        from ..parser import Parser
+
+        source = """
+        shader OpenGLBuiltinOption {
+            generic<T> struct Option {
+                enum OptionType { Some(T), None }
+                OptionType variant;
+            }
+
+            generic<T> bool is_Some(Option<T> item) {
+                return item.variant == Option::Some;
+            }
+
+            generic<T> bool is_None(Option<T> item) {
+                return item.variant == Option::None;
+            }
+
+            generic<T> T unwrap_Some(Option<T> item) {
+                return item.Some_0;
+            }
+        }
+        """
+        return Parser(Lexer(source).tokens).parse()
+
+    def glsl_ast_declares_type(self, ast, type_name):
+        return any(
+            getattr(struct, "name", None) == type_name
+            for struct in getattr(ast, "structs", []) or []
+        )
+
+    def glsl_ast_needs_builtin_option(self, ast):
+        option_helpers = {"is_Some", "is_None", "unwrap_Some"}
+        for node in self.walk_ast(ast):
+            if self.glsl_node_type_uses_builtin_option(node):
+                return True
+            if self.function_call_name(node) in option_helpers:
+                return True
+        return False
+
+    def glsl_node_type_uses_builtin_option(self, node):
+        for attr in (
+            "return_type",
+            "param_type",
+            "var_type",
+            "vtype",
+            "member_type",
+            "const_type",
+            "constructor_type",
+        ):
+            if self.glsl_type_uses_builtin_option(getattr(node, attr, None)):
+                return True
+        return False
+
+    def glsl_type_uses_builtin_option(self, type_value):
+        type_name = self.type_name_string(type_value)
+        return isinstance(type_name, str) and re.search(
+            r"(?:^|::|\b)Option\s*<", type_name
+        )
+
     def glsl_stage_names(self, ast, target_stage=None):
         stage_names = set()
 
@@ -2365,6 +2442,8 @@ class GLSLCodeGen:
 
     def generate_program(self, ast, target_stage=None):
         """Render an AST to GLSL, optionally filtering stage entry points."""
+        ast = self.with_glsl_builtin_option_prelude(ast)
+        self.glsl_builtin_option_available = self.glsl_ast_declares_type(ast, "Option")
         target_stage = normalize_stage_name(target_stage)
         self.validate_stage_main_helper_conflict(ast, target_stage)
 
@@ -8799,9 +8878,13 @@ class GLSLCodeGen:
         var_type = getattr(stmt, "var_type", None)
         if var_type is None:
             var_type = getattr(stmt, "vtype", None)
-        if var_type is None:
-            var_type = self.expression_result_type(getattr(stmt, "initial_value", None))
-        return self.type_name_string(var_type) or "float"
+        var_type_name = self.type_name_string(var_type)
+        if var_type_name in {None, "auto"}:
+            inferred_type = self.expression_result_type(
+                getattr(stmt, "initial_value", None)
+            )
+            return self.type_name_string(inferred_type) or "float"
+        return var_type_name
 
     def glsl_parameter_identifier_name(self, name, parameter_names=None):
         if (
@@ -10551,11 +10634,49 @@ class GLSLCodeGen:
             return "gl_VertexID"
         return name
 
+    def is_glsl_builtin_option_none_expression(self, expr):
+        if not getattr(self, "glsl_builtin_option_available", False):
+            return False
+        if isinstance(expr, str):
+            return expr == "None"
+        return getattr(expr, "name", None) == "None"
+
+    def glsl_builtin_option_constructor_name(self, func_name):
+        if not getattr(self, "glsl_builtin_option_available", False):
+            return func_name
+        if func_name == "Some":
+            return "Option::Some"
+        if func_name == "None":
+            return "Option::None"
+        return func_name
+
+    def generate_glsl_builtin_option_none_value(self):
+        if not getattr(self, "glsl_builtin_option_available", False):
+            return None
+        return generate_enum_constructor_call(self, "Option::None", [])
+
+    def generate_glsl_builtin_option_none_comparison(self, left, op, right):
+        if op not in {"==", "!="}:
+            return None
+        left_is_none = self.is_glsl_builtin_option_none_expression(left)
+        right_is_none = self.is_glsl_builtin_option_none_expression(right)
+        if left_is_none == right_is_none:
+            return None
+
+        subject = right if left_is_none else left
+        subject_expr = self.generate_expression(subject)
+        operator = "==" if op == "==" else "!="
+        return f"({subject_expr}.variant {operator} Option_None)"
+
     def generate_expression(self, expr, is_main=False):
         """Render a CrossGL AST expression into GLSL expression syntax."""
         if expr is None:
             return ""
         if isinstance(expr, str):
+            if self.is_glsl_builtin_option_none_expression(expr):
+                none_value = self.generate_glsl_builtin_option_none_value()
+                if none_value is not None:
+                    return none_value
             return expr
         elif isinstance(expr, (int, float, bool)):
             if isinstance(expr, bool):
@@ -10563,6 +10684,10 @@ class GLSLCodeGen:
             return str(expr)
         elif hasattr(expr, "__class__") and "VariableNode" in str(type(expr)):
             if hasattr(expr, "name"):
+                if self.is_glsl_builtin_option_none_expression(expr):
+                    none_value = self.generate_glsl_builtin_option_none_value()
+                    if none_value is not None:
+                        return none_value
                 if expr.name in self.current_resource_aliases:
                     return self.current_resource_aliases[expr.name]["expression"]
                 if expr.name in getattr(self, "enum_variant_constants", {}):
@@ -10575,6 +10700,10 @@ class GLSLCodeGen:
             else:
                 return str(expr)
         elif hasattr(expr, "__class__") and "IdentifierNode" in str(type(expr)):
+            if self.is_glsl_builtin_option_none_expression(expr):
+                none_value = self.generate_glsl_builtin_option_none_value()
+                if none_value is not None:
+                    return none_value
             if expr.name in self.current_resource_aliases:
                 return self.current_resource_aliases[expr.name]["expression"]
             if expr.name in getattr(self, "enum_variant_constants", {}):
@@ -10606,6 +10735,11 @@ class GLSLCodeGen:
             return str(expr.value)
         elif hasattr(expr, "__class__") and "BinaryOpNode" in str(type(expr)):
             op = self.map_operator(expr.op)
+            option_none_comparison = self.generate_glsl_builtin_option_none_comparison(
+                expr.left, op, expr.right
+            )
+            if option_none_comparison is not None:
+                return option_none_comparison
             vector_relational = self.generate_vector_relational_expression(
                 expr.left, op, expr.right
             )
@@ -10705,6 +10839,12 @@ class GLSLCodeGen:
             else:
                 callee = self.generate_expression(func_expr)
             original_func_name = func_name
+            original_func_name = self.glsl_builtin_option_constructor_name(
+                original_func_name
+            )
+            if original_func_name != func_name:
+                func_name = original_func_name
+                callee = original_func_name
 
             mesh_output_counts_call = self.generate_mesh_output_counts_call(
                 original_func_name, expr.args

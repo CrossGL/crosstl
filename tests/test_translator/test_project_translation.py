@@ -11155,6 +11155,64 @@ def test_translate_project_hip_bit_extract_artifacts_bind_scalar_and_skip_host_m
     assert re.search(r"OpDecorate %\d+ Binding 2", spirv_output)
 
 
+def test_translate_project_rust_option_helpers_lower_to_opengl_compute(tmp_path):
+    repo = tmp_path / "repo"
+    source_dir = repo / "src"
+    source_dir.mkdir(parents=True)
+    (source_dir / "collatz.rs").write_text(
+        textwrap.dedent("""
+            fn collatz(n: u32) -> Option<u32> {
+                if n == 0u32 {
+                    return None;
+                }
+                return Some(n);
+            }
+
+            fn read_option(item: Option<u32>) -> u32 {
+                match item {
+                    Some(value) => { return value; },
+                    None => { return 0u32; }
+                }
+            }
+
+            #[spirv(compute(threads(1, 1, 1)))]
+            pub fn main() {
+                let value = read_option(collatz(7u32));
+            }
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["src"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    opengl_output = (
+        repo / "translated" / "opengl" / "src" / "collatz.glsl"
+    ).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert "struct Option_u32" in opengl_output
+    assert "Option_u32 collatz(uint n)" in opengl_output
+    assert "uint value = unwrap_Some_u32(item);" in opengl_output
+    assert "(item.variant == Option_None)" in opengl_output
+    assert "Option<" not in opengl_output
+    assert "Option::" not in opengl_output
+    assert re.search(r"\bSome\s*\(", opengl_output) is None
+    assert "return None;" not in opengl_output
+    assert "== None" not in opengl_output
+    assert "auto value" not in opengl_output
+    assert_compute_glsl_validates_if_available(opengl_output, tmp_path)
+
+
 def test_validate_project_report_rejects_artifacts_with_undeclared_variants(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
