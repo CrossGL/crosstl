@@ -973,10 +973,7 @@ def test_hlsl_diagnostic_vector_zero_fallbacks_expand_for_dxc():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "float2 uv = float2(0.0, 0.0) /* unsupported HLSL" in generated_code
-    assert (
-        "double2 precise_ = double2(0.0, 0.0) /* unsupported HLSL"
-        in generated_code
-    )
+    assert "double2 precise_ = double2(0.0, 0.0) /* unsupported HLSL" in generated_code
     assert "float3 normal = float3(0.0, 0.0, 0.0) /* unsupported HLSL" in generated_code
     assert (
         "float4 color = float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL"
