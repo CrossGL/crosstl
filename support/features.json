@@ -2570,17 +2570,16 @@
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "barrier/workgroupBarrier, groupMemoryBarrierWithGroupSync, groupMemoryBarrier, and memoryBarrierShared lower to workgroupBarrier; memoryBarrierBuffer lowers to storageBarrier; memoryBarrierImage lowers to textureBarrier; wider device/global/all-address-space aliases emit deterministic diagnostics because WGSL synchronization is workgroup-scoped and address-space-specific; synchronization aliases reject arguments, value contexts, non-compute stages, and helper placement; user-defined functions with synchronization names are preserved.",
+          "status": "supported",
+          "notes": "Sampled texture globals lower to split WGSL texture/sampler bindings; implicit and explicit sampler texture() calls lower to textureSample; compute-stage implicit sampling lowers to textureSampleLevel with zero LOD; sampled texture arrays expand to per-element bindings with static and dynamic dispatch helpers; resource-member texture aliases lower to module-scope bindings with deterministic sampler forwarding.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_compute_barrier_to_workgroup_barrier",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_compute_synchronization_aliases",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_reports_diagnostics_for_inexact_synchronization_aliases",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_preserves_user_defined_synchronization_names",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_barrier_outside_compute_stages",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_synchronization_builtin_arguments",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_synchronization_builtin_value_contexts",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_barriers_in_helpers_with_specific_diagnostic"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_aliases_nested_resource_member_paths_from_initializer",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_sampled_texture_resources_and_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_explicit_sampler_texture_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_sampled_texture_arrays_to_element_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_dynamic_sampled_texture_array_sampling",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_dispatches_dynamic_sampled_texture_array_function_arguments",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls"
           ]
         }
       }
@@ -4285,10 +4284,17 @@
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "supported",
+          "notes": "barrier/workgroupBarrier, groupMemoryBarrierWithGroupSync, groupMemoryBarrier, and memoryBarrierShared lower to workgroupBarrier; memoryBarrierBuffer lowers to storageBarrier; memoryBarrierImage lowers to textureBarrier; wider device/global/all-address-space aliases emit deterministic diagnostics because WGSL synchronization is workgroup-scoped and address-space-specific; synchronization aliases reject arguments, value contexts, non-compute stages, and helper placement; user-defined functions with synchronization names are preserved.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_compute_barrier_to_workgroup_barrier",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_compute_synchronization_aliases",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_reports_diagnostics_for_inexact_synchronization_aliases",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_preserves_user_defined_synchronization_names",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_barrier_outside_compute_stages",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_synchronization_builtin_arguments",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_synchronization_builtin_value_contexts",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_barriers_in_helpers_with_specific_diagnostic"
           ]
         }
       }

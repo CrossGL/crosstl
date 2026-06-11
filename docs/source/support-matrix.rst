@@ -40,7 +40,7 @@ implicitly supported.
    "DirectX / HLSL", "66", "0", "2", "0", "0", "0"
    "OpenGL / GLSL", "66", "0", "2", "0", "0", "0"
    "WebGL / GLSL ES", "37", "0", "22", "9", "0", "0"
-   "WebGPU / WGSL", "47", "0", "14", "7", "0", "0"
+   "WebGPU / WGSL", "49", "0", "12", "7", "0", "0"
    "Metal", "65", "0", "3", "0", "0", "0"
    "Vulkan SPIR-V", "66", "0", "2", "0", "0", "0"
    "CUDA", "61", "0", "7", "0", "0", "0"
@@ -140,7 +140,7 @@ Each category below uses the status codes from the legend.
 .. csv-table:: textures
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "WebGPU / WGSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
-   "Texture sampling", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Texture sampling", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Texture LOD, gradient, and offset operations", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Projected texture operations", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Texture gather operations", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
@@ -164,7 +164,7 @@ Each category below uses the status codes from the legend.
    "Array declarations and access", "Y", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Function declarations and calls", "Y", "Y", "Y", "Y", "Y", "D", "D", "D", "D", "Y", "D"
    "Control flow", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Synchronization and memory barriers", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Synchronization and memory barriers", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Wave/subgroup intrinsics", "Y", "Y", "R", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Match/pattern lowering", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Vector and matrix expressions", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
