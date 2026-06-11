@@ -1751,19 +1751,34 @@ class GLSLCodeGen:
         minimum_version = None
         for line in str(code or "").splitlines():
             stripped = line.strip()
-            if not stripped.startswith("layout("):
+            if stripped.startswith("layout("):
+                end = stripped.find(")")
+                if end == -1:
+                    continue
+                layout_parts = {
+                    part.partition("=")[0].strip()
+                    for part in stripped[len("layout(") : end].split(",")
+                }
+                if "component" in layout_parts:
+                    minimum_version = max(minimum_version or 0, 440)
+                if layout_parts & {"location", "index"}:
+                    minimum_version = max(minimum_version or 0, 330)
+                remainder = stripped[end + 1 :].strip()
+                if remainder.startswith("uniform ") and "{" in remainder:
+                    minimum_version = max(minimum_version or 0, 330)
+                if any(
+                    remainder.startswith(f"{direction} ")
+                    for direction in ("in", "out")
+                ):
+                    minimum_version = max(minimum_version or 0, 330)
                 continue
 
-            end = stripped.find(")")
-            if end == -1:
-                continue
-            layout_parts = {
-                part.partition("=")[0].strip()
-                for part in stripped[len("layout(") : end].split(",")
-            }
-            if "component" in layout_parts:
-                minimum_version = max(minimum_version or 0, 440)
-            if layout_parts & {"location", "index"}:
+            interface_parts = stripped.rstrip(";").split()
+            if (
+                stripped.endswith(";")
+                and len(interface_parts) >= 3
+                and interface_parts[-3] in {"in", "out"}
+            ):
                 minimum_version = max(minimum_version or 0, 330)
         return minimum_version
 

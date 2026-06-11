@@ -159,6 +159,23 @@ def validate_wgsl_with_naga(tmp_path, code: str) -> None:
     assert result.returncode == 0, diagnostics
 
 
+def validate_glsl_with_glslang(tmp_path, code: str, stage: str) -> None:
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+    result = subprocess.run(
+        [glslang, "--stdin", "-S", stage],
+        input=code,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    diagnostics = "\n".join(
+        part for part in (result.stdout, result.stderr) if part.strip()
+    )
+    assert result.returncode == 0, diagnostics
+
+
 def assert_roundtrip(code: str, shader_type: str, expected_stage: ShaderStage) -> str:
     output = generate_crossgl(code, shader_type)
     assert isinstance(output, str)
@@ -663,6 +680,34 @@ def test_codegen_local_function_prototype_from_glslang_scope_vert():
     assert "void helper();" not in output
     assert "helper();" in output
     assert "gl_Position = vec4(1.0);" in output
+
+
+def test_codegen_glsl_110_vertex_stage_interfaces_bump_version(tmp_path):
+    code = textwrap.dedent("""
+        #version 110
+
+        uniform mat4 MVP;
+        attribute vec3 vCol;
+        attribute vec2 vPos;
+        varying vec3 color;
+
+        void main()
+        {
+            gl_Position = MVP * vec4(vPos, 0.0, 1.0);
+            color = vCol;
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+    glsl = GLSLCodeGen().generate_stage(parse_crossgl(crossgl), "vertex")
+
+    assert glsl.lstrip().startswith("#version 330 core\n")
+    assert "#version 110" not in glsl
+    assert "in vec3 vCol;" in glsl
+    assert "in vec2 vPos;" in glsl
+    assert "out vec3 color;" in glsl
+    assert "layout(std140) uniform Uniforms" in glsl
+    validate_glsl_with_glslang(tmp_path, glsl, "vert")
 
 
 def test_codegen_macro_declaration_prefixes_from_filament_sources():
