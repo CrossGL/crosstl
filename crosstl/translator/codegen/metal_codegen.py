@@ -3426,8 +3426,10 @@ class MetalCodeGen:
         texture_parameter_array_sizes = {}
         image_format_parameters = {}
         vertex_stage_input_parameters = []
+        fragment_stage_input_parameters = []
         stage_builtin_parameter_alias_declarations = []
         vertex_stage_input_alias_declarations = []
+        fragment_stage_input_alias_declarations = []
         stage_output_parameters = []
         stage_output_struct_name = None
         previous_function_name = self.current_function_name
@@ -3708,6 +3710,22 @@ class MetalCodeGen:
                         "mapped_type": param_type,
                         "attribute": self.metal_vertex_input_location_attribute(p),
                         "semantic": semantic,
+                    }
+                )
+                continue
+            if self.is_plain_metal_fragment_stage_input_parameter(
+                raw_param_type, param_type, p, shader_type
+            ):
+                fragment_stage_input_parameters.append(
+                    {
+                        "name": p.name,
+                        "raw_type": raw_param_type,
+                        "mapped_type": param_type,
+                        "attribute": self.metal_fragment_input_semantic_attribute(
+                            semantic
+                        ),
+                        "semantic": semantic,
+                        "preserve_user_attribute": True,
                     }
                 )
                 continue
@@ -4150,10 +4168,35 @@ class MetalCodeGen:
                 self.current_function_return_wrapper = return_wrapper
             code += f"vertex {return_type} {function_name}({params_str}) {{\n"
         elif shader_type == "fragment":
+            function_name = entry_name or f"fragment_{func.name}"
+            if fragment_stage_input_parameters:
+                stage_input_struct_name = self.unique_vertex_stage_input_struct_name(
+                    function_name
+                )
+                stage_input_parameter_name = self.unique_metal_generated_name(
+                    "_crossglInput",
+                    reserved_parameter_names
+                    | self.metal_function_local_variable_names(func),
+                )
+                self.local_variable_types[stage_input_parameter_name] = (
+                    stage_input_struct_name
+                )
+                code += self.generate_metal_vertex_stage_input_parameter_struct(
+                    stage_input_struct_name, fragment_stage_input_parameters
+                )
+                params_str = self.append_parameter_declaration(
+                    params_str,
+                    f"{stage_input_struct_name} {stage_input_parameter_name} "
+                    "[[stage_in]]",
+                )
+                fragment_stage_input_alias_declarations = (
+                    self.generate_metal_vertex_stage_input_alias_declarations(
+                        stage_input_parameter_name, fragment_stage_input_parameters
+                    )
+                )
             params_str = self.append_global_resource_parameters(
                 params_str, self.current_function_name, func
             )
-            function_name = entry_name or f"fragment_{func.name}"
             if stage_output_parameters:
                 stage_output_struct_name = self.unique_return_wrapper_struct_name(
                     function_name
@@ -4329,6 +4372,8 @@ class MetalCodeGen:
         for declaration in stage_builtin_parameter_alias_declarations:
             code += f"    {declaration}\n"
         for declaration in vertex_stage_input_alias_declarations:
+            code += f"    {declaration}\n"
+        for declaration in fragment_stage_input_alias_declarations:
             code += f"    {declaration}\n"
         code += self.generate_metal_stage_output_parameter_locals(
             stage_output_parameters
@@ -4985,6 +5030,46 @@ class MetalCodeGen:
             return False
         return self.is_metal_scalar_or_vector_type_name(base_type)
 
+    def is_plain_metal_fragment_stage_input_parameter(
+        self, raw_param_type, mapped_param_type, parameter, shader_type
+    ):
+        if shader_type != "fragment":
+            return False
+        if self.is_graphics_stage_output_parameter(parameter, shader_type):
+            return False
+        semantic = self.semantic_from_node(parameter)
+        if not self.is_metal_user_stage_io_semantic(semantic):
+            return False
+        if self.is_resource_parameter_type(raw_param_type):
+            return False
+        if isinstance(raw_param_type, (PointerType, ReferenceType)):
+            return False
+        if self.metal_parameter_user_struct_type(parameter) is not None:
+            return False
+
+        mapped_type = self.type_name_string(mapped_param_type)
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        if array_suffix:
+            return False
+        if self.metal_matrix_dimensions(base_type) is not None:
+            return False
+        if base_type in self.structs_by_name:
+            return False
+        return self.is_metal_scalar_or_vector_type_name(base_type)
+
+    def metal_fragment_input_semantic_attribute(self, semantic):
+        if self.metal_attribute_index_from_semantic(semantic) is not None:
+            return self.map_semantic(semantic)
+        hlsl_attribute = self.metal_hlsl_attribute_semantic(semantic)
+        if hlsl_attribute is not None:
+            return f" [[{hlsl_attribute}]]"
+        hlsl_color = self.metal_hlsl_color_semantic(semantic)
+        if hlsl_color is not None:
+            return f" [[user({hlsl_color})]]"
+        if str(semantic).lower() == "color":
+            return " [[user(Color0)]]"
+        return None
+
     def is_metal_scalar_or_vector_type_name(self, type_name):
         type_name = str(type_name).strip()
         return (
@@ -5030,7 +5115,10 @@ class MetalCodeGen:
             if attribute_index is None and (
                 attribute is None
                 or not attribute.strip()
-                or self.is_metal_user_stage_io_semantic(parameter.get("semantic"))
+                or (
+                    self.is_metal_user_stage_io_semantic(parameter.get("semantic"))
+                    and not parameter.get("preserve_user_attribute")
+                )
             ):
                 while next_attribute in used_attributes:
                     next_attribute += 1

@@ -1059,6 +1059,32 @@ def test_hlsl_legacy_sampler_register_lowers_to_opengl_binding(tmp_path):
     assert "fragColor = texture(Texture, uv);" in generated
 
 
+def test_hlsl_pixel_shader_user_semantic_input_lowers_to_metal_stage_in(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "neg1.hlsl",
+        """
+        float4 main(float4 a : A) : SV_Target
+        {
+            int4 x = int4(a);
+            return float4(x);
+        }
+        """,
+    )
+
+    metal = crosstl.translate(str(source_path), backend="metal", format_output=False)
+
+    assert "struct fragment_main_Input" in metal
+    assert "float4 a [[attribute(0)]];" in metal
+    assert (
+        "fragment float4 fragment_main("
+        "fragment_main_Input _crossglInput [[stage_in]])"
+    ) in metal
+    assert "float4 a = _crossglInput.a;" in metal
+    assert "[[A]]" not in metal
+    _compile_with_metal_if_available(metal, tmp_path)
+
+
 def test_hlsl_fx_macro_texture_resource_survives_metal_translation(tmp_path):
     _write_source(
         tmp_path,
