@@ -1555,6 +1555,8 @@ PLACEHOLDER_DIAGNOSTIC_MISSING_CODE = (
 )
 PLACEHOLDER_MISSING_CAPABILITY = "target.native-placeholder-lowering"
 PLACEHOLDER_DIAGNOSTIC_CAPABILITY = "project.placeholder-diagnostics"
+MOJO_RESOURCE_PLACEHOLDER_CAPABILITY = "mojo.resource-binding"
+MOJO_RESOURCE_PLACEHOLDER_KIND = "crossgl-resource-placeholders"
 PLACEHOLDER_MARKER_RULES = (
     (
         "crossgl-builtin-placeholders",
@@ -10714,12 +10716,47 @@ def _artifact_diagnostic_context(artifact: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _generated_placeholder_diagnostic_message(
-    target: str, artifact_path: str, label: str, action: str
+    target: str,
+    artifact_path: str,
+    label: str,
+    action: str,
+    provenance: str = "",
 ) -> str:
     return (
-        f"Generated {target} artifact contains {label}: {artifact_path}. "
+        f"Generated {target} artifact contains {label}: {artifact_path}{provenance}. "
         f"{action}"
     )
+
+
+def _artifact_provenance_message_suffix(artifact: Mapping[str, Any]) -> str:
+    provenance = artifact.get("provenance")
+    if not isinstance(provenance, Mapping):
+        return ""
+    parts = []
+    for field_name in ("pipeline", "intermediate"):
+        value = provenance.get(field_name)
+        if _is_non_empty_string(value):
+            parts.append(f"{field_name}={value}")
+    return f" ({', '.join(parts)})" if parts else ""
+
+
+def _placeholder_marker_missing_capabilities(
+    kind: str, target: str
+) -> list[str]:
+    capabilities = [PLACEHOLDER_MISSING_CAPABILITY, kind]
+    if target == "mojo" and kind == MOJO_RESOURCE_PLACEHOLDER_KIND:
+        capabilities.append(MOJO_RESOURCE_PLACEHOLDER_CAPABILITY)
+    return capabilities
+
+
+def _placeholder_marker_action(kind: str, target: str, action: str) -> str:
+    if target == "mojo" and kind == MOJO_RESOURCE_PLACEHOLDER_KIND:
+        return (
+            "Mojo resource placeholders are compile-only scaffolding for "
+            "resource helpers. Replace them with Mojo-native resource "
+            "bindings or host integration before relying on runtime behavior."
+        )
+    return action
 
 
 def _generated_placeholder_diagnostics_for_artifact(
@@ -10751,15 +10788,17 @@ def _generated_placeholder_diagnostics_for_artifact(
             column = match.start() + 1
             length = max(match.end() - match.start(), 1)
             context = _artifact_diagnostic_context(artifact)
+            target = str(artifact.get("target", ""))
             diagnostics.append(
                 ProjectDiagnostic(
                     severity="warning",
                     code=GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE,
                     message=_generated_placeholder_diagnostic_message(
-                        str(artifact.get("target", "")),
+                        target,
                         str(artifact_path_value),
                         label,
-                        action,
+                        _placeholder_marker_action(kind, target, action),
+                        _artifact_provenance_message_suffix(artifact),
                     ),
                     location=SourceLocation(
                         file=str(artifact_path_value),
@@ -10774,7 +10813,9 @@ def _generated_placeholder_diagnostics_for_artifact(
                     original_location=SourceLocation(
                         file=str(artifact.get("source", ""))
                     ),
-                    missing_capabilities=[PLACEHOLDER_MISSING_CAPABILITY, kind],
+                    missing_capabilities=_placeholder_marker_missing_capabilities(
+                        kind, target
+                    ),
                     **context,
                 )
             )

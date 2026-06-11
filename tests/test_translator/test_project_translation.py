@@ -6580,7 +6580,7 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
             [project]
             source_roots = ["gpu"]
             include = ["gpu/*.hlsl"]
-            targets = ["cgl", "opengl", "metal", "directx", "vulkan"]
+            targets = ["cgl", "opengl", "metal", "directx", "vulkan", "mojo"]
             output_dir = "translated"
             """).strip(),
         encoding="utf-8",
@@ -6604,11 +6604,14 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
     vulkan = (
         repo / "translated" / "vulkan" / "gpu" / "hello_texture.spvasm"
     ).read_text(encoding="utf-8")
+    mojo = (repo / "translated" / "mojo" / "gpu" / "hello_texture.mojo").read_text(
+        encoding="utf-8"
+    )
 
     assert payload["summary"]["unitCount"] == 1
-    assert payload["summary"]["translatedCount"] == 5
+    assert payload["summary"]["translatedCount"] == 6
     assert payload["summary"]["failedCount"] == 0
-    assert len(payload["artifacts"]) == 5
+    assert len(payload["artifacts"]) == 6
 
     assert "PSInput VSMain(vec4 position @ Position, vec2 uv @ TexCoord)" in cgl
     assert "vec4 PSMain(PSInput input) @ gl_FragColor @ stage_entry" in cgl
@@ -6643,6 +6646,29 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
     assert "BuiltIn FragCoord" in vulkan
     assert "OpImageSampleImplicitLod" in vulkan
     assert "WARNING: SPIR-V builtin gl_Position" not in vulkan
+
+    assert "# CrossGL resource bindings" in mojo
+    assert "# CrossGL resource placeholders" not in mojo
+    assert (
+        "# CrossGL resource metadata: name=g_texture kind=texture set=0 "
+        "binding=0 binding_source=explicit register=t0"
+    ) in mojo
+    assert (
+        "# CrossGL resource metadata: name=g_sampler kind=sampler set=0 "
+        "binding=0 binding_source=explicit register=s0"
+    ) in mojo
+    assert "var g_texture: Texture2D = Texture2D(0, 0)" in mojo
+    assert "var g_sampler: Sampler = Sampler(0, 0)" in mojo
+    assert "return sample_sampler(g_texture, g_sampler, input.uv)" in mojo
+    assert not [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"]
+        == project_pipeline.GENERATED_PLACEHOLDER_DIAGNOSTIC_CODE
+        and diagnostic.get("target") == "mojo"
+        and diagnostic["location"]["file"]
+        == "translated/mojo/gpu/hello_texture.mojo"
+    ]
 
     assert_metal_validates_if_available(metal, tmp_path)
     assert_guarded_glsl_validates_if_available(opengl, tmp_path)
@@ -7797,6 +7823,17 @@ def test_translate_project_reports_generated_placeholder_markers(
     assert any(
         "resource placeholders" in diagnostic["message"]
         for diagnostic in placeholder_diagnostics
+    )
+    mojo_resource_diagnostic = next(
+        diagnostic
+        for diagnostic in placeholder_diagnostics
+        if diagnostic["target"] == "mojo"
+        and "resource placeholder prelude" in diagnostic["message"]
+    )
+    assert "pipeline=single-file-translate" in mojo_resource_diagnostic["message"]
+    assert (
+        project_pipeline.MOJO_RESOURCE_PLACEHOLDER_CAPABILITY
+        in mojo_resource_diagnostic["missingCapabilities"]
     )
     assert any(
         "unsupported fallback expression" in diagnostic["message"]
