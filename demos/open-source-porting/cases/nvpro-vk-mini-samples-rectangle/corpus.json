@@ -7,7 +7,7 @@
       "id": "nvpro-vk-mini-samples-rectangle-vertex",
       "path": "rectangle.vert.glsl",
       "sourceBackend": "opengl",
-      "targets": ["cgl", "metal", "opengl", "vulkan"],
+      "targets": ["cgl", "metal", "opengl", "directx", "vulkan"],
       "repository": "https://github.com/nvpro-samples/vk_mini_samples",
       "commit": "994ac9f446ef44962c563b9600c8e9f117a3725d",
       "sourceUrl": "https://github.com/nvpro-samples/vk_mini_samples/blob/994ac9f446ef44962c563b9600c8e9f117a3725d/samples/rectangle/shaders/rectangle.vert.glsl"
@@ -16,7 +16,7 @@
       "id": "nvpro-vk-mini-samples-rectangle-fragment",
       "path": "rectangle.frag.glsl",
       "sourceBackend": "opengl",
-      "targets": ["cgl", "metal", "opengl", "vulkan"],
+      "targets": ["cgl", "metal", "opengl", "directx", "vulkan"],
       "repository": "https://github.com/nvpro-samples/vk_mini_samples",
       "commit": "994ac9f446ef44962c563b9600c8e9f117a3725d",
       "sourceUrl": "https://github.com/nvpro-samples/vk_mini_samples/blob/994ac9f446ef44962c563b9600c8e9f117a3725d/samples/rectangle/shaders/rectangle.frag.glsl"

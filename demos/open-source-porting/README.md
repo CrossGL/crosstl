@@ -56,25 +56,25 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `libgdx-batch-shader` | `libgdx/libgdx` at `846d63a746e4604a7699133f803ff844fdc8c9fe` | Apache-2.0 | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream batch shader pair unchanged apart from line-ending and trailing-whitespace normalization. |
 | `lonelydevil-vulkan-tutorial-triangle` | `lonelydevil/vulkan-tutorial-C-implementation` at `780ff146a6eccd7064a10e86363f3c2f7323825d` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream triangle shader pair unchanged. |
 | `monogame-sprite-effect` | `MonoGame/MonoGame` at `d4893ac09e06bc203792d01d6f151f1891cc1ab5` | MS-PL and MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream SpriteEffect source and macro include with whitespace normalization. |
-| `spirv-cross-round-fragment` | `KhronosGroup/SPIRV-Cross` at `146679ff8255a6068518685599d7fb8761d1b570` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream fragment reference shader unchanged. |
+| `spirv-cross-round-fragment` | `KhronosGroup/SPIRV-Cross` at `146679ff8255a6068518685599d7fb8761d1b570` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream fragment reference shader unchanged. |
 | `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. |
 | `angle-simple-texture-2d` | `google/angle` at `52232eaf409a28d77947df5622af274e1ef770c6` | BSD-style | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses extracted upstream SimpleTexture2D shader strings. |
 | `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. |
 | `arm-opengl-es-sdk-cube` | `ARM-software/opengl-es-sdk-for-android` at `c3caf759bb2e71fa9a118b3e3abd996cf00e660a` | MIT | GLSL ES | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream cube shader pair unchanged. |
 | `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Metal kernel and its shared parameter header. |
 | `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, Metal, DirectX, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. Host launch and memory-management integration remain outside the demo scope. |
-| `nvpro-vk-mini-samples-rectangle` | `nvpro-samples/vk_mini_samples` at `994ac9f446ef44962c563b9600c8e9f117a3725d` | Apache-2.0 | GLSL | CrossGL, Metal, OpenGL, Vulkan | Uses the upstream rectangle shader pair unchanged. |
+| `nvpro-vk-mini-samples-rectangle` | `nvpro-samples/vk_mini_samples` at `994ac9f446ef44962c563b9600c8e9f117a3725d` | Apache-2.0 | GLSL | CrossGL, Metal, OpenGL, DirectX, Vulkan | Uses the upstream rectangle shader pair unchanged. |
 | `ogl-samples-flat-color` | `g-truc/ogl-samples` at `38cada7a9458864265e25415ae61586d500ff5fc` | MIT | GLSL | CrossGL, Metal, OpenGL, Vulkan | Uses the upstream GLSL 330 flat-color shader pair unchanged. |
 | `openframeworks-noise-shader` | `openframeworks/openFrameworks` at `63eb03828c40de713b85db7810f1c519d8b9b0cc` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream noise shader pair with whitespace normalization. |
-| `opencl-sdk-saxpy` | `KhronosGroup/OpenCL-SDK` at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` | Apache-2.0 | OpenCL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream SAXPY compute kernel unchanged. |
-| `rocm-examples-add-kernel` | `ROCm/rocm-examples` at `cf369da68f209c315074204bd0eb61d1a5c015d1` | MIT | HIP | CrossGL, Metal, Vulkan | Uses the upstream sphinx-marked add-kernel slice. Host HIP runtime setup remains outside the demo scope. |
-| `raylib-base-fragment` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream base fragment shader unchanged. |
-| `raylib-base-vertex` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream base vertex shader unchanged. |
-| `raylib-lighting-shader-pair` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream lighting vertex and fragment shaders unchanged. |
-| `renderdoc-vktext-fragment` | `baldurk/renderdoc` at `6660344c3d8024dc5107afa2115c5035ceb85533` | MIT | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream Vulkan text fragment shader unchanged. |
+| `opencl-sdk-saxpy` | `KhronosGroup/OpenCL-SDK` at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` | Apache-2.0 | OpenCL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream SAXPY compute kernel unchanged. |
+| `rocm-examples-add-kernel` | `ROCm/rocm-examples` at `cf369da68f209c315074204bd0eb61d1a5c015d1` | MIT | HIP | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream sphinx-marked add-kernel slice. Host HIP runtime setup remains outside the demo scope. |
+| `raylib-base-fragment` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream base fragment shader unchanged. |
+| `raylib-base-vertex` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream base vertex shader unchanged. |
+| `raylib-lighting-shader-pair` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream lighting vertex and fragment shaders unchanged. |
+| `renderdoc-vktext-fragment` | `baldurk/renderdoc` at `6660344c3d8024dc5107afa2115c5035ceb85533` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Vulkan text fragment shader unchanged. |
 | `rust-gpu-compute-collatz` | `Rust-GPU/rust-gpu` at `36e3348cdc2f824afec64b3b5af5d369d98a4c0d` | Apache-2.0 OR MIT | Rust-GPU | CrossGL, Metal, Vulkan | Uses the upstream compute shader unchanged. |
-| `rust-gpu-graphics-stage-inputs` | `Rust-GPU/rust-gpu` at `36e3348cdc2f824afec64b3b5af5d369d98a4c0d` | Apache-2.0 OR MIT | Rust-GPU | CrossGL, OpenGL, Metal, Vulkan | Uses a reduced graphics shader slice that keeps the plain vertex input and fragment color path. |
-| `rust-gpu-vulkan-examples-triangle-overlay` | `Rust-GPU/VulkanShaderExamples` at `b29a37eb46802b5ea6882af4808d6887fc184581` | MIT | Rust-GPU | CrossGL, Metal, Vulkan | Uses the upstream conservative raster triangle-overlay shader unchanged. |
+| `rust-gpu-graphics-stage-inputs` | `Rust-GPU/rust-gpu` at `36e3348cdc2f824afec64b3b5af5d369d98a4c0d` | Apache-2.0 OR MIT | Rust-GPU | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses a reduced graphics shader slice that keeps the plain vertex input and fragment color path. |
+| `rust-gpu-vulkan-examples-triangle-overlay` | `Rust-GPU/VulkanShaderExamples` at `b29a37eb46802b5ea6882af4808d6887fc184581` | MIT | Rust-GPU | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream conservative raster triangle-overlay shader unchanged. |
 | `sascha-willems-vulkan-conservative-triangle` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream conservative raster triangle vertex shader without semantic edits. Host conservative-rasterizer pipeline state remains outside the demo scope. |
 | `sascha-willems-vulkan-headless-compute` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream headless compute shader unchanged. |
 | `slang-hello-world-compute` | `shader-slang/slang` at `29e69b0bf626f87500be73a7fb3764db25658c66` | Apache-2.0 WITH LLVM-exception | Slang | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream compute shader unchanged. |
@@ -178,7 +178,10 @@ The `g-truc/ogl-samples` flat-color shader pair is checked for CrossGL,
 Metal, OpenGL, and Vulkan output.
 
 The `nvpro-samples/vk_mini_samples` rectangle shader pair is checked for
-CrossGL, Metal, OpenGL, and Vulkan output.
+CrossGL, Metal, OpenGL, DirectX, and Vulkan output.
+
+The `KhronosGroup/SPIRV-Cross` round fragment shader is checked for CrossGL,
+OpenGL, Metal, DirectX, and Vulkan output.
 
 The `KhronosGroup/Vulkan-Tools` cube demo shaders are checked for CrossGL,
 OpenGL, Metal, DirectX, and Vulkan output after issue #819 restored HLSL
@@ -188,6 +191,15 @@ output semantics.
 The `ARM-software/opengl-es-sdk-for-android` cube shaders are checked for
 CrossGL, OpenGL, Metal, DirectX, and Vulkan output after issue #820 restored
 legacy `gl_FragColor` lowering.
+
+The `raysan5/raylib` base and lighting shader cases are checked for CrossGL,
+OpenGL, Metal, DirectX, and Vulkan output. The demo still leaves raylib's
+host-side uniform, texture, and material binding setup outside the translated
+artifact set.
+
+The `baldurk/renderdoc` Vulkan text fragment shader is checked for CrossGL,
+OpenGL, Metal, DirectX, and Vulkan output. RenderDoc's UI text atlas setup and
+render-pass integration remain outside this source-focused demo.
 
 The `KhronosGroup/OpenCL-SDK` reduce kernel from `samples/core/reduce/reduce.cl`
 at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` was tested as a candidate and
@@ -227,21 +239,24 @@ configuration, memory allocation, and data-transfer code is a runtime porting
 task outside this demo scope.
 
 The `Rust-GPU/VulkanShaderExamples` conservative raster triangle-overlay shader
-was retested after issue #776 closed and is now checked for Metal and Vulkan
-output. The `Rust-GPU/rust-gpu` compute Collatz shader was retested after
-issue #809 closed and is now checked for Metal and Vulkan output. The
-`Rust-GPU/rust-gpu` graphics stage-input slice is checked for CrossGL, OpenGL,
-Metal, and Vulkan output. Full Rust-GPU crate builds, host-side dispatch, and
-runtime validation remain outside this source-focused demo scope.
+was retested after issue #776 closed and is now checked for OpenGL, Metal,
+DirectX, and Vulkan output. The `Rust-GPU/rust-gpu` compute Collatz shader was
+retested after issue #809 closed and is now checked for Metal and Vulkan
+output. DirectX output for the Collatz shader still leaks Rust `Option`
+constructs and remains excluded under issue #1214. The `Rust-GPU/rust-gpu`
+graphics stage-input slice is checked for CrossGL, OpenGL, Metal, DirectX, and
+Vulkan output. Full Rust-GPU crate builds, host-side dispatch, and runtime
+validation remain outside this source-focused demo scope.
 
 The `ROCm/rocm-examples` add-kernel case uses only the upstream
-`[sphinx-kernel-start]` to `[sphinx-kernel-end]` source section. The full sample
-host `main()`, HIP runtime calls, and launch configuration are runtime
-integration work outside this shader translation demo. The earlier
-`ROCm/rocm-examples` bit-extract HIP kernel was retested after issue #795
-closed; generated Metal now compiles and generated SPIR-V contains only the
-translated compute entry point. It remains a candidate for a future demo
-expansion.
+`[sphinx-kernel-start]` to `[sphinx-kernel-end]` source section and is checked
+for CrossGL, OpenGL, Metal, and Vulkan output. DirectX pointer and invocation
+lowering remains excluded under issue #1216. The full sample host `main()`,
+HIP runtime calls, and launch configuration are runtime integration work
+outside this shader translation demo. The earlier `ROCm/rocm-examples`
+bit-extract HIP kernel was retested after issue #795 closed; generated Metal
+now compiles and generated SPIR-V contains only the translated compute entry
+point. It remains a candidate for a future demo expansion.
 
 The `modular/modular` Mojo GPU vector-add example was tested as a candidate.
 It now generates Metal and SPIR-V artifacts after issue #798 closed, but those
@@ -253,7 +268,8 @@ shader-only kernel slice can be translated and validated as platform target
 source.
 
 The `KhronosGroup/OpenCL-SDK` SAXPY kernel was retested after issue #751 and
-issue #768 closed and is now checked for OpenGL, Metal, and Vulkan output.
+issue #768 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan
+output.
 
 The `bkvogel/metal_performance_testing` matmul kernel is checked for CrossGL,
 OpenGL, Metal, DirectX, and Vulkan output after issue #1158 restored OpenGL

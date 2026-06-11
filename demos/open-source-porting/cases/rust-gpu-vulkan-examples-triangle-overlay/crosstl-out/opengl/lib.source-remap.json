@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/opengl/lib.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 134,
+        "file": "crosstl-out/opengl/lib.glsl",
+        "length": 42,
+        "line": 5,
+        "offset": 92
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 178,
+        "file": "lib.rs",
+        "length": 53,
+        "line": 8,
+        "offset": 125
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

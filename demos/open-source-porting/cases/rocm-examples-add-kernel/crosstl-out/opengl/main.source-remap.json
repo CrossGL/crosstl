@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/opengl/main.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 77,
+        "file": "crosstl-out/opengl/main.glsl",
+        "length": 59,
+        "line": 2,
+        "offset": 18
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 1346,
+        "file": "main.hip",
+        "length": 52,
+        "line": 25,
+        "offset": 1294
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 145,
+        "file": "crosstl-out/opengl/main.glsl",
+        "length": 68,
+        "line": 3,
+        "offset": 77
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 1346,
+        "file": "main.hip",
+        "length": 52,
+        "line": 25,
+        "offset": 1294
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 346,
+        "file": "crosstl-out/opengl/main.glsl",
+        "length": 104,
+        "line": 7,
+        "offset": 242
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 1408,
+        "file": "main.hip",
+        "length": 60,
+        "line": 27,
+        "offset": 1348
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 382,
+        "file": "crosstl-out/opengl/main.glsl",
+        "length": 36,
+        "line": 8,
+        "offset": 346
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 1445,
+        "file": "main.hip",
+        "length": 36,
+        "line": 29,
+        "offset": 1409
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

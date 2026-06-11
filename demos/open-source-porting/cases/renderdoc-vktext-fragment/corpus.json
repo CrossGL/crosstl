@@ -7,7 +7,7 @@
       "id": "renderdoc-vktext-fragment",
       "path": "vktext.frag",
       "sourceBackend": "opengl",
-      "targets": ["cgl", "opengl", "vulkan"],
+      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
       "repository": "https://github.com/baldurk/renderdoc",
       "commit": "6660344c3d8024dc5107afa2115c5035ceb85533",
       "sourceUrl": "https://github.com/baldurk/renderdoc/blob/6660344c3d8024dc5107afa2115c5035ceb85533/renderdoc/data/glsl/vktext.frag"

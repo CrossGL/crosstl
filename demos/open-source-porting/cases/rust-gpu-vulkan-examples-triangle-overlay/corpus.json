@@ -7,7 +7,7 @@
       "id": "rust-gpu-vulkan-examples-triangle-overlay",
       "path": "lib.rs",
       "sourceBackend": "rust",
-      "targets": ["cgl", "metal", "vulkan"],
+      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
       "repository": "https://github.com/Rust-GPU/VulkanShaderExamples",
       "commit": "b29a37eb46802b5ea6882af4808d6887fc184581",
       "sourceUrl": "https://github.com/Rust-GPU/VulkanShaderExamples/blob/b29a37eb46802b5ea6882af4808d6887fc184581/shaders/rust/conservativeraster/triangleoverlay/src/lib.rs"

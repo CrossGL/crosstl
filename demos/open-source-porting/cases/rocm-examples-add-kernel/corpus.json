@@ -7,7 +7,7 @@
       "id": "rocm-examples-add-kernel",
       "path": "main.hip",
       "sourceBackend": "hip",
-      "targets": ["cgl", "metal", "vulkan"],
+      "targets": ["cgl", "opengl", "metal", "vulkan"],
       "repository": "https://github.com/ROCm/rocm-examples",
       "commit": "cf369da68f209c315074204bd0eb61d1a5c015d1",
       "sourceUrl": "https://github.com/ROCm/rocm-examples/blob/cf369da68f209c315074204bd0eb61d1a5c015d1/HIP-Doc/Programming-Guide/Introduction-to-the-HIP-Programming-Model/add_kernel/main.hip"
