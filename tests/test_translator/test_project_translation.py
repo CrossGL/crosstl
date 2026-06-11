@@ -10731,6 +10731,166 @@ def test_translate_project_opengl_materializes_masked_gemv_local_kernel_alias(
     assert_compute_glsl_validates_if_available(output, tmp_path)
 
 
+def test_translate_project_opengl_propagates_steel_conv_helper_template_binding(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "steel_conv_general.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_conv(name, type) \\
+                instantiate_kernel("steel_conv_" #name, steel_conv_general, type)
+
+            template <typename T>
+            METAL_FUNC T load_window_value(T value, uint offset) {
+                return value + T(offset);
+            }
+
+            template <typename T>
+            [[kernel]] void steel_conv_general(
+                device const T* src [[buffer(0)]],
+                device T* dst [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                T value = load_window_value(src[gid], gid);
+                dst[gid] = value;
+            }
+
+            instantiate_conv(float32, float)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["specializations"] == [
+        {
+            "name": "steel_conv_general",
+            "materializedName": "steel_conv_float32",
+            "parameters": {"T": "float"},
+            "parameterSources": {"T": "source-instantiation"},
+            "source": "source-instantiation",
+            "hostName": "steel_conv_float32",
+        },
+        {
+            "name": "load_window_value",
+            "materializedName": "load_window_value_float",
+            "parameters": {"T": "float"},
+            "parameterSources": {"T": "source-instantiation"},
+            "source": "source-instantiation",
+        },
+    ]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "float load_window_value_float(float value, uint offset)" in output
+    assert "float value = load_window_value_float(src[gid], gid);" in output
+    assert "load_window_value<" not in output
+    assert not re.search(r"\bT\b", output)
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_opengl_propagates_steel_gemm_accumulator_binding(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "steel_gemm_splitk.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_gemm(name, type) \\
+                instantiate_kernel("steel_gemm_" #name, steel_gemm_splitk, type)
+
+            template <typename U>
+            struct DefaultAccT {
+                using type = float;
+            };
+
+            template <typename T, typename AccT>
+            METAL_FUNC AccT accumulate_tile(AccT acc, T value) {
+                return acc + AccT(value);
+            }
+
+            template <typename T, typename AccT = typename DefaultAccT<T>::type>
+            [[kernel]] void steel_gemm_splitk(
+                device const T* lhs [[buffer(0)]],
+                device AccT* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                AccT acc = AccT(0);
+                acc = accumulate_tile(acc, lhs[gid]);
+                out[gid] = acc;
+            }
+
+            instantiate_gemm(float32, float)
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["opengl"]
+            output_dir = "translated"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["specializations"] == [
+        {
+            "name": "steel_gemm_splitk",
+            "materializedName": "steel_gemm_float32",
+            "parameters": {"AccT": "float", "T": "float"},
+            "parameterSources": {
+                "AccT": "source-default",
+                "T": "source-instantiation",
+            },
+            "source": "source-instantiation",
+            "hostName": "steel_gemm_float32",
+        },
+        {
+            "name": "accumulate_tile",
+            "materializedName": "accumulate_tile_float_float",
+            "parameters": {"AccT": "float", "T": "float"},
+            "parameterSources": {
+                "AccT": "source-default",
+                "T": "source-instantiation",
+            },
+            "source": "source-default",
+        },
+    ]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "float accumulate_tile_float_float(float acc, float value)" in output
+    assert "acc = accumulate_tile_float_float(acc, lhs[gid]);" in output
+    assert "accumulate_tile<" not in output
+    assert not re.search(r"\b(?:T|AccT)\b", output)
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
 def test_translate_project_opengl_missing_accumulator_template_diagnostic(
     tmp_path,
 ):
