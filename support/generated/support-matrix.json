@@ -995,7 +995,7 @@
         "path": "crosstl/backend/Mojo"
       },
       "signals": {
-        "unsupported_marker_count": 98,
+        "unsupported_marker_count": 100,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
@@ -1088,7 +1088,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 921
+        "test_count": 922
       },
       "translator_codegen": {
         "exists": true,
@@ -3467,12 +3467,13 @@
         },
         "mojo": {
           "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_texture2d_sampler_uses_concrete_mojo_resource_bindings",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_placeholders_compile_with_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_sampled_texture_aliases_compile_with_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_texture_and_sampler_binding_namespaces_are_independent_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo"
           ],
-          "notes": "Covers separate texture and sampler declarations, split-sampler texture calls through Mojo placeholder helpers, HLSL sampled-texture and sampler-state aliases, shadow sampler result typing, resource-array sampler indexing, independent texture/sampler binding namespaces, and duplicate binding diagnostics within each namespace. Mojo models the CrossGL texture/sampler object contract for compile-smoke output; real GPU sampler filtering and target-native resource binding ABI remain placeholder semantics.",
+          "notes": "Covers separate texture and sampler declarations, concrete Mojo resource-binding scaffolding for HLSL Texture2D.Sample with SamplerState, placeholder helpers for unsupported split-sampler texture shapes, shadow sampler result typing, resource-array sampler indexing, independent texture/sampler binding namespaces, and duplicate binding diagnostics within each namespace. Mojo models the CrossGL texture/sampler object contract for compile-smoke output; advanced sampler filtering and target-native host resource ABI integration remain outside the current scope.",
           "status": "supported"
         },
         "opengl": {
@@ -3898,13 +3899,15 @@
         },
         "mojo": {
           "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_texture2d_sampler_uses_concrete_mojo_resource_bindings",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_placeholders_compile_with_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_sampled_texture_aliases_compile_with_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsized_resource_arrays_use_mojo_lists_bindings_and_compile",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_texture_and_sampler_binding_namespaces_are_independent_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo"
           ],
-          "notes": "For the repo-owned compile-oriented Mojo contract, basic sampled texture and shadow-sampler calls lower to compile-smoke placeholder helpers across common dimensions, fixed and unsized arrays, HLSL sampled texture aliases, SamplerState aliases, split-sampler member calls, and independent texture/sampler binding namespaces. The Mojo backend models CrossGL texture call shape rather than target-native sampler filtering semantics.",
+          "notes": "For the repo-owned compile-oriented Mojo contract, HLSL Texture2D.Sample with SamplerState lowers to concrete resource-binding structs with set/binding provenance and a non-placeholder sample method. Other sampled texture and shadow-sampler shapes continue to lower to explicit compile-smoke placeholder helpers across common dimensions, fixed and unsized arrays, HLSL sampled texture aliases, SamplerState aliases, split-sampler member calls, and independent texture/sampler binding namespaces.",
           "status": "supported"
         },
         "opengl": {
