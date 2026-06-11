@@ -12589,9 +12589,10 @@ def test_translate_project_opengl_rejects_unresolved_metal_template_type_before_
     assert diagnostic["target"] == "opengl"
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
-    assert f"{expected_name} missing {', '.join(expected_missing)}" in diagnostic[
-        "message"
-    ]
+    assert (
+        f"{expected_name} missing {', '.join(expected_missing)}"
+        in diagnostic["message"]
+    )
 
 
 def test_translate_project_forwards_metal_template_specialization_limit(tmp_path):
@@ -37599,6 +37600,54 @@ def test_translate_project_hip_pointer_parameters_lower_to_opengl_buffers(
     assert "float A[], float B[]" not in output
 
     assert_compute_glsl_validates_if_available(output, tmp_path)
+
+
+def test_translate_project_hip_pointer_parameters_lower_to_directx_resources(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "add_kernel.hip").write_text(
+        textwrap.dedent("""
+            #include <hip/hip_runtime.h>
+
+            __global__ void addKernel(float *A,
+                                      const float *B) {
+                int i = hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x;
+                A[i] += B[i];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    artifact = payload["artifacts"][0]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+
+    assert "RWStructuredBuffer<float> A : register(u0);" in output
+    assert "StructuredBuffer<float> B : register(t1);" in output
+    assert (
+        "void CSMain(uint3 groupThreadID : SV_GroupThreadID, "
+        "uint3 groupID : SV_GroupID)"
+    ) in output
+    assert "int i = ((uint3(1, 1, 1).x * groupID.x) + groupThreadID.x);" in output
+    assert "A[i] += B[i];" in output
+    assert "float A[] : group" not in output
+    assert "float B[] : group" not in output
+    assert "gl_LocalInvocationID" not in output
+    assert "gl_WorkGroupID" not in output
+    assert "gl_WorkGroupSize" not in output
+
+    assert_directx_compute_validates_if_available(output, tmp_path)
 
 
 def test_translate_project_opencl_directx_allocates_generated_parameter_bindings(
