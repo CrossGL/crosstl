@@ -259,7 +259,7 @@ The `bkvogel/metal_performance_testing` matmul kernel is checked for CrossGL,
 Metal, and Vulkan output. OpenGL remains excluded because generated compute
 input parameters still lack valid GLSL resource declarations, tracked in issue
 #973. DirectX remains excluded because Metal buffer parameters still lower to
-raw HLSL pointer parameters, tracked in issue #974.
+raw HLSL pointer parameters, tracked in issue #1156.
 
 The `SaschaWillems/Vulkan` headless compute shader was retested after issue
 #780 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan output.
