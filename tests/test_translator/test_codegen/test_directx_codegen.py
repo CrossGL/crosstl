@@ -1900,6 +1900,60 @@ def test_hlsl_stage_entry_buffer_pointer_params_promote_to_resources():
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
+def test_hlsl_stage_entry_storage_arrays_promote_to_resources():
+    shader = """
+    // HIP to CrossGL conversion
+    // Kernel: AddKernel
+    @compute
+    @stage_entry
+    @workgroup_size(1, 1, 1)
+    fn AddKernel(
+        @group(0) @binding(0) var<storage, read_write> a: array<f32>,
+        @group(0) @binding(1) var<storage, read> b: array<f32>
+    ) {
+        var global_idx: i32 = (
+            gl_LocalInvocationID.x + (gl_WorkGroupID.x * gl_WorkGroupSize.x)
+        );
+        a[global_idx] += b[global_idx];
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "RWStructuredBuffer<float> a : register(u0);" in generated_code
+    assert "StructuredBuffer<float> b : register(t1);" in generated_code
+    assert (
+        "void CSMain(uint3 groupThreadID : SV_GroupThreadID, "
+        "uint3 groupID : SV_GroupID)"
+    ) in generated_code
+    assert "a[global_idx] += b[global_idx];" in generated_code
+    assert ": group" not in generated_code
+    assert "float a[]" not in generated_code
+    assert "float b[]" not in generated_code
+    assert re.search(r"void CSMain\([^)]*StructuredBuffer", generated_code) is None
+    assert re.search(r"void CSMain\([^)]*float\s+[ab]\[\]", generated_code) is None
+    assert "gl_LocalInvocationID" not in generated_code
+    assert "gl_WorkGroupID" not in generated_code
+    assert "gl_WorkGroupSize" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_directx_group_binding_metadata_is_not_parameter_semantic():
+    shader = """
+    shader GroupBindingMetadata {
+        float passthrough(@group(0) @binding(0) float value) {
+            return value;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float passthrough(float value)" in generated_code
+    assert ": group" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
 def test_hlsl_metal_matmul_pointer_params_lower_to_resources(tmp_path):
     shader = """
     #include <metal_stdlib>

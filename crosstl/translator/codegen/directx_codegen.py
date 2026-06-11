@@ -312,6 +312,7 @@ from .stage_utils import (
     compute_local_size,
     declaration_signature,
     deduplicate_named_declarations,
+    function_stage_name,
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
@@ -2208,11 +2209,7 @@ class HLSLCodeGen:
         self.current_hlsl_available_functions = global_functions_by_name
         functions_code = ""
         for func in functions:
-            if hasattr(func, "qualifiers") and func.qualifiers:
-                qualifier = func.qualifiers[0] if func.qualifiers else None
-            else:
-                qualifier = getattr(func, "qualifier", None)
-            qualifier_name = normalize_stage_name(qualifier)
+            qualifier_name = function_stage_name(func)
 
             if not should_emit_qualified_function(target_stage, qualifier_name):
                 continue
@@ -7666,6 +7663,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return f"stage-entry parameter {function_name}.{parameter_name}"
 
     def hlsl_entry_resource_parameter_global_type(self, parameter, func=None):
+        storage_array_type = self.hlsl_storage_array_parameter_resource_type(parameter)
+        if storage_array_type is not None:
+            return storage_array_type
+
         raw_type = self.hlsl_parameter_raw_type(parameter)
         mapped_type = self.map_resource_parameter_type_with_hint(
             raw_type,
@@ -7676,6 +7677,43 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if self.is_hlsl_global_resource_type(mapped_type):
             return mapped_type
         return None
+
+    def hlsl_storage_array_parameter_resource_type(self, parameter):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "resource_qualifiers", []) or []
+        }
+        if "storage" not in qualifiers:
+            return None
+
+        raw_type = self.hlsl_parameter_raw_type(parameter)
+        element_type = None
+        if (
+            hasattr(raw_type, "element_type")
+            and str(type(raw_type)).find("ArrayType") != -1
+        ):
+            element_type = raw_type.element_type
+        else:
+            type_name = self.type_name_string(raw_type)
+            if not type_name:
+                return None
+            base_type, array_suffix = split_array_type_suffix(type_name)
+            if array_suffix:
+                element_type = base_type
+            else:
+                base_name, generic_args = generic_type_parts(type_name)
+                if base_name == "array" and generic_args:
+                    element_type = generic_args[0]
+
+        if element_type is None:
+            return None
+
+        resource_name = (
+            "StructuredBuffer"
+            if qualifiers.intersection({"const", "read", "readonly", "read_only"})
+            else "RWStructuredBuffer"
+        )
+        return f"{resource_name}<{self.map_type(element_type)}>"
 
     def is_hlsl_global_resource_type(self, mapped_type):
         mapped_type = str(mapped_type)
@@ -14913,7 +14951,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 continue
             for param in getattr(func, "parameters", getattr(func, "params", [])):
                 vtype = getattr(param, "param_type", getattr(param, "vtype", None))
-                if self.is_unsized_resource_array_type(vtype):
+                if self.is_unsized_resource_array_type(
+                    vtype
+                ) or self.is_unsized_storage_array_parameter(param):
                     function_arrays.setdefault(func_name, {})[param.name] = vtype
         return function_arrays
 
@@ -14967,6 +15007,25 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return False
         base_type, size = parse_array_type(type_string)
         return size is None and self.is_resource_array_hint_type(base_type)
+
+    def is_unsized_storage_array_parameter(self, parameter):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "resource_qualifiers", []) or []
+        }
+        if "storage" not in qualifiers:
+            return False
+
+        vtype = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        if hasattr(vtype, "element_type") and str(type(vtype)).find("ArrayType") != -1:
+            return vtype.size is None
+        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
+            return False
+        type_string = str(vtype)
+        if "[" not in type_string or "]" not in type_string:
+            return False
+        _, size = parse_array_type(type_string)
+        return size is None
 
     def is_resource_array_hint_type(self, vtype):
         return (
@@ -19219,6 +19278,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return str(attr_name).lower() in {
             "binding",
             "buffer",
+            "group",
             "packoffset",
             "register",
             "sampler",
