@@ -40266,6 +40266,128 @@ def test_translate_project_opencl_to_opengl_casts_signed_global_id_local(
     GLSLParser(GLSLLexer(output).tokenize(), "compute").parse()
 
 
+def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "saxpy.cl").write_text(
+        textwrap.dedent("""
+            kernel void saxpy(global float *dst,
+                              global const float *x,
+                              const float a) {
+                int gid = get_global_id(0);
+                dst[gid] = a * x[gid];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["mojo"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("mojo", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "# CrossGL GPU builtin placeholders" not in output
+    assert "struct _CrossGLGpuBuiltinU32Vec3" not in output
+    assert "fn saxpy(global_idx_uint: SIMD[DType.uint32, 4]) -> None:" in output
+    assert "var gid: Int32 = global_idx_uint[0]" in output
+    assert "gl_GlobalInvocationID" not in output
+
+    assert "crossgl-gpu-builtin-placeholders" not in payload["summary"].get(
+        "missingCapabilityCounts", {}
+    )
+    for diagnostic in payload["diagnostics"]:
+        assert "crossgl-gpu-builtin-placeholders" not in diagnostic.get(
+            "missingCapabilities", []
+        )
+
+
+@pytest.mark.parametrize(
+    ("filename", "source", "expected_params", "expected_expression"),
+    [
+        (
+            "vector_add.cu",
+            """
+            __global__ void vectorAdd(float* C, const float* A, const float* B, int N) {
+                int i = blockDim.x * blockIdx.x + threadIdx.x;
+                if (i < N) {
+                    C[i] = A[i] + B[i];
+                }
+            }
+            """,
+            [
+                "global_idx_uint: SIMD[DType.uint32, 4]",
+                "thread_idx_uint: SIMD[DType.uint32, 4]",
+                "block_idx_uint: SIMD[DType.uint32, 4]",
+                "block_dim_uint: SIMD[DType.uint32, 4]",
+            ],
+            "((block_dim_uint[0] * block_idx_uint[0]) + thread_idx_uint[0])",
+        ),
+        (
+            "add_kernel.hip",
+            """
+            #include <hip/hip_runtime.h>
+
+            __global__ void addKernel(const float *A,
+                                      const float *B,
+                                      float *C,
+                                      int N) {
+                int i = hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x;
+                if (i < N) {
+                    C[i] = A[i] + B[i];
+                }
+            }
+            """,
+            [
+                "thread_idx_uint: SIMD[DType.uint32, 4]",
+                "block_idx_uint: SIMD[DType.uint32, 4]",
+                "block_dim_uint: SIMD[DType.uint32, 4]",
+            ],
+            "((block_dim_uint[0] * block_idx_uint[0]) + thread_idx_uint[0])",
+        ),
+    ],
+)
+def test_translate_project_cuda_hip_to_mojo_lower_compute_builtin_inputs(
+    tmp_path,
+    filename,
+    source,
+    expected_params,
+    expected_expression,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / filename).write_text(textwrap.dedent(source).strip(), encoding="utf-8")
+
+    payload = translate_project(
+        repo,
+        targets=["mojo"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("mojo", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "# CrossGL GPU builtin placeholders" not in output
+    assert "struct _CrossGLGpuBuiltinU32Vec3" not in output
+    for expected_param in expected_params:
+        assert expected_param in output
+    assert expected_expression in output
+    assert "crossgl-gpu-builtin-placeholders" not in payload["summary"].get(
+        "missingCapabilityCounts", {}
+    )
+
+
 def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     tmp_path,
 ):
