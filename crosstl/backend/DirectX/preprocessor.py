@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
+PRESERVED_SYSTEM_INCLUDE_SENTINEL = "__CROSSGL_HLSL_PRESERVED_INCLUDE__ "
+
 
 @dataclass
 class Macro:
@@ -44,7 +46,9 @@ class HLSLPreprocessor:
     def preprocess(self, code: str, file_path: Optional[str] = None) -> str:
         logical_lines = self._split_logical_lines(code)
         output_lines = self._process_lines(logical_lines, file_path)
-        return "\n".join(output_lines)
+        return "\n".join(output_lines).replace(
+            PRESERVED_SYSTEM_INCLUDE_SENTINEL, "#include "
+        )
 
     def _split_logical_lines(self, code: str) -> List[str]:
         lines = code.splitlines()
@@ -348,6 +352,8 @@ class HLSLPreprocessor:
 
         if self.strict:
             raise FileNotFoundError(f"Include not found: {target}")
+        if delimiter == "<":
+            return f"{PRESERVED_SYSTEM_INCLUDE_SENTINEL}<{target}>", file_path or ""
         return None
 
     def _is_pragma_once(self, rest: str) -> bool:

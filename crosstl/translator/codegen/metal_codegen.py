@@ -19949,6 +19949,30 @@ class MetalCodeGen:
             return self.cube_array_texture_coordinate_parts(coord)
         return self.array_texture_coordinate_parts(coord)
 
+    def texture_read_coordinate_components(self, texture_type, coord):
+        texture_type = self.resource_base_type(texture_type)
+        if texture_type.startswith("texture1d_array<"):
+            coord_x = self.vector_component(coord, "x")
+            layer = f"uint({self.vector_component(coord, 'y')})"
+            return coord_x, layer, 1
+        if texture_type.startswith(
+            ("texture2d_array<", "depth2d_array<", "texture2d_ms_array<")
+        ):
+            coord_xy = self.vector_component(coord, "xy")
+            layer = f"uint({self.vector_component(coord, 'z')})"
+            return coord_xy, layer, 2
+        if texture_type.startswith("texture1d<"):
+            return coord, None, 1
+        if texture_type.startswith("texture3d<"):
+            return coord, None, 3
+        return coord, None, 2
+
+    def texture_read_coordinate_parts(self, texture_type, coord):
+        texel_coord, layer, dimensions = self.texture_read_coordinate_components(
+            texture_type, coord
+        )
+        return self.unsigned_coordinate_expression(texel_coord, dimensions), layer
+
     def texture_query_lod_coordinate(self, texture_type, coord):
         texture_type = self.resource_base_type(texture_type)
         swizzle = texture_query_lod_coordinate_swizzle("Metal", texture_type)
@@ -21790,29 +21814,31 @@ class MetalCodeGen:
         if is_texel_fetch_basic_operation(func_name) and len(args) >= 3:
             if self.is_cube_texture_resource(texture_type):
                 return self.unsupported_cube_texel_fetch_call(func_name, texture_type)
+            texel_coord, layer = self.texture_read_coordinate_parts(
+                texture_type, coord
+            )
             if self.is_multisample_texture_resource(texture_type):
-                lod = self.generate_expression(args[2])
-                if texture_type == "texture2d_ms_array<float>":
-                    texel_xy, layer = self.array_texture_coordinate_parts(coord)
-                    return f"{texture_name}.read({texel_xy}, {layer}, uint({lod}))"
-                return f"{texture_name}.read({coord}, uint({lod}))"
+                sample = self.unsigned_coordinate_expression(
+                    self.generate_expression(args[2]), 1
+                )
+                if layer is not None:
+                    return f"{texture_name}.read({texel_coord}, {layer}, {sample})"
+                return f"{texture_name}.read({texel_coord}, {sample})"
             if self.is_texture1d_sample_resource(texture_type):
                 lod = self.metal_texture1d_read_lod_argument(args[2])
                 if lod is None:
                     return self.unsupported_texture1d_texel_fetch_lod_call(
                         func_name, texture_type
                     )
-                if is_array_texture:
-                    texel_coord, layer = self.texture_coordinate_parts(
-                        texture_type, coord
-                    )
-                    return f"{texture_name}.read(uint({texel_coord}), {layer}, {lod})"
-                return f"{texture_name}.read(uint({coord}), {lod})"
-            lod = self.generate_expression(args[2])
-            if is_array_texture:
-                texel_coord, layer = self.texture_coordinate_parts(texture_type, coord)
+                if layer is not None:
+                    return f"{texture_name}.read({texel_coord}, {layer}, {lod})"
+                return f"{texture_name}.read({texel_coord}, {lod})"
+            lod = self.unsigned_coordinate_expression(
+                self.generate_expression(args[2]), 1
+            )
+            if layer is not None:
                 return f"{texture_name}.read({texel_coord}, {layer}, {lod})"
-            return f"{texture_name}.read({coord}, {lod})"
+            return f"{texture_name}.read({texel_coord}, {lod})"
 
         if is_texel_fetch_offset_operation(func_name) and len(args) >= 4:
             if self.is_cube_texture_resource(texture_type):
@@ -21835,14 +21861,26 @@ class MetalCodeGen:
                         f"{layer}, {lod})"
                     )
                 return f"{texture_name}.read(uint(({coord} + {offset})), {lod})"
-            lod = self.generate_expression(args[2])
+            lod = self.unsigned_coordinate_expression(
+                self.generate_expression(args[2]), 1
+            )
             offset = self.generate_expression(args[3])
-            if is_array_texture:
-                texel_coord, layer = self.texture_coordinate_parts(texture_type, coord)
-                return (
-                    f"{texture_name}.read(({texel_coord} + {offset}), {layer}, {lod})"
+            (
+                texel_coord,
+                layer,
+                dimensions,
+            ) = self.texture_read_coordinate_components(
+                texture_type, coord
+            )
+            if layer is not None:
+                offset_coord = self.unsigned_coordinate_expression(
+                    f"({texel_coord} + {offset})", dimensions
                 )
-            return f"{texture_name}.read(({coord} + {offset}), {lod})"
+                return f"{texture_name}.read({offset_coord}, {layer}, {lod})"
+            offset_coord = self.unsigned_coordinate_expression(
+                f"({texel_coord} + {offset})", dimensions
+            )
+            return f"{texture_name}.read({offset_coord}, {lod})"
 
         return None
 

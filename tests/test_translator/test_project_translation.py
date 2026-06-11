@@ -6922,6 +6922,127 @@ def test_translate_project_records_include_forwarding_for_all_source_frontends(
         }
 
 
+def test_translate_project_records_include_dependency_processing_for_all_source_frontends(
+    tmp_path, monkeypatch
+):
+    register_default_sources()
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    include_dir = repo / "includes"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir()
+    include_dir.joinpath("shared.inc").write_text("// shared\n", encoding="utf-8")
+    scenarios = {
+        "resolved": '#include <shared.inc>\n',
+        "system": '#include <runtime_system.h>\n',
+        "missing": '#include "missing.inc"\n',
+    }
+    source_names = sorted(SOURCE_REGISTRY.names())
+    source_overrides = []
+    for source_name in source_names:
+        for scenario, source_text in scenarios.items():
+            shader_path = shader_dir / f"{source_name}-{scenario}.shader"
+            shader_path.write_text(source_text, encoding="utf-8")
+            source_overrides.append(
+                f'"shaders/{source_name}-{scenario}.shader" = "{source_name}"'
+            )
+    source_override_text = "\n".join(source_overrides)
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(f"""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["cgl"]
+            output_dir = "translated"
+            include_dirs = ["includes"]
+
+            [project.sources]
+            {source_override_text}
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    def write_shader(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del file_path, backend, format_output, source_backend, include_paths, defines
+        Path(save_shader).write_text("// translated\n", encoding="utf-8")
+        return "// translated\n"
+
+    monkeypatch.setattr(project_pipeline, "translate", write_shader)
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    inspection = inspect_project_report(report_path)
+
+    expected_by_status = {}
+    expected_by_source = {}
+    artifacts_by_source = {
+        artifact["source"]: artifact for artifact in payload["artifacts"]
+    }
+    preserving_sources = (
+        project_pipeline.SOURCE_FRONTENDS_PRESERVING_UNRESOLVED_SYSTEM_INCLUDES
+    )
+    for source_name in source_names:
+        supports_include_paths = SOURCE_REGISTRY.get(
+            source_name
+        ).supports_lexer_keyword("include_paths")
+        expected_source_counts = {}
+        for scenario in scenarios:
+            if not supports_include_paths:
+                expected_status = "not-supported"
+            elif scenario == "resolved":
+                expected_status = "forwarded"
+            elif scenario == "system" and source_name in preserving_sources:
+                expected_status = "preserved"
+            else:
+                expected_status = "rejected"
+            expected_by_status[expected_status] = (
+                expected_by_status.get(expected_status, 0) + 1
+            )
+            expected_source_counts[expected_status] = (
+                expected_source_counts.get(expected_status, 0) + 1
+            )
+            artifact = artifacts_by_source[f"shaders/{source_name}-{scenario}.shader"]
+            assert artifact["includeDependencyProcessing"]["status"] == expected_status
+            assert artifact["includeDependencyProcessing"]["frontend"] == "lexer"
+            assert (
+                artifact["includeDependencyProcessing"]["supportsIncludePaths"]
+                is supports_include_paths
+            )
+            assert artifact["includeDependencyProcessing"]["dependencyCount"] == 1
+        expected_by_source[source_name] = dict(sorted(expected_source_counts.items()))
+
+    assert validation["success"] is True
+    assert payload["summary"]["translatedCount"] == len(source_names) * len(scenarios)
+    assert payload["summary"]["includeDependencyCount"] == (
+        len(source_names) * len(scenarios)
+    )
+    assert payload["summary"]["includeDependencyProcessingByStatus"] == dict(
+        sorted(expected_by_status.items())
+    )
+    assert (
+        payload["summary"]["includeDependencyProcessingBySourceBackend"]
+        == expected_by_source
+    )
+    assert payload["summary"]["includeDependencyProcessingByTarget"] == {
+        "cgl": dict(sorted(expected_by_status.items()))
+    }
+    assert inspection["includeDependencyProcessing"]["available"] is True
+    assert inspection["includeDependencyProcessing"]["byStatus"] == dict(
+        sorted(expected_by_status.items())
+    )
+
+
 def test_translate_project_records_define_forwarding_for_all_source_frontends(
     tmp_path, monkeypatch
 ):
@@ -22004,6 +22125,92 @@ def test_translate_project_records_structured_diagnostics_for_failures(tmp_path)
     assert payload["migration"]["actions"][0]["targets"] == ["opengl"]
 
 
+def test_translate_project_reports_directx_unresolved_source_type_diagnostic(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "missing_texture.cgl").write_text(
+        textwrap.dedent("""
+            shader MissingTextureType {
+                compute {
+                    void main() {
+                        vec4 color = texture(missingTex, vec2(0.0));
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.unresolved-source-type": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "directx.type-inference": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.unresolved-source-type"
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["location"]["file"] == "missing_texture.cgl"
+    assert diagnostic["missingCapabilities"] == ["directx.type-inference"]
+    assert "missingTex" in diagnostic["message"]
+    assert "operation 'texture'" in diagnostic["message"]
+    assert "function 'main'" in diagnostic["message"]
+    assert "NoneType" not in diagnostic["message"]
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "directx"
+    assert "NoneType" not in artifact["error"]
+    assert not (repo / artifact["path"]).exists()
+
+
+def test_translate_project_rewrites_directx_nontype_startswith_failure(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    def raise_raw_directx_failure(*_args, **_kwargs):
+        raise AttributeError("'NoneType' object has no attribute 'startswith'")
+
+    monkeypatch.setattr(project_pipeline, "translate", raise_raw_directx_failure)
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.unresolved-source-type": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "directx.type-inference": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.unresolved-source-type"
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["missingCapabilities"] == ["directx.type-inference"]
+    assert "source type metadata" in diagnostic["message"]
+    assert "simple.cgl" in diagnostic["message"]
+    assert "NoneType" not in diagnostic["message"]
+    assert "startswith" not in diagnostic["message"]
+    assert "NoneType" not in payload["artifacts"][0]["error"]
+
+
 def test_translate_project_reports_glsl_fragment_invocation_density_as_unsupported(
     tmp_path,
 ):
@@ -31095,6 +31302,103 @@ def test_translate_project_opencl_targets_do_not_leak_resource_parameter_syntax(
     assert "const device float* in_ [[buffer(1)]]" in outputs["metal"]
     assert "constant scale_Args& scale_Args [[buffer(2)]]" in outputs["metal"]
     assert "kernel void kernel_scale(" in outputs["metal"]
+
+
+def test_translate_project_opencl_directx_allocates_generated_parameter_bindings(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "ops.cl").write_text(
+        textwrap.dedent("""
+            kernel void scale(global float *out_a,
+                              global const float *in_a,
+                              const float factor) {
+                uint i = get_global_id(0);
+                out_a[i] = in_a[i] * factor;
+            }
+
+            kernel void bias(global float *out_b,
+                             global const float *in_b,
+                             const float offset) {
+                uint i = get_global_id(0);
+                out_b[i] = in_b[i] + offset;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "RWStructuredBuffer<float> out_a : register(u0);" in output
+    assert "StructuredBuffer<float> in_a : register(t1);" in output
+    assert "RWStructuredBuffer<float> out_b : register(u1);" in output
+    assert "StructuredBuffer<float> in_b : register(t2);" in output
+    assert "cbuffer scale_Args : register(b2)" in output
+    assert "cbuffer bias_Args : register(b3)" in output
+    assert output.count(": register(b2)") == 1
+
+
+def test_translate_project_metal_directx_relocates_stage_entry_buffer_bindings(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "kernels.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct ParamsA {
+                uint n;
+            };
+
+            struct ParamsB {
+                uint n;
+            };
+
+            kernel void first(device float* out [[buffer(0)]],
+                              constant ParamsA& params [[buffer(2)]],
+                              uint gid [[thread_position_in_grid]]) {
+                out[gid] = float(params.n);
+            }
+
+            kernel void second(device float* dst [[buffer(0)]],
+                               constant ParamsB& params [[buffer(2)]],
+                               uint gid [[thread_position_in_grid]]) {
+                dst[gid] = float(params.n);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "RWStructuredBuffer<float> out_ : register(u0);" in output
+    assert "ConstantBuffer<ParamsA> params : register(b2);" in output
+    assert "RWStructuredBuffer<float> dst : register(u1);" in output
+    assert "ConstantBuffer<ParamsB> second_params : register(b3);" in output
+    assert output.count(": register(b2)") == 1
 
 
 def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(

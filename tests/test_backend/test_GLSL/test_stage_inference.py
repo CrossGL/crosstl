@@ -284,7 +284,7 @@ def reverse_plain_glsl(source: str, file_path: str = "/tmp/upstream-sample.glsl"
             [
                 "fragment {",
                 "#pragma shader_stage ( fragment )",
-                "vec4 main() @location(0) @ outColor",
+                "vec4 main() @location(0)",
                 "outColor = vec4(1.0);",
             ],
             id="glslc-pragma-shader-stage-fragment",
@@ -346,7 +346,7 @@ def reverse_plain_glsl(source: str, file_path: str = "/tmp/upstream-sample.glsl"
             [
                 "fragment {",
                 "#extension GL_ARB_separate_shader_objects : enable",
-                "vec4 main(FragmentInput input) @location(0) @ outColor",
+                "vec4 main(FragmentInput input) @location(0)",
                 "outColor = vec4(input.uv, 0.0, 1.0);",
             ],
             id="vulkan-fragment-output-location-infers-fragment",
