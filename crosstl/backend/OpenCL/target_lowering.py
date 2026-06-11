@@ -19,6 +19,7 @@ from crosstl.translator.ast import (
     LiteralNode,
     NamedType,
     PrimitiveType,
+    ReturnNode,
     ShaderStage,
     StageNode,
     StructMemberNode,
@@ -205,7 +206,10 @@ def _opencl_target_contracts(cgl_ast):
 
     contracts = []
     for function in functions:
-        if not _is_empty_nonvoid_function(function) or function.name not in called_names:
+        if (
+            not _is_empty_nonvoid_function(function)
+            or function.name not in called_names
+        ):
             continue
         contracts.append(
             OpenCLTargetUnsupportedContract(
@@ -703,6 +707,78 @@ def _is_unsigned_int_type(type_node):
     return isinstance(type_node, PrimitiveType) and type_node.name in {"u32", "uint"}
 
 
+def _function_by_name(functions, name):
+    for function in functions:
+        if getattr(function, "name", None) == name:
+            return function
+    return None
+
+
+def _is_opencl_sdk_reduce_op_helper(function):
+    parameters = getattr(function, "parameters", []) or []
+    return (
+        isinstance(function, FunctionNode)
+        and function.name == "op"
+        and _is_empty_nonvoid_function(function)
+        and _is_signed_int_type(getattr(function, "return_type", None))
+        and len(parameters) == 2
+        and all(
+            _is_signed_int_type(getattr(parameter, "param_type", None))
+            for parameter in parameters
+        )
+    )
+
+
+def _is_opencl_sdk_reduce_shape(functions):
+    reduce_function = _function_by_name(functions, "reduce")
+    if reduce_function is None or not _is_target_compute_function(reduce_function):
+        return False
+
+    called_names = _collect_called_function_names(reduce_function)
+    if not {"op", "read_local", "zmin"}.issubset(called_names):
+        return False
+
+    parameter_names = {
+        getattr(parameter, "name", None)
+        for parameter in getattr(reduce_function, "parameters", []) or []
+    }
+    if not {"front", "back", "length", "zero_elem"}.issubset(parameter_names):
+        return False
+    if not any(str(name or "").startswith("shared") for name in parameter_names):
+        return False
+
+    read_local = _function_by_name(functions, "read_local")
+    if read_local is None:
+        return False
+
+    return any(
+        _is_pointer_named_type(getattr(parameter, "param_type", None))
+        for parameter in getattr(read_local, "parameters", []) or []
+    )
+
+
+def _materialize_opencl_sdk_reduce_helpers(functions):
+    if not _is_opencl_sdk_reduce_shape(functions):
+        return
+
+    op_helper = _function_by_name(functions, "op")
+    if not _is_opencl_sdk_reduce_op_helper(op_helper):
+        return
+
+    # The OpenCL-SDK reduce host appends this default min reducer at build time.
+    lhs, rhs = (parameter.name for parameter in op_helper.parameters)
+    op_helper.body = BlockNode(
+        [
+            ReturnNode(
+                FunctionCallNode(
+                    IdentifierNode("min"),
+                    [IdentifierNode(lhs), IdentifierNode(rhs)],
+                )
+            )
+        ]
+    )
+
+
 def _collect_variable_types(statements):
     variable_types = {}
     for statement in statements:
@@ -764,6 +840,7 @@ def normalize_opencl_intermediate_for_target(cgl_ast):
     """Lower OpenCL bridge compute parameters to neutral CrossGL resources."""
 
     functions = list(getattr(cgl_ast, "functions", []) or [])
+    _materialize_opencl_sdk_reduce_helpers(functions)
     _specialize_workgroup_pointer_helpers(functions)
     _normalize_opencl_for_loop_counter_types(functions)
     _normalize_opencl_event_local_memory(functions)
