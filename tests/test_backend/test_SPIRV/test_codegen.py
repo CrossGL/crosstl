@@ -10,6 +10,7 @@ from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
 from crosstl.backend.SPIRV.VulkanParser import VulkanParser
 from crosstl.translator import parse as parse_crossgl
 from crosstl.translator.ast import ShaderStage
+from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.source_registry import BINARY_SPIRV_UNSUPPORTED_MESSAGE
 
@@ -8376,6 +8377,41 @@ def test_spirv_tools_gl_pervertex_access_chain_codegen():
     assert "gl_Position = _ua_position;" in generated_code
     assert "value_19[0]" not in generated_code
     assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_gl_pervertex_access_chain_metal_codegen():
+    tokens = tokenize_code(SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert "vertex vertex_main_Return vertex_main" in generated_code
+    assert "float4 _ua_position [[attribute(0)]];" in generated_code
+    assert "vertex_main_Input _crossglInput [[stage_in]]" in generated_code
+    assert "float4 _ua_position = _crossglInput._ua_position;" in generated_code
+    assert "float4 gl_Position [[position]];" in generated_code
+    assert "float gl_PointSize [[point_size]];" in generated_code
+    assert "gl_Position = _ua_position;" in generated_code
+    assert "_crossglOutput.gl_Position = gl_Position;" in generated_code
+    assert "_crossglOutput.gl_PointSize = gl_PointSize;" in generated_code
+    assert "return _crossglOutput;" in generated_code
+    assert "[[mediump]]" not in generated_code
+    assert "[[lowp]]" not in generated_code
+    assert "[[highp]]" not in generated_code
+    assert "constant float _ua_position" not in generated_code
+    assert "constant float gl_Position" not in generated_code
+    assert "return;\n    vertex_main_Return" not in generated_code
+    assert "AssignmentNode(" not in generated_code
+
+
+def test_glslang_relaxed_precision_interface_metal_codegen_omits_precision_attributes():
+    tokens = tokenize_code(SPIRV_GLSLANG_RELAXED_PRECISION_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert "[[mediump]]" not in generated_code
+    assert "[[lowp]]" not in generated_code
+    assert "[[highp]]" not in generated_code
+    assert "RelaxedPrecision" not in generated_code
 
 
 def test_translate_api_preserves_spirv_builtin_interfaces_for_opengl(tmp_path):
