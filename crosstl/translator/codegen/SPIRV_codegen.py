@@ -61,9 +61,11 @@ from .enum_utils import (
     substitute_generic_type_name,
 )
 from .generic_function_utils import (
+    collect_unresolved_generic_function_call_names,
     generic_function_call_name,
     generic_function_emission_list,
     generic_function_parameters,
+    generic_function_value_arguments,
     iter_function_nodes,
     prepare_generic_function_specializations,
 )
@@ -259,6 +261,7 @@ class VulkanSPIRVCodeGen:
         self.current_return_semantic_output = None
         self.current_entry_point_return_outputs = None
         self.current_expression_expected_type = None
+        self.current_generic_type_substitutions = {}
         self.mesh_output_counts_by_function = {}
         self.mesh_vertex_output_variable = None
         self.mesh_vertex_output_limit = None
@@ -2416,7 +2419,10 @@ class VulkanSPIRVCodeGen:
             if match is None:
                 rejection_reasons[id(candidate)] = rejection_reason
                 continue
-            scored_matches.append((match["rank_score"], match["score"], candidate))
+            specificity_score = 0 if generic_function_parameters(candidate) else 1
+            scored_matches.append(
+                (match["rank_score"], match["score"], specificity_score, candidate)
+            )
 
         if not scored_matches:
             if len(candidates) == 1:
@@ -2434,12 +2440,18 @@ class VulkanSPIRVCodeGen:
                 rejection_reasons=rejection_reasons,
             )
 
-        scored_matches.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        best_rank_score, best_score, best_candidate = scored_matches[0]
+        scored_matches.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+        best_rank_score, best_score, best_specificity_score, best_candidate = (
+            scored_matches[0]
+        )
         tied_candidates = [
             candidate
-            for rank_score, score, candidate in scored_matches
-            if rank_score == best_rank_score and score == best_score
+            for rank_score, score, specificity_score, candidate in scored_matches
+            if (
+                rank_score == best_rank_score
+                and score == best_score
+                and specificity_score == best_specificity_score
+            )
         ]
         if len(tied_candidates) > 1:
             raise self.storage_buffer_overload_diagnostic(
@@ -3187,6 +3199,66 @@ class VulkanSPIRVCodeGen:
             return left_type
         return self.register_primitive_type(scalar_type)
 
+    def bitwise_expression_operand_type(
+        self, left_type: Optional[SpirvId], right_type: Optional[SpirvId]
+    ) -> Optional[SpirvId]:
+        """Return a shared integer type for bitwise operands when it is knowable."""
+        if left_type is None and right_type is None:
+            return None
+
+        left_type = self.ensure_registered_type(left_type) if left_type else None
+        right_type = self.ensure_registered_type(right_type) if right_type else None
+        left_vector = (
+            self.vector_component_type_and_count(left_type.type.base_type)
+            if left_type is not None
+            else None
+        )
+        right_vector = (
+            self.vector_component_type_and_count(right_type.type.base_type)
+            if right_type is not None
+            else None
+        )
+
+        if left_vector is not None or right_vector is not None:
+            if (
+                left_vector is not None
+                and right_vector is not None
+                and left_vector[1] != right_vector[1]
+            ):
+                return None
+            component_count = (left_vector or right_vector)[1]
+            component_names = [
+                vector[0]
+                for vector in (left_vector, right_vector)
+                if vector is not None
+            ]
+            for scalar_type in (left_type, right_type):
+                if scalar_type is not None:
+                    scalar_component = self.normalize_primitive_name(
+                        scalar_type.type.base_type
+                    )
+                    if scalar_component in {"int", "uint"}:
+                        component_names.append(scalar_component)
+            if not component_names or any(
+                component not in {"int", "uint"} for component in component_names
+            ):
+                return None
+            component_type = "uint" if "uint" in component_names else "int"
+            return self.register_vector_type(
+                self.register_primitive_type(component_type), component_count
+            )
+
+        type_names = [
+            self.normalize_primitive_name(value.type.base_type)
+            for value in (left_type, right_type)
+            if value is not None
+        ]
+        if not type_names or any(
+            type_name not in {"int", "uint"} for type_name in type_names
+        ):
+            return None
+        return self.register_primitive_type("uint" if "uint" in type_names else "int")
+
     def splat_scalar_to_vector(
         self, scalar_id: SpirvId, vector_type: SpirvId
     ) -> SpirvId:
@@ -3700,7 +3772,9 @@ class VulkanSPIRVCodeGen:
         offsets_type = self.value_types.get(offsets_value.id)
         array_info = self.array_type_info_from_type(offsets_type)
         if array_info is not None:
-            element_type, _ = array_info
+            element_type, element_count = array_info
+            if element_count != 4:
+                return [], component_id
             return [
                 self.composite_extract(offsets_value, element_type, index)
                 for index in range(4)
@@ -12168,8 +12242,6 @@ class VulkanSPIRVCodeGen:
     def is_bound_uniform_value_parameter(
         self, param, execution_model: Optional[str]
     ) -> bool:
-        if self.explicit_descriptor_binding(param) is None:
-            return False
         qualifiers = self.parameter_qualifier_names(param)
         qualifiers.update(self.resource_parameter_qualifier_names(param))
         if not qualifiers & {"uniform", "constant"}:
@@ -12188,15 +12260,21 @@ class VulkanSPIRVCodeGen:
 
     def is_storage_resource_parameter(self, param) -> bool:
         param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+        if param_type is None:
+            return False
         type_name = self.type_name_from_value(param_type)
         if self.is_structured_buffer_declared_type_name(type_name):
             return True
 
         qualifiers = self.resource_parameter_qualifier_names(param)
-        if "storage" not in qualifiers:
-            return False
+        parameter_qualifiers = self.parameter_qualifier_names(param)
+        if self.pointer_pointee_type_name_from_string(type_name) is not None:
+            return bool(
+                qualifiers & {"storage", "buffer"}
+                or parameter_qualifiers & {"device", "constant", "storage", "buffer"}
+            )
 
-        if param_type is None:
+        if "storage" not in qualifiers:
             return False
         param_type_id = self.map_crossgl_type(param_type)
         return self.array_type_info_from_type(param_type_id) is not None
@@ -12214,7 +12292,9 @@ class VulkanSPIRVCodeGen:
         type_name = self.type_name_from_value(variable.var_type)
         if self.is_structured_buffer_declared_type_name(type_name):
             return self.process_structured_buffer_declaration(variable, type_name)
-        return self.process_glsl_buffer_block_declaration(variable, type_name)
+        return self.process_glsl_buffer_block_declaration(
+            variable, type_name, allow_binding_reassignment=True
+        )
 
     def entry_point_uniform_parameter_value(
         self, param, param_value_type: SpirvId
@@ -12226,7 +12306,9 @@ class VulkanSPIRVCodeGen:
         self.decorate_cbuffer_type(block_type, [(member_type, param_name)])
 
         var_id = self.create_variable(block_type, "Uniform", f"{param_name}Uniform")
-        descriptor_set, binding = self.resource_descriptor_slot(param)
+        descriptor_set, binding = self.resource_descriptor_slot(
+            param, allow_binding_reassignment=True
+        )
         self.decorations.append(
             f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
         )
@@ -12915,6 +12997,8 @@ class VulkanSPIRVCodeGen:
         type_str = self.normalize_reference_type_name(type_str)
         type_str = self.normalize_generic_vector_type(type_str)
         type_str = self.normalize_hlsl_matrix_type(type_str)
+        if type_str.startswith("&"):
+            return self.map_crossgl_type(type_str[1:].strip())
 
         array_type = self.split_outer_array_type(type_str)
         if array_type is not None:
@@ -13792,7 +13876,11 @@ class VulkanSPIRVCodeGen:
         return "std430"
 
     def process_glsl_buffer_block_declaration(
-        self, node: VariableNode, type_name: str
+        self,
+        node: VariableNode,
+        type_name: str,
+        *,
+        allow_binding_reassignment: bool = False,
     ) -> SpirvId:
         """Emit a GLSL-style buffer block or buffer-qualified array variable."""
         layout = self.glsl_buffer_block_layout(node)
@@ -13870,7 +13958,9 @@ class VulkanSPIRVCodeGen:
         self.decorate_storage_buffer_member_memory_qualifiers(block_type, memory_flags)
 
         var_id = self.create_variable(value_type, "Uniform", node.name)
-        descriptor_set, binding = self.resource_descriptor_slot(node)
+        descriptor_set, binding = self.resource_descriptor_slot(
+            node, allow_binding_reassignment=allow_binding_reassignment
+        )
         self.decorations.append(
             f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
         )
@@ -15292,6 +15382,8 @@ class VulkanSPIRVCodeGen:
     def process_variable_declaration(self, node: VariableNode):
         """Process a local CrossGL variable declaration."""
         var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
+        if self.type_name_from_value(var_type_source) == "auto":
+            var_type_source = None
         var_type_name = self.type_name_from_value(var_type_source)
         infer_declared_type = var_type_source is None or var_type_name == "auto"
         if self.process_local_resource_alias_declaration(
@@ -15569,13 +15661,21 @@ class VulkanSPIRVCodeGen:
         }
         return var_id
 
-    def resource_descriptor_slot(self, node: VariableNode) -> Tuple[int, int]:
+    def resource_descriptor_slot(
+        self, node: VariableNode, *, allow_binding_reassignment: bool = False
+    ) -> Tuple[int, int]:
         descriptor_set = self.resource_descriptor_set(node)
         explicit_binding = self.explicit_descriptor_binding(node)
 
         if explicit_binding is not None:
             key = (descriptor_set, explicit_binding)
-            if key in self.used_resource_bindings:
+            if key in self.used_resource_bindings or (
+                allow_binding_reassignment and key in self.reserved_resource_bindings
+            ):
+                if allow_binding_reassignment:
+                    binding = self.next_available_resource_binding(descriptor_set)
+                    self.used_resource_bindings.add((descriptor_set, binding))
+                    return descriptor_set, binding
                 raise ValueError(
                     f"Duplicate SPIR-V resource binding set {descriptor_set} "
                     f"binding {explicit_binding}"
@@ -16630,8 +16730,24 @@ class VulkanSPIRVCodeGen:
         else:
             type_name = str(type_value)
 
-        substitutions = self.current_generic_function_substitutions or {}
+        substitutions = {}
+        substitutions.update(
+            getattr(self, "current_generic_type_substitutions", {}) or {}
+        )
+        substitutions.update(
+            getattr(self, "current_generic_function_substitutions", {}) or {}
+        )
         if substitutions:
+            if type_name.startswith("&"):
+                referenced = substitute_generic_type_name(
+                    type_name[1:].strip(), substitutions
+                )
+                return f"&{referenced}"
+            if type_name.endswith("*"):
+                pointee = substitute_generic_type_name(
+                    type_name[:-1].strip(), substitutions
+                )
+                return f"{pointee}*"
             return substitute_generic_type_name(type_name, substitutions)
         return type_name
 
@@ -16682,7 +16798,8 @@ class VulkanSPIRVCodeGen:
         location_suffix = f" at {location_label}" if location_label else ""
         return UnsupportedSPIRVFeatureError(
             "generic-helper-specialization",
-            "SPIR-V codegen does not support unspecialized generic helper "
+            "SPIR-V codegen does not support generic functions: "
+            "unspecialized generic helper "
             f"'{helper_name}' with generic parameters ({params_label})"
             f"{location_suffix}; specialize the function before SPIR-V generation",
             missing_capabilities=("spirv.generic_function_specialization",),
@@ -16835,9 +16952,14 @@ class VulkanSPIRVCodeGen:
         )
         return len(parameters) == len(args)
 
-    def storage_buffer_argument_match_score(self, param, arg) -> Optional[int]:
+    def storage_buffer_argument_match_score(
+        self, param, arg, substitutions=None
+    ) -> Optional[int]:
         storage_buffer_type_name = self.storage_buffer_parameter_type_name(param)
         if storage_buffer_type_name is not None:
+            storage_buffer_type_name = self.substitute_generic_signature_type(
+                storage_buffer_type_name, substitutions
+            )
             actual_type_name = self.storage_buffer_expression_type_name(arg)
             if actual_type_name is None:
                 return None
@@ -16854,6 +16976,9 @@ class VulkanSPIRVCodeGen:
             return score
 
         declared_type_name = self.function_parameter_type_name(param)
+        declared_type_name = self.substitute_generic_signature_type(
+            declared_type_name, substitutions
+        )
         actual_type_name = self.call_argument_type_name(arg)
         if not self.scalar_or_vector_type_compatible(
             declared_type_name, actual_type_name
@@ -16888,10 +17013,15 @@ class VulkanSPIRVCodeGen:
         type_name = str(type_name).strip()
         return type_name.startswith("&") or type_name.endswith("&")
 
-    def storage_buffer_argument_rejection_reason(self, param, arg, arg_index) -> str:
+    def storage_buffer_argument_rejection_reason(
+        self, param, arg, arg_index, substitutions=None
+    ) -> str:
         param_name = getattr(param, "name", f"param{arg_index}")
         storage_buffer_type_name = self.storage_buffer_parameter_type_name(param)
         if storage_buffer_type_name is not None:
+            storage_buffer_type_name = self.substitute_generic_signature_type(
+                storage_buffer_type_name, substitutions
+            )
             expected_class = self.storage_buffer_resource_class_label(
                 storage_buffer_type_name
             )
@@ -16913,7 +17043,10 @@ class VulkanSPIRVCodeGen:
                 f"({storage_buffer_type_name})"
             )
 
-        declared_type_name = self.function_parameter_type_name(param) or "unknown"
+        declared_type_name = self.substitute_generic_signature_type(
+            self.function_parameter_type_name(param), substitutions
+        )
+        declared_type_name = declared_type_name or "unknown"
         actual_type_name = self.call_argument_type_name(arg) or "unknown"
         return (
             f"argument {arg_index + 1} type {actual_type_name} is incompatible "
@@ -16931,6 +17064,9 @@ class VulkanSPIRVCodeGen:
             for index, param in enumerate(parameters)
             if index not in skipped_param_indices
         ]
+        substitutions = self.generic_storage_function_type_bindings(function_node, args)
+        if substitutions is None:
+            return None, "generic type arguments could not be resolved"
 
         reason = None
         incompatibility_reasons = []
@@ -16967,7 +17103,9 @@ class VulkanSPIRVCodeGen:
 
             original_param_index, param = effective_parameters[param_index]
             arg = args[arg_index]
-            arg_score = self.storage_buffer_argument_match_score(param, arg)
+            arg_score = self.storage_buffer_argument_match_score(
+                param, arg, substitutions
+            )
             if arg_score is not None:
                 search(
                     param_index + 1,
@@ -16978,7 +17116,9 @@ class VulkanSPIRVCodeGen:
                 )
             else:
                 incompatibility_reasons.append(
-                    self.storage_buffer_argument_rejection_reason(param, arg, arg_index)
+                    self.storage_buffer_argument_rejection_reason(
+                        param, arg, arg_index, substitutions
+                    )
                 )
             search(
                 param_index,
@@ -17078,6 +17218,78 @@ class VulkanSPIRVCodeGen:
 
         return False
 
+    def collect_generic_type_bindings(
+        self, expected_type, actual_type, generic_params, substitutions
+    ) -> None:
+        if expected_type is None or actual_type is None:
+            return
+
+        expected_type = self.normalize_signature_type_name(expected_type)
+        actual_type = self.normalize_signature_type_name(actual_type)
+        if expected_type is None or actual_type is None:
+            return
+
+        if expected_type in generic_params:
+            substitutions.setdefault(expected_type, actual_type)
+            return
+
+        expected_pointee = self.pointer_pointee_type_name_from_string(expected_type)
+        actual_pointee = self.pointer_pointee_type_name_from_string(actual_type)
+        if expected_pointee is not None or actual_pointee is not None:
+            if expected_pointee is not None and actual_pointee is not None:
+                self.collect_generic_type_bindings(
+                    expected_pointee,
+                    actual_pointee,
+                    generic_params,
+                    substitutions,
+                )
+            return
+
+        expected_base, expected_args = generic_type_parts(expected_type)
+        actual_base, actual_args = generic_type_parts(actual_type)
+        if expected_base != actual_base or len(expected_args) != len(actual_args):
+            return
+
+        for expected_arg, actual_arg in zip(expected_args, actual_args):
+            self.collect_generic_type_bindings(
+                expected_arg, actual_arg, generic_params, substitutions
+            )
+
+    def generic_storage_function_type_bindings(self, function_node, call_args):
+        generic_params = set(generic_function_parameters(function_node))
+        if not generic_params:
+            return {}
+
+        substitutions = {}
+        for param, arg in zip(self.function_parameters(function_node), call_args):
+            declared_type_name = self.function_parameter_type_name(param)
+            actual_type_name = self.call_argument_type_name(arg)
+            self.collect_generic_type_bindings(
+                declared_type_name, actual_type_name, generic_params, substitutions
+            )
+
+        if any(param not in substitutions for param in generic_params):
+            return None
+        return substitutions
+
+    def substitute_generic_signature_type(self, type_name, substitutions):
+        if not substitutions:
+            return type_name
+        type_name = self.type_name_from_value(type_name)
+        if type_name is None:
+            return None
+        if type_name.startswith("&"):
+            referenced = substitute_generic_type_name(
+                type_name[1:].strip(), substitutions
+            )
+            return f"&{referenced}"
+        if type_name.endswith("*"):
+            pointee = substitute_generic_type_name(
+                type_name[:-1].strip(), substitutions
+            )
+            return f"{pointee}*"
+        return substitute_generic_type_name(type_name, substitutions)
+
     def storage_buffer_candidate_match_score(self, function_node, call_args):
         match, _reason = self.storage_buffer_candidate_call_match(
             function_node, call_args
@@ -17088,7 +17300,23 @@ class VulkanSPIRVCodeGen:
 
     def has_matching_non_storage_function_candidate(self, function_name, call_args):
         for function_node in self.function_nodes_by_name.get(function_name, []):
+            if getattr(function_node, "_generic_source_name", None) == function_name:
+                continue
             if self.function_has_storage_buffer_parameters(function_node):
+                continue
+            parameters, args = self.storage_buffer_effective_call_signature(
+                function_node, call_args
+            )
+            if len(parameters) != len(args):
+                continue
+            return True
+        return False
+
+    def has_matching_concrete_function_candidate(self, function_name, call_args):
+        for function_node in self.function_nodes_by_name.get(function_name, []):
+            if getattr(function_node, "_generic_source_name", None) == function_name:
+                continue
+            if generic_function_parameters(function_node):
                 continue
             parameters, args = self.storage_buffer_effective_call_signature(
                 function_node, call_args
@@ -18280,6 +18508,13 @@ class VulkanSPIRVCodeGen:
         previous_locals = self.local_variables.copy()
         previous_precise_locals = set(self.precise_local_variables)
         previous_return_type = self.current_return_type
+        previous_generic_type_substitutions = self.current_generic_type_substitutions
+        generic_type_substitutions = self.generic_storage_function_type_bindings(
+            function_node, call_args
+        )
+        if generic_type_substitutions is None:
+            generic_type_substitutions = {}
+        self.current_generic_type_substitutions = generic_type_substitutions
         previous_generic_function_substitutions = (
             self.current_generic_function_substitutions
         )
@@ -18344,6 +18579,9 @@ class VulkanSPIRVCodeGen:
             self.local_variables = previous_locals
             self.precise_local_variables = previous_precise_locals
             self.current_return_type = previous_return_type
+            self.current_generic_type_substitutions = (
+                previous_generic_type_substitutions
+            )
             self.current_generic_function_substitutions = (
                 previous_generic_function_substitutions
             )
@@ -22560,8 +22798,24 @@ class VulkanSPIRVCodeGen:
             return self.load_from_variable(access, element_type)
 
         elif isinstance(expr, BinaryOpNode):
-            left = self.process_expression(expr.left)
-            right = self.process_expression(expr.right)
+            if expr.op in {"&", "|", "^"}:
+                expected_type = self.bitwise_expression_operand_type(
+                    self.infer_expression_result_type(expr.left),
+                    self.infer_expression_result_type(expr.right),
+                )
+                if expected_type is not None:
+                    left = self.process_expression_with_expected_type(
+                        expr.left, expected_type
+                    )
+                    right = self.process_expression_with_expected_type(
+                        expr.right, expected_type
+                    )
+                else:
+                    left = self.process_expression(expr.left)
+                    right = self.process_expression(expr.right)
+            else:
+                left = self.process_expression(expr.left)
+                right = self.process_expression(expr.right)
 
             if left is None or right is None:
                 float_type = self.register_primitive_type("float")
@@ -22731,7 +22985,12 @@ class VulkanSPIRVCodeGen:
             generic_function_definition = self.generic_function_definitions.get(
                 callee_name
             )
-            if generic_function_definition is not None:
+            if (
+                generic_function_definition is not None
+                and not self.has_matching_concrete_function_candidate(
+                    callee_name, expr.args
+                )
+            ):
                 specialized_callee_name = generic_function_call_name(
                     self, callee_name, expr.args
                 )
@@ -22741,7 +23000,14 @@ class VulkanSPIRVCodeGen:
                     raise self.unsupported_generic_function_error(
                         generic_function_definition, call_node=expr
                     )
+                call_args = generic_function_value_arguments(
+                    self,
+                    callee_name,
+                    expr.args,
+                )
                 callee_name = specialized_callee_name
+            else:
+                call_args = list(expr.args)
 
             args = []
             has_errors = False
@@ -22749,7 +23015,7 @@ class VulkanSPIRVCodeGen:
             mesh_output_arg_indices = (
                 self.resolve_function_mesh_output_parameter_indices(callee_name)
             )
-            for arg_index, arg in enumerate(expr.args):
+            for arg_index, arg in enumerate(call_args):
                 if arg_index in skipped_arg_indices:
                     continue
                 if arg_index in mesh_output_arg_indices:
@@ -24335,16 +24601,26 @@ class VulkanSPIRVCodeGen:
 
     def reject_unsupported_generic_functions(self, ast_node):
         """Reject generic functions that have no concrete SPIR-V specialization."""
-        specialized_source_names = {
-            key[0]
-            for key in self.generic_function_specializations or {}
-            if isinstance(key, tuple) and key
-        }
-        for func in iter_function_nodes(ast_node):
-            if not generic_function_parameters(func):
-                continue
-            if getattr(func, "name", None) in specialized_source_names:
-                continue
+        functions = list(iter_function_nodes(ast_node)) + list(
+            (self.generic_function_specializations or {}).values()
+        )
+        for func_name in collect_unresolved_generic_function_call_names(
+            self, functions
+        ):
+            candidates = (self.generic_function_definitions or {}).get(func_name) or []
+            if candidates:
+                raise self.unsupported_generic_function_error(candidates[0])
+
+    def has_concrete_function_overload(self, function_node, functions):
+        function_name = getattr(function_node, "name", None)
+        if not function_name:
+            return False
+        return any(
+            other is not function_node
+            and getattr(other, "name", None) == function_name
+            and not generic_function_parameters(other)
+            for other in functions
+        )
 
     def generate(self, ast):
         """Generate SPIR-V code from a CrossGL AST."""

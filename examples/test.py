@@ -96,10 +96,34 @@ EXAMPLE_BACKEND_SKIPS = {
     (
         "advanced",
         "GenericPatternMatching",
+        "vulkan",
+    ): (
+        "SPIR-V codegen intentionally rejects generic helpers that are not "
+        "covered by concrete specializations."
+    ),
+    (
+        "advanced",
+        "GenericPatternMatching",
+        "cuda",
+    ): (
+        "CUDA codegen intentionally rejects generic functions until all generic "
+        "types are lowered to concrete device declarations."
+    ),
+    (
+        "advanced",
+        "GenericPatternMatching",
         "mojo",
     ): (
         "Mojo codegen intentionally rejects generic payload enum specializations "
         "until they can be lowered to concrete payload layouts."
+    ),
+    (
+        "advanced",
+        "GenericPatternMatching",
+        "slang",
+    ): (
+        "Slang codegen intentionally rejects generic functions until all generic "
+        "types are lowered to concrete shader declarations."
     ),
     (
         "advanced",
@@ -119,14 +143,6 @@ EXAMPLE_BACKEND_SKIPS = {
         "webgl",
     ): (
         "WebGL codegen intentionally rejects compute stages; use WebGPU/WGSL for compute."
-    ),
-    (
-        "graphics",
-        "ComplexShader",
-        "wgsl",
-    ): (
-        "WGSL codegen intentionally rejects image2D resources until storage texture "
-        "binding lowering is available for this example."
     ),
 }
 
