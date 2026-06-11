@@ -7400,6 +7400,66 @@ def test_translate_project_glsl_fragcoord_lowers_to_wgsl_fragment_position(tmp_p
         assert payload["validation"]["toolchainRuns"][0]["status"] == "ok"
 
 
+def test_translate_project_spirv_assembly_vertex_position_lowers_to_wgsl(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "position.spvasm").write_text(
+        textwrap.dedent("""
+            ; SPIR-V
+            ; Version: 1.0
+            OpCapability Shader
+            OpMemoryModel Logical GLSL450
+            OpEntryPoint Vertex %main "main" %pos
+            OpName %main "main"
+            OpName %pos "gl_Position"
+            OpDecorate %pos BuiltIn Position
+            %void = OpTypeVoid
+            %fn = OpTypeFunction %void
+            %float = OpTypeFloat 32
+            %v4float = OpTypeVector %float 4
+            %ptr_output_v4float = OpTypePointer Output %v4float
+            %float_0 = OpConstant %float 0
+            %float_1 = OpConstant %float 1
+            %const_pos = OpConstantComposite %v4float %float_0 %float_0 %float_0 %float_1
+            %pos = OpVariable %ptr_output_v4float Output
+            %main = OpFunction %void None %fn
+            %entry = OpLabel
+            OpStore %pos %const_pos
+            OpReturn
+            OpFunctionEnd
+            """).lstrip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["wgsl"],
+        output_dir="out",
+        validate=True,
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("wgsl", "translated")}
+
+    wgsl = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    assert "struct VertexOutput" in wgsl
+    assert "@builtin(position) position: vec4<f32>," in wgsl
+    assert "@vertex\nfn vertex_main() -> VertexOutput" in wgsl
+    assert "output.position = vec4<f32>(0, 0, 0, 1);" in wgsl
+    assert "return output;" in wgsl
+    assert "gl_Position" not in wgsl
+
+    if shutil.which("naga"):
+        assert payload["validation"]["artifacts"][0]["status"] == "ok"
+        assert payload["validation"]["toolchainRuns"][0]["status"] == "ok"
+
+
 def test_translate_project_glsl_usampler_texel_fetch_lowers_to_cuda_hip_slang(
     tmp_path,
 ):
