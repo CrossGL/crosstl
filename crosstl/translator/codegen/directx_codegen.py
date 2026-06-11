@@ -4075,7 +4075,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return "precise " if self.hlsl_has_precise_modifier(node) else ""
 
     def is_hlsl_declaration_metadata_attribute(self, attr):
-        return str(getattr(attr, "name", "")).lower() in {"precise"}
+        return str(getattr(attr, "name", "")).lower() in {
+            "hlsl_program_constant",
+            "precise",
+        }
 
     def hlsl_canonical_compile_time_type_text(self, type_text):
         type_text = str(type_text)
@@ -13727,6 +13730,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             or self.hlsl_mesh_parameter_role_attribute_name(attr)
             or self.hlsl_mesh_payload_parameter_attribute_name(attr)
             or self.hlsl_stage_attribute_name(attr)
+            or self.is_hlsl_declaration_metadata_attribute(attr)
         ):
             return False
         return True

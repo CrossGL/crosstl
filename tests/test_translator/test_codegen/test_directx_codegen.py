@@ -1526,6 +1526,31 @@ def test_hlsl_multiple_cbuffers_sequential_registers():
     assert "float3 emissive;" in generated_code
 
 
+def test_hlsl_program_constant_metadata_does_not_emit_resource_array_suffix():
+    shader = """
+    shader SpriteEffectProgramConstantResource {
+        sampler2D Texture @ hlsl_program_constant @ register(t0);
+        sampler TextureSampler @ register(s0);
+        mat4 MatrixTransform @ hlsl_program_constant;
+
+        vertex {
+            vec4 main(vec4 position @ POSITION0) @ SV_Position {
+                return MatrixTransform * position;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "Texture2D Texture : register(t0);" in generated_code
+    assert "SamplerState TextureSampler : register(s0);" in generated_code
+    assert "float4x4 MatrixTransform;" in generated_code
+    assert "hlsl_program_constant" not in generated_code
+    assert "Texture[hlsl_program_constant]" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
 def test_hlsl_structured_buffer_register_t0_and_rw_register_u0():
     shader = """
     shader BufferRegisterBindings {
