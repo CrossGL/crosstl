@@ -16232,6 +16232,7 @@ class VulkanSPIRVCodeGen:
                 storage_buffer_type_name
             ) == self.normalize_signature_type_name(actual_type_name):
                 score += 1
+            score += self.storage_buffer_argument_name_match_score(param, arg)
             return score
 
         declared_type_name = self.function_parameter_type_name(param)
@@ -16247,7 +16248,27 @@ class VulkanSPIRVCodeGen:
                 declared_type_name
             ) == self.normalize_signature_type_name(actual_type_name):
                 score += 1
+        score += self.storage_buffer_argument_name_match_score(param, arg)
         return score
+
+    def storage_buffer_argument_name_match_score(self, param, arg) -> int:
+        param_name = getattr(param, "name", None)
+        arg_name = self.expression_name(arg)
+        if not param_name or not arg_name or param_name != arg_name:
+            return 0
+
+        if self.function_parameter_is_reference_like(param):
+            return 4
+        return 2
+
+    def function_parameter_is_reference_like(self, param) -> bool:
+        param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+        type_name = self.type_name_from_value(param_type)
+        if type_name is None:
+            return False
+
+        type_name = str(type_name).strip()
+        return type_name.startswith("&") or type_name.endswith("&")
 
     def storage_buffer_argument_rejection_reason(self, param, arg, arg_index) -> str:
         param_name = getattr(param, "name", f"param{arg_index}")

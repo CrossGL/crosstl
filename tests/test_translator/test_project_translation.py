@@ -24436,6 +24436,92 @@ def test_translate_project_resolves_mlx_sort_vulkan_storage_buffer_overload(
     assert payload["diagnostics"] == []
 
 
+def test_translate_project_resolves_mlx_sort_reference_thread_ids_for_vulkan(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "sort_reference_thread_ids.cgl"
+    source_path.write_text(
+        textwrap.dedent("""
+            shader ReducedSortReferenceThreadIds {
+                StructuredBuffer<uint> keys @binding(0);
+                RWStructuredBuffer<uint> outKeys @binding(1);
+
+                void block_sort(
+                    StructuredBuffer<uint>& source,
+                    RWStructuredBuffer<uint>& target,
+                    uint& block,
+                    uint& lane,
+                    uint index,
+                    uvec3 tid,
+                    uvec3 gid
+                ) {
+                    uint offset = block + lane + index + tid.x + gid.x;
+                    target.Store(offset, source.Load(index));
+                }
+
+                compute {
+                    void main() {
+                        uint staticScratch = 7u;
+                        uint dynamicScratch = 5u;
+                        uint block = 1u;
+                        uint lane = 2u;
+                        block_sort(
+                            keys,
+                            outKeys,
+                            staticScratch,
+                            dynamicScratch,
+                            block,
+                            lane,
+                            3u,
+                            gl_LocalInvocationID,
+                            gl_GlobalInvocationID
+                        );
+                    }
+                }
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["vulkan"], output_dir="out").to_json()
+
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+    assert payload["diagnosticCounts"]["error"] == 0
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["target"] == "vulkan"
+    assert artifact["source"] == "sort_reference_thread_ids.cgl"
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    static_scratch = re.search(r'OpName (%\d+) "staticScratch"', generated)
+    dynamic_scratch = re.search(r'OpName (%\d+) "dynamicScratch"', generated)
+    block = re.search(r'OpName (%\d+) "block"', generated)
+    lane = re.search(r'OpName (%\d+) "lane"', generated)
+    assert static_scratch is not None
+    assert dynamic_scratch is not None
+    assert block is not None
+    assert lane is not None
+    assert not re.search(
+        rf"OpLoad %\d+ {re.escape(static_scratch.group(1))}\b", generated
+    )
+    assert not re.search(
+        rf"OpLoad %\d+ {re.escape(dynamic_scratch.group(1))}\b", generated
+    )
+    assert re.search(rf"OpLoad %\d+ {re.escape(block.group(1))}\b", generated)
+    assert re.search(rf"OpLoad %\d+ {re.escape(lane.group(1))}\b", generated)
+    assert "block_sort" not in generated
+    assert "OpFunctionCall" not in generated
+    assert "WARNING" not in generated
+    assert payload["diagnostics"] == []
+    assert_spirv_asm_validates_if_available(generated, tmp_path)
+
+
 def test_translate_project_resolves_generic_vulkan_storage_buffer_helper_family(
     tmp_path,
 ):

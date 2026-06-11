@@ -14541,6 +14541,73 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_storage_buffer_reference_helpers_skip_generated_locals_before_thread_ids(
+        self, tmp_path
+    ):
+        source_code = """
+        shader StorageBufferReferenceGeneratedLocalAlignment {
+            StructuredBuffer<uint> keys @binding(0);
+            RWStructuredBuffer<uint> outKeys @binding(1);
+
+            void block_sort(
+                StructuredBuffer<uint>& source,
+                RWStructuredBuffer<uint>& target,
+                uint& block,
+                uint& lane,
+                uint index,
+                uvec3 tid,
+                uvec3 gid
+            ) {
+                uint offset = block + lane + index + tid.x + gid.x;
+                target.Store(offset, source.Load(index));
+            }
+
+            compute {
+                void main() {
+                    uint staticScratch = 7u;
+                    uint dynamicScratch = 5u;
+                    uint block = 1u;
+                    uint lane = 2u;
+                    block_sort(
+                        keys,
+                        outKeys,
+                        staticScratch,
+                        dynamicScratch,
+                        block,
+                        lane,
+                        3u,
+                        gl_LocalInvocationID,
+                        gl_GlobalInvocationID
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        static_scratch = spirv_named_variable(
+            spv_code, "staticScratch", storage_class="Function"
+        )
+        dynamic_scratch = spirv_named_variable(
+            spv_code, "dynamicScratch", storage_class="Function"
+        )
+        block = spirv_named_variable(spv_code, "block", storage_class="Function")
+        lane = spirv_named_variable(spv_code, "lane", storage_class="Function")
+
+        assert not re.search(rf"OpLoad %\d+ {re.escape(static_scratch)}\b", spv_code)
+        assert not re.search(rf"OpLoad %\d+ {re.escape(dynamic_scratch)}\b", spv_code)
+        assert re.search(rf"OpLoad %\d+ {re.escape(block)}\b", spv_code)
+        assert re.search(rf"OpLoad %\d+ {re.escape(lane)}\b", spv_code)
+        assert "block_sort" not in spv_code
+        assert "storage-buffer-function-overload" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_generic_structured_buffer_overloads_resolve_project_helper_family(
         self, tmp_path
     ):
