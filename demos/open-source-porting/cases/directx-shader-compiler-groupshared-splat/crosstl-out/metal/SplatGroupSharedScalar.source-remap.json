@@ -1,0 +1,72 @@
+{
+  "generatedFile": "crosstl-out/metal/SplatGroupSharedScalar.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 142,
+        "file": "crosstl-out/metal/SplatGroupSharedScalar.metal",
+        "length": 47,
+        "line": 7,
+        "offset": 95
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 469,
+        "file": "SplatGroupSharedScalar.hlsl",
+        "length": 19,
+        "line": 10,
+        "offset": 450
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 155,
+        "file": "crosstl-out/metal/SplatGroupSharedScalar.metal",
+        "length": 13,
+        "line": 8,
+        "offset": 142
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 517,
+        "file": "SplatGroupSharedScalar.hlsl",
+        "length": 11,
+        "line": 13,
+        "offset": 506
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 201,
+        "file": "crosstl-out/metal/SplatGroupSharedScalar.metal",
+        "length": 46,
+        "line": 9,
+        "offset": 155
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 538,
+        "file": "SplatGroupSharedScalar.hlsl",
+        "length": 21,
+        "line": 14,
+        "offset": 517
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

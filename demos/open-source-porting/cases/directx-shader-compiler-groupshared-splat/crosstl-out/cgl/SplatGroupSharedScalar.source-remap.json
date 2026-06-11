@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/cgl/SplatGroupSharedScalar.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 37,
+        "file": "crosstl-out/cgl/SplatGroupSharedScalar.cgl",
+        "length": 23,
+        "line": 2,
+        "offset": 14
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 469,
+        "file": "SplatGroupSharedScalar.hlsl",
+        "length": 19,
+        "line": 10,
+        "offset": 450
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 100,
+        "file": "crosstl-out/cgl/SplatGroupSharedScalar.cgl",
+        "length": 27,
+        "line": 5,
+        "offset": 73
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 492,
+        "file": "SplatGroupSharedScalar.hlsl",
+        "length": 23,
+        "line": 11,
+        "offset": 469
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 135,
+        "file": "crosstl-out/cgl/SplatGroupSharedScalar.cgl",
+        "length": 17,
+        "line": 7,
+        "offset": 118
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 517,
+        "file": "SplatGroupSharedScalar.hlsl",
+        "length": 11,
+        "line": 13,
+        "offset": 506
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 163,
+        "file": "crosstl-out/cgl/SplatGroupSharedScalar.cgl",
+        "length": 28,
+        "line": 8,
+        "offset": 135
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 538,
+        "file": "SplatGroupSharedScalar.hlsl",
+        "length": 21,
+        "line": 14,
+        "offset": 517
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

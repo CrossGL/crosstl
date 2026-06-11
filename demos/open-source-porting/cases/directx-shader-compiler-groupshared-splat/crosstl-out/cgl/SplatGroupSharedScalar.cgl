@@ -1,0 +1,13 @@
+shader main {
+    groupshared int a;
+    // compute Shader
+    compute {
+    @ numthreads(64, 1, 1)
+    void main() {
+        a = 123;
+        ivec4 x = ivec4(a);
+    }
+
+    }
+
+}

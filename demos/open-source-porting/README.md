@@ -44,6 +44,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | --- | --- | --- | --- | --- | --- |
 | `directx-graphics-samples-hello-triangle` | `microsoft/DirectX-Graphics-Samples` at `31ae3c91160d8634264004cdaf4e41a99c41243e` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Hello Triangle shader file without source edits. |
 | `directx-graphics-samples-hello-texture` | `microsoft/DirectX-Graphics-Samples` at `31ae3c91160d8634264004cdaf4e41a99c41243e` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Hello Texture shader file without source edits. Host texture setup remains outside the demo scope. |
+| `directx-shader-compiler-groupshared-splat` | `microsoft/DirectXShaderCompiler` at `517dd5eb5d8cbb46c15fc1230acac1d2f4779092` | University of Illinois/NCSA | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream groupshared scalar-splat compute shader unchanged. |
 | `directx-shader-compiler-neg1` | `microsoft/DirectXShaderCompiler` at `d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652` | University of Illinois/NCSA | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream negated swizzle pixel shader unchanged. |
 | `directx-sdk-samples-tutorial02` | `walbourn/directx-sdk-samples-reworked` at `1ad8f0f6a3e4d9be7e54ca52640ac12b6565ab0c` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Direct3D 11 Tutorial02 effect include unchanged. |
 | `diligent-samples-tutorial02-cube` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Tutorial02 cube vertex and pixel shader pair with repository whitespace normalization. |
@@ -210,13 +211,12 @@ Metal output. Retesting after issue #781 closed shows OpenGL, Metal, and
 SPIR-V output now validate, so the source is a candidate for a future demo
 expansion.
 
-The `microsoft/DirectXShaderCompiler` scalar-splat compute test was tested as
-a candidate and exposed target semantic gaps for HLSL scalar swizzles and
-`groupshared` storage. Retesting after issue #767 closed shows scalar splats
-are preserved in SPIR-V. Retesting after issue #1149 closed shows generated
+The `microsoft/DirectXShaderCompiler` scalar-splat compute test keeps the
+upstream source unchanged and is checked for CrossGL, OpenGL, Metal, DirectX,
+and Vulkan output. Retesting after issue #767 closed shows scalar splats are
+preserved in SPIR-V, and retesting after issue #1149 closed shows generated
 Metal now lowers the program-scope `groupshared` value to kernel-local
-`threadgroup` storage and validates directly, so the source remains a candidate
-for a future demo expansion.
+`threadgroup` storage and validates directly.
 
 The `NVIDIA/cuda-samples` vector-add NVRTC kernel was retested after issue #772
 closed and is now checked for Metal and Vulkan output. The upstream host

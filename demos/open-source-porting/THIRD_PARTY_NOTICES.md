@@ -35,6 +35,15 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/microsoft/DirectXShaderCompiler/blob/d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652/LICENSE.TXT
 
+## microsoft/DirectXShaderCompiler groupshared scalar splat
+
+- Repository: https://github.com/microsoft/DirectXShaderCompiler
+- Commit: `517dd5eb5d8cbb46c15fc1230acac1d2f4779092`
+- Source path: `tools/clang/test/CodeGenHLSL/SplatGroupSharedScalar.hlsl`
+- License: University of Illinois/NCSA Open Source License
+- License URL:
+  https://github.com/microsoft/DirectXShaderCompiler/blob/517dd5eb5d8cbb46c15fc1230acac1d2f4779092/LICENSE.TXT
+
 ## walbourn/directx-sdk-samples-reworked
 
 - Repository: https://github.com/walbourn/directx-sdk-samples-reworked

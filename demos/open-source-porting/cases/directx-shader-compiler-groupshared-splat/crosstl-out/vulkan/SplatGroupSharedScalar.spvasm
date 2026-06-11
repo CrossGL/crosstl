@@ -1,0 +1,33 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 20
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %12 "main"
+OpExecutionMode %12 LocalSize 64 1 1
+OpName %10 "a"
+OpName %17 "x"
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypePointer Private %4
+%11 = OpTypeFunction %2
+%14 = OpConstant %4 123
+%15 = OpTypeVector %4 4
+%16 = OpTypePointer Function %15
+%10 = OpVariable %9 Private
+%12 = OpFunction %2 None %11
+%13 = OpLabel
+%17 = OpVariable %16 Function
+OpStore %10 %14
+%18 = OpLoad %4 %10
+%19 = OpCompositeConstruct %15 %18 %18 %18 %18
+OpStore %17 %19
+OpReturn
+OpFunctionEnd
