@@ -41473,6 +41473,42 @@ def test_translate_project_khronos_opencl_reduce_lowers_supported_target_artifac
     assert "wait_group_events" not in vulkan_source
 
 
+def test_translate_project_opencl_reduce_get_num_groups_directx_uses_cbuffer_input(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "reduce.cl").write_text(
+        textwrap.dedent("""
+            kernel void reduce(global uint* back) {
+                const size_t lid = get_local_id(0),
+                             wid = get_group_id(0),
+                             wsi = get_num_groups(0);
+                if (lid == 0) back[wid] = (uint)(wsi);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    assert "cbuffer CrossGLDispatchInfo" in output
+    assert "uint3 crossglNumWorkGroups;" in output
+    assert "uint wsi = crossglNumWorkGroups.x;" in output
+    assert re.search(r"void CSMain\([^)]*numWorkGroups", output) is None
+    HLSLParser(HLSLLexer(output).tokenize()).parse()
+
+
 def test_translate_project_opencl_global_pointer_helper_reports_contract(
     tmp_path,
 ):

@@ -33850,7 +33850,10 @@ def test_hlsl_compute_builtins_are_auto_parameters_when_referenced_by_name():
     assert "uint3 groupThreadID : SV_GroupThreadID" in generated_code
     assert "uint3 groupID : SV_GroupID" in generated_code
     assert "uint groupIndex : SV_GroupIndex" in generated_code
-    assert "uint3 numWorkGroups" in generated_code
+    assert "cbuffer CrossGLDispatchInfo : register(b0)" in generated_code
+    assert "uint3 crossglNumWorkGroups;" in generated_code
+    assert "uint3 groups = crossglNumWorkGroups;" in generated_code
+    assert re.search(r"void CSMain\([^)]*numWorkGroups", generated_code) is None
     assert "gl_GlobalInvocationID" not in generated_code
     assert "gl_LocalInvocationID" not in generated_code
     assert "gl_WorkGroupID" not in generated_code
