@@ -113,7 +113,7 @@ def test_crossgl_scalar_smoothstep_call_disambiguates_mojo_helper_overloads():
     ) in generated_code
 
 
-def test_crossgl_compute_builtin_aliases_emit_mojo_placeholders():
+def test_crossgl_compute_builtin_aliases_emit_mojo_parameters():
     # Reduced from examples/graphics/ComplexShader.cgl compute_main, where
     # gl_GlobalInvocationID lowered to global_idx_uint but left it undeclared.
     code = """
@@ -128,18 +128,13 @@ def test_crossgl_compute_builtin_aliases_emit_mojo_placeholders():
 
     generated_code = MojoCodeGen().generate(parse_crossgl(code))
 
-    assert "# CrossGL GPU builtin placeholders" in generated_code
-    assert "struct _CrossGLGpuBuiltinU32Vec3" in generated_code
-    assert "var x: UInt32" in generated_code
-    assert "var y: UInt32" in generated_code
-    assert "var z: UInt32" in generated_code
+    assert "# CrossGL GPU builtin placeholders" not in generated_code
+    assert "struct _CrossGLGpuBuiltinU32Vec3" not in generated_code
     assert (
-        "var global_idx_uint = _CrossGLGpuBuiltinU32Vec3(0, 0, 0)"
+        "fn compute_main(global_idx_uint: SIMD[DType.uint32, 4]) -> None:"
     ) in generated_code
-    assert (
-        "SIMD[DType.uint32, 4]("
-        "global_idx_uint.x, global_idx_uint.y, global_idx_uint.z, 0)"
-    ) in generated_code
+    assert "global_idx_uint[0]" in generated_code
+    assert "global_idx_uint[1]" in generated_code
     assert "gl_GlobalInvocationID" not in generated_code
 
 

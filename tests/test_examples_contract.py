@@ -41,16 +41,12 @@ MOJO_PLACEHOLDER_EXAMPLE_CASES = (
     (
         "compute/ParticleSimulation.cgl",
         "mojo",
-        (
-            "# CrossGL GPU builtin placeholders",
-            "# CrossGL synchronization placeholders",
-        ),
+        ("# CrossGL synchronization placeholders",),
     ),
     (
         "gpu_computing/MatrixMultiplication.cgl",
         "mojo",
         (
-            "# CrossGL GPU builtin placeholders",
             "# CrossGL synchronization placeholders",
             "# CrossGL wave/subgroup placeholders",
         ),
@@ -58,18 +54,12 @@ MOJO_PLACEHOLDER_EXAMPLE_CASES = (
     (
         "cross_platform/UniversalPBRShader.cgl",
         "mojo",
-        (
-            "# CrossGL GPU builtin placeholders",
-            "# CrossGL resource placeholders",
-        ),
+        ("# CrossGL resource placeholders",),
     ),
     (
         "graphics/ComplexShader.cgl",
         "mojo",
-        (
-            "# CrossGL GPU builtin placeholders",
-            "# CrossGL resource placeholders",
-        ),
+        ("# CrossGL resource placeholders",),
     ),
 )
 MOJO_PLACEHOLDER_EXAMPLE_CASE_KEYS = {

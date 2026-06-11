@@ -1799,7 +1799,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert mlx_commit in mlx_porting
     assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
     assert re.search(r"translate-project\b[\s\S]*--run-toolchains", harness)
-    for issue_number in (852, 1184):
+    for issue_number in (1184,):
         assert f"https://github.com/CrossGL/crosstl/issues/{issue_number}" in (
             mlx_porting
         )
@@ -1808,7 +1808,6 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "mlx/backend/metal/kernels/fence.metal" in harness
     assert "mlx/backend/metal/kernels/random.metal" in harness
     assert "mlx/backend/metal/kernels/ternary.metal" in harness
-    assert "OPENGL_ARANGE_BINDING_ERROR" in harness
     assert "arange-opengl" in harness
     assert "metalIncludesFiltered" in harness
 

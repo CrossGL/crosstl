@@ -15,8 +15,7 @@ The current harness verifies:
   `arange.metal`, `binary_two.metal`, `fence.metal`, `random.metal`, and
   `ternary.metal`;
 - Vulkan assembly validation when SPIR-V tools are available;
-- a tracked OpenGL `arange.metal` smoke check that currently records
-  CrossGL/crosstl#852 as an expected backend gap.
+- OpenGL artifact generation for `arange.metal`.
 
 A previous full-corpus scout against the same pinned MLX revision translated 47
 of 120 target artifacts across DirectX, OpenGL, and Vulkan: DirectX translated
@@ -64,10 +63,6 @@ The harness writes reports, generated artifacts, and command logs under
 
 ## Current Translator Gaps
 
-- CrossGL/crosstl#852 covers the current OpenGL smoke blocker:
-  `mlx/backend/metal/kernels/arange.metal` fails OpenGL project translation
-  because materialized entry variants reuse uniform-buffer binding 0 for
-  distinct generated argument blocks.
 - CrossGL/crosstl#1184 covers the current full-corpus scout blocker:
   `mlx/backend/metal/kernels/fp_quantized_nax.metal` now completes translation
   planning, but DirectX, OpenGL, and Vulkan reject it with structured
@@ -105,8 +100,9 @@ closed issue set as active missing capabilities. CrossGL/crosstl#1106,
 CrossGL/crosstl#1107, CrossGL/crosstl#1110, CrossGL/crosstl#1111,
 CrossGL/crosstl#1122, CrossGL/crosstl#1124, CrossGL/crosstl#1126, and
 CrossGL/crosstl#1127 are also closed and are no longer tracked as active MLX
-blockers. CrossGL/crosstl#1146 is resolved by bounded template replacement
-scans; `fp_quantized_nax.metal` now reports the narrower CrossGL/crosstl#1184
+blockers. CrossGL/crosstl#852 is covered by the current OpenGL arange smoke
+check. CrossGL/crosstl#1146 is resolved by bounded template replacement scans;
+`fp_quantized_nax.metal` now reports the narrower CrossGL/crosstl#1184
 template-specialization gap instead of timing out. CrossGL/crosstl#1155 and
 CrossGL/crosstl#1160 are covered by the current frontier after the SPIR-V
 project-artifact and multi-entry binding fixes.

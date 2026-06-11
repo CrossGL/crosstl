@@ -735,6 +735,66 @@ def test_translate_project_glsl_overloaded_vector_helper_to_mojo(tmp_path):
     assert "fragColor = linearToSrgb((light * sample(tex," in generated
 
 
+def test_translate_project_glsl_overloaded_vector_helper_to_wgsl(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "cube.frag").write_text(
+        textwrap.dedent("""
+        #version 450
+        layout(binding = 0) uniform sampler2D tex;
+        layout(location = 0) in vec2 texcoord;
+        layout(location = 0) out vec4 fragColor;
+
+        float linearToSrgb(float linear) {
+            return linear;
+        }
+        vec3 linearToSrgb(vec3 linear) {
+            return vec3(
+                linearToSrgb(linear.r),
+                linearToSrgb(linear.g),
+                linearToSrgb(linear.b)
+            );
+        }
+        vec4 linearToSrgb(vec4 linear) {
+            return vec4(linearToSrgb(linear.rgb), linear.a);
+        }
+
+        void main() {
+            vec4 light = vec4(0.5);
+            fragColor = linearToSrgb(light * texture(tex, texcoord.xy));
+        }
+        """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+        [project]
+        source_roots = ["shaders"]
+        include = ["shaders/*.frag"]
+        targets = ["wgsl"]
+        output_dir = "translated"
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo), format_output=False)
+    payload = report.to_json()
+    generated = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert "fn linearToSrgb(" not in generated
+    assert generated.count("fn linearToSrgb_") == 3
+    assert "fn linearToSrgb_f32(linear: f32) -> f32" in generated
+    assert "fn linearToSrgb_vec3_f32(linear: vec3<f32>) -> vec3<f32>" in generated
+    assert "fn linearToSrgb_vec4_f32(linear: vec4<f32>) -> vec4<f32>" in generated
+    assert "linearToSrgb_f32(linear.r)" in generated
+    assert "linearToSrgb_vec3_f32(linear.rgb)" in generated
+    assert "fragColor = linearToSrgb_vec4_f32((light * textureSample(" in generated
+    assert "fragColor = linearToSrgb((light * textureSample(" not in generated
+
+
 def test_translate_project_mojo_gpu_vector_add_filters_host_runtime(tmp_path):
     repo = tmp_path / "repo"
     kernel_dir = repo / "kernels"
@@ -10251,6 +10311,67 @@ def test_translate_project_materializes_mlx_metal_instantiate_kernel_entries(
     assert "void arangefloat16(" in output
     assert "buffer_store(out_, gid, float16(gid + 3));" in output
     assert "void arange(" not in output
+
+
+def test_translate_project_opengl_remaps_mlx_arange_materialized_entry_bindings(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "arange.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_arange(tname, type) \\
+                instantiate_kernel("arange" #tname, arange, type)
+
+            template <typename T>
+            [[kernel]] void arange(
+                constant const T& start [[buffer(0)]],
+                constant const T& step [[buffer(1)]],
+                device T* out [[buffer(2)]],
+                uint index [[thread_position_in_grid]]) {
+                out[index] = start + index * step;
+            }
+
+            instantiate_arange(uint8, uint8_t)
+            instantiate_arange(uint16, uint16_t)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("opengl", "translated")}
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    arg_bindings = {
+        block_name: int(binding)
+        for binding, block_name in re.findall(
+            r"layout\(std140, binding = (\d+)\) uniform "
+            r"(arange(?:uint8|uint16)_(?:start|step)_Args)",
+            output,
+        )
+    }
+
+    assert set(arg_bindings) == {
+        "arangeuint8_start_Args",
+        "arangeuint8_step_Args",
+        "arangeuint16_start_Args",
+        "arangeuint16_step_Args",
+    }
+    assert len(set(arg_bindings.values())) == len(arg_bindings)
+    assert "Conflicting OpenGL resource binding" not in output
+    assert_compute_glsl_validates_if_available(output, tmp_path)
 
 
 def test_translate_project_materialized_metal_quantized_specialization_to_targets(
@@ -40264,6 +40385,128 @@ def test_translate_project_opencl_to_opengl_casts_signed_global_id_local(
     GLSLParser(GLSLLexer(output).tokenize(), "compute").parse()
 
 
+def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "saxpy.cl").write_text(
+        textwrap.dedent("""
+            kernel void saxpy(global float *dst,
+                              global const float *x,
+                              const float a) {
+                int gid = get_global_id(0);
+                dst[gid] = a * x[gid];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["mojo"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("mojo", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "# CrossGL GPU builtin placeholders" not in output
+    assert "struct _CrossGLGpuBuiltinU32Vec3" not in output
+    assert "fn saxpy(global_idx_uint: SIMD[DType.uint32, 4]) -> None:" in output
+    assert "var gid: Int32 = global_idx_uint[0]" in output
+    assert "gl_GlobalInvocationID" not in output
+
+    assert "crossgl-gpu-builtin-placeholders" not in payload["summary"].get(
+        "missingCapabilityCounts", {}
+    )
+    for diagnostic in payload["diagnostics"]:
+        assert "crossgl-gpu-builtin-placeholders" not in diagnostic.get(
+            "missingCapabilities", []
+        )
+
+
+@pytest.mark.parametrize(
+    ("filename", "source", "expected_params", "expected_expression"),
+    [
+        (
+            "vector_add.cu",
+            """
+            __global__ void vectorAdd(float* C, const float* A, const float* B, int N) {
+                int i = blockDim.x * blockIdx.x + threadIdx.x;
+                if (i < N) {
+                    C[i] = A[i] + B[i];
+                }
+            }
+            """,
+            [
+                "global_idx_uint: SIMD[DType.uint32, 4]",
+                "thread_idx_uint: SIMD[DType.uint32, 4]",
+                "block_idx_uint: SIMD[DType.uint32, 4]",
+                "block_dim_uint: SIMD[DType.uint32, 4]",
+            ],
+            "((block_dim_uint[0] * block_idx_uint[0]) + thread_idx_uint[0])",
+        ),
+        (
+            "add_kernel.hip",
+            """
+            #include <hip/hip_runtime.h>
+
+            __global__ void addKernel(const float *A,
+                                      const float *B,
+                                      float *C,
+                                      int N) {
+                int i = hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x;
+                if (i < N) {
+                    C[i] = A[i] + B[i];
+                }
+            }
+            """,
+            [
+                "thread_idx_uint: SIMD[DType.uint32, 4]",
+                "block_idx_uint: SIMD[DType.uint32, 4]",
+                "block_dim_uint: SIMD[DType.uint32, 4]",
+            ],
+            "((block_dim_uint[0] * block_idx_uint[0]) + thread_idx_uint[0])",
+        ),
+    ],
+)
+def test_translate_project_cuda_hip_to_mojo_lower_compute_builtin_inputs(
+    tmp_path,
+    filename,
+    source,
+    expected_params,
+    expected_expression,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / filename).write_text(textwrap.dedent(source).strip(), encoding="utf-8")
+
+    payload = translate_project(
+        repo,
+        targets=["mojo"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("mojo", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "# CrossGL GPU builtin placeholders" not in output
+    assert "struct _CrossGLGpuBuiltinU32Vec3" not in output
+    for expected_param in expected_params:
+        assert expected_param in output
+    assert expected_expression in output
+    assert "crossgl-gpu-builtin-placeholders" not in payload["summary"].get(
+        "missingCapabilityCounts", {}
+    )
+
+
 def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     tmp_path,
 ):
@@ -40283,7 +40526,7 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
 
     payload = translate_project(
         repo,
-        targets=["cgl", "metal", "vulkan", "wgsl"],
+        targets=["cgl", "directx", "metal", "vulkan", "wgsl"],
         output_dir="out",
     ).to_json()
 
@@ -40291,6 +40534,7 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
         (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
     } == {
         ("cgl", "translated"),
+        ("directx", "translated"),
         ("metal", "translated"),
         ("vulkan", "translated"),
         ("wgsl", "translated"),
@@ -40329,6 +40573,27 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     ]:
         assert gl_builtin not in metal_output
 
+    directx_output = outputs["directx"]
+    assert "RWStructuredBuffer<float> C : register(u0);" in directx_output
+    assert "RWStructuredBuffer<float> A : register(u1);" in directx_output
+    assert "RWStructuredBuffer<float> B : register(u2);" in directx_output
+    assert "cbuffer vectorAdd_Args : register(b3)" in directx_output
+    assert "uint3 groupID : SV_GroupID" in directx_output
+    assert "uint3 groupThreadID : SV_GroupThreadID" in directx_output
+    assert "SV_DispatchThreadID" not in directx_output
+    assert "float A[]" not in directx_output
+    assert "float B[]" not in directx_output
+    assert "float C[]" not in directx_output
+    assert ": group" not in directx_output
+    for gl_builtin in [
+        "gl_GlobalInvocationID",
+        "gl_WorkGroupID",
+        "gl_LocalInvocationID",
+        "gl_WorkGroupSize",
+    ]:
+        assert gl_builtin not in directx_output
+    assert_directx_compute_validates_if_available(directx_output, tmp_path)
+
     spirv_output = outputs["vulkan"]
     assert "OpEntryPoint GLCompute" in spirv_output
     assert "OpName " in spirv_output
@@ -40352,6 +40617,147 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     assert "var thread_local_id: vec3<u32> = local_invocation_id;" in wgsl_output
     assert "var block_dim: vec3<u32> = vec3<u32>(1u, 1u, 1u);" in wgsl_output
     assert ": void" not in wgsl_output
+
+
+def test_translate_project_cli_cuda_vector_add_demo_directx_outputs_valid_hlsl(
+    tmp_path,
+):
+    repo = tmp_path / "nvidia-cuda-samples-vector-add"
+    repo.mkdir()
+    config_path = repo / "crosstl.toml"
+    config_path.write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["."]
+            include = ["vectorAdd_kernel.cu"]
+            targets = ["cgl", "metal", "vulkan"]
+            output_dir = "crosstl-out"
+            external_corpus_manifest = "corpus.json"
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            'targets = ["cgl", "metal", "vulkan"]',
+            'targets = ["cgl", "metal", "directx", "vulkan"]',
+        ),
+        encoding="utf-8",
+    )
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "name": "NVIDIA CUDA Samples vectorAdd kernel",
+                "description": (
+                    "Pinned CUDA sample used by the open-source project "
+                    "porting demo."
+                ),
+                "entries": [
+                    {
+                        "id": "nvidia-cuda-samples-vector-add",
+                        "path": "vectorAdd_kernel.cu",
+                        "sourceBackend": "cuda",
+                        "targets": ["cgl", "metal", "vulkan"],
+                        "repository": "https://github.com/NVIDIA/cuda-samples",
+                        "commit": "b7c5481c556c3fe98db060207ecaa41a4b9a9abc",
+                        "sourceUrl": (
+                            "https://github.com/NVIDIA/cuda-samples/blob/"
+                            "b7c5481c556c3fe98db060207ecaa41a4b9a9abc/"
+                            "cpp/0_Introduction/vectorAdd_nvrtc/"
+                            "vectorAdd_kernel.cu"
+                        ),
+                    }
+                ],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "vectorAdd_kernel.cu").write_text(
+        textwrap.dedent("""
+            extern "C" __global__ void vectorAdd(const float *A,
+                                                  const float *B,
+                                                  float *C,
+                                                  int numElements) {
+                int i = blockDim.x * blockIdx.x + threadIdx.x;
+                if (i < numElements) {
+                    C[i] = A[i] + B[i];
+                }
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    report_path = repo / "crosstl-out" / "portability-report.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "translate-project",
+            str(repo),
+            "--output-dir",
+            str(repo / "crosstl-out"),
+            "--report",
+            str(report_path),
+            "--validate",
+            "--no-format",
+            "--target",
+            "directx",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "Wrote" in result.stdout
+
+    validation = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "validate-project",
+            str(report_path),
+            "--format",
+            "json",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    validation_payload = json.loads(validation.stdout)
+    assert validation_payload["success"] is True
+    assert validation_payload["artifactStatusByTarget"]["directx"] == {
+        "artifactCount": 1,
+        "failedCount": 0,
+        "okCount": 1,
+    }
+
+    directx_output = (
+        repo / "crosstl-out" / "directx" / "vectorAdd_kernel.hlsl"
+    ).read_text(encoding="utf-8")
+
+    assert "RWStructuredBuffer<float> A : register(u0);" in directx_output
+    assert "RWStructuredBuffer<float> B : register(u1);" in directx_output
+    assert "RWStructuredBuffer<float> C : register(u2);" in directx_output
+    assert "cbuffer vectorAdd_Args : register(b3)" in directx_output
+    assert "uint3 groupID : SV_GroupID" in directx_output
+    assert "uint3 groupThreadID : SV_GroupThreadID" in directx_output
+    assert "float A[]" not in directx_output
+    assert "float B[]" not in directx_output
+    assert "float C[]" not in directx_output
+    assert ": group" not in directx_output
+    for gl_builtin in [
+        "gl_GlobalInvocationID",
+        "gl_WorkGroupID",
+        "gl_LocalInvocationID",
+        "gl_WorkGroupSize",
+    ]:
+        assert gl_builtin not in directx_output
+    assert_directx_compute_validates_if_available(directx_output, tmp_path)
 
 
 def test_translate_project_vulkan_compute_bool_parameter_uses_uint_interface(

@@ -24,12 +24,7 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/ternary.metal",
 )
 EXPECTED_METAL_KERNEL_COUNT = 40
-FULL_CORPUS_TRACKED_ISSUES = (
-    "https://github.com/CrossGL/crosstl/issues/852",
-    "https://github.com/CrossGL/crosstl/issues/1184",
-)
-OPENGL_ARANGE_BINDING_ISSUE = "https://github.com/CrossGL/crosstl/issues/852"
-OPENGL_ARANGE_BINDING_ERROR = "Conflicting OpenGL resource binding"
+FULL_CORPUS_TRACKED_ISSUES = ("https://github.com/CrossGL/crosstl/issues/1184",)
 RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/939",
     "https://github.com/CrossGL/crosstl/issues/940",
@@ -79,6 +74,7 @@ RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1124",
     "https://github.com/CrossGL/crosstl/issues/1126",
     "https://github.com/CrossGL/crosstl/issues/1127",
+    "https://github.com/CrossGL/crosstl/issues/852",
     "https://github.com/CrossGL/crosstl/issues/1146",
     "https://github.com/CrossGL/crosstl/issues/1155",
     "https://github.com/CrossGL/crosstl/issues/1160",
@@ -435,10 +431,8 @@ def _check_arange_opengl(
     _require(isinstance(summary, dict), "OpenGL report summary must be an object")
     if result.returncode != 0:
         messages = []
-        diagnostics = []
         for diagnostic in payload.get("diagnostics", []):
             if isinstance(diagnostic, dict):
-                diagnostics.append(diagnostic)
                 message = diagnostic.get("message")
                 if isinstance(message, str):
                     messages.append(message)
@@ -447,25 +441,6 @@ def _check_arange_opengl(
                 error = artifact.get("error")
                 if isinstance(error, str):
                     messages.append(error)
-        if any(OPENGL_ARANGE_BINDING_ERROR in message for message in messages):
-            diagnostic_codes = sorted(
-                {
-                    str(diagnostic.get("code"))
-                    for diagnostic in diagnostics
-                    if diagnostic.get("code")
-                }
-            )
-            return {
-                "name": "arange-opengl",
-                "status": "blocked",
-                "issue": OPENGL_ARANGE_BINDING_ISSUE,
-                "report": _relpath(report_path, mlx_root),
-                "source": MLX_ARANGE_SOURCE,
-                "target": "opengl",
-                "error": messages[0],
-                "diagnosticCodes": diagnostic_codes,
-                "metalIncludesFiltered": None,
-            }
         detail = f": {messages[0]}" if messages else ""
         raise PortingCheckError(f"OpenGL arange translation failed{detail}")
 

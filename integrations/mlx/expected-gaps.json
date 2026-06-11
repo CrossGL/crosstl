@@ -12,10 +12,10 @@
     "artifacts": 10
   },
   "opengl_smoke_status": {
-    "status": "blocked",
+    "status": "passing",
     "source": "mlx/backend/metal/kernels/arange.metal",
     "target": "opengl",
-    "blocked_by": "https://github.com/CrossGL/crosstl/issues/852"
+    "artifacts": 1
   },
   "full_corpus_scout": {
     "status": "blocked",
@@ -38,12 +38,6 @@
     }
   },
   "tracked_issues": [
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/852",
-      "scope": "opengl-materialized-entry-resource-bindings",
-      "status": "open",
-      "summary": "Disambiguate OpenGL resource bindings for materialized multi-entry Metal kernels."
-    },
     {
       "issue": "https://github.com/CrossGL/crosstl/issues/1184",
       "scope": "metal-dependent-template-graph-materialization",
@@ -100,6 +94,7 @@
     "https://github.com/CrossGL/crosstl/issues/1124",
     "https://github.com/CrossGL/crosstl/issues/1126",
     "https://github.com/CrossGL/crosstl/issues/1127",
+    "https://github.com/CrossGL/crosstl/issues/852",
     "https://github.com/CrossGL/crosstl/issues/1146",
     "https://github.com/CrossGL/crosstl/issues/1155",
     "https://github.com/CrossGL/crosstl/issues/1160"
