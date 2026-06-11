@@ -224,6 +224,31 @@ def test_metal_reserved_stage_keyword_local_identifier_is_escaped():
     compile_with_metal_if_available(generated_code)
 
 
+def test_binary_expression_precedence_preserves_grouping_in_metal():
+    shader = """
+    shader MetalExpressionGrouping {
+        compute {
+            void main() {
+                vec3 nearPoint = vec3(1.0, 2.0, 3.0);
+                vec3 farPoint = vec3(4.0, 5.0, 6.0);
+                float t = -nearPoint.y / (farPoint.y - nearPoint.y);
+                vec3 pos = nearPoint + t * (farPoint - nearPoint);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float t = -nearPoint.y / (farPoint.y - nearPoint.y);" in generated_code
+    assert (
+        "__attribute__((unused)) float3 pos = nearPoint + "
+        "float3(t) * (farPoint - nearPoint);"
+    ) in generated_code
+    assert "float t = -nearPoint.y / farPoint.y - nearPoint.y;" not in generated_code
+    assert "float3(t) * farPoint - nearPoint" not in generated_code
+
+
 def test_glsl_fragment_output_named_fragment_escapes_metal_keyword(tmp_path):
     shader = """
     #version 330
@@ -13908,7 +13933,9 @@ def test_glsl_fragment_subgroup_builtins_emit_metal_diagnostics(tmp_path):
 
     assert "fragment uint4 fragment_main()" in generated
     assert "unsupported Metal GLSL subgroup builtin: gl_SubgroupSize" in generated
-    assert "unsupported Metal GLSL subgroup builtin: gl_SubgroupInvocationID" in generated
+    assert (
+        "unsupported Metal GLSL subgroup builtin: gl_SubgroupInvocationID" in generated
+    )
     assert "requires compute-stage threads_per_simdgroup value" in generated
     assert "requires compute-stage thread_index_in_simdgroup value" in generated
     assert "[[threads_per_simdgroup]]" not in generated
@@ -25881,37 +25908,22 @@ def test_metal_glsl_es_shadow_sampler_lod_overloads_lower_to_compare_sampling():
         f"c = s2da.sample_compare({default_sampler}, input.tc.xyz.xy, "
         "uint(input.tc.xyz.z), input.tc.w"
     )
-    assert (
-        f"{s2da_compare}, bias(0.0));"
-        in generated_code
-    )
+    assert f"{s2da_compare}, bias(0.0));" in generated_code
     assert (
         f"c = sca.sample_compare({default_sampler}, input.tc.xyz, "
-        "uint(input.tc.w), 0.0, bias(0.0));"
-        in generated_code
+        "uint(input.tc.w), 0.0, bias(0.0));" in generated_code
     )
-    assert (
-        f"{s2da_compare}, bias(0.0), int2(0.0));"
-        in generated_code
-    )
-    assert (
-        f"{s2da_lod_compare}, level(0.0));"
-        in generated_code
-    )
+    assert f"{s2da_compare}, bias(0.0), int2(0.0));" in generated_code
+    assert f"{s2da_lod_compare}, level(0.0));" in generated_code
     assert (
         f"c = sc.sample_compare({default_sampler}, input.tc.xyz, "
-        "input.tc.w, level(0.0));"
-        in generated_code
+        "input.tc.w, level(0.0));" in generated_code
     )
     assert (
         f"c = sca.sample_compare({default_sampler}, input.tc.xyz, "
-        "uint(input.tc.w), 0.0, level(0.0));"
-        in generated_code
+        "uint(input.tc.w), 0.0, level(0.0));" in generated_code
     )
-    assert (
-        f"{s2da_lod_compare}, level(0.0), int2(0.0));"
-        in generated_code
-    )
+    assert f"{s2da_lod_compare}, level(0.0), int2(0.0));" in generated_code
     assert "texture(s2da" not in generated_code
     assert "textureOffset(" not in generated_code
     assert "textureLod(" not in generated_code

@@ -1842,6 +1842,70 @@ def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
     assert "retention-days: 30" in translator_tests
 
 
+def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
+    workflows = _workflow_texts()
+    mlx_porting = workflows.get("mlx-project-porting.yml", "")
+    harness = (ROOT / "integrations" / "mlx" / "run_mlx_porting.py").read_text(
+        encoding="utf-8"
+    )
+    mlx_commit = "968d264f2903d578e699c4452a4dbf48633921aa"
+
+    assert mlx_porting, "mlx-project-porting.yml must exist"
+    assert "integrations/mlx/run_mlx_porting.py" in mlx_porting
+    assert mlx_commit in mlx_porting
+    assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
+    assert re.search(r"translate-project\b[\s\S]*validation_flag", harness)
+    assert '"--run-toolchains"' in harness
+    assert '"--validate"' in harness
+    for resolved_issue_number in (
+        1184,
+        1203,
+        1204,
+        1206,
+        1205,
+        1207,
+        1218,
+        1222,
+        1238,
+        1239,
+        1240,
+        1246,
+        1248,
+        1249,
+        1250,
+        1259,
+        1260,
+        1261,
+        1274,
+        1287,
+        1300,
+    ):
+        assert (
+            f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
+            not in mlx_porting
+        )
+        assert (
+            f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
+            in harness
+        )
+    for tracked_issue_number in (1317,):
+        assert (
+            f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}"
+            not in mlx_porting
+        )
+        assert (
+            f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}"
+            in harness
+        )
+    assert "MLX_DIRECTX_VULKAN_FRONTIER_SOURCES" in harness
+    assert "mlx/backend/metal/kernels/binary_two.metal" in harness
+    assert "mlx/backend/metal/kernels/fence.metal" in harness
+    assert "mlx/backend/metal/kernels/random.metal" in harness
+    assert "mlx/backend/metal/kernels/ternary.metal" in harness
+    assert "arange-opengl" in harness
+    assert "metalIncludesFiltered" in harness
+
+
 def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():
     workflows = _workflow_texts()
     support_matrix = workflows.get("support-matrix.yml", "")
