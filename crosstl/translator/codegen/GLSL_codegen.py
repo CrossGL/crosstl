@@ -2631,6 +2631,9 @@ class GLSLCodeGen:
         self.glsl_buffer_block_struct_names = (
             self.collect_glsl_buffer_block_struct_names(resource_declaration_nodes)
         )
+        self.layout_bound_struct_uniform_names = (
+            self.collect_layout_bound_struct_uniform_names(resource_declaration_nodes)
+        )
         self.vertex_input_struct_names = self.stage_parameter_struct_names(
             ast, "vertex"
         )
@@ -2697,6 +2700,8 @@ class GLSLCodeGen:
                     code += self.generate_glsl_interface_block_declaration(node)
                     continue
                 if node.name in self.glsl_buffer_block_struct_names:
+                    continue
+                if node.name in self.layout_bound_struct_uniform_names:
                     continue
                 elif (
                     node.name == "VSInput"
@@ -6344,6 +6349,17 @@ class GLSLCodeGen:
         return parameters
 
     def glsl_stage_entry_resource_parameter_declaration(self, parameter):
+        constant_struct_type = self.stage_entry_constant_struct_parameter_type(
+            parameter
+        )
+        if constant_struct_type is not None:
+            return VariableNode(
+                name=getattr(parameter, "name", None),
+                var_type=constant_struct_type,
+                attributes=list(getattr(parameter, "attributes", []) or []),
+                qualifiers=["uniform"],
+            )
+
         node = VariableNode(
             name=getattr(parameter, "name", None),
             var_type=self.resource_node_type(parameter),
@@ -6513,10 +6529,32 @@ class GLSLCodeGen:
 
         return declarations
 
+    def stage_entry_constant_struct_parameter_type(self, param):
+        qualifiers = {str(q).lower() for q in getattr(param, "qualifiers", []) or []}
+        if "constant" not in qualifiers:
+            return None
+        if self.explicit_resource_binding_index(param) is None:
+            return None
+
+        raw_type = self.resource_node_type(param)
+        if isinstance(raw_type, ReferenceType):
+            referenced_type = raw_type.referenced_type
+            type_name = self.type_name_string(referenced_type)
+        else:
+            type_name = self.type_name_string(raw_type)
+            if type_name and type_name.endswith("&"):
+                type_name = type_name[:-1].strip()
+
+        if type_name in self.structs_by_name:
+            return type_name
+        return None
+
     def is_stage_entry_resource_parameter(self, param):
         raw_type = self.resource_node_type(param)
         if self.is_sampler_type(raw_type):
             return False
+        if self.stage_entry_constant_struct_parameter_type(param) is not None:
+            return True
         if self.is_glsl_buffer_block_variable(param, raw_type):
             return True
         if self.is_structured_buffer_type(raw_type):
@@ -15368,6 +15406,15 @@ class GLSLCodeGen:
             names.add(str(type_name))
         return names
 
+    def collect_layout_bound_struct_uniform_names(self, global_vars):
+        names = set()
+        for node in global_vars:
+            node_type = self.resource_node_type(node)
+            if not self.is_layout_bound_struct_uniform(node, node_type):
+                continue
+            names.add(str(self.resource_base_type(node_type)))
+        return names
+
     def glsl_buffer_block_declaration(
         self, node, vtype, name, binding, array_suffix=""
     ):
@@ -15503,14 +15550,14 @@ class GLSLCodeGen:
     def glsl_struct_uniform_block_declaration(
         self, vtype, var_name, binding, array_suffix=""
     ):
-        block_name = str(self.resource_base_type(vtype))
-        struct = self.structs_by_name[block_name]
+        struct_name = str(self.resource_base_type(vtype))
+        struct = self.structs_by_name[struct_name]
         layout = self.glsl_resource_layout_prefix("std140", binding=binding)
-        code = f"{layout} uniform {block_name} {{\n"
+        code = f"{layout} uniform {struct_name} {{\n"
         for member in getattr(struct, "members", []) or []:
             code += self.generate_struct_member_declaration(
                 member,
-                struct_name=block_name,
+                struct_name=struct_name,
                 preserve_unsized_arrays=True,
             )
         code += f"}} {var_name}{array_suffix};\n"
