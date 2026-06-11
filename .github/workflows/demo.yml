@@ -149,6 +149,7 @@ jobs:
             --case glslang-spec-constant-vertex \
             --case godot-betsy-alpha-stitch \
             --case libgdx-batch-shader \
+            --case lonelydevil-vulkan-tutorial-triangle \
             --case monogame-sprite-effect \
             --case nvidia-cuda-samples-vector-add \
             --case nvpro-vk-mini-samples-rectangle \
