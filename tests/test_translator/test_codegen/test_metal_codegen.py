@@ -195,6 +195,35 @@ def test_metal_reserved_stage_keyword_local_identifier_is_escaped():
     compile_with_metal_if_available(generated_code)
 
 
+def test_glsl_fragment_output_named_fragment_escapes_metal_keyword(tmp_path):
+    shader = """
+    #version 330
+    in vec3 color;
+    out vec4 fragment;
+    void main()
+    {
+        fragment = vec4(color, 1.0);
+    }
+    """
+    shader_path = tmp_path / "triangle.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert re.search(r"^\s*float4\s+fragment\b", generated_code, re.MULTILINE) is None
+    assert re.search(r"^\s*fragment\s*=", generated_code, re.MULTILINE) is None
+    assert re.search(r"\breturn\s+fragment\s*;", generated_code) is None
+    assert "float4 fragment_;" in generated_code
+    assert "fragment_ = float4(input.color, 1.0);" in generated_code
+    assert "return fragment_;" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_glsl_push_constant_vertex_output_synthesizes_metal_position(tmp_path):
     shader = """
     #version 400
