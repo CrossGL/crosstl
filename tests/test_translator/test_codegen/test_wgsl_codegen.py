@@ -1083,6 +1083,66 @@ def test_wgsl_codegen_lowers_explicit_sampler_texture_calls():
     assert "return textureSample(colorTex, linearSampler, uv);" in generated
 
 
+@pytest.mark.parametrize(
+    ("declaration", "resource_type"),
+    (
+        ("sampler2D textures[4];", "sampler2D"),
+        ("sampler samplers[2];", "sampler"),
+        ("image2D images[2];", "image2D"),
+        ("StructuredBuffer<float> values[4];", "StructuredBuffer"),
+        ("RWStructuredBuffer<float> values[];", "RWStructuredBuffer"),
+    ),
+)
+def test_wgsl_codegen_rejects_resource_array_declarations(
+    declaration, resource_type
+):
+    shader = f"""
+    shader WGSLResourceArray {{
+        {declaration}
+        compute {{
+            void main() {{
+                return;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"WGSL target does not support resource arrays of {resource_type}; "
+            r"WebGPU/WGSL requires texture, sampler, image, and storage-buffer "
+            r"resources to be declared as individual module-scope bindings"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_resource_array_parameters():
+    shader = """
+    shader WGSLResourceArrayParameter {
+        vec4 sampleAt(sampler2D textures[4], int index, vec2 uv) {
+            return texture(textures[index], uv);
+        }
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0, int index @ TEXCOORD1) @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target does not support resource arrays of sampler2D; "
+            r"WebGPU/WGSL requires texture, sampler, image, and storage-buffer "
+            r"resources to be declared as individual module-scope bindings"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_emits_stage_local_resource_declarations():
     shader = """
     shader WGSLStageLocalResources {
