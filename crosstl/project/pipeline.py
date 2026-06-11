@@ -13794,12 +13794,17 @@ def _runtime_host_interface_resource_access(node: Any) -> str | None:
     qualifiers = {
         str(qualifier).lower() for qualifier in getattr(node, "qualifiers", [])
     }
-    if qualifiers & {"read_write", "readwrite", "rw", "coherent"}:
-        return "read_write"
-    if qualifiers & {"writeonly", "write_only"}:
+    attribute_names = {
+        str(getattr(attribute, "name", "")).lower()
+        for attribute in getattr(node, "attributes", []) or []
+    }
+    names = qualifiers | attribute_names
+    if names & {"writeonly", "write_only"}:
         return "write"
-    if qualifiers & {"readonly", "read_only", "constant"}:
+    if names & {"readonly", "read_only", "constant"}:
         return "read"
+    if names & {"read_write", "readwrite", "rw", "coherent"}:
+        return "read_write"
     return None
 
 
@@ -13831,6 +13836,7 @@ def _runtime_host_interface_resource_kind(node: Any) -> str | None:
     if (
         "rwtexture" in type_label
         or "storage_texture" in type_label
+        or re.match(r"^(?:[iu]?image)(?:1d|2d|2darray|3d|buffer|cube)", type_label)
         or "writeonly" in qualifiers
         or "uav" in attribute_names
     ):
@@ -14079,7 +14085,11 @@ def _runtime_wgsl_resource_kind(
     if address_kind == "storage":
         return "buffer", access or "read"
     if lowered_type.startswith("texture_storage_"):
-        return "storage-texture", None
+        texture_access = None
+        match = re.search(r"<[^,>]+,\s*([^>]+)>", type_name)
+        if match:
+            texture_access = match.group(1).strip()
+        return "storage-texture", texture_access
     if lowered_type.startswith("texture_"):
         return "texture", None
     if lowered_type in {"sampler", "sampler_comparison"}:

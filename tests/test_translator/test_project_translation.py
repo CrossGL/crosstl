@@ -6736,6 +6736,112 @@ def test_translate_project_glsl_usampler_texel_fetch_lowers_to_uint_spirv(
     assert_spirv_asm_validates_if_available(vulkan, tmp_path)
 
 
+def test_translate_project_glsl_alpha_stitch_storage_image_lowers_to_wgsl(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "alpha_stitch.glsl").write_text(
+        textwrap.dedent("""
+            #version 450
+            layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+            layout(binding = 0) uniform usampler2D srcRGB;
+            layout(binding = 1) uniform usampler2D srcAlpha;
+            layout(binding = 2, rgba32ui) uniform restrict writeonly uimage2D dstTexture;
+
+            void main() {
+                uvec2 rgbBlock = texelFetch(
+                    srcRGB,
+                    ivec2(gl_GlobalInvocationID.xy),
+                    0
+                ).xy;
+                uvec2 alphaBlock = texelFetch(
+                    srcAlpha,
+                    ivec2(gl_GlobalInvocationID.xy),
+                    0
+                ).xy;
+                imageStore(
+                    dstTexture,
+                    ivec2(gl_GlobalInvocationID.xy),
+                    uvec4(rgbBlock.xy, alphaBlock.xy)
+                );
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["wgsl"],
+        output_dir="out",
+        validate=True,
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("wgsl", "translated")}
+
+    wgsl = (repo / "out" / "wgsl" / "alpha_stitch.wgsl").read_text(
+        encoding="utf-8"
+    )
+    assert "@group(0) @binding(0)\nvar srcRGB: texture_2d<u32>;" in wgsl
+    assert "@group(0) @binding(1)\nvar srcAlpha: texture_2d<u32>;" in wgsl
+    assert (
+        "@group(0) @binding(2)\n"
+        "var dstTexture: texture_storage_2d<rgba32uint, write>;"
+    ) in wgsl
+    assert (
+        "textureLoad(srcRGB, vec2<i32>(global_invocation_id.xy), 0).xy" in wgsl
+    )
+    assert (
+        "textureStore(dstTexture, vec2<i32>(global_invocation_id.xy), "
+        "vec4<u32>(rgbBlock.xy, alphaBlock.xy));"
+    ) in wgsl
+    assert "uimage2D" not in wgsl
+    assert "imageStore" not in wgsl
+
+    if shutil.which("naga"):
+        assert payload["validation"]["artifacts"][0]["status"] == "ok"
+        assert payload["validation"]["toolchainRuns"][0]["status"] == "ok"
+
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    runtime_manifest = build_runtime_artifact_manifest(report_path)
+    storage_binding = next(
+        binding
+        for binding in runtime_manifest["artifacts"][0]["resourceBindings"]
+        if binding["name"] == "dstTexture"
+    )
+    assert storage_binding["kind"] == "storage-texture"
+    assert storage_binding["binding"] == 2
+    assert storage_binding["access"] == "write"
+    assert storage_binding["type"] == "uimage2D"
+
+    manifest_path = repo / "out" / "runtime-manifest.json"
+    manifest_path.write_text(json.dumps(runtime_manifest, indent=2), encoding="utf-8")
+    package_dir = repo / "runtime-package"
+    build_runtime_package(manifest_path, package_dir)
+    inspection = inspect_runtime_package(package_dir / "runtime-package.json")
+    storage_resource = next(
+        resource
+        for resource in inspection["bindings"][0]["hostInterface"]["resources"]
+        if resource["name"] == "dstTexture"
+    )
+    assert storage_resource == {
+        "name": "dstTexture",
+        "kind": "storage-texture",
+        "type": "texture_storage_2d<rgba32uint, write>",
+        "set": 0,
+        "binding": 2,
+        "access": "write",
+    }
+
+
 def test_translate_project_preserves_anonymous_glsl_ssbo_shape_for_targets(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"

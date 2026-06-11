@@ -249,6 +249,53 @@ def test_wgsl_codegen_preserves_explicit_set_and_binding_resources():
     assert "@group(6) @binding(8)\nvar<uniform> _Registered: Registered;" in generated
 
 
+def test_wgsl_codegen_lowers_writeonly_uimage2d_to_storage_texture_store():
+    shader = """
+    shader WGSLStorageImage {
+        uimage2D dstTexture @binding(2) @rgba32ui @writeonly;
+        compute {
+            void main() {
+                imageStore(dstTexture, ivec2(1, 2), uvec4(3u, 4u, 5u, 6u));
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "@group(0) @binding(2)\n"
+        "var dstTexture: texture_storage_2d<rgba32uint, write>;"
+    ) in generated
+    assert (
+        "textureStore(dstTexture, vec2<i32>(1, 2), "
+        "vec4<u32>(3, 4, 5, 6));"
+    ) in generated
+    assert "imageStore" not in generated
+
+
+def test_wgsl_codegen_rejects_storage_image_without_representable_format():
+    shader = """
+    shader WGSLStorageImageMissingFormat {
+        uimage2D dstTexture @binding(2) @writeonly;
+        compute {
+            void main() {
+                imageStore(dstTexture, ivec2(1, 2), uvec4(3u));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WGSL target requires storage image resource dstTexture to declare "
+            "a representable image format"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_auto_bindings_skip_later_explicit_bindings():
     shader = """
     shader WGSLLateExplicitBindings {
@@ -1064,8 +1111,8 @@ def test_wgsl_codegen_rejects_do_while_statement():
                 }
             }
             """,
-            "WGSL target does not support CrossGL resource type image2D yet; "
-            "split texture/sampler/storage bindings are required",
+            "WGSL target requires storage image resource colorImage to declare "
+            "a representable image format",
         ),
         (
             """

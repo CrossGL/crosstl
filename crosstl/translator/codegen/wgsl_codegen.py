@@ -219,6 +219,10 @@ class WGSLCodeGen:
         "uimagebuffer",
         "uimagecube",
         "uimagecubearray",
+        "isampler2d",
+        "isampler2darray",
+        "usampler2d",
+        "usampler2darray",
     }
     STRUCTURED_BUFFER_TYPE_NAMES = {
         "rwstructuredbuffer",
@@ -277,6 +281,42 @@ class WGSLCodeGen:
         "texture3d": "texture_3d<f32>",
         "texturecube": "texture_cube<f32>",
         "texturecubearray": "texture_cube_array<f32>",
+        "isampler2d": "texture_2d<i32>",
+        "isampler2darray": "texture_2d_array<i32>",
+        "usampler2d": "texture_2d<u32>",
+        "usampler2darray": "texture_2d_array<u32>",
+    }
+    STORAGE_TEXTURE_DIMENSION_MAP = {
+        "image1d": "1d",
+        "image2d": "2d",
+        "image2darray": "2d_array",
+        "image3d": "3d",
+        "iimage1d": "1d",
+        "iimage2d": "2d",
+        "iimage2darray": "2d_array",
+        "iimage3d": "3d",
+        "uimage1d": "1d",
+        "uimage2d": "2d",
+        "uimage2darray": "2d_array",
+        "uimage3d": "3d",
+    }
+    STORAGE_TEXTURE_FORMAT_MAP = {
+        "r32f": "r32float",
+        "r32i": "r32sint",
+        "r32ui": "r32uint",
+        "rg32f": "rg32float",
+        "rg32i": "rg32sint",
+        "rg32ui": "rg32uint",
+        "rgba8": "rgba8unorm",
+        "rgba8snorm": "rgba8snorm",
+        "rgba8i": "rgba8sint",
+        "rgba8ui": "rgba8uint",
+        "rgba16f": "rgba16float",
+        "rgba16i": "rgba16sint",
+        "rgba16ui": "rgba16uint",
+        "rgba32f": "rgba32float",
+        "rgba32i": "rgba32sint",
+        "rgba32ui": "rgba32uint",
     }
     SAMPLER_TYPE_NAMES = {
         "sampler",
@@ -315,6 +355,7 @@ class WGSLCodeGen:
         "texturequerylevels",
         "texturequerylod",
         "texturesize",
+        "texelfetch",
     }
     BARRIER_FUNCTION_NAMES = {
         "barrier",
@@ -340,6 +381,7 @@ class WGSLCodeGen:
         self._glsl_buffer_block_struct_names = set()
         self._module_variable_types = {}
         self._module_storage_access_modes = {}
+        self._module_storage_texture_access_modes = {}
         self._module_resource_bindings = {}
         self._function_resource_member_parameters = {}
         self._reserved_bindings_by_group = {}
@@ -368,6 +410,7 @@ class WGSLCodeGen:
         self._glsl_buffer_block_struct_names = set()
         self._module_variable_types = {}
         self._module_storage_access_modes = {}
+        self._module_storage_texture_access_modes = {}
         self._module_resource_bindings = {}
         self._function_resource_member_parameters = {}
         self._reserved_bindings_by_group = {}
@@ -837,6 +880,11 @@ class WGSLCodeGen:
             )
         if self.is_sampler_type(node.var_type):
             return self.generate_sampler_global_variable(node)
+        storage_texture_type = self.storage_texture_type(node.var_type, node)
+        if storage_texture_type is not None:
+            return self.generate_storage_texture_global_variable(
+                node, storage_texture_type
+            )
         if self.is_buffer_pointer_type(node.var_type, node.qualifiers):
             return self.generate_buffer_pointer_global_variable(node)
         if self.is_glsl_buffer_block_variable(node):
@@ -921,6 +969,20 @@ class WGSLCodeGen:
             self.explicit_binding_attributes(node) or self.next_binding_attributes()
         )
         return f"{attributes}\nvar {node.name}: {self.sampler_type(node.var_type)};"
+
+    def generate_storage_texture_global_variable(self, node, texture_type):
+        if node.initial_value is not None:
+            raise ValueError(
+                "WGSL target does not support initializers for storage texture "
+                f"resource {node.name}"
+            )
+        attributes = (
+            self.explicit_binding_attributes(node) or self.next_binding_attributes()
+        )
+        self._module_storage_texture_access_modes[node.name] = (
+            self.storage_texture_access(node)
+        )
+        return f"{attributes}\nvar {node.name}: {texture_type};"
 
     def generate_resource_member_global_variables(self, root_name, root_type):
         declarations = []
@@ -1278,6 +1340,8 @@ class WGSLCodeGen:
                     )
         if normalized_name in self.TEXTURE_FUNCTION_NAMES:
             return self.generate_texture_function_call(node, function_name)
+        if normalized_name == "imagestore":
+            return self.generate_image_store_call(node, function_name)
         if normalized_name in self.BARRIER_FUNCTION_NAMES:
             return self.generate_barrier_call(node, function_name)
         if function_name == "mod":
@@ -1437,6 +1501,8 @@ class WGSLCodeGen:
             )
         if normalized_name == "texturesize":
             return self.generate_texture_dimensions_call(args)
+        if normalized_name == "texelfetch":
+            return self.generate_texel_fetch_call(function_name, args)
         raise ValueError(
             "WGSL target does not support CrossGL texture function "
             f"{function_name} yet"
@@ -1611,6 +1677,33 @@ class WGSLCodeGen:
             "textureDimensions("
             + ", ".join(self.generate_expression(arg) for arg in args)
             + ")"
+        )
+
+    def generate_texel_fetch_call(self, function_name, args):
+        if len(args) != 3:
+            raise ValueError(
+                "WGSL target supports texelFetch() calls with exactly 3 "
+                f"arguments; got {len(args)} for {function_name}"
+            )
+        texture, coords, level = args
+        return (
+            f"textureLoad({self.generate_expression(texture)}, "
+            f"{self.generate_expression(coords)}, "
+            f"{self.generate_expression(level)})"
+        )
+
+    def generate_image_store_call(self, node, function_name):
+        if len(node.arguments) != 3:
+            raise ValueError(
+                "WGSL target supports imageStore() calls with exactly 3 "
+                f"arguments; got {len(node.arguments)} for {function_name}"
+            )
+        image, coords, value = node.arguments
+        self.require_writable_storage_texture_resource(image, function_name)
+        return (
+            f"textureStore({self.generate_expression(image)}, "
+            f"{self.generate_expression(coords)}, "
+            f"{self.generate_expression(value)})"
         )
 
     def texture_sampler_expression(self, texture_expr):
@@ -2023,6 +2116,73 @@ class WGSLCodeGen:
         if type_name is None:
             return None
         return self.SAMPLED_TEXTURE_TYPE_MAP.get(type_name)
+
+    def storage_texture_type(self, vtype, node):
+        type_name = self.resource_type_name(vtype)
+        dimension = self.STORAGE_TEXTURE_DIMENSION_MAP.get(type_name or "")
+        if dimension is None:
+            return None
+        texture_format = self.storage_texture_format(node)
+        access = self.storage_texture_access(node)
+        return f"texture_storage_{dimension}<{texture_format}, {access}>"
+
+    def storage_texture_format(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            key = self.semantic_key(str(getattr(attr, "name", attr)))
+            texture_format = self.STORAGE_TEXTURE_FORMAT_MAP.get(key)
+            if texture_format is not None:
+                return texture_format
+        name = getattr(node, "name", "storage texture")
+        raise ValueError(
+            "WGSL target requires storage image resource "
+            f"{name} to declare a representable image format"
+        )
+
+    def storage_texture_access(self, node):
+        names = self.resource_qualifier_attribute_names(node)
+        if names & {"write", "writeonly", "write_only"}:
+            return "write"
+        if names & {"read", "readonly", "read_only", "constant"}:
+            return "read"
+        if names & {"readwrite", "read_write", "rw", "coherent"}:
+            return "read_write"
+        return "read_write"
+
+    def resource_qualifier_attribute_names(self, node):
+        names = {
+            self.semantic_key(str(qualifier))
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        names.update(
+            self.semantic_key(str(getattr(attr, "name", attr)))
+            for attr in getattr(node, "attributes", []) or []
+        )
+        return names
+
+    def require_writable_storage_texture_resource(self, resource, function_name):
+        resource_type = self.expression_type(resource)
+        if self.STORAGE_TEXTURE_DIMENSION_MAP.get(
+            self.resource_type_name(resource_type) or ""
+        ) is None:
+            raise ValueError(
+                f"WGSL target requires {function_name}() to use a storage image "
+                "resource"
+            )
+        access = self.storage_texture_access_for_expression(resource)
+        if access == "read":
+            raise ValueError(
+                "WGSL target cannot store through read-only storage image "
+                f"resource in {function_name}()"
+            )
+
+    def storage_texture_access_for_expression(self, expr):
+        access_path = self.expression_access_path(expr)
+        if access_path is None:
+            return None
+        root_name, path = access_path
+        if path:
+            return None
+        return self._module_storage_texture_access_modes.get(root_name)
 
     def is_depth_texture_type(self, vtype):
         type_name = self.resource_type_name(vtype)
