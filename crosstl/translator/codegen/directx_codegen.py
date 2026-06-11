@@ -1041,6 +1041,65 @@ class HLSLCodeGen:
         """Generate HLSL source for a single requested shader stage."""
         return self.generate_program(ast, target_stage=shader_type)
 
+    def validate_directx_target_profile_feature(self, feature, requirement):
+        if self.target_profile != "dx11":
+            return
+
+        raise ValueError(
+            f"DirectX profile dx11 does not support {feature}; " f"{requirement}"
+        )
+
+    def validate_directx_stage_profile(self, shader_type):
+        stage = normalize_stage_name(shader_type)
+        if stage in self.hlsl_ray_stage_types():
+            self.validate_directx_target_profile_feature(
+                f"ray tracing shader stage '{stage}'",
+                "ray tracing stages require DirectX 12 / DXR",
+            )
+        elif stage in {"mesh", "task", "amplification", "object"}:
+            self.validate_directx_target_profile_feature(
+                f"mesh/amplification shader stage '{stage}'",
+                "mesh and amplification shaders require DirectX 12 / Shader Model 6.5",
+            )
+
+    def validate_directx_type_profile(self, mapped_type, context):
+        base_type, _array_suffix = split_array_type_suffix(str(mapped_type or ""))
+        base_type = base_type.split("<", 1)[0].strip()
+
+        if base_type == "RaytracingAccelerationStructure":
+            self.validate_directx_target_profile_feature(
+                f"RaytracingAccelerationStructure {context}",
+                "ray tracing resources require DirectX 12 / DXR",
+            )
+        elif base_type == "RayQuery":
+            self.validate_directx_target_profile_feature(
+                f"RayQuery {context}",
+                "ray query requires DirectX 12 / DXR",
+            )
+        elif base_type == "RayDesc":
+            self.validate_directx_target_profile_feature(
+                f"RayDesc {context}",
+                "ray tracing descriptors require DirectX 12 / DXR",
+            )
+        elif base_type == "BuiltInTriangleIntersectionAttributes":
+            self.validate_directx_target_profile_feature(
+                f"ray hit-attribute {context}",
+                "ray tracing hit attributes require DirectX 12 / DXR",
+            )
+        elif self.is_hlsl_feedback_texture_type(mapped_type):
+            self.validate_directx_target_profile_feature(
+                f"sampler feedback texture {context}",
+                "sampler feedback requires DirectX 12 / Shader Model 6.5",
+            )
+
+    def validate_directx_register_space_profile(self, space):
+        if not space:
+            return
+        self.validate_directx_target_profile_feature(
+            f"register space '{space}'",
+            "register spaces require DirectX 12",
+        )
+
     def with_hlsl_builtin_option_prelude(self, ast):
         if not self.hlsl_ast_needs_builtin_option(ast):
             return ast
@@ -1782,6 +1841,7 @@ class HLSLCodeGen:
             mapped_type = self.hlsl_struct_buffer_resource_type(
                 node, vtype
             ) or self.map_resource_type_with_format(vtype, node)
+            self.validate_directx_type_profile(mapped_type, f"resource '{var_name}'")
             if (
                 var_name in comparison_sampler_names
                 and mapped_type == "SamplerState"
@@ -3666,6 +3726,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 raw_param_type, p, getattr(func, "name", None)
             )
             param_type = self.directx_resource_declaration_type(param_type)
+            self.validate_directx_type_profile(param_type, f"parameter '{p.name}'")
             if self.is_texture_type(raw_param_type) or self.is_image_type(
                 raw_param_type
             ):
@@ -3985,6 +4046,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return code
 
         if effective_shader_type is not None:
+            self.validate_directx_stage_profile(effective_shader_type)
             self.validate_hlsl_function_return_semantic(
                 func, effective_shader_type, raw_return_type, return_semantic
             )
@@ -4162,6 +4224,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if id(stmt) in self.hlsl_hoisted_groupshared_declaration_ids:
                 return ""
             stmt_name = self.hlsl_declaration_identifier_name(stmt.name)
+            mapped_type = self.map_type(vtype)
+            self.validate_directx_type_profile(
+                mapped_type, f"local variable '{stmt.name}'"
+            )
             if self.is_unsupported_glsl_buffer_block_struct_type(vtype):
                 self.current_unsupported_glsl_buffer_block_local_variables.add(
                     stmt.name
@@ -4172,9 +4238,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     f"{self.unsupported_glsl_buffer_block_local_variable_placeholder('HLSL', vtype, stmt.name)};\n",
                 )
 
-            declaration = format_c_style_array_declaration(
-                self.map_type(vtype), stmt_name
-            )
+            declaration = format_c_style_array_declaration(mapped_type, stmt_name)
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
             initial_value = getattr(stmt, "initial_value", None)
             if isinstance(initial_value, MatchNode):
@@ -5701,16 +5765,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         elif isinstance(expr, WaveOpNode):
             return self.generate_wave_op_expression(expr)
         elif isinstance(expr, RayTracingOpNode):
+            self.validate_directx_ray_tracing_profile(expr.operation)
             args_str = ", ".join(
                 self.generate_expression(arg) for arg in expr.arguments
             )
             return f"{expr.operation}({args_str})"
         elif isinstance(expr, MeshOpNode):
+            self.validate_directx_mesh_operation_profile(expr.operation)
             args_str = ", ".join(
                 self.generate_expression(arg) for arg in expr.arguments
             )
             return f"{expr.operation}({args_str})"
         elif isinstance(expr, RayQueryOpNode):
+            self.validate_directx_ray_query_profile(expr.operation)
             query = self.generate_expression(expr.query_expr)
             args_str = ", ".join(
                 self.generate_expression(arg) for arg in expr.arguments
@@ -5761,6 +5828,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if original_func_name != func_name:
                 func_name = original_func_name
                 callee = original_func_name
+
+            ray_query_call = self.hlsl_ray_query_call_parts(expr)
+            if ray_query_call is not None:
+                operation, _query_expr, _args = ray_query_call
+                self.validate_directx_ray_query_profile(operation)
+            elif func_name in self.hlsl_ray_tracing_expected_arg_counts():
+                self.validate_directx_ray_tracing_profile(func_name)
+            elif func_name in {"DispatchMesh", "SetMeshOutputCounts"}:
+                self.validate_directx_mesh_operation_profile(func_name)
 
             byteaddress_interlocked_call = (
                 self.generate_hlsl_byteaddress_interlocked_member_call(
@@ -6368,6 +6444,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         raise ValueError(
             f"DirectX profile dx11 does not support wave intrinsic '{operation}'; "
             "wave intrinsics require DirectX 12 / Shader Model 6.0"
+        )
+
+    def validate_directx_ray_tracing_profile(self, operation):
+        self.validate_directx_target_profile_feature(
+            f"ray tracing operation '{operation}'",
+            "ray tracing operations require DirectX 12 / DXR",
+        )
+
+    def validate_directx_ray_query_profile(self, operation):
+        self.validate_directx_target_profile_feature(
+            f"RayQuery operation '{operation}'",
+            "ray query operations require DirectX 12 / DXR",
+        )
+
+    def validate_directx_mesh_operation_profile(self, operation):
+        self.validate_directx_target_profile_feature(
+            f"mesh shader operation '{operation}'",
+            "mesh shader operations require DirectX 12 / Shader Model 6.5",
         )
 
     def generate_hlsl_wave_intrinsic_call(self, operation, args):
@@ -8857,6 +8951,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for attr in getattr(func, "attributes", []) or []:
             if not self.hlsl_root_signature_attribute(attr):
                 continue
+            self.validate_directx_target_profile_feature(
+                "RootSignature attribute",
+                "root signatures require DirectX 12",
+            )
             arguments = getattr(attr, "arguments", []) or []
             if not arguments:
                 return "[RootSignature()]\n"
@@ -19972,6 +20070,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def resource_register_suffix_for_space(self, register_prefix, binding, space=None):
+        self.validate_directx_register_space_profile(space)
         register = f"{register_prefix}{binding}"
         if space:
             return f" : register({register}, {space})"

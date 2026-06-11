@@ -1084,6 +1084,154 @@ def test_webgl_codegen_rejects_atomic_counter_resources():
 
 
 @pytest.mark.parametrize(
+    "member_type,resource_kind,diagnostic_type",
+    (
+        ("sampler2D", "sampled", "sampler2D"),
+        ("texture2D", "sampled", "sampler2D"),
+        ("image2D", "storage image", "image2D"),
+        ("atomic_uint", "atomic counter", "atomic_uint"),
+    ),
+)
+def test_webgl_codegen_rejects_opaque_resource_members_in_cbuffers(
+    member_type,
+    resource_kind,
+    diagnostic_type,
+):
+    shader = f"""
+    shader WebGLNoOpaqueCBufferMember {{
+        cbuffer MaterialData {{
+            {member_type} resourceMember;
+            float factor;
+        }};
+
+        fragment {{
+            vec4 main() @ gl_FragColor {{
+                return vec4(factor);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"WebGL target does not support {resource_kind} resource member "
+            rf"'resourceMember' in constant buffer 'MaterialData' "
+            rf"\({diagnostic_type}\)"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+def test_webgl_codegen_rejects_opaque_resource_members_in_constant_buffers():
+    shader = """
+    shader WebGLNoOpaqueConstantBufferMember {
+        struct MaterialData {
+            sampler2D colorTex;
+            float factor;
+        };
+        ConstantBuffer<MaterialData> material @binding(0);
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target does not support sampled resource member "
+            r"'colorTex' in constant buffer 'material' \(sampler2D\)"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+def test_webgl_codegen_rejects_opaque_resource_members_in_uniform_blocks():
+    shader = """
+    shader WebGLNoOpaqueUniformBlockMember {
+        struct MaterialData {
+            texture2D colorTex;
+            vec4 tint;
+        };
+        uniform MaterialData material @binding(0);
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target does not support sampled resource member "
+            r"'colorTex' in uniform block 'material' \(sampler2D\)"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+def test_webgl_codegen_rejects_opaque_resource_members_in_interface_blocks():
+    shader = """
+    shader WebGLNoOpaqueInterfaceBlockMember {
+        @glsl_interface_block(in) @glsl_interface_instance(fragmentInput)
+        struct FragmentInputBlock {
+            sampler2D colorTex;
+            vec2 uv;
+        };
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target does not support sampled resource member "
+            r"'colorTex' in interface block 'FragmentInputBlock' \(sampler2D\)"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+def test_webgl_codegen_preserves_regular_uniform_blocks_and_sampler_uniforms():
+    shader = """
+    shader WebGLRegularUniformResources {
+        struct MaterialData {
+            vec4 tint;
+            float factor;
+        };
+        uniform MaterialData material @binding(0);
+        uniform sampler2D colorTex;
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(colorTex, uv) * material.tint * material.factor;
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "layout(std140) uniform MaterialData" in generated
+    assert "vec4 tint;" in generated
+    assert "float factor;" in generated
+    assert "uniform sampler2D colorTex;" in generated
+    assert "resource member" not in generated
+
+
+@pytest.mark.parametrize(
     "resource_type,diagnostic_type",
     (
         ("sampler1D", "sampler1D"),

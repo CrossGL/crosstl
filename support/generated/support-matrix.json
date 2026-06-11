@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 301,
+        "unsupported_marker_count": 302,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1118
+        "test_count": 1122
       },
       "translator_codegen": {
         "exists": true,
@@ -275,7 +275,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 55,
+        "unsupported_marker_count": 58,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
@@ -343,19 +343,19 @@
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "f\"WebGL target does not support {resource_kind} resource member \""
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "if mapped_base_type in self.UNSUPPORTED_OPAQUE_RESOURCE_TYPES:"
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "self.UNSUPPORTED_OPAQUE_RESOURCE_TYPES[mapped_base_type],"
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "for qualifier in self.webgl_node_unsupported_interpolation_qualifiers(node):"
-          },
-          {
-            "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "\"WebGL target does not support interpolation qualifier \""
-          },
-          {
-            "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "def webgl_node_unsupported_interpolation_qualifiers(self, node):"
-          },
-          {
-            "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "unsupported = []"
           }
         ]
       },
@@ -371,7 +371,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_webgl_codegen.py"
         ],
-        "test_count": 55
+        "test_count": 60
       },
       "translator_codegen": {
         "exists": true,
@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 161
+        "test_count": 164
       },
       "translator_codegen": {
         "exists": true,

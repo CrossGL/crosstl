@@ -734,8 +734,112 @@ class WebGLCodeGen(GLSLCodeGen):
         return input_name
 
     def validate_webgl_resource_support(self, ast):
+        structs_by_name = self.webgl_structs_by_name(ast)
         for node in self.walk_ast(ast):
             self.validate_webgl_node_resource_support(node)
+            self.validate_webgl_block_resource_members(node, structs_by_name)
+
+    def webgl_structs_by_name(self, ast):
+        structs_by_name = {}
+        for node in self.walk_ast(ast):
+            if not self.is_struct_declaration_node(node):
+                continue
+            node_name = getattr(node, "name", None)
+            if node_name:
+                structs_by_name.setdefault(str(node_name), node)
+        return structs_by_name
+
+    def validate_webgl_block_resource_members(self, node, structs_by_name):
+        if getattr(node, "is_cbuffer", False):
+            self.validate_webgl_container_members(
+                node,
+                "constant buffer",
+                self.resource_node_name(node, "<unnamed>"),
+            )
+            return
+
+        if self.is_glsl_interface_block_struct(node):
+            if self.is_webgl_builtin_interface_block(node):
+                return
+            self.validate_webgl_container_members(
+                node,
+                "interface block",
+                self.glsl_interface_block_name(node),
+            )
+            return
+
+        node_type = self.resource_node_type(node)
+        if self.is_constant_buffer_type(node_type):
+            struct_name = self.constant_buffer_element_type(node_type)
+            struct = structs_by_name.get(str(struct_name))
+            if struct is not None:
+                self.validate_webgl_container_members(
+                    struct,
+                    "constant buffer",
+                    self.resource_node_name(node, "<unnamed>"),
+                )
+            return
+
+        if self.is_webgl_layout_bound_struct_uniform(node, node_type, structs_by_name):
+            struct_name = str(self.resource_base_type(node_type))
+            self.validate_webgl_container_members(
+                structs_by_name[struct_name],
+                "uniform block",
+                self.resource_node_name(node, "<unnamed>"),
+            )
+
+    def is_webgl_layout_bound_struct_uniform(self, node, node_type, structs_by_name):
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        if "uniform" not in qualifiers:
+            return False
+        if self.explicit_resource_binding_index(node) is None:
+            return False
+        return str(self.resource_base_type(node_type)) in structs_by_name
+
+    def validate_webgl_container_members(self, struct, container_kind, container_name):
+        for member in getattr(struct, "members", []) or []:
+            member_type = self.webgl_member_type(member)
+            resource_kind, diagnostic_type = self.webgl_opaque_member_resource(
+                member_type
+            )
+            if resource_kind is None:
+                continue
+            member_name = self.resource_node_name(member, "<unnamed>")
+            raise ValueError(
+                f"WebGL target does not support {resource_kind} resource member "
+                f"'{member_name}' in {container_kind} '{container_name}' "
+                f"({diagnostic_type})"
+            )
+
+    def webgl_member_type(self, member):
+        if hasattr(member, "member_type"):
+            return member.member_type
+        if hasattr(member, "element_type"):
+            return member.element_type
+        return getattr(member, "vtype", "float")
+
+    def webgl_opaque_member_resource(self, member_type):
+        base_type = self.resource_base_type(member_type)
+        if self.is_storage_image_type(base_type):
+            return (
+                "storage image",
+                self.map_type(base_type),
+            )
+
+        sampled_type = self.sampled_image_type(base_type)
+        sampled_base_type = self.map_type(self.resource_base_type(sampled_type))
+        if self.is_webgl_sampled_resource_type(sampled_base_type):
+            return "sampled", sampled_base_type
+
+        mapped_base_type = self.map_type(base_type)
+        if mapped_base_type in self.UNSUPPORTED_OPAQUE_RESOURCE_TYPES:
+            return (
+                self.UNSUPPORTED_OPAQUE_RESOURCE_TYPES[mapped_base_type],
+                mapped_base_type,
+            )
+        if self.is_opaque_resource_type(mapped_base_type):
+            return "opaque", mapped_base_type
+        return None, None
 
     def validate_webgl_interpolation_qualifiers(self, ast):
         for node in self.walk_ast(ast):

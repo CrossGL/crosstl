@@ -3444,6 +3444,11 @@ class WGSLCodeGen:
 
         if self.is_type_constructor_name(function_name):
             if len(node.arguments) == 1:
+                scalar_matrix = self.generate_scalar_matrix_constructor(
+                    function_name, node.arguments[0]
+                )
+                if scalar_matrix is not None:
+                    return scalar_matrix
                 narrowed = self.generate_vector_narrowing_conversion(
                     function_name, node.arguments[0]
                 )
@@ -4775,6 +4780,11 @@ class WGSLCodeGen:
 
     def generate_constructor(self, node):
         if len(node.arguments) == 1:
+            scalar_matrix = self.generate_scalar_matrix_constructor(
+                node.constructor_type, node.arguments[0]
+            )
+            if scalar_matrix is not None:
+                return scalar_matrix
             narrowed = self.generate_vector_narrowing_conversion(
                 node.constructor_type, node.arguments[0]
             )
@@ -4842,6 +4852,66 @@ class WGSLCodeGen:
         if self.is_float_vector_abstract_int_argument(arg, element_type):
             return self.generate_expression(arg)
         return self.generate_expression_for_target(arg, element_type)
+
+    def generate_scalar_matrix_constructor(self, constructor_type, arg):
+        matrix_shape = self.matrix_shape(constructor_type)
+        if matrix_shape is None:
+            return None
+        element_type, columns, rows = matrix_shape
+        if self.scalar_type_name(self.expression_type(arg)) is None:
+            return None
+        if self.expression_contains_function_call(arg):
+            raise ValueError(
+                "WGSL target cannot lower scalar matrix constructor with a "
+                "function-call argument without changing evaluation count"
+            )
+        diagonal = self.generate_expression_for_target(arg, element_type)
+        zero = self.matrix_zero_literal(element_type)
+        column_type = f"vec{rows}<{element_type}>"
+        column_values = []
+        for column in range(columns):
+            row_values = [diagonal if column == row else zero for row in range(rows)]
+            column_values.append(f"{column_type}({', '.join(row_values)})")
+        return (
+            f"{self.type_name_string(constructor_type)}" f"({', '.join(column_values)})"
+        )
+
+    def matrix_zero_literal(self, element_type):
+        scalar_type = self.scalar_type_name(element_type)
+        if scalar_type == "u32":
+            return "0u"
+        if scalar_type == "f32":
+            return "0.0"
+        return "0"
+
+    def expression_contains_function_call(self, expr):
+        if isinstance(expr, FunctionCallNode):
+            return True
+        if isinstance(expr, ConstructorNode):
+            return any(
+                self.expression_contains_function_call(arg) for arg in expr.arguments
+            )
+        if isinstance(expr, CastNode):
+            return self.expression_contains_function_call(expr.expression)
+        if isinstance(expr, UnaryOpNode):
+            return self.expression_contains_function_call(expr.operand)
+        if isinstance(expr, BinaryOpNode):
+            return self.expression_contains_function_call(
+                expr.left
+            ) or self.expression_contains_function_call(expr.right)
+        if isinstance(expr, TernaryOpNode):
+            return (
+                self.expression_contains_function_call(expr.condition)
+                or self.expression_contains_function_call(expr.true_expr)
+                or self.expression_contains_function_call(expr.false_expr)
+            )
+        if isinstance(expr, MemberAccessNode):
+            return self.expression_contains_function_call(expr.object_expr)
+        if isinstance(expr, ArrayAccessNode):
+            return self.expression_contains_function_call(
+                expr.array_expr
+            ) or self.expression_contains_function_call(expr.index)
+        return False
 
     def is_float_vector_abstract_int_argument(self, arg, element_type):
         return (
@@ -5273,8 +5343,8 @@ class WGSLCodeGen:
 
         matrix_match = self.MATRIX_TYPE_RE.match(lower)
         if matrix_match:
-            columns = matrix_match.group(1)
-            rows = matrix_match.group(2) or columns
+            rows = matrix_match.group(1)
+            columns = matrix_match.group(2) or rows
             return f"mat{columns}x{rows}<f32>"
 
         return self.type_identifier_name(normalized)

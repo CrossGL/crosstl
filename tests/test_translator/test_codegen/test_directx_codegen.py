@@ -32219,6 +32219,155 @@ def test_directx_dx11_profile_rejects_shader_model_6_wave_intrinsics():
     assert "WaveActiveSum(value)" in generated
 
 
+def test_directx_dx11_profile_rejects_ray_tracing_and_dx12_preserves_output():
+    code = """
+    shader Dx11RayTracing {
+        struct RayPayload {
+            vec4 color;
+        };
+
+        ray_generation {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                RayDesc ray;
+                RayPayload payload;
+                TraceRay(accel, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX profile dx11 does not support ray tracing shader stage "
+            "'ray_generation'.*DirectX 12 / DXR"
+        ),
+    ):
+        HLSLCodeGen(target_profile="dx11").generate(crosstl.translator.parse(code))
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(code)
+    )
+    assert '[shader("raygeneration")]' in generated
+    assert "RaytracingAccelerationStructure accel;" in generated
+    assert "TraceRay(accel, 0, 255, 0, 1, 0, ray, payload);" in generated
+
+
+def test_directx_dx11_profile_rejects_ray_query_and_dx12_preserves_output():
+    code = """
+    shader Dx11RayQuery {
+        compute {
+            void main() {
+                RayQuery<RAY_FLAG_NONE> rq;
+                bool proceed = rq.Proceed();
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX profile dx11 does not support RayQuery local variable "
+            "'rq'.*DirectX 12 / DXR"
+        ),
+    ):
+        HLSLCodeGen(target_profile="directx-11").generate(
+            crosstl.translator.parse(code)
+        )
+
+    generated = HLSLCodeGen(target_profile="directx-12").generate(
+        crosstl.translator.parse(code)
+    )
+    assert "RayQuery<RAY_FLAG_NONE> rq;" in generated
+    assert "bool proceed = rq.Proceed();" in generated
+
+
+def test_directx_dx11_profile_rejects_mesh_stage_and_dx12_preserves_output():
+    code = """
+    shader Dx11MeshShader {
+        mesh {
+            void main() @numthreads(1, 1, 1) @outputtopology(triangle) {
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX profile dx11 does not support mesh/amplification shader "
+            "stage 'mesh'.*Shader Model 6.5"
+        ),
+    ):
+        HLSLCodeGen(target_profile="dx11").generate(crosstl.translator.parse(code))
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(code)
+    )
+    assert '[shader("mesh")]' in generated
+    assert "[numthreads(1, 1, 1)]" in generated
+    assert '[outputtopology("triangle")]' in generated
+
+
+def test_directx_dx11_profile_rejects_root_signatures_and_register_spaces():
+    root_signature = """
+    shader Dx11RootSignature {
+        compute {
+            @ RootSignature("RootFlags(0)")
+            @ numthreads(8, 1, 1)
+            void main() {
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX profile dx11 does not support RootSignature attribute.*"
+            "root signatures require DirectX 12"
+        ),
+    ):
+        HLSLCodeGen(target_profile="dx11").generate(
+            crosstl.translator.parse(root_signature)
+        )
+
+    generated_root_signature = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(root_signature)
+    )
+    assert '[RootSignature("RootFlags(0)")]' in generated_root_signature
+
+    register_space = """
+    shader Dx11RegisterSpace {
+        sampler2D colorMap @register(t0, space1);
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX profile dx11 does not support register space 'space1'.*"
+            "register spaces require DirectX 12"
+        ),
+    ):
+        HLSLCodeGen(target_profile="dx11").generate(
+            crosstl.translator.parse(register_space)
+        )
+
+    generated_register_space = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(register_space)
+    )
+    assert "Texture2D colorMap : register(t0, space1);" in generated_register_space
+
+
 def test_directx_wave_active_sum_ballot_prefix_in_compute_expressions():
     code = """
     shader WaveExpressionCoverage {

@@ -381,6 +381,72 @@ def test_wgsl_codegen_casts_integer_vector_constructor_arguments():
     assert "return vec4<f32>((uv + offset), f32(0), f32(1));" not in generated
 
 
+def test_wgsl_codegen_expands_scalar_matrix_constructor_to_columns():
+    shader = """
+    shader WGSLScalarMatrixConstructor {
+        vertex {
+            vec4 main(vec3 position @ POSITION) @ gl_Position {
+                mat4 identity = mat4(1.0);
+                return identity * vec4(position, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "mat4x4<f32>(1.0)" not in generated
+    assert (
+        "var identity: mat4x4<f32> = mat4x4<f32>("
+        "vec4<f32>(1.0, 0.0, 0.0, 0.0), "
+        "vec4<f32>(0.0, 1.0, 0.0, 0.0), "
+        "vec4<f32>(0.0, 0.0, 1.0, 0.0), "
+        "vec4<f32>(0.0, 0.0, 0.0, 1.0));"
+    ) in generated
+
+
+def test_wgsl_codegen_expands_scalar_rectangular_matrix_constructor():
+    shader = """
+    shader WGSLScalarRectangularMatrixConstructor {
+        vertex {
+            vec3 main(vec2 position @ TEXCOORD0) @ TEXCOORD1 {
+                float scale = 2.0;
+                mat3x2 basis = mat3x2(scale);
+                return basis * position;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "mat3x2<f32>(scale)" not in generated
+    assert (
+        "var basis: mat2x3<f32> = mat2x3<f32>("
+        "vec3<f32>(scale, 0.0, 0.0), "
+        "vec3<f32>(0.0, scale, 0.0));"
+    ) in generated
+
+
+def test_wgsl_codegen_rejects_scalar_matrix_constructor_call_argument():
+    shader = """
+    shader WGSLScalarMatrixConstructorCall {
+        float makeScale() {
+            return 1.0;
+        }
+        vertex {
+            vec4 main(vec3 position @ POSITION) @ gl_Position {
+                mat4 identity = mat4(makeScale());
+                return identity * vec4(position, 1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="scalar matrix constructor"):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_preserves_explicit_io_attributes():
     shader = """
     shader WGSLExplicitAttributes {
