@@ -35904,6 +35904,108 @@ def test_translate_project_metal_call_site_template_materializes_for_opengl(
     assert validation["success"] is True
 
 
+def test_translate_project_metal_source_instantiation_propagates_plain_helper_bindings_for_opengl(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "elemental_copy.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_unary(name, type) \\
+                instantiate_kernel("unary" #name, unary_v, type)
+            #define instantiate_copy(name, itype, otype) \\
+                instantiate_kernel("copy" #name, copy_v, itype, otype)
+
+            template <typename T>
+            T apply_value(T value) {
+                return value + T(1);
+            }
+
+            template <typename T, typename U>
+            U convert_value(T value) {
+                return U(value);
+            }
+
+            template <typename T>
+            [[kernel]] void unary_v(
+                device const T* in [[buffer(0)]],
+                device T* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = apply_value(in[gid]);
+            }
+
+            template <typename T, typename U>
+            [[kernel]] void copy_v(
+                device const T* src [[buffer(0)]],
+                device U* dst [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                dst[gid] = convert_value(src[gid]);
+            }
+
+            instantiate_unary(f32, float)
+            instantiate_copy(f32, float, float)
+            instantiate_copy(i32f32, int, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    materialization = artifact["templateMaterialization"]
+    assert materialization["status"] == "materialized"
+    assert materialization["unsupported"] == []
+    assert [
+        (entry["name"], entry["materializedName"], entry["parameters"])
+        for entry in materialization["specializations"]
+    ] == [
+        ("unary_v", "unaryf32", {"T": "float"}),
+        ("copy_v", "copyf32", {"T": "float", "U": "float"}),
+        ("copy_v", "copyi32f32", {"T": "int", "U": "float"}),
+        ("apply_value", "apply_value_float", {"T": "float"}),
+        ("convert_value", "convert_value_float_float", {"T": "float", "U": "float"}),
+        ("convert_value", "convert_value_int_float", {"T": "int", "U": "float"}),
+    ]
+    assert {
+        source
+        for entry in materialization["specializations"]
+        for source in entry["parameterSources"].values()
+    } == {"source-instantiation"}
+
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert (
+        "layout(std430, binding = 0) readonly buffer in_Buffer { float in_[]; };"
+        in output
+    )
+    assert (
+        "layout(std430, binding = 4) readonly buffer copyi32f32_srcBuffer "
+        "{ int copyi32f32_src[]; };" in output
+    )
+    assert "float apply_value_float(float value)" in output
+    assert "float convert_value_float_float(float value)" in output
+    assert "float convert_value_int_float(int value)" in output
+    assert "out_[gid] = apply_value_float(in_[gid]);" in output
+    assert "dst[gid] = convert_value_float_float(src[gid]);" in output
+    assert "dst[gid] = convert_value_int_float(copyi32f32_src[gid]);" in output
+    assert "apply_value(in_[gid])" not in output
+    assert "convert_value(src[gid])" not in output
+    assert re.search(r"\\b(?:T|U)\\b", output) is None
+    assert_compute_glsl_validates_if_available(output, tmp_path)
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+
+
 def test_translate_project_metal_repeated_call_site_templates_share_budget_for_opengl(
     tmp_path,
 ):
