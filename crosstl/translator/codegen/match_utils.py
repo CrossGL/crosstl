@@ -170,10 +170,13 @@ def generate_match_expression_assignment_arms(
     target_type,
     indent,
     target_name,
+    suppress_unmatched_fallback=False,
+    covered_variants=None,
 ):
     indent_str = "    " * indent
     expression = generator.generate_expression(expression_node)
     expression_type = expression_result_type(generator, expression_node)
+    covered_variants = set(covered_variants or ())
 
     code = ""
     if match_subject_requires_temp(expression_node, expression_type):
@@ -217,6 +220,7 @@ def generate_match_expression_assignment_arms(
                 indent,
                 emitted_arm,
                 target_name,
+                covered_variants=covered_variants,
             )
             handled_unconditional = True
             break
@@ -258,10 +262,21 @@ def generate_match_expression_assignment_arms(
         )
         code += f"{indent_str}}}\n"
         emitted_arm = True
+        if guard is None:
+            covered_variants = covered_variants_with_arm(covered_variants, arm)
 
-    if not handled_unconditional and (
-        match_expression_requires_fallback_assignment(generator)
-        or not match_arms_exhaust_subject(generator, arms, expression_type)
+    if (
+        not suppress_unmatched_fallback
+        and not handled_unconditional
+        and (
+            match_expression_requires_fallback_assignment(generator)
+            or not match_arms_exhaust_subject(
+                generator,
+                arms,
+                expression_type,
+                covered_variants=covered_variants,
+            )
+        )
     ):
         fallback = match_expression_unmatched_assignment(
             generator,
@@ -281,7 +296,12 @@ def generate_match_expression_assignment_arms(
     return code
 
 
-def match_arms_exhaust_subject(generator, arms, expression_type):
+def match_arms_exhaust_subject(
+    generator,
+    arms,
+    expression_type,
+    covered_variants=None,
+):
     subject_type = base_type_name(type_name_string(generator, expression_type))
     if not subject_type:
         return False
@@ -293,7 +313,7 @@ def match_arms_exhaust_subject(generator, arms, expression_type):
     if not expected_variants:
         return False
 
-    covered_variants = set()
+    covered_variants = set(covered_variants or ())
     for arm in arms:
         if getattr(arm, "guard", None) is not None:
             continue
@@ -307,6 +327,28 @@ def match_arms_exhaust_subject(generator, arms, expression_type):
                 covered_variants.add(variant_name)
 
     return expected_variants <= covered_variants
+
+
+def covered_variants_with_arm(covered_variants, arm):
+    covered = set(covered_variants or ())
+    pattern = getattr(arm, "pattern", None)
+    variant = unconditionally_covered_enum_variant(pattern)
+    if variant is not None:
+        _enum_name, variant_name = split_enum_path(variant)
+        covered.add(variant_name)
+    return covered
+
+
+def match_arms_cover_enum_variant(arms, variant_path):
+    for arm in arms or []:
+        if getattr(arm, "guard", None) is not None:
+            continue
+        pattern = getattr(arm, "pattern", None)
+        if isinstance(pattern, WildcardPatternNode):
+            return True
+        if unconditionally_covered_enum_variant(pattern) == variant_path:
+            return True
+    return False
 
 
 def enum_variants_for_subject(generator, subject_type):
@@ -521,6 +563,7 @@ def generate_guarded_bound_match_assignment_arm(
     indent,
     emitted_arm,
     target_name,
+    covered_variants=None,
 ):
     indent_str = "    " * indent
 
@@ -538,6 +581,7 @@ def generate_guarded_bound_match_assignment_arm(
             target_type,
             indent + 1,
             target_name,
+            covered_variants=covered_variants,
         )
         code += f"{indent_str}}}\n"
         return code
@@ -559,10 +603,12 @@ def generate_guarded_bound_match_assignment_arm(
         target_type,
         indent + 1,
         target_name,
+        covered_variants=covered_variants,
     )
     code += f"{indent_str}}}\n"
     if rest_arms:
         code += f"{indent_str}else {{\n"
+        covered_for_rest = covered_variants_with_arm(covered_variants, arm)
         code += generate_match_expression_assignment_arms(
             generator,
             rest_arms,
@@ -571,6 +617,7 @@ def generate_guarded_bound_match_assignment_arm(
             target_type,
             indent + 1,
             target_name,
+            covered_variants=covered_for_rest,
         )
         code += f"{indent_str}}}\n"
     return code
@@ -588,6 +635,7 @@ def generate_guarded_bound_match_assignment_body(
     target_type,
     indent,
     target_name,
+    covered_variants=None,
 ):
     indent_str = "    " * indent
     guard_condition = generate_match_guard_condition(generator, guard, binding_types)
@@ -607,6 +655,13 @@ def generate_guarded_bound_match_assignment_body(
     code += f"{indent_str}}}"
     if rest_arms:
         code += " else {\n"
+        narrowed_variant = unconditionally_covered_enum_variant(
+            getattr(arm, "pattern", None)
+        )
+        suppress_unmatched_fallback = (
+            narrowed_variant is not None
+            and match_arms_cover_enum_variant(rest_arms, narrowed_variant)
+        )
         code += generate_match_expression_assignment_arms(
             generator,
             rest_arms,
@@ -615,6 +670,8 @@ def generate_guarded_bound_match_assignment_body(
             target_type,
             indent + 1,
             target_name,
+            suppress_unmatched_fallback=suppress_unmatched_fallback,
+            covered_variants=covered_variants,
         )
         code += f"{indent_str}}}"
     code += "\n"

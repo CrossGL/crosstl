@@ -27,6 +27,31 @@ from ..ast import (
     WaveOpNode,
 )
 from .array_utils import parse_array_type, split_array_type_suffix
+from .enum_utils import (
+    collect_enum_struct_variant_fields,
+    collect_enum_type_names,
+    collect_enum_variant_constants,
+    collect_enum_variant_constructor_fields,
+    collect_enum_variant_constructors,
+    collect_generic_enum_specialization_member_types,
+    collect_generic_enum_specializations,
+    collect_generic_enum_struct_definitions,
+    collect_generic_enum_variant_constants,
+    collect_struct_payload_enums,
+    enum_struct_fields,
+    enum_value_expression,
+    generate_enum_constants,
+    generate_enum_constructor_call,
+    generate_enum_constructor_expression,
+    generate_enum_constructor_functions,
+    generate_enum_structs,
+    generate_generic_enum_constants,
+    generate_generic_enum_constructor_functions,
+    generate_generic_enum_structs,
+    generic_enum_specialized_fields,
+    generic_enum_specialized_type_name,
+    infer_enum_constructor_type,
+)
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
@@ -223,12 +248,19 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.glsl_buffer_block_accesses = {}
         self.glsl_buffer_block_layouts = {}
         self.enum_variant_constants = {}
+        self.enum_struct_type_names = set()
+        self.enum_struct_variant_fields = {}
+        self.enum_variant_constructors = {}
+        self.enum_variant_constructor_fields = {}
+        self.struct_payload_enums = []
         self.cuda_resource_binding_cursors = {}
         self.cuda_used_resource_bindings = {}
         self.struct_member_types = {}
         self.structs_by_name = {}
         self.struct_member_semantics = {}
         self.struct_member_image_accesses = {}
+        self.generic_enum_struct_definitions = {}
+        self.generic_enum_specializations = {}
         self.generic_struct_definitions = {}
         self.generic_struct_specializations = {}
         self.function_return_types = {}
@@ -247,6 +279,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.current_function_name = None
         self.current_stage_name = None
         self.cuda_function_capture_params = {}
+        self.enum_constructor_function_prefix = "__device__ inline "
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
         self.stage_builtin_aliases = {}
@@ -340,12 +373,42 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.cuda_resource_binding_cursors = {}
         self.cuda_used_resource_bindings = {}
         self.structs_by_name = self.collect_structs_by_name(ast_node)
+        declaration_nodes = self.collect_cuda_declaration_nodes(ast_node)
+        self.struct_payload_enums = collect_struct_payload_enums(declaration_nodes)
+        self.enum_struct_variant_fields = collect_enum_struct_variant_fields(
+            self.struct_payload_enums
+        )
+        self.enum_variant_constructors = collect_enum_variant_constructors(
+            self.struct_payload_enums
+        )
+        self.enum_variant_constructor_fields = collect_enum_variant_constructor_fields(
+            self.struct_payload_enums
+        )
+        self.enum_variant_constants.update(
+            collect_enum_variant_constants(self.struct_payload_enums)
+        )
+        self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
+            self.structs_by_name.values()
+        )
+        self.enum_struct_type_names = collect_enum_type_names(
+            self.struct_payload_enums
+        ) | set(self.generic_enum_struct_definitions)
         (
             self.struct_member_types,
             self.struct_member_image_accesses,
         ) = self.collect_struct_member_metadata(ast_node)
         self.generic_struct_definitions = collect_generic_struct_definitions(
             self.structs_by_name.values(),
+            excluded_names=set(self.generic_enum_struct_definitions),
+        )
+        self.generic_enum_specializations = collect_generic_enum_specializations(
+            ast_node,
+            self.generic_enum_struct_definitions,
+            self.type_name_string,
+        )
+        self.enum_struct_type_names.update(
+            specialization["struct_name"]
+            for specialization in self.generic_enum_specializations.values()
         )
         self.generic_struct_specializations = collect_generic_struct_specializations(
             ast_node,
@@ -356,10 +419,22 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.generic_struct_definition_member_types(self.generic_struct_definitions)
         )
         self.struct_member_types.update(
+            self.enum_payload_struct_member_types(self.struct_payload_enums)
+        )
+        self.struct_member_types.update(
+            collect_generic_enum_specialization_member_types(
+                self,
+                self.generic_enum_specializations,
+            )
+        )
+        self.struct_member_types.update(
             collect_generic_struct_specialization_member_types(
                 self,
                 self.generic_struct_specializations,
             )
+        )
+        self.enum_variant_constants.update(
+            collect_generic_enum_variant_constants(self.generic_enum_struct_definitions)
         )
         self.struct_member_semantics = {}
         self.function_return_types = self.collect_function_return_types(ast_node)
@@ -393,6 +468,25 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 collect_generic_struct_specialization_member_types(
                     self,
                     additional_generic_struct_specializations,
+                )
+            )
+        additional_generic_enum_specializations = collect_generic_enum_specializations(
+            list(generic_function_specializations.values()),
+            self.generic_enum_struct_definitions,
+            self.type_name_string,
+        )
+        if additional_generic_enum_specializations:
+            self.generic_enum_specializations.update(
+                additional_generic_enum_specializations
+            )
+            self.enum_struct_type_names.update(
+                specialization["struct_name"]
+                for specialization in additional_generic_enum_specializations.values()
+            )
+            self.struct_member_types.update(
+                collect_generic_enum_specialization_member_types(
+                    self,
+                    additional_generic_enum_specializations,
                 )
             )
         self.reject_unsupported_generic_functions(ast_node)
@@ -974,6 +1068,40 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         else:
             self.emit_statement(body)
 
+    def emit_function_body(self, body):
+        """Render a function body, preserving CrossGL tail-expression returns."""
+        statements = self.statement_list(body)
+        return_type = self.current_nonvoid_function_return_type()
+        if return_type is None or not statements:
+            self.emit_body(body)
+            return
+
+        tail = statements[-1]
+        for stmt in statements[:-1]:
+            self.emit_statement(stmt)
+
+        if isinstance(tail, MatchNode):
+            self.emit_match_expression_return(tail)
+            return
+
+        if isinstance(tail, ExpressionStatementNode) and getattr(
+            tail, "is_tail_expression", False
+        ):
+            value = self.generate_expression_with_expected(tail.expression, return_type)
+            self.emit(f"return {value};")
+            return
+
+        self.emit_statement(tail)
+
+    def current_nonvoid_function_return_type(self):
+        """Return the current return type when a tail expression should return."""
+        if self.current_function_is_kernel_entry:
+            return None
+        return_type = self.type_name_string(self.current_function_return_type)
+        if not return_type or return_type == "void":
+            return None
+        return return_type
+
     def statement_list(self, body):
         """Normalize block-like statement containers to a list."""
         if body is None:
@@ -1021,14 +1149,29 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def collect_structs_by_name(self, root):
         """Return plain struct declarations visible to CUDA expression lowering."""
-        structs = list(getattr(root, "structs", []) or [])
-        for stage in (getattr(root, "stages", {}) or {}).values():
-            structs.extend(getattr(stage, "local_structs", []) or [])
+        structs = self.collect_cuda_declaration_nodes(root)
         return {
             struct.name: struct
             for struct in structs
             if isinstance(struct, StructNode) and getattr(struct, "name", None)
         }
+
+    def collect_cuda_declaration_nodes(self, root):
+        """Collect top-level and stage-local declarations with type definitions."""
+        declarations = list(getattr(root, "structs", []) or [])
+        for stage in (getattr(root, "stages", {}) or {}).values():
+            declarations.extend(getattr(stage, "local_structs", []) or [])
+        return declarations
+
+    def enum_payload_struct_member_types(self, enums):
+        """Return member-type maps for payload enums lowered to tagged structs."""
+        member_types = {}
+        for enum in enums or []:
+            fields = {"variant": "int"}
+            for field_name, field_type in enum_struct_fields(enum) or []:
+                fields[field_name] = field_type
+            member_types[enum.name] = fields
+        return member_types
 
     def generic_struct_definition_member_types(self, definitions):
         member_types = {}
@@ -1089,6 +1232,130 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             visit(type_text)
         return ordered
 
+    def ordered_cuda_data_declarations(self):
+        """Return payload/generic data struct declarations in dependency order."""
+        entries = {}
+
+        for enum in self.struct_payload_enums:
+            entries[enum.name] = {
+                "dependencies": {
+                    self.cuda_data_declaration_dependency(field_type)
+                    for _field_name, field_type in enum_struct_fields(enum) or []
+                },
+                "code": generate_enum_structs(self, [enum]),
+            }
+
+        for type_text, specialization in self.generic_enum_specializations.items():
+            entries[specialization["struct_name"]] = {
+                "dependencies": {
+                    self.cuda_data_declaration_dependency(field_type)
+                    for _field_name, field_type in generic_enum_specialized_fields(
+                        self,
+                        specialization,
+                    )
+                },
+                "code": generate_generic_enum_structs(
+                    self,
+                    {type_text: specialization},
+                ),
+            }
+
+        for type_text, specialization in self.generic_struct_specializations.items():
+            entries[specialization["struct_name"]] = {
+                "dependencies": {
+                    self.cuda_data_declaration_dependency(field_type)
+                    for _field_name, field_type in generic_struct_specialized_fields(
+                        self.type_name_string,
+                        specialization,
+                    )
+                },
+                "code": generate_generic_structs(
+                    self,
+                    {type_text: specialization},
+                ),
+            }
+
+        for name, entry in entries.items():
+            entry["dependencies"] = {
+                dependency
+                for dependency in entry["dependencies"]
+                if dependency in entries and dependency != name
+            }
+
+        ordered = []
+        visiting = set()
+        visited = set()
+
+        def visit(name):
+            if name in visited:
+                return
+            if name in visiting:
+                return
+            visiting.add(name)
+            for dependency in sorted(entries[name]["dependencies"]):
+                visit(dependency)
+            visiting.remove(name)
+            visited.add(name)
+            ordered.append(entries[name]["code"])
+
+        for name in sorted(entries):
+            visit(name)
+        return ordered
+
+    def cuda_data_declaration_dependency(self, type_name):
+        """Map a field type to the CUDA data declaration that must precede it."""
+        generic_enum_type = generic_enum_specialized_type_name(self, type_name)
+        if generic_enum_type is not None:
+            return generic_enum_type
+
+        generic_struct_type = generic_struct_specialized_type_name(self, type_name)
+        if generic_struct_type is not None:
+            return generic_struct_type
+
+        type_text = self.type_name_string(type_name)
+        if type_text in self.enum_struct_type_names:
+            return type_text
+        return None
+
+    def default_value_expression_for_type(self, type_value):
+        mapped_type = self.map_type(type_value)
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type or ""))
+        if array_suffix:
+            return None
+
+        vector_info = self.vector_type_info(mapped_type)
+        if vector_info is not None:
+            scalar = (
+                "0.0" if vector_info["component_type"] in {"float", "double"} else "0"
+            )
+            args = ", ".join([scalar] * len(vector_info["components"]))
+            return f"{vector_info['constructor']}({args})"
+
+        if base_type in self.struct_member_types:
+            defaults = [
+                self.default_value_expression_for_type(field_type)
+                or self.primitive_default_value_expression(field_type)
+                for field_type in self.struct_member_types[base_type].values()
+            ]
+            return f"{base_type}{{{', '.join(defaults)}}}"
+
+        if mapped_type in {"const char*", "char*"}:
+            return "nullptr"
+
+        return None
+
+    def primitive_default_value_expression(self, type_value):
+        mapped_type = self.map_type(type_value)
+        if mapped_type == "bool":
+            return "false"
+        if mapped_type in {"float", "double"}:
+            return "0.0"
+        if mapped_type in {"int", "unsigned int"}:
+            return "0"
+        if mapped_type in {"const char*", "char*"}:
+            return "nullptr"
+        return f"{mapped_type}{{}}"
+
     def collect_struct_query_metadata_members(self, root):
         """Collect struct resource members that need embedded query sidecars."""
         has_resource_query = False
@@ -1133,16 +1400,47 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         structs = getattr(node, "structs", [])
         for struct in structs:
+            if isinstance(struct, EnumNode) and struct in self.struct_payload_enums:
+                continue
+            if getattr(struct, "name", None) in self.generic_enum_struct_definitions:
+                continue
             if getattr(struct, "name", None) in self.generic_struct_definitions:
                 continue
             self.visit(struct)
             self.emit("")
-        generic_struct_code = generate_generic_structs(
+        payload_enum_constants = generate_enum_constants(
             self,
-            self.ordered_generic_struct_specializations(),
+            self.struct_payload_enums,
+            qualifier="static const",
         )
-        if generic_struct_code:
-            self.emit_generated_code(generic_struct_code)
+        if payload_enum_constants:
+            self.emit_generated_code(payload_enum_constants)
+            self.emit("")
+        enum_constants = generate_generic_enum_constants(
+            self,
+            self.generic_enum_struct_definitions,
+            qualifier="static const",
+        )
+        if enum_constants:
+            self.emit_generated_code(enum_constants)
+            self.emit("")
+        for data_declaration in self.ordered_cuda_data_declarations():
+            if data_declaration:
+                self.emit_generated_code(data_declaration)
+                self.emit("")
+        enum_constructors = generate_enum_constructor_functions(
+            self,
+            self.struct_payload_enums,
+        )
+        if enum_constructors:
+            self.emit_generated_code(enum_constructors)
+            self.emit("")
+        generic_enum_constructors = generate_generic_enum_constructor_functions(
+            self,
+            self.generic_enum_specializations,
+        )
+        if generic_enum_constructors:
+            self.emit_generated_code(generic_enum_constructors)
             self.emit("")
 
         cbuffers = getattr(node, "cbuffers", [])
@@ -1596,7 +1894,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if self.is_cuda_shared_variable(local_var):
                 self.visit(local_var)
 
-        self.emit_body(body)
+        self.emit_function_body(body)
         if fragment_output_name is not None and not self.statement_body_terminates(
             body
         ):
@@ -2928,7 +3226,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return ray_builtin
         enum_constant = self.enum_variant_constants.get(name)
         if enum_constant is not None:
-            return enum_constant
+            return enum_value_expression(self, name)
         return self.builtin_map.get(name, name)
 
     def cuda_ray_builtin_expression(self, name):
@@ -3193,6 +3491,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def visit_ConstructorNode(self, node):
         """Lower braced AST constructors to CUDA aggregate/value constructors."""
+        enum_constructor = generate_enum_constructor_expression(self, node)
+        if enum_constructor is not None:
+            return enum_constructor
+
         struct_constructor = generate_struct_constructor_expression(self, node)
         if struct_constructor is not None:
             return struct_constructor
@@ -3359,6 +3661,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         elif hasattr(node, "args"):
             raw_args = node.args
 
+        enum_func_name = self.enum_constructor_call_name(function_expr)
+        if enum_func_name is not None:
+            enum_constructor = generate_enum_constructor_call(
+                self,
+                enum_func_name,
+                raw_args,
+            )
+            if enum_constructor is not None:
+                return enum_constructor
+
         numeric_trait_call = generate_numeric_trait_method_call(
             self,
             function_expr,
@@ -3376,6 +3688,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             func_name = specialized_func_name
         else:
             raise_unresolved_generic_function_call(self, func_name, "CUDA")
+
+        enum_constructor = generate_enum_constructor_call(self, func_name, raw_args)
+        if enum_constructor is not None:
+            return enum_constructor
 
         args = [self.visit(arg) for arg in raw_args]
 
@@ -3558,6 +3874,34 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         func_name = self.convert_builtin_function(func_name)
         return f"{func_name}({args_str})"
+
+    def enum_constructor_call_name(self, function_expr):
+        if isinstance(function_expr, str):
+            return function_expr if "::" in function_expr else None
+
+        name = getattr(function_expr, "name", None)
+        if isinstance(name, str) and "::" in name:
+            return name
+
+        if not isinstance(function_expr, MemberAccessNode):
+            return None
+
+        object_node = getattr(
+            function_expr,
+            "object_expr",
+            getattr(function_expr, "object", None),
+        )
+        object_name = getattr(object_node, "name", None)
+        member_name = getattr(function_expr, "member", None)
+        if not object_name or not member_name:
+            return None
+
+        path = f"{object_name}::{member_name}"
+        if path in self.enum_variant_constants:
+            return path
+        if object_name in self.generic_enum_struct_definitions:
+            return path
+        return None
 
     def cuda_math_function_name(self, func_name):
         return {"inverseSqrt": "inversesqrt", "rsqrt": "inversesqrt"}.get(
@@ -6481,7 +6825,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if node.value:
             if isinstance(node.value, MatchNode):
                 return self.emit_match_expression_return(node.value)
-            value = self.visit(node.value)
+            value = self.generate_expression_with_expected(
+                node.value,
+                self.current_function_return_type,
+            )
             self.emit(f"return {value};")
         else:
             self.emit("return;")
@@ -6600,6 +6947,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if unsupported_type is not None:
             self.raise_unsupported_cuda_fp16_vector_type(unsupported_type)
 
+        generic_enum_type = generic_enum_specialized_type_name(self, crossgl_type)
+        if generic_enum_type is not None:
+            return generic_enum_type
+
         generic_struct_type = generic_struct_specialized_type_name(self, crossgl_type)
         if generic_struct_type is not None:
             return generic_struct_type
@@ -6639,6 +6990,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "void": "void",
             "bool": "bool",
             "string": "const char*",
+            "str": "const char*",
             "i8": "char",
             "u8": "unsigned char",
             "i16": "short",
@@ -7481,6 +7833,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if isinstance(node, FunctionCallNode):
             function_expr = getattr(node, "function", getattr(node, "name", None))
             func_name = getattr(function_expr, "name", function_expr)
+            enum_constructor_type = infer_enum_constructor_type(self, node)
+            if enum_constructor_type is not None:
+                return enum_constructor_type
             numeric_result_type = numeric_trait_method_result_type(self, node)
             if numeric_result_type is not None:
                 return numeric_result_type

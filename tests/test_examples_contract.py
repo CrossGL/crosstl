@@ -77,6 +77,7 @@ FULL_BACKEND_EXAMPLE_CASES = tuple(
 KNOWN_PRIMARY_GRAPHICS_GAPS = ()
 
 PRIMARY_GRAPHICS_FIXED_CASES = (
+    ("advanced/GenericPatternMatching.cgl", "cuda"),
     ("advanced/GenericPatternMatching.cgl", "directx"),
     ("advanced/GenericPatternMatching.cgl", "hip"),
     ("advanced/GenericPatternMatching.cgl", "metal"),
@@ -111,7 +112,6 @@ GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES = (
 
 GENERIC_FUNCTION_KNOWN_LEAK_BACKEND_CASES = (
     ("advanced/GenericPatternMatching.cgl", "vulkan", "T::zero"),
-    ("advanced/GenericPatternMatching.cgl", "cuda", "Result<Vec3<float>, MathError>"),
 )
 
 KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
@@ -291,11 +291,6 @@ def test_generic_function_examples_track_known_backend_generic_leaks(
     )
 
     assert expected_marker in generated
-    if backend == "cuda":
-        assert "Vec3<T>" not in generated
-        assert "Matrix3x3<T>" not in generated
-        assert "RenderState<T>" not in generated
-        assert re.search(r"\bT\b", generated) is None
 
 
 @pytest.mark.parametrize(

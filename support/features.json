@@ -4096,11 +4096,12 @@
           ]
         },
         "cuda": {
-          "status": "diagnostic",
-          "notes": "CUDA lowers helper functions, entry functions, calls, parameters, returns, concrete generic helper specializations, and generic data-struct specializations. Generic enum payload signatures still remain diagnostic/known-leak coverage until CUDA has a concrete enum-payload ABI.",
+          "status": "supported",
+          "notes": "CUDA lowers helper functions, entry functions, calls, parameters, returns, concrete generic helper specializations, generic enum payload specializations, and generic data-struct specializations without leaking unresolved template placeholders.",
           "evidence": [
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_function_conversion",
-            "tests/test_examples_contract.py::def test_generic_function_examples_track_known_backend_generic_leaks"
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_match_generic_enum_constructor_pattern_binds_payload_for_cuda",
+            "tests/test_examples_contract.py::def test_primary_graphics_examples_with_stage_local_resources_translate"
           ]
         },
         "hip": {
@@ -4526,12 +4527,14 @@
         },
         "cuda": {
           "status": "supported",
-          "notes": "CUDA lowers literal/wildcard arms, guarded arms, identifier bindings, scoped fallthrough bodies, struct field patterns, match expressions, typed temporaries, return match expressions, switch-style literal cases, wildcard defaults, complex bodies, and return arms.",
+          "notes": "CUDA lowers literal/wildcard arms, guarded arms, identifier bindings, scoped fallthrough bodies, struct field patterns, enum path and payload patterns, generic enum matches, match expressions, typed temporaries, return match expressions, switch-style literal cases, wildcard defaults, complex bodies, and return arms.",
           "evidence": [
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_match_literal_and_wildcard_arms_lower_to_switch",
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_match_guarded_arm_lowers_to_cuda_if_chain",
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_match_identifier_binding_arm_lowers_to_cuda_scoped_else_body",
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_match_plain_struct_pattern_binds_fields_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_match_expression_and_payload_pattern_lower_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_match_generic_enum_constructor_pattern_binds_payload_for_cuda",
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_return_match_expression_in_cuda_kernel_discards_return_value"
           ]
         },
