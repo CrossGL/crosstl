@@ -950,6 +950,22 @@ class VulkanSPIRVCodeGen:
         self.named_constants[name] = constant_id
         return constant_id
 
+    def spirv_specialization_constant_declaration_node(self, node):
+        if isinstance(node, VariableNode):
+            if self.spirv_specialization_constant_attributes(node):
+                return node
+            return None
+        if isinstance(node, AssignmentNode) and isinstance(
+            getattr(node, "left", None), VariableNode
+        ):
+            declaration = node.left
+            if not self.spirv_specialization_constant_attributes(declaration):
+                return None
+            if getattr(declaration, "initial_value", None) is None:
+                declaration.initial_value = getattr(node, "right", None)
+            return declaration
+        return None
+
     def evaluate_literal_scalar_constant(
         self, expr, type_id: SpirvId
     ) -> Optional[Union[bool, int, float]]:
@@ -11803,7 +11819,9 @@ class VulkanSPIRVCodeGen:
         interface_node = node
         if interface_node is None:
             interface_node = VariableNode(name, type_id.type.base_type)
-        self.validate_user_defined_interface_type(type_id, storage_class, name)
+        self.validate_user_defined_interface_type(
+            type_id, storage_class, name, interface_node
+        )
         preferred_location = self.entry_point_interface_location(
             semantic, storage_class, node, member_index
         )
@@ -11930,8 +11948,44 @@ class VulkanSPIRVCodeGen:
 
         return False
 
+    def interface_source_declaration_text(
+        self,
+        source_node,
+        fallback_name: Optional[str],
+        fallback_type: Optional[SpirvId],
+    ) -> Optional[str]:
+        if isinstance(source_node, AssignmentNode):
+            source_node = getattr(source_node, "left", None)
+
+        declaration_name = getattr(source_node, "name", None) or fallback_name
+        type_value = (
+            getattr(source_node, "var_type", None)
+            or getattr(source_node, "param_type", None)
+            or getattr(source_node, "const_type", None)
+        )
+        type_name = self.type_name_from_value(type_value)
+        if type_name is None and fallback_type is not None:
+            type_name = fallback_type.type.base_type
+
+        qualifiers = [
+            str(qualifier)
+            for qualifier in (getattr(source_node, "qualifiers", None) or [])
+            if qualifier
+        ]
+        parts = [*qualifiers]
+        if type_name:
+            parts.append(str(type_name))
+        if declaration_name:
+            parts.append(str(declaration_name))
+        declaration = " ".join(parts).strip()
+        return declaration or None
+
     def validate_user_defined_interface_type(
-        self, type_id: SpirvId, storage_class: str, name: Optional[str]
+        self,
+        type_id: SpirvId,
+        storage_class: str,
+        name: Optional[str],
+        source_node=None,
     ):
         if storage_class not in {"Input", "Output"}:
             return
@@ -11940,10 +11994,24 @@ class VulkanSPIRVCodeGen:
 
         direction = storage_class.lower()
         variable_name = f" '{name}'" if name else ""
-        raise ValueError(
-            f"Unsupported user-defined SPIR-V {direction} variable{variable_name}; "
-            "Vulkan requires Input/Output OpTypeBool interfaces to use BuiltIn, "
-            "so use int or uint for location-decorated boolean shader IO"
+        declaration = self.interface_source_declaration_text(
+            source_node, name, type_id
+        )
+        declaration_suffix = (
+            f" from source declaration '{declaration}'" if declaration else ""
+        )
+        source_location = getattr(source_node, "source_location", None)
+        location_label = self.format_source_location(source_location)
+        location_suffix = f" at {location_label}" if location_label else ""
+        raise UnsupportedSPIRVFeatureError(
+            "spirv.bool_interface",
+            f"Unsupported user-defined SPIR-V {direction} variable{variable_name}"
+            f"{declaration_suffix}{location_suffix}; Vulkan requires "
+            "Input/Output OpTypeBool interfaces to use BuiltIn. Lower boolean "
+            "input-like values as int or uint uniforms or specialization "
+            "constants before SPIR-V generation.",
+            missing_capabilities=("spirv.bool_interface_lowering",),
+            source_location=source_location,
         )
 
     def store_entry_point_return_value(self, value: SpirvId) -> bool:
@@ -14688,13 +14756,17 @@ class VulkanSPIRVCodeGen:
             var_id = self.global_interface_builtin_variable(node, "Input", var_type)
             if var_id is None:
                 location = self.global_interface_location(node, "Input")
-                var_id = self.register_input(node.name, var_type, location, 0)
+                var_id = self.register_input(
+                    node.name, var_type, location, 0, source_node=node
+                )
                 self.decorate_global_interface_variable(node, var_id)
         elif storage_class == "Output":
             var_id = self.global_interface_builtin_variable(node, "Output", var_type)
             if var_id is None:
                 location = self.global_interface_location(node, "Output")
-                var_id = self.register_output(node.name, var_type, location, 0)
+                var_id = self.register_output(
+                    node.name, var_type, location, 0, source_node=node
+                )
                 self.decorate_global_interface_variable(node, var_id)
         else:
             var_id = self.create_variable(
@@ -15400,7 +15472,9 @@ class VulkanSPIRVCodeGen:
         preferred_location: Optional[int] = None,
     ):
         self.require_capability("Tessellation")
-        self.validate_user_defined_interface_type(type_id, storage_class, name)
+        self.validate_user_defined_interface_type(
+            type_id, storage_class, name, source_node
+        )
         variable = self.create_variable(type_id, storage_class, name)
         location = self.global_interface_location(
             source_node, storage_class, preferred_location, patch=True
@@ -15564,7 +15638,7 @@ class VulkanSPIRVCodeGen:
         )
         storage_class = patch_info["storage_class"]
         self.validate_user_defined_interface_type(
-            array_type, storage_class, patch_info["name"]
+            array_type, storage_class, patch_info["name"], param
         )
         variable = self.create_variable(array_type, storage_class, patch_info["name"])
         location = self.global_interface_location(
@@ -21518,10 +21592,15 @@ class VulkanSPIRVCodeGen:
             return None
 
     def register_input(
-        self, name: str, type_id: SpirvId, location: int, binding: int
+        self,
+        name: str,
+        type_id: SpirvId,
+        location: int,
+        binding: int,
+        source_node=None,
     ) -> SpirvId:
         """Register an input variable with location decoration."""
-        self.validate_user_defined_interface_type(type_id, "Input", name)
+        self.validate_user_defined_interface_type(type_id, "Input", name, source_node)
         ptr_type = self.register_pointer_type(type_id, "Input")
 
         id_value = self.get_id()
@@ -21538,10 +21617,15 @@ class VulkanSPIRVCodeGen:
         return spirv_id
 
     def register_output(
-        self, name: str, type_id: SpirvId, location: int, binding: int
+        self,
+        name: str,
+        type_id: SpirvId,
+        location: int,
+        binding: int,
+        source_node=None,
     ) -> SpirvId:
         """Register an output variable with location decoration."""
-        self.validate_user_defined_interface_type(type_id, "Output", name)
+        self.validate_user_defined_interface_type(type_id, "Output", name, source_node)
         ptr_type = self.register_pointer_type(type_id, "Output")
 
         id_value = self.get_id()
@@ -23054,6 +23138,14 @@ class VulkanSPIRVCodeGen:
             if isinstance(constant, ConstantNode):
                 self.process_named_constant_declaration(constant)
 
+        global_specialization_constant_declarations = set()
+        for var in getattr(ast, "global_variables", []) or []:
+            declaration = self.spirv_specialization_constant_declaration_node(var)
+            if declaration is None:
+                continue
+            self.process_named_constant_declaration(declaration)
+            global_specialization_constant_declarations.add(id(declaration))
+
         all_functions = self.collect_ast_functions(ast)
         generic_function_specializations = prepare_generic_function_specializations(
             self,
@@ -23106,6 +23198,12 @@ class VulkanSPIRVCodeGen:
             self.process_cbuffer_declaration(cbuffer)
 
         for var in getattr(ast, "global_variables", []):
+            declaration = self.spirv_specialization_constant_declaration_node(var)
+            if (
+                declaration is not None
+                and id(declaration) in global_specialization_constant_declarations
+            ):
+                continue
             self.process_global_variable_declaration(var)
 
         top_level_entries = []
