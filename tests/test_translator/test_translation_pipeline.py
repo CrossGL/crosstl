@@ -132,6 +132,31 @@ void main() {
 }
 """
 
+SPIRV_VERTEX_POSITION_OUTPUT_SOURCE = """
+; SPIR-V
+; Version: 1.0
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main" %pos
+OpName %main "main"
+OpName %pos "gl_Position"
+OpDecorate %pos BuiltIn Position
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%float_0 = OpConstant %float 0
+%float_1 = OpConstant %float 1
+%const_pos = OpConstantComposite %v4float %float_0 %float_0 %float_0 %float_1
+%pos = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%entry = OpLabel
+OpStore %pos %const_pos
+OpReturn
+OpFunctionEnd
+"""
+
 
 def _write_source(tmp_path, filename, source):
     path = tmp_path / filename
@@ -1028,6 +1053,22 @@ def test_translate_accepts_pathlike_source_paths(tmp_path):
     shader_ast = crosstl.translator.parse(generated)
     assert ShaderStage.FRAGMENT in shader_ast.stages
     assert "fragment {" in generated
+
+
+def test_spirv_assembly_vertex_position_output_lowers_to_wgsl(tmp_path):
+    source_path = _write_source(
+        tmp_path, "position.spvasm", SPIRV_VERTEX_POSITION_OUTPUT_SOURCE
+    )
+
+    generated = crosstl.translate(str(source_path), backend="wgsl", format_output=False)
+
+    _assert_generated_output_is_usable(generated)
+    assert "struct VertexOutput" in generated
+    assert "@builtin(position) position: vec4<f32>," in generated
+    assert "@vertex\nfn vertex_main() -> VertexOutput" in generated
+    assert "output.position = vec4<f32>(0, 0, 0, 1);" in generated
+    assert "return output;" in generated
+    assert "gl_Position" not in generated
 
 
 @pytest.mark.parametrize(

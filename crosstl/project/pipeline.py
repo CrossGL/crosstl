@@ -18,7 +18,7 @@ from collections import Counter
 from dataclasses import dataclass, field, replace
 from importlib import metadata as importlib_metadata
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
 from crosstl.translator.codegen import (
@@ -1701,9 +1701,7 @@ MOJO_UNRESOLVED_TARGET_CONSTRUCT_RULES = (
     (
         "spirv-unresolved-warning",
         "SPIR-V unresolved-lowering warning",
-        re.compile(
-            r";\s*WARNING:.*\b(?:Unknown|unknown|unresolved|Could not find)\b"
-        ),
+        re.compile(r";\s*WARNING:.*\b(?:Unknown|unknown|unresolved|Could not find)\b"),
     ),
 )
 MOJO_SPIRV_BLOCK_ONLY_OPS = frozenset(
@@ -9377,44 +9375,18 @@ def _plain_template_call_replacements(
     included_spans: Sequence[tuple[int, int]] | None,
 ) -> list[tuple[int, int, str]]:
     replacements: list[tuple[int, int, str]] = []
-    i = 0
-    excluded = list(excluded_spans)
-    included = list(included_spans) if included_spans is not None else None
-    while i < len(source):
-        if source[i] in "\"'":
-            _literal, consumed = preprocessor._read_string(source, i)
-            i += consumed
-            continue
-        if source.startswith("//", i):
-            end = source.find("\n", i)
-            if end == -1:
-                break
-            i = end + 1
-            continue
-        if source.startswith("/*", i):
-            end = source.find("*/", i + 2)
-            if end == -1:
-                break
-            i = end + 2
-            continue
-        span = preprocessor._containing_span(i, excluded)
-        if span is not None:
-            i = span[1]
-            continue
-        if included is not None and preprocessor._containing_span(i, included) is None:
-            i += 1
-            continue
-        if source[i].isalpha() or source[i] == "_":
-            ident, consumed = preprocessor._read_identifier(source, i)
-            replacement = replacements_by_name.get(ident)
-            j = i + consumed
-            while j < len(source) and source[j].isspace():
-                j += 1
-            if replacement is not None and j < len(source) and source[j] == "(":
-                replacements.append((i, i + consumed, replacement))
-            i += consumed
-            continue
-        i += 1
+    for _ident, replacement, i, consumed, scan_end in _template_replacement_scan_sites(
+        preprocessor,
+        source,
+        replacements_by_name,
+        excluded_spans,
+        included_spans,
+    ):
+        j = i + consumed
+        while j < scan_end and source[j].isspace():
+            j += 1
+        if j < scan_end and source[j] == "(":
+            replacements.append((i, i + consumed, replacement))
     return replacements
 
 
@@ -9426,61 +9398,80 @@ def _explicit_template_call_replacements(
     included_spans: Sequence[tuple[int, int]] | None,
 ) -> list[tuple[int, int, str]]:
     replacements: list[tuple[int, int, str]] = []
-    i = 0
-    excluded = list(excluded_spans)
-    included = list(included_spans) if included_spans is not None else None
-    while i < len(source):
-        if source[i] in "\"'":
-            _literal, consumed = preprocessor._read_string(source, i)
-            i += consumed
+    for _ident, replacement, i, consumed, scan_end in _template_replacement_scan_sites(
+        preprocessor,
+        source,
+        replacements_by_name,
+        excluded_spans,
+        included_spans,
+    ):
+        j = i + consumed
+        while j < scan_end and source[j].isspace():
+            j += 1
+        if j >= scan_end or source[j] != "<":
             continue
-        if source.startswith("//", i):
-            end = source.find("\n", i)
-            if end == -1:
-                break
-            i = end + 1
+        angle_end = preprocessor._find_matching_angle(source, j)
+        if angle_end is None or angle_end >= scan_end:
             continue
-        if source.startswith("/*", i):
-            end = source.find("*/", i + 2)
-            if end == -1:
-                break
-            i = end + 2
-            continue
-        span = preprocessor._containing_span(i, excluded)
-        if span is not None:
-            i = span[1]
-            continue
-        if included is not None and preprocessor._containing_span(i, included) is None:
-            i += 1
-            continue
-        if source[i].isalpha() or source[i] == "_":
-            ident, consumed = preprocessor._read_identifier(source, i)
-            replacement = replacements_by_name.get(ident)
-            j = i + consumed
-            while j < len(source) and source[j].isspace():
-                j += 1
-            if replacement is None or j >= len(source) or source[j] != "<":
-                i += consumed
-                continue
-            angle_end = preprocessor._find_matching_angle(source, j)
-            if angle_end is None:
-                i += consumed
-                continue
-            k = angle_end + 1
-            while k < len(source) and source[k].isspace():
-                k += 1
-            if k < len(source) and source[k] == "(":
-                replacements.append(
-                    (
-                        preprocessor._scoped_identifier_start(source, i),
-                        angle_end + 1,
-                        replacement,
-                    )
+        k = angle_end + 1
+        while k < scan_end and source[k].isspace():
+            k += 1
+        if k < scan_end and source[k] == "(":
+            replacements.append(
+                (
+                    preprocessor._scoped_identifier_start(source, i),
+                    angle_end + 1,
+                    replacement,
                 )
-            i = angle_end + 1
-            continue
-        i += 1
+            )
     return replacements
+
+
+def _template_replacement_scan_sites(
+    preprocessor: Any,
+    source: str,
+    replacements_by_name: Mapping[str, str],
+    excluded_spans: Sequence[tuple[int, int]],
+    included_spans: Sequence[tuple[int, int]] | None,
+) -> Iterator[tuple[str, str, int, int, int]]:
+    excluded = _SpanLookup(excluded_spans)
+    scan_spans = (
+        [(0, len(source))]
+        if included_spans is None
+        else _SpanLookup(included_spans)._spans
+    )
+    for span_start, span_end in scan_spans:
+        i = span_start
+        scan_end = min(span_end, len(source))
+        while i < scan_end:
+            if source[i] in "\"'":
+                _literal, consumed = preprocessor._read_string(source, i)
+                i += consumed
+                continue
+            if source.startswith("//", i):
+                end = source.find("\n", i, scan_end)
+                if end == -1:
+                    break
+                i = end + 1
+                continue
+            if source.startswith("/*", i):
+                end = source.find("*/", i + 2, scan_end)
+                if end == -1:
+                    break
+                i = end + 2
+                continue
+            excluded_span = excluded.containing(i)
+            if excluded_span is not None:
+                i = min(excluded_span[1], scan_end)
+                continue
+            if source[i].isalpha() or source[i] == "_":
+                ident, consumed = preprocessor._read_identifier(source, i)
+                replacement = replacements_by_name.get(ident)
+                if replacement is not None:
+                    yield ident, replacement, i, consumed, scan_end
+                i += consumed
+                continue
+            i += 1
 
 
 METAL_TEMPLATE_TYPE_QUALIFIERS = frozenset(
@@ -12574,9 +12565,7 @@ def translate_project(
                                 config, target, artifact, output_path
                             )
                         diagnostics.extend(
-                            _generated_placeholder_diagnostics(
-                                artifact_records, config
-                            )
+                            _generated_placeholder_diagnostics(artifact_records, config)
                         )
                     diagnostics.extend(mojo_host_diagnostics)
                 except Exception as exc:  # noqa: BLE001
@@ -13440,10 +13429,8 @@ def _mojo_unresolved_target_construct_diagnostics(
                 offset=int(first_finding["offset"]),
                 length=int(first_finding["length"]),
                 end_line=int(first_finding["line"]),
-                end_column=int(first_finding["column"])
-                + int(first_finding["length"]),
-                end_offset=int(first_finding["offset"])
-                + int(first_finding["length"]),
+                end_column=int(first_finding["column"]) + int(first_finding["length"]),
+                end_offset=int(first_finding["offset"]) + int(first_finding["length"]),
             ),
             original_location=SourceLocation(file=str(artifact.get("source", ""))),
             **_artifact_diagnostic_context(artifact),

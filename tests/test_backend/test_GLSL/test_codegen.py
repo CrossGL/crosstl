@@ -12,6 +12,7 @@ from crosstl.translator.ast import ShaderStage
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -138,6 +139,24 @@ def parse_crossgl(code: str):
     tokens = CrossGLLexer(code).get_tokens()
     parser = CrossGLParser(tokens)
     return parser.parse()
+
+
+def validate_wgsl_with_naga(tmp_path, code: str) -> None:
+    naga = shutil.which("naga")
+    if naga is None:
+        pytest.skip("naga is not installed")
+    source = tmp_path / "shader.wgsl"
+    source.write_text(code, encoding="utf-8")
+    result = subprocess.run(
+        [naga, str(source)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    diagnostics = "\n".join(
+        part for part in (result.stdout, result.stderr) if part.strip()
+    )
+    assert result.returncode == 0, diagnostics
 
 
 def assert_roundtrip(code: str, shader_type: str, expected_stage: ShaderStage) -> str:
@@ -2561,6 +2580,34 @@ def test_codegen_push_constant_interface_block_preserves_attribute():
     assert "mvp_uniform.view_proj" not in crossgl
     assert "gl_Position = (view_proj * vec4(1.0));" in crossgl
     parse_crossgl(crossgl)
+
+
+def test_codegen_push_constant_scalar_array_to_wgsl_uses_padded_elements(tmp_path):
+    code = textwrap.dedent("""
+        #version 450
+        layout(push_constant, std430) uniform Material {
+            int kind;
+            float fa[3];
+        } matInst;
+
+        void main() {
+            gl_Position = vec4(matInst.fa[1]);
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(code, "vertex")
+    wgsl = WGSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "cbuffer Material @push_constant {" in crossgl
+    assert "float fa[3];" in crossgl
+    assert (
+        "struct UniformArrayElementF32 {\n"
+        "    @size(16) value: f32,\n"
+        "};"
+    ) in wgsl
+    assert "@align(16) fa: array<UniformArrayElementF32, 3>," in wgsl
+    assert "_Material.fa[1].value" in wgsl
+    validate_wgsl_with_naga(tmp_path, wgsl)
 
 
 def test_codegen_arrayed_descriptor_uniform_block_preserves_instance_metadata():

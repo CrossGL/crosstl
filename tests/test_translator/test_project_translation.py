@@ -7415,6 +7415,66 @@ def test_translate_project_glsl_fragcoord_lowers_to_wgsl_fragment_position(tmp_p
         assert payload["validation"]["toolchainRuns"][0]["status"] == "ok"
 
 
+def test_translate_project_spirv_assembly_vertex_position_lowers_to_wgsl(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "position.spvasm").write_text(
+        textwrap.dedent("""
+            ; SPIR-V
+            ; Version: 1.0
+            OpCapability Shader
+            OpMemoryModel Logical GLSL450
+            OpEntryPoint Vertex %main "main" %pos
+            OpName %main "main"
+            OpName %pos "gl_Position"
+            OpDecorate %pos BuiltIn Position
+            %void = OpTypeVoid
+            %fn = OpTypeFunction %void
+            %float = OpTypeFloat 32
+            %v4float = OpTypeVector %float 4
+            %ptr_output_v4float = OpTypePointer Output %v4float
+            %float_0 = OpConstant %float 0
+            %float_1 = OpConstant %float 1
+            %const_pos = OpConstantComposite %v4float %float_0 %float_0 %float_0 %float_1
+            %pos = OpVariable %ptr_output_v4float Output
+            %main = OpFunction %void None %fn
+            %entry = OpLabel
+            OpStore %pos %const_pos
+            OpReturn
+            OpFunctionEnd
+            """).lstrip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["wgsl"],
+        output_dir="out",
+        validate=True,
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("wgsl", "translated")}
+
+    wgsl = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    assert "struct VertexOutput" in wgsl
+    assert "@builtin(position) position: vec4<f32>," in wgsl
+    assert "@vertex\nfn vertex_main() -> VertexOutput" in wgsl
+    assert "output.position = vec4<f32>(0, 0, 0, 1);" in wgsl
+    assert "return output;" in wgsl
+    assert "gl_Position" not in wgsl
+
+    if shutil.which("naga"):
+        assert payload["validation"]["artifacts"][0]["status"] == "ok"
+        assert payload["validation"]["toolchainRuns"][0]["status"] == "ok"
+
+
 def test_translate_project_glsl_usampler_texel_fetch_lowers_to_cuda_hip_slang(
     tmp_path,
 ):
@@ -10780,6 +10840,131 @@ def test_plain_metal_helper_call_scan_starts_at_included_body_span():
         )
     ]
     assert CountingSource.index_reads < len(function_source) * 4
+
+
+def test_plain_metal_template_replacement_scan_uses_indexed_included_spans(
+    monkeypatch,
+):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    class CountingSource(str):
+        index_reads = 0
+
+        def __getitem__(self, key):
+            if isinstance(key, int):
+                type(self).index_reads += 1
+            return super().__getitem__(key)
+
+    preprocessor = MetalPreprocessor()
+    excluded_spans: list[tuple[int, int]] = []
+    parts: list[str] = []
+    offset = 0
+    for index in range(1200):
+        block = textwrap.dedent(f"""
+            template <typename T>
+            struct ExcludedReplacement{index} {{
+                T value;
+            }};
+            """)
+        parts.append(block)
+        excluded_spans.append((offset, offset + len(block)))
+        offset += len(block)
+    function_source = textwrap.dedent("""
+        uint call_plain(uint value) {
+            return plain_helper(value);
+        }
+        """)
+    source = CountingSource("".join(parts) + function_source)
+    function_start = source.find("uint call_plain")
+    body_start = source.find("{", function_start) + 1
+    body_end = source.find("}", body_start)
+    helper_start = source.find("plain_helper")
+    CountingSource.index_reads = 0
+
+    def fail_linear_span_lookup(*_args):
+        raise AssertionError("plain replacement scan should use indexed spans")
+
+    monkeypatch.setattr(preprocessor, "_containing_span", fail_linear_span_lookup)
+
+    replacements = project_pipeline._plain_template_call_replacements(
+        preprocessor,
+        source,
+        {"plain_helper": "plain_helper_uint"},
+        excluded_spans,
+        [(body_start, body_end)],
+    )
+
+    assert replacements == [
+        (
+            helper_start,
+            helper_start + len("plain_helper"),
+            "plain_helper_uint",
+        )
+    ]
+    assert CountingSource.index_reads < len(function_source) * 4
+
+
+def test_explicit_metal_template_replacement_scan_uses_indexed_included_spans(
+    monkeypatch,
+):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    class CountingSource(str):
+        index_reads = 0
+
+        def __getitem__(self, key):
+            if isinstance(key, int):
+                type(self).index_reads += 1
+            return super().__getitem__(key)
+
+    preprocessor = MetalPreprocessor()
+    excluded_spans: list[tuple[int, int]] = []
+    parts: list[str] = []
+    offset = 0
+    for index in range(1200):
+        block = textwrap.dedent(f"""
+            template <typename T>
+            struct ExcludedExplicitReplacement{index} {{
+                T value;
+            }};
+            """)
+        parts.append(block)
+        excluded_spans.append((offset, offset + len(block)))
+        offset += len(block)
+    function_source = textwrap.dedent("""
+        uint call_explicit(uint value) {
+            return explicit_helper<uint>(value);
+        }
+        """)
+    source = CountingSource("".join(parts) + function_source)
+    function_start = source.find("uint call_explicit")
+    body_start = source.find("{", function_start) + 1
+    body_end = source.find("}", body_start)
+    helper_start = source.find("explicit_helper")
+    angle_end = source.find(">", helper_start)
+    CountingSource.index_reads = 0
+
+    def fail_linear_span_lookup(*_args):
+        raise AssertionError("explicit replacement scan should use indexed spans")
+
+    monkeypatch.setattr(preprocessor, "_containing_span", fail_linear_span_lookup)
+
+    replacements = project_pipeline._explicit_template_call_replacements(
+        preprocessor,
+        source,
+        {"explicit_helper": "explicit_helper_uint"},
+        excluded_spans,
+        [(body_start, body_end)],
+    )
+
+    assert replacements == [
+        (
+            helper_start,
+            angle_end + 1,
+            "explicit_helper_uint",
+        )
+    ]
+    assert CountingSource.index_reads < len(function_source) * 5
 
 
 def test_translate_project_bounds_mlx_like_plain_helper_scan_across_targets(tmp_path):
@@ -38723,6 +38908,87 @@ def test_translate_project_metal_reduction_materializes_shared_helper_templates(
         assert not re.search(r"\\b(?:T|U|Op|N_READS)\\b", output)
 
 
+def test_translate_project_metal_multi_entry_instantiations_scope_vulkan_bindings(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "rope.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, typename IdxT, int N = 4>
+            T rope_impl(device const T* src, IdxT index) {
+                return src[index] + T(N);
+            }
+
+            template <typename T, typename IdxT, int N = 4>
+            [[kernel]] void rope(
+                device const T* src [[buffer(0)]],
+                device T* out [[buffer(1)]]
+            ) {
+                out[0] = rope_impl<T, IdxT, N>(src, IdxT(0));
+            }
+
+            template <typename T, typename IdxT, int N = 4>
+            [[kernel]] void rope_freqs(
+                device const T* src [[buffer(0)]],
+                device T* out [[buffer(1)]]
+            ) {
+                out[0] = rope_impl<T, IdxT, N>(src, IdxT(0)) + T(1);
+            }
+
+            instantiate_kernel("rope_float32", rope, float, uint)
+            instantiate_kernel("rope_freqs_float32", rope_freqs, float, uint)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl", "directx", "vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+
+    for artifact in payload["artifacts"]:
+        materialization = artifact["templateMaterialization"]
+        assert materialization["status"] == "materialized"
+        assert materialization["unsupported"] == []
+        assert {
+            specialization["materializedName"]
+            for specialization in materialization["specializations"]
+        } == {
+            "rope_float32",
+            "rope_freqs_float32",
+            "rope_impl_float_uint_4",
+        }
+
+    vulkan_artifact = next(
+        artifact for artifact in payload["artifacts"] if artifact["target"] == "vulkan"
+    )
+    output = (repo / vulkan_artifact["path"]).read_text(encoding="utf-8")
+    assert sorted(re.findall(r'OpEntryPoint GLCompute %\d+ "([^"]+)"', output)) == [
+        "rope_float32",
+        "rope_freqs_float32",
+    ]
+    assert len(re.findall(r"OpDecorate %\d+ Binding 0\b", output)) == 2
+    assert len(re.findall(r"OpDecorate %\d+ Binding 1\b", output)) == 2
+    assert "Duplicate SPIR-V resource binding" not in output
+    assert_spirv_asm_validates_if_available(output, tmp_path)
+
+
 def test_translate_project_skips_standalone_metal_template_utility_artifacts(
     tmp_path,
 ):
@@ -39910,7 +40176,7 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
 
     payload = translate_project(
         repo,
-        targets=["cgl", "metal", "vulkan"],
+        targets=["cgl", "metal", "vulkan", "wgsl"],
         output_dir="out",
     ).to_json()
 
@@ -39920,6 +40186,7 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
         ("cgl", "translated"),
         ("metal", "translated"),
         ("vulkan", "translated"),
+        ("wgsl", "translated"),
     }
 
     outputs = {
@@ -39967,6 +40234,17 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     assert "WorkgroupId" in spirv_output
     assert "LocalInvocationId" in spirv_output
     assert_spirv_asm_validates_if_available(spirv_output, tmp_path)
+
+    wgsl_output = outputs["wgsl"]
+    assert (
+        "fn compute_main(@builtin(global_invocation_id) "
+        "global_invocation_id: vec3<u32>"
+    ) in wgsl_output
+    assert "var thread_id: vec3<u32> = global_invocation_id;" in wgsl_output
+    assert "var block_id: vec3<u32> = workgroup_id;" in wgsl_output
+    assert "var thread_local_id: vec3<u32> = local_invocation_id;" in wgsl_output
+    assert "var block_dim: vec3<u32> = vec3<u32>(1u, 1u, 1u);" in wgsl_output
+    assert ": void" not in wgsl_output
 
 
 def test_translate_project_vulkan_compute_bool_parameter_uses_uint_interface(
