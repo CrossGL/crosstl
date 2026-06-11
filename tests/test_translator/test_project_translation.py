@@ -791,10 +791,7 @@ def test_translate_project_glsl_overloaded_vector_helper_to_wgsl(tmp_path):
     assert "fn linearToSrgb_vec4_f32(linear: vec4<f32>) -> vec4<f32>" in generated
     assert "linearToSrgb_f32(linear.r)" in generated
     assert "linearToSrgb_vec3_f32(linear.rgb)" in generated
-    assert (
-        "fragColor = linearToSrgb_vec4_f32((light * textureSample("
-        in generated
-    )
+    assert "fragColor = linearToSrgb_vec4_f32((light * textureSample(" in generated
     assert "fragColor = linearToSrgb((light * textureSample(" not in generated
 
 
@@ -10562,6 +10559,78 @@ def test_translate_project_opengl_materializes_mlx_pointer_and_value_bindings(
     assert not re.search(r"\b(?:T|U)\b", output)
 
 
+def test_translate_project_ignores_unreachable_metal_template_family(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "copy.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_copy(name, type) \\
+                instantiate_kernel("copy" #name, copy_values, type)
+
+            template <typename T>
+            [[kernel]] void copy_values(
+                device const T* src [[buffer(0)]],
+                device T* dst [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                dst[gid] = src[gid];
+            }
+
+            template <typename Value, typename Missing>
+            Value unused_convert(Value value) {
+                return Missing(value);
+            }
+
+            template <typename Missing>
+            Missing unused_family(Missing value) {
+                return unused_convert<Missing, Missing>(value);
+            }
+
+            instantiate_copy(float32, float)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx", "opengl", "vulkan"]
+            output_dir = "translated"
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("directx", "translated"),
+        ("opengl", "translated"),
+        ("vulkan", "translated"),
+    }
+    for artifact in payload["artifacts"]:
+        materialization = artifact["templateMaterialization"]
+        assert materialization["status"] == "materialized"
+        assert materialization["unsupported"] == []
+        assert all(
+            record["name"] not in {"unused_convert", "unused_family"}
+            for record in materialization["specializations"]
+        )
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        assert "unused_convert" not in output
+        assert "unused_family" not in output
+        assert "Missing" not in output
+
+
 def test_translate_project_opengl_validates_implicit_metal_matmul_resources(
     tmp_path, monkeypatch
 ):
@@ -13499,6 +13568,74 @@ def test_translate_project_rust_option_helpers_lower_to_opengl_compute(tmp_path)
     assert "== None" not in opengl_output
     assert "auto value" not in opengl_output
     assert_compute_glsl_validates_if_available(opengl_output, tmp_path)
+
+
+def test_translate_project_rust_option_helpers_lower_to_wgsl_compute(tmp_path):
+    repo = tmp_path / "repo"
+    source_dir = repo / "src"
+    source_dir.mkdir(parents=True)
+    (source_dir / "collatz.rs").write_text(
+        textwrap.dedent("""
+            fn collatz(n: u32) -> Option<u32> {
+                if n == 0u32 {
+                    return None;
+                }
+                return Some(n);
+            }
+
+            fn read_option(item: Option<u32>) -> u32 {
+                match item {
+                    Some(value) => { return value; },
+                    None => { return 0u32; }
+                }
+            }
+
+            #[spirv(compute(threads(1, 1, 1)))]
+            pub fn main() {
+                let value = read_option(collatz(7u32));
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["src"]
+            targets = ["wgsl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path, run_toolchains=True)
+    wgsl_output = (repo / "translated" / "wgsl" / "src" / "collatz.wgsl").read_text(
+        encoding="utf-8"
+    )
+
+    assert validation["success"] is True
+    if shutil.which("naga"):
+        assert validation["validation"]["toolchainRuns"][0]["status"] == "ok"
+    assert payload["summary"]["translatedCount"] == 1
+    assert "struct Option_u32" in wgsl_output
+    assert "fn Option_u32_Some_make(payload0: u32) -> Option_u32" in wgsl_output
+    assert "fn Option_u32_None_make() -> Option_u32" in wgsl_output
+    assert "fn collatz(n: u32) -> Option_u32" in wgsl_output
+    assert "fn read_option(item: Option_u32) -> u32" in wgsl_output
+    assert "return Option_u32_None_make();" in wgsl_output
+    assert "return Option_u32_Some_make(n);" in wgsl_output
+    assert "var value: u32 = item.Some_0;" in wgsl_output
+    assert "(item.variant == Option_None)" in wgsl_output
+    assert "return u32(0);" in wgsl_output
+    assert "Option<" not in wgsl_output
+    assert "Option::" not in wgsl_output
+    assert re.search(r"\bSome\s*\(", wgsl_output) is None
+    assert "return None;" not in wgsl_output
+    assert "== None" not in wgsl_output
+    assert "auto value" not in wgsl_output
 
 
 def test_validate_project_report_rejects_artifacts_with_undeclared_variants(tmp_path):
@@ -37294,7 +37431,8 @@ def test_translate_project_metal_matmul_buffers_lower_to_directx_resources(
     assert "uint2 id = id_dispatchThreadID.xy;" in output
     assert "A.Load(index_A)" in output
     assert "B.Load(index_B)" in output
-    assert "X.Store(index, sum);" in output
+    assert "X[index] = sum;" in output
+    assert "X.Store(" not in output
     assert "float* A" not in output
     assert "float* B" not in output
     assert "float* X" not in output
@@ -37354,7 +37492,12 @@ def test_translate_project_metal_matmul_device_buffers_do_not_emit_directx_param
     assert "ConstantBuffer<MatMulParams> params : register(b3);" in output
     assert "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)" in output
     assert "uint2 id = id_dispatchThreadID.xy;" in output
-    assert "X.Store(((row * col_dim_x) + col)" in output
+    assert (
+        "X[((row * col_dim_x) + col)] = "
+        "(A.Load(((row * inner_dim) + col)) + B.Load(col));"
+        in output
+    )
+    assert "X.Store(" not in output
     assert "A.Load(((row * inner_dim) + col))" in output
     assert "B.Load(col)" in output
     assert "float* A" not in output
@@ -37430,13 +37573,14 @@ def test_translate_project_metal_matmul_unbound_device_buffers_lower_to_directx_
 
     assert "StructuredBuffer<float> A : register(t0);" in output
     assert "StructuredBuffer<float> B : register(t1);" in output
-    assert "RWStructuredBuffer<float> X : register(u0);" in output
-    assert "ConstantBuffer<MatMulParams> params : register(b0);" in output
+    assert "RWStructuredBuffer<float> X : register(u2);" in output
+    assert "ConstantBuffer<MatMulParams> params : register(b3);" in output
     assert "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)" in output
     assert "uint2 id = id_dispatchThreadID.xy;" in output
     assert "A.Load(index_A)" in output
     assert "B.Load(index_B)" in output
-    assert "X.Store(index, sum);" in output
+    assert "X[index] = sum;" in output
+    assert "X.Store(" not in output
     assert "float* A" not in output
     assert "float* B" not in output
     assert "float* X" not in output
@@ -39848,7 +39992,8 @@ def test_translate_project_target_template_variant_manifest_materializes_for_ope
     }
     directx_output = (repo / directx_artifact["path"]).read_text(encoding="utf-8")
     assert "RWStructuredBuffer<uint> out_ : register(u0);" in directx_output
-    assert "out_.Store(gid, uint(0));" in directx_output
+    assert "out_[gid] = uint(0);" in directx_output
+    assert "out_.Store(" not in directx_output
 
     report_path = repo / "out" / "report.json"
     report.write_json(report_path)
@@ -40281,6 +40426,128 @@ def test_translate_project_opencl_to_opengl_casts_signed_global_id_local(
     GLSLParser(GLSLLexer(output).tokenize(), "compute").parse()
 
 
+def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "saxpy.cl").write_text(
+        textwrap.dedent("""
+            kernel void saxpy(global float *dst,
+                              global const float *x,
+                              const float a) {
+                int gid = get_global_id(0);
+                dst[gid] = a * x[gid];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["mojo"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("mojo", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "# CrossGL GPU builtin placeholders" not in output
+    assert "struct _CrossGLGpuBuiltinU32Vec3" not in output
+    assert "fn saxpy(global_idx_uint: SIMD[DType.uint32, 4]) -> None:" in output
+    assert "var gid: Int32 = global_idx_uint[0]" in output
+    assert "gl_GlobalInvocationID" not in output
+
+    assert "crossgl-gpu-builtin-placeholders" not in payload["summary"].get(
+        "missingCapabilityCounts", {}
+    )
+    for diagnostic in payload["diagnostics"]:
+        assert "crossgl-gpu-builtin-placeholders" not in diagnostic.get(
+            "missingCapabilities", []
+        )
+
+
+@pytest.mark.parametrize(
+    ("filename", "source", "expected_params", "expected_expression"),
+    [
+        (
+            "vector_add.cu",
+            """
+            __global__ void vectorAdd(float* C, const float* A, const float* B, int N) {
+                int i = blockDim.x * blockIdx.x + threadIdx.x;
+                if (i < N) {
+                    C[i] = A[i] + B[i];
+                }
+            }
+            """,
+            [
+                "global_idx_uint: SIMD[DType.uint32, 4]",
+                "thread_idx_uint: SIMD[DType.uint32, 4]",
+                "block_idx_uint: SIMD[DType.uint32, 4]",
+                "block_dim_uint: SIMD[DType.uint32, 4]",
+            ],
+            "((block_dim_uint[0] * block_idx_uint[0]) + thread_idx_uint[0])",
+        ),
+        (
+            "add_kernel.hip",
+            """
+            #include <hip/hip_runtime.h>
+
+            __global__ void addKernel(const float *A,
+                                      const float *B,
+                                      float *C,
+                                      int N) {
+                int i = hipBlockDim_x * hipBlockIdx_x + hipThreadIdx_x;
+                if (i < N) {
+                    C[i] = A[i] + B[i];
+                }
+            }
+            """,
+            [
+                "thread_idx_uint: SIMD[DType.uint32, 4]",
+                "block_idx_uint: SIMD[DType.uint32, 4]",
+                "block_dim_uint: SIMD[DType.uint32, 4]",
+            ],
+            "((block_dim_uint[0] * block_idx_uint[0]) + thread_idx_uint[0])",
+        ),
+    ],
+)
+def test_translate_project_cuda_hip_to_mojo_lower_compute_builtin_inputs(
+    tmp_path,
+    filename,
+    source,
+    expected_params,
+    expected_expression,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / filename).write_text(textwrap.dedent(source).strip(), encoding="utf-8")
+
+    payload = translate_project(
+        repo,
+        targets=["mojo"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("mojo", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "# CrossGL GPU builtin placeholders" not in output
+    assert "struct _CrossGLGpuBuiltinU32Vec3" not in output
+    for expected_param in expected_params:
+        assert expected_param in output
+    assert expected_expression in output
+    assert "crossgl-gpu-builtin-placeholders" not in payload["summary"].get(
+        "missingCapabilityCounts", {}
+    )
+
+
 def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     tmp_path,
 ):
@@ -40391,6 +40658,147 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     assert "var thread_local_id: vec3<u32> = local_invocation_id;" in wgsl_output
     assert "var block_dim: vec3<u32> = vec3<u32>(1u, 1u, 1u);" in wgsl_output
     assert ": void" not in wgsl_output
+
+
+def test_translate_project_cli_cuda_vector_add_demo_directx_outputs_valid_hlsl(
+    tmp_path,
+):
+    repo = tmp_path / "nvidia-cuda-samples-vector-add"
+    repo.mkdir()
+    config_path = repo / "crosstl.toml"
+    config_path.write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["."]
+            include = ["vectorAdd_kernel.cu"]
+            targets = ["cgl", "metal", "vulkan"]
+            output_dir = "crosstl-out"
+            external_corpus_manifest = "corpus.json"
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            'targets = ["cgl", "metal", "vulkan"]',
+            'targets = ["cgl", "metal", "directx", "vulkan"]',
+        ),
+        encoding="utf-8",
+    )
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "name": "NVIDIA CUDA Samples vectorAdd kernel",
+                "description": (
+                    "Pinned CUDA sample used by the open-source project "
+                    "porting demo."
+                ),
+                "entries": [
+                    {
+                        "id": "nvidia-cuda-samples-vector-add",
+                        "path": "vectorAdd_kernel.cu",
+                        "sourceBackend": "cuda",
+                        "targets": ["cgl", "metal", "vulkan"],
+                        "repository": "https://github.com/NVIDIA/cuda-samples",
+                        "commit": "b7c5481c556c3fe98db060207ecaa41a4b9a9abc",
+                        "sourceUrl": (
+                            "https://github.com/NVIDIA/cuda-samples/blob/"
+                            "b7c5481c556c3fe98db060207ecaa41a4b9a9abc/"
+                            "cpp/0_Introduction/vectorAdd_nvrtc/"
+                            "vectorAdd_kernel.cu"
+                        ),
+                    }
+                ],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo / "vectorAdd_kernel.cu").write_text(
+        textwrap.dedent("""
+            extern "C" __global__ void vectorAdd(const float *A,
+                                                  const float *B,
+                                                  float *C,
+                                                  int numElements) {
+                int i = blockDim.x * blockIdx.x + threadIdx.x;
+                if (i < numElements) {
+                    C[i] = A[i] + B[i];
+                }
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    report_path = repo / "crosstl-out" / "portability-report.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "translate-project",
+            str(repo),
+            "--output-dir",
+            str(repo / "crosstl-out"),
+            "--report",
+            str(report_path),
+            "--validate",
+            "--no-format",
+            "--target",
+            "directx",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "Wrote" in result.stdout
+
+    validation = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "validate-project",
+            str(report_path),
+            "--format",
+            "json",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    validation_payload = json.loads(validation.stdout)
+    assert validation_payload["success"] is True
+    assert validation_payload["artifactStatusByTarget"]["directx"] == {
+        "artifactCount": 1,
+        "failedCount": 0,
+        "okCount": 1,
+    }
+
+    directx_output = (
+        repo / "crosstl-out" / "directx" / "vectorAdd_kernel.hlsl"
+    ).read_text(encoding="utf-8")
+
+    assert "RWStructuredBuffer<float> A : register(u0);" in directx_output
+    assert "RWStructuredBuffer<float> B : register(u1);" in directx_output
+    assert "RWStructuredBuffer<float> C : register(u2);" in directx_output
+    assert "cbuffer vectorAdd_Args : register(b3)" in directx_output
+    assert "uint3 groupID : SV_GroupID" in directx_output
+    assert "uint3 groupThreadID : SV_GroupThreadID" in directx_output
+    assert "float A[]" not in directx_output
+    assert "float B[]" not in directx_output
+    assert "float C[]" not in directx_output
+    assert ": group" not in directx_output
+    for gl_builtin in [
+        "gl_GlobalInvocationID",
+        "gl_WorkGroupID",
+        "gl_LocalInvocationID",
+        "gl_WorkGroupSize",
+    ]:
+        assert gl_builtin not in directx_output
+    assert_directx_compute_validates_if_available(directx_output, tmp_path)
 
 
 def test_translate_project_vulkan_compute_bool_parameter_uses_uint_interface(

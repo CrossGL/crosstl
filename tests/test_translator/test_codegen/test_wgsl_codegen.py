@@ -228,6 +228,102 @@ def test_wgsl_codegen_assigns_locations_to_entry_struct_members(tmp_path):
     validate_wgsl_with_naga(tmp_path, generated)
 
 
+def test_wgsl_codegen_monomorphizes_generic_structs(tmp_path):
+    shader = """
+    shader WGSLGenericStructs {
+        generic<T> struct Box {
+            T value;
+        };
+        generic<T> struct PairBox {
+            Box<T> left;
+            T right;
+        };
+        struct Payload {
+            Box<float> weight;
+            Box<int> index;
+            PairBox<float> nested;
+        };
+        vertex {
+            vec4 main(float x @ TEXCOORD0) @ gl_Position {
+                Box<float> b = Box<float>(x);
+                PairBox<float> n = PairBox<float>(b, x + 1.0);
+                Payload p = Payload(b, Box<int>(2), n);
+                return vec4(
+                    p.weight.value,
+                    float(p.index.value),
+                    p.nested.right,
+                    1.0
+                );
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "struct Box_f32" in generated
+    assert "struct Box_i32" in generated
+    assert "struct PairBox_f32" in generated
+    assert "weight: Box_f32," in generated
+    assert "index: Box_i32," in generated
+    assert "nested: PairBox_f32," in generated
+    assert "var b: Box_f32 = Box_f32(x);" in generated
+    assert "var n: PairBox_f32 = PairBox_f32(b, (x + 1.0));" in generated
+    assert "Payload(b, Box_i32(2), n)" in generated
+    assert "Box<" not in generated
+    assert "PairBox<" not in generated
+    assert " T" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_generic_struct_constructor_calls_seed_specializations(tmp_path):
+    shader = """
+    shader WGSLGenericStructConstructorOnly {
+        generic<T> struct Box {
+            T value;
+        };
+        vertex {
+            vec4 main(float x @ TEXCOORD0) @ gl_Position {
+                return vec4(Box<float>(x).value, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "struct Box_f32" in generated
+    assert "Box_f32(x).value" in generated
+    assert "Box<" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_generic_struct_diagnostic_names_unsupported_member():
+    shader = """
+    shader WGSLGenericEnumMember {
+        generic<T> struct Maybe {
+            enum MaybeType {
+                Some(T),
+                None
+            }
+            MaybeType variant;
+        };
+        struct UsesMaybe {
+            Maybe<float> value;
+        };
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target cannot specialize generic struct Maybe; "
+            r"member MaybeType uses unsupported EnumNode"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_maps_derivative_intrinsics():
     shader = """
     shader WGSLDerivatives {
