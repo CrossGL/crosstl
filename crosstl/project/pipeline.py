@@ -146,6 +146,7 @@ REPORT_FIELDS = frozenset(
         "summary",
         "units",
         "skipped",
+        "nativeDirectives",
         "artifacts",
         "diagnosticCounts",
         "diagnostics",
@@ -958,6 +959,18 @@ REPORT_SOURCE_ROOT_STATUS_FIELDS = frozenset(
 )
 REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
     ("path", "resolvedPath", "status", "frontendVisible")
+)
+REPORT_NATIVE_DIRECTIVE_FIELDS = frozenset(
+    (
+        "source",
+        "sourceBackend",
+        "line",
+        "column",
+        "kind",
+        "payload",
+        "handlingStatus",
+        "variant",
+    )
 )
 REPORT_SUMMARY_FIELDS = frozenset(
     (
@@ -2064,6 +2077,7 @@ INCLUDE_DEPENDENCY_STATUSES = frozenset(
     ("dynamic", "missing", "outside-project", "resolved", "system")
 )
 INCLUDE_DEPENDENCY_RESOLUTION_SOURCES = frozenset(("include-dir", "source"))
+NATIVE_DIRECTIVE_HANDLING_STATUSES = frozenset(("preserved", "unsupported"))
 DEFINE_PROCESSING_STATUSES = frozenset(("forwarded", "not-requested", "not-supported"))
 INCLUDE_PATH_PROCESSING_STATUSES = frozenset(
     ("forwarded", "not-requested", "not-supported")
@@ -4864,6 +4878,30 @@ def _macro_form_label(directive: str, body: str) -> str:
     return f"#{directive}"
 
 
+def _source_frontend_native_directive_plan(
+    *,
+    source_backend: str,
+    directive: str,
+    body: str,
+) -> dict[str, str] | None:
+    source_spec = SOURCE_REGISTRY.get(source_backend)
+    if source_spec is None:
+        return None
+    payload = _strip_preprocessor_line_comment(body).strip()
+    raw_plan = source_spec.classify_native_directive(directive, payload)
+    if raw_plan is None:
+        return None
+    kind = str(raw_plan.get("kind", "")).strip().lower()
+    handling_status = str(raw_plan.get("handlingStatus", "")).strip().lower()
+    if not kind or handling_status not in NATIVE_DIRECTIVE_HANDLING_STATUSES:
+        return None
+    return {
+        "kind": kind,
+        "payload": str(raw_plan.get("payload", payload)).strip(),
+        "handlingStatus": handling_status,
+    }
+
+
 def _unsupported_macro_form_reason(
     *,
     directive: str,
@@ -4939,6 +4977,16 @@ def _scan_native_macro_semantic_lines(
         if not _include_conditionals_active(conditional_stack):
             continue
 
+        if (
+            _source_frontend_native_directive_plan(
+                source_backend=source_backend,
+                directive=directive,
+                body=body,
+            )
+            is not None
+        ):
+            continue
+
         reason = _unsupported_macro_form_reason(
             directive=directive,
             body=body,
@@ -4963,6 +5011,104 @@ def _scan_native_macro_semantic_lines(
             )
         )
     return diagnostics
+
+
+def _scan_native_directive_lines(
+    config: ProjectConfig,
+    lines: Sequence[str],
+    relative_path: str,
+    *,
+    source_backend: str,
+    seen: set[tuple[str, int, str, str, str, str | None]],
+    variant: str | None = None,
+) -> list["ProjectNativeDirective"]:
+    native_directives: list[ProjectNativeDirective] = []
+    conditional_stack: list[_IncludeConditionalFrame] = []
+    for line_number, line in enumerate(lines, start=1):
+        directive_match = PREPROCESSOR_DIRECTIVE_RE.match(line)
+        if not directive_match:
+            continue
+
+        directive = directive_match.group("directive")
+        body = directive_match.group("body")
+        if directive in {"if", "ifdef", "ifndef", "elif", "else", "endif"}:
+            _apply_include_conditional_directive(
+                config,
+                conditional_stack,
+                directive,
+                body,
+            )
+            continue
+
+        if not _include_conditionals_active(conditional_stack):
+            continue
+
+        plan = _source_frontend_native_directive_plan(
+            source_backend=source_backend,
+            directive=directive,
+            body=body,
+        )
+        if plan is None:
+            continue
+        key = (
+            relative_path,
+            line_number,
+            plan["kind"],
+            plan["payload"],
+            plan["handlingStatus"],
+            variant,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        native_directives.append(
+            ProjectNativeDirective(
+                source=relative_path,
+                source_backend=source_backend,
+                line=line_number,
+                column=max(1, line.find("#") + 1),
+                kind=plan["kind"],
+                payload=plan["payload"],
+                handling_status=plan["handlingStatus"],
+                variant=variant,
+            )
+        )
+    return native_directives
+
+
+def _scan_native_directive_planning(
+    config: ProjectConfig,
+    source_path: Path,
+    relative_path: str,
+    *,
+    source_backend: str,
+) -> list["ProjectNativeDirective"]:
+    source_spec = SOURCE_REGISTRY.get(source_backend)
+    if source_spec is None or source_spec.native_directive_classifier is None:
+        return []
+    try:
+        lines = source_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+
+    native_directives: list[ProjectNativeDirective] = []
+    seen: set[tuple[str, int, str, str, str, str | None]] = set()
+    scan_lines = _mask_preprocessor_block_comments(lines)
+    for variant, defines in _variant_jobs(config):
+        scan_config = (
+            replace(config, defines=defines) if variant is not None else config
+        )
+        native_directives.extend(
+            _scan_native_directive_lines(
+                scan_config,
+                scan_lines,
+                relative_path,
+                source_backend=source_backend,
+                seen=seen,
+                variant=variant,
+            )
+        )
+    return native_directives
 
 
 def _scan_unsupported_wgsl_macro_semantics(
@@ -5764,6 +5910,32 @@ class ProjectDiagnostic:
         return payload
 
 
+@dataclass(frozen=True)
+class ProjectNativeDirective:
+    source: str
+    source_backend: str
+    line: int
+    column: int
+    kind: str
+    payload: str
+    handling_status: str
+    variant: str | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        payload = {
+            "source": self.source,
+            "sourceBackend": self.source_backend,
+            "line": self.line,
+            "column": self.column,
+            "kind": self.kind,
+            "payload": self.payload,
+            "handlingStatus": self.handling_status,
+        }
+        if self.variant:
+            payload["variant"] = self.variant
+        return payload
+
+
 def _configuration_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
     diagnostics: list[ProjectDiagnostic] = []
     location = _config_location(config)
@@ -6123,6 +6295,7 @@ class ProjectScan:
     config: ProjectConfig
     units: Sequence[ProjectTranslationUnit]
     skipped: Sequence[dict[str, Any]] = ()
+    native_directives: Sequence[ProjectNativeDirective] = ()
     diagnostics: Sequence[ProjectDiagnostic] = ()
 
     def to_report(
@@ -6140,6 +6313,7 @@ class ProjectScan:
             targets=report_targets,
             units=self.units,
             skipped=self.skipped,
+            native_directives=self.native_directives,
             artifacts=[],
             diagnostics=diagnostics,
             validation={"toolchains": [], "artifacts": []},
@@ -6160,6 +6334,7 @@ class ProjectPortabilityReport:
     targets: Sequence[str]
     units: Sequence[ProjectTranslationUnit]
     skipped: Sequence[dict[str, Any]]
+    native_directives: Sequence[ProjectNativeDirective]
     artifacts: Sequence[dict[str, Any]]
     diagnostics: Sequence[ProjectDiagnostic]
     validation: Mapping[str, Any]
@@ -6298,6 +6473,9 @@ class ProjectPortabilityReport:
             },
             "units": [unit.to_json() for unit in self.units],
             "skipped": list(self.skipped),
+            "nativeDirectives": [
+                directive.to_json() for directive in self.native_directives
+            ],
             "artifacts": list(self.artifacts),
             "diagnosticCounts": _diagnostic_counts(self.diagnostics),
             "diagnostics": diagnostics,
@@ -6481,6 +6659,7 @@ def scan_project(
     config = _config_with_selected_variants(config, variants)
     units: list[ProjectTranslationUnit] = []
     skipped: list[dict[str, Any]] = []
+    native_directives: list[ProjectNativeDirective] = []
     diagnostics: list[ProjectDiagnostic] = _configuration_diagnostics(config)
     diagnostics.extend(_source_root_diagnostics(config))
     diagnostics.extend(_include_dir_diagnostics(config))
@@ -6547,6 +6726,14 @@ def scan_project(
             )
             continue
 
+        native_directives.extend(
+            _scan_native_directive_planning(
+                config,
+                path,
+                relative_path,
+                source_backend=source_spec.name,
+            )
+        )
         include_dependencies, include_diagnostics = _scan_include_dependencies(
             config, path, relative_path, source_spec.name
         )
@@ -6578,7 +6765,11 @@ def scan_project(
             )
         )
     return ProjectScan(
-        config=config, units=units, skipped=skipped, diagnostics=diagnostics
+        config=config,
+        units=units,
+        skipped=skipped,
+        native_directives=native_directives,
+        diagnostics=diagnostics,
     )
 
 
@@ -7999,6 +8190,7 @@ def translate_project(
         targets=selected_targets,
         units=scan.units,
         skipped=scan.skipped,
+        native_directives=scan.native_directives,
         artifacts=artifacts,
         diagnostics=diagnostics,
         validation=validation,
@@ -20823,6 +21015,82 @@ def _skipped_contract_reasons(
     return reasons
 
 
+def _native_directive_contract_reasons(
+    index: int,
+    native_directive: Any,
+    *,
+    units_by_path: dict[str, UnitDeclaration] | None = None,
+    project: Mapping[str, Any] | None = None,
+    require_registered_source_backend: bool = False,
+    require_closed_fields: bool = False,
+) -> list[str]:
+    prefix = f"nativeDirectives[{index}]"
+    if not isinstance(native_directive, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = (
+        _unsupported_mapping_field_reasons(
+            prefix, native_directive, REPORT_NATIVE_DIRECTIVE_FIELDS
+        )
+        if require_closed_fields
+        else []
+    )
+    source = native_directive.get("source")
+    reasons.extend(_repository_path_contract_reasons(f"{prefix}.source", source))
+    source_backend = native_directive.get("sourceBackend")
+    reasons.extend(
+        _source_backend_contract_reasons(
+            f"{prefix}.sourceBackend",
+            source_backend,
+            require_registered=require_registered_source_backend,
+        )
+    )
+    if (
+        units_by_path is not None
+        and _is_non_empty_string(source)
+        and _is_report_identity_path(source)
+    ):
+        unit_declaration = units_by_path.get(source)
+        if unit_declaration is None:
+            reasons.append(f"{prefix}.source must be listed in units")
+        elif source_backend != unit_declaration[1].get("sourceBackend"):
+            reasons.append(
+                f"{prefix}.sourceBackend must match "
+                f"units[{unit_declaration[0]}].sourceBackend "
+                f"({_value_mismatch_context(unit_declaration[1].get('sourceBackend'), source_backend)})"
+            )
+
+    for field_name in ("line", "column"):
+        value = native_directive.get(field_name)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            reasons.append(f"{prefix}.{field_name} must be a positive integer")
+
+    if not _is_non_empty_string(native_directive.get("kind")):
+        reasons.append(f"{prefix}.kind must be a string")
+    if not isinstance(native_directive.get("payload"), str):
+        reasons.append(f"{prefix}.payload must be a string")
+    handling_status = native_directive.get("handlingStatus")
+    if handling_status not in NATIVE_DIRECTIVE_HANDLING_STATUSES:
+        reasons.append(
+            "{}.handlingStatus must be one of {}".format(
+                prefix, ", ".join(sorted(NATIVE_DIRECTIVE_HANDLING_STATUSES))
+            )
+        )
+    if "variant" in native_directive:
+        variant = native_directive.get("variant")
+        if not _is_non_empty_string(variant):
+            reasons.append(f"{prefix}.variant must be a string")
+        elif isinstance(project, Mapping):
+            project_variants = project.get("variants", {})
+            if (
+                isinstance(project_variants, Mapping)
+                and project_variants
+                and variant not in project_variants
+            ):
+                reasons.append(f"{prefix}.variant must be listed in project.variants")
+    return reasons
+
+
 def _config_string_list_contract_reasons(prefix: str, value: Any) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         return [f"{prefix} must be a list of strings"]
@@ -24098,6 +24366,28 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             reasons.extend(_duplicate_path_contract_reasons("skipped", skipped))
             if isinstance(units, list):
                 reasons.extend(_unit_skipped_path_contract_reasons(units, skipped))
+
+    native_directives = report.get("nativeDirectives", [])
+    if has_summary and "nativeDirectives" not in report:
+        reasons.append("nativeDirectives must be a list")
+    if has_summary or "nativeDirectives" in report:
+        if not isinstance(native_directives, list):
+            reasons.append("nativeDirectives must be a list")
+        else:
+            units_by_path = _declared_units_by_path(
+                units, require_full_metadata=has_summary
+            )
+            for index, native_directive in enumerate(native_directives):
+                reasons.extend(
+                    _native_directive_contract_reasons(
+                        index,
+                        native_directive,
+                        units_by_path=units_by_path,
+                        project=project if isinstance(project, Mapping) else None,
+                        require_registered_source_backend=has_summary,
+                        require_closed_fields=has_summary,
+                    )
+                )
 
     if has_summary and isinstance(units, list) and isinstance(skipped, list):
         reasons.extend(

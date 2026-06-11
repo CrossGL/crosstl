@@ -78,6 +78,9 @@ class SourceSpec:
     reverse_codegen_factory: Callable[[], Any] | None = None
     aliases: Sequence[str] = ()
     shader_type_from_path: Callable[[str], str | None] | None = None
+    native_directive_classifier: Callable[
+        [str, str], Mapping[str, Any] | None
+    ] | None = None
 
     def parse(
         self,
@@ -121,6 +124,16 @@ class SourceSpec:
         """Return whether this source frontend accepts a lexer keyword option."""
         lexer_cls, _parser_cls = self.load_lexer_parser()
         return _accepts_keyword(lexer_cls, keyword)
+
+    def classify_native_directive(
+        self, directive: str, payload: str
+    ) -> Mapping[str, Any] | None:
+        if self.native_directive_classifier is None:
+            return None
+        return self.native_directive_classifier(
+            _normalize_source_name(directive),
+            payload.strip(),
+        )
 
 
 class SourceRegistry:
@@ -331,6 +344,18 @@ def _load_metal():
     from crosstl.backend.Metal import MetalLexer, MetalParser
 
     return MetalLexer, MetalParser
+
+
+def _classify_metal_native_directive(
+    directive: str, payload: str
+) -> Mapping[str, Any] | None:
+    if directive != "mode":
+        return None
+    return {
+        "kind": "mode",
+        "payload": " ".join(payload.split()),
+        "handlingStatus": "preserved",
+    }
 
 
 def _load_glsl():
@@ -564,6 +589,7 @@ def register_default_sources() -> None:
             load_lexer_parser=_load_metal,
             reverse_codegen_factory=_reverse_metal,
             aliases=("metal", "msl"),
+            native_directive_classifier=_classify_metal_native_directive,
         )
     )
     _register(

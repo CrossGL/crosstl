@@ -4470,6 +4470,84 @@ def test_scan_project_rejects_crossgl_function_like_native_macro_form(tmp_path):
     assert "LOCAL_VALUE" not in diagnostic["message"]
 
 
+def test_scan_project_represents_metal_mode_directive_without_macro_warning(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.metal").write_text(
+        textwrap.dedent("""
+            #mode threaded   tile_width=16 // scan payload comment
+            kernel void main0() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["metal"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+    assert payload["nativeDirectives"] == [
+        {
+            "source": "shaders/kernel.metal",
+            "sourceBackend": "metal",
+            "line": 1,
+            "column": 1,
+            "kind": "mode",
+            "payload": "threaded tile_width=16",
+            "handlingStatus": "preserved",
+        }
+    ]
+
+
+def test_scan_project_unknown_metal_directive_keeps_macro_native_warning(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.metal").write_text(
+        textwrap.dedent("""
+            #native_unknown payload
+            kernel void main0() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["metal"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    diagnostic = payload["diagnostics"][0]
+
+    assert validation["success"] is True
+    assert payload["nativeDirectives"] == []
+    assert payload["summary"]["missingCapabilityCounts"] == {"macro.native": 1}
+    assert diagnostic["code"] == "project.scan.unsupported-macro-form"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["macro.native"]
+    assert diagnostic["location"]["file"] == "shaders/kernel.metal"
+    assert diagnostic["location"]["line"] == 1
+    assert "unknown preprocessor directive" in diagnostic["message"]
+
+
 def test_scan_project_scopes_define_shadowing_to_selected_variants(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
