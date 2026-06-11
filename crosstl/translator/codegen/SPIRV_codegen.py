@@ -1513,10 +1513,7 @@ class VulkanSPIRVCodeGen:
 
         member_names = [name for _, name in members]
         type_name = str(type_id.type.base_type)
-        if not (
-            type_name.startswith("complex")
-            or member_names == ["real", "imag"]
-        ):
+        if not (type_name.startswith("complex") or member_names == ["real", "imag"]):
             return False
 
         return all(

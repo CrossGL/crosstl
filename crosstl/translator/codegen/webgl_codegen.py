@@ -8,8 +8,12 @@ from ..ast import (
     FunctionCallNode,
     StageMap,
     TernaryOpNode,
+    WaveOpNode,
 )
-from .array_utils import format_c_style_array_declaration
+from .array_utils import (
+    format_c_style_array_declaration,
+    split_array_type_suffix,
+)
 from .GLSL_codegen import GLSLCodeGen
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
@@ -53,6 +57,22 @@ class WebGLCodeGen(GLSLCodeGen):
         "atomicCounterDecrement",
         "atomicCounter",
         "atomicCounterAdd",
+    }
+    SYNCHRONIZATION_INTRINSIC_NAMES = {
+        "barrier",
+        "workgroupBarrier",
+        "memoryBarrier",
+        "memoryBarrierAtomicCounter",
+        "memoryBarrierBuffer",
+        "memoryBarrierImage",
+        "memoryBarrierShared",
+        "groupMemoryBarrier",
+        "GroupMemoryBarrier",
+        "GroupMemoryBarrierWithGroupSync",
+        "DeviceMemoryBarrier",
+        "DeviceMemoryBarrierWithGroupSync",
+        "AllMemoryBarrier",
+        "AllMemoryBarrierWithGroupSync",
     }
     GLSL_ES_310_TEXTURE_INTRINSIC_NAMES = {
         "textureGather",
@@ -111,6 +131,15 @@ class WebGLCodeGen(GLSLCodeGen):
     UNSUPPORTED_OPAQUE_RESOURCE_TYPES = {
         "atomic_uint": "atomic counter",
     }
+    BUILTIN_OUTPUT_TYPES = {
+        "gl_Position": ("vec4", "vec4"),
+        "gl_PointSize": ("float", "scalar float"),
+        "gl_ClipDistance": ("float", "scalar float"),
+        "gl_CullDistance": ("float", "scalar float"),
+        "gl_FragDepth": ("float", "scalar float"),
+        "gl_FragStencilRefARB": ("int", "scalar int"),
+        "gl_SampleMask": ("int", "scalar int"),
+    }
 
     def default_glsl_version_line(self, ast, target_stage=None):
         return "#version 300 es"
@@ -142,9 +171,16 @@ class WebGLCodeGen(GLSLCodeGen):
         replacement = getattr(self, "_webgl_expression_replacements", {}).get(id(expr))
         if replacement is not None:
             return replacement
+        if isinstance(expr, WaveOpNode):
+            self.validate_webgl_wave_support(expr.operation)
         if isinstance(expr, FunctionCallNode):
             self.validate_webgl_function_call_support(self.function_call_name(expr))
         return super().generate_expression(expr, is_main=is_main)
+
+    def validate_webgl_wave_support(self, operation):
+        raise ValueError(
+            "WebGL target does not support wave/subgroup intrinsic " f"'{operation}'"
+        )
 
     def validate_webgl_function_call_support(self, func_name):
         if func_name in self.STORAGE_IMAGE_INTRINSIC_NAMES:
@@ -165,6 +201,65 @@ class WebGLCodeGen(GLSLCodeGen):
         if func_name in self.ATOMIC_INTRINSIC_NAMES:
             raise ValueError(
                 f"WebGL target does not support atomic operation '{func_name}'"
+            )
+        if self.is_webgl_synchronization_intrinsic(func_name):
+            raise ValueError(
+                "WebGL target does not support synchronization intrinsic "
+                f"'{func_name}'"
+            )
+
+    def is_webgl_synchronization_intrinsic(self, func_name):
+        if func_name in self.function_return_types:
+            return False
+        return func_name in self.SYNCHRONIZATION_INTRINSIC_NAMES
+
+    def validate_function_return_semantic(self, func, stage_name):
+        super().validate_function_return_semantic(func, stage_name)
+        semantic = self.function_return_semantic(func)
+        if semantic is None:
+            return
+        self.validate_webgl_builtin_output_type(
+            stage_name,
+            semantic,
+            self.function_return_type(func),
+            f"function '{getattr(func, 'name', '<anonymous>')}' return",
+        )
+
+    def stage_output_member_map(self, func, shader_type):
+        member_map = super().stage_output_member_map(func, shader_type)
+        if member_map:
+            self.validate_webgl_stage_output_struct_members(func, shader_type)
+        return member_map
+
+    def validate_webgl_stage_output_struct_members(self, func, stage_name):
+        struct_name = self.type_node_name(getattr(func, "return_type", None))
+        struct = self.structs_by_name.get(struct_name)
+        if struct is None:
+            return
+        for member in getattr(struct, "members", []) or []:
+            semantic = self.semantic_from_node(member)
+            if semantic is None:
+                continue
+            self.validate_webgl_builtin_output_type(
+                stage_name,
+                semantic,
+                self.member_type_name(member),
+                f"struct '{struct_name}' member '{member.name}'",
+            )
+
+    def validate_webgl_builtin_output_type(
+        self, stage_name, semantic, mapped_type, source
+    ):
+        mapped_semantic = self.map_semantic(semantic)
+        expected = self.BUILTIN_OUTPUT_TYPES.get(mapped_semantic)
+        if expected is None:
+            return
+        expected_type, expected_description = expected
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        if array_suffix or base_type != expected_type:
+            raise ValueError(
+                f"WebGL {stage_name} stage {source} semantic '{semantic}' "
+                f"must be {expected_description}"
             )
 
     def generate_glsl_interface_block_declaration(self, node):
@@ -664,6 +759,16 @@ class WebGLCodeGen(GLSLCodeGen):
                 f"'{self.resource_node_name(node, '<unnamed>')}' "
                 f"({sampled_base_type})"
             )
+        memory_qualifiers = self.resource_memory_qualifiers(node)
+        if memory_qualifiers and self.is_webgl_sampled_resource_type(sampled_base_type):
+            raise ValueError(
+                "WebGL target does not support resource memory qualifier(s) "
+                f"'{memory_qualifiers}' on sampled resource "
+                f"'{self.resource_node_name(node, '<unnamed>')}'"
+            )
+
+    def is_webgl_sampled_resource_type(self, type_name):
+        return str(type_name).startswith(("sampler", "isampler", "usampler"))
 
     def is_webgl_glsl_buffer_block_node(self, node):
         qualifiers = {

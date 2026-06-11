@@ -1138,8 +1138,7 @@ def test_append_consume_structured_buffers_use_sidecar_counters():
         in generated
     )
     assert (
-        "appendValues[atomicAdd(appendValuesCounter[0], 1u)] = int(value);"
-        in generated
+        "appendValues[atomicAdd(appendValuesCounter[0], 1u)] = int(value);" in generated
     )
     assert (
         "int consumed = consumeValues[(atomicAdd(consumeValuesCounter[0], uint(-1)) - 1u)];"
@@ -1243,15 +1242,9 @@ def test_structured_buffer_arrays_lower_to_ssbo_instance_arrays():
         "layout(std430, binding = 3) buffer buffersBuffer { int data[]; } buffers[2];"
         in generated
     )
-    assert (
-        "int v = buffers[index].data[gl_GlobalInvocationID.x];"
-        in generated
-    )
+    assert "int v = buffers[index].data[gl_GlobalInvocationID.x];" in generated
     assert "len = buffers[index].data.length();" in generated
-    assert (
-        "buffers[index].data[gl_GlobalInvocationID.x] = (v + 1);"
-        in generated
-    )
+    assert "buffers[index].data[gl_GlobalInvocationID.x] = (v + 1);" in generated
     assert "buffers[index][gl_GlobalInvocationID.x]" not in generated
 
 
