@@ -1,0 +1,100 @@
+{
+  "kind": "crosstl-runtime-verification-fixtures",
+  "fixtures": [
+    {
+      "id": "mlx-vector-add-contract",
+      "selector": {
+        "source": "kernels/vector_add.cgl",
+        "target": "metal",
+        "variant": "debug"
+      },
+      "executor": "mlx",
+      "inputs": [
+        {
+          "name": "lhs",
+          "kind": "buffer",
+          "dtype": "float32",
+          "shape": [
+            4
+          ],
+          "values": [
+            1.0,
+            2.0,
+            3.0,
+            4.0
+          ]
+        },
+        {
+          "name": "rhs",
+          "kind": "buffer",
+          "dtype": "float32",
+          "shape": [
+            4
+          ],
+          "values": [
+            10.0,
+            20.0,
+            30.0,
+            40.0
+          ]
+        }
+      ],
+      "expectedOutputs": [
+        {
+          "name": "out",
+          "kind": "buffer",
+          "dtype": "float32",
+          "shape": [
+            4
+          ],
+          "values": [
+            11.0,
+            22.0,
+            33.0,
+            44.0
+          ]
+        }
+      ],
+      "runtimeAdapter": {
+        "id": "vector-add-contract-v1",
+        "functionConstants": [
+          {
+            "name": "vector_width",
+            "id": 0,
+            "dtype": "uint32",
+            "value": 4,
+            "required": true
+          }
+        ],
+        "dispatch": {
+          "entryPoint": "vector_add",
+          "workgroupCount": [
+            1,
+            1,
+            1
+          ],
+          "globalSize": [
+            4,
+            1,
+            1
+          ]
+        },
+        "validationHooks": [
+          {
+            "name": "adapter-contract",
+            "phase": "pre-run",
+            "required": true
+          },
+          {
+            "name": "output-comparison",
+            "phase": "post-run",
+            "required": true
+          }
+        ],
+        "metadata": {
+          "contract": "backend-neutral-kernel-execution"
+        }
+      }
+    }
+  ]
+}
