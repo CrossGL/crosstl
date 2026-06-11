@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from typing import Tuple
 
 from crosstl.translator.ast import (
-    ArrayType,
     ArrayAccessNode,
+    ArrayType,
     AssignmentNode,
     AttributeNode,
     BinaryOpNode,
