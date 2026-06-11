@@ -1798,6 +1798,16 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "integrations/mlx/run_mlx_porting.py" in mlx_porting
     assert mlx_commit in mlx_porting
     assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
+    assert "sudo apt-get install -y glslang-tools spirv-tools" in mlx_porting
+    assert "brew install glslang" in mlx_porting
+    assert "dxc_2026_02_20.zip" in mlx_porting
+    assert "--require-directx-toolchain" in mlx_porting
+    assert "--require-opengl-toolchain" in mlx_porting
+    assert "--require-vulkan-toolchain" in mlx_porting
+    assert '"--require-directx-toolchain"' in harness
+    assert '"--require-opengl-toolchain"' in harness
+    assert '"--require-vulkan-toolchain"' in harness
+    assert "requiredToolchains" in harness
     assert re.search(r"translate-project\b[\s\S]*validation_flag", harness)
     assert '"--run-toolchains"' in harness
     assert '"--validate"' in harness
@@ -1823,6 +1833,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         1274,
         1287,
         1300,
+        1317,
     ):
         assert (
             f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
@@ -1832,15 +1843,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
             f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
             in harness
         )
-    for tracked_issue_number in (1317,):
-        assert (
-            f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}"
-            not in mlx_porting
-        )
-        assert (
-            f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}"
-            in harness
-        )
+    assert "FRONTIER_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()" in harness
     assert "MLX_DIRECTX_VULKAN_FRONTIER_SOURCES" in harness
     assert "mlx/backend/metal/kernels/binary_two.metal" in harness
     assert "mlx/backend/metal/kernels/fence.metal" in harness
