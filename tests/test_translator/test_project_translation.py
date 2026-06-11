@@ -22125,6 +22125,92 @@ def test_translate_project_records_structured_diagnostics_for_failures(tmp_path)
     assert payload["migration"]["actions"][0]["targets"] == ["opengl"]
 
 
+def test_translate_project_reports_directx_unresolved_source_type_diagnostic(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "missing_texture.cgl").write_text(
+        textwrap.dedent("""
+            shader MissingTextureType {
+                compute {
+                    void main() {
+                        vec4 color = texture(missingTex, vec2(0.0));
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.unresolved-source-type": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "directx.type-inference": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.unresolved-source-type"
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["location"]["file"] == "missing_texture.cgl"
+    assert diagnostic["missingCapabilities"] == ["directx.type-inference"]
+    assert "missingTex" in diagnostic["message"]
+    assert "operation 'texture'" in diagnostic["message"]
+    assert "function 'main'" in diagnostic["message"]
+    assert "NoneType" not in diagnostic["message"]
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "directx"
+    assert "NoneType" not in artifact["error"]
+    assert not (repo / artifact["path"]).exists()
+
+
+def test_translate_project_rewrites_directx_nontype_startswith_failure(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    def raise_raw_directx_failure(*_args, **_kwargs):
+        raise AttributeError("'NoneType' object has no attribute 'startswith'")
+
+    monkeypatch.setattr(project_pipeline, "translate", raise_raw_directx_failure)
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.unresolved-source-type": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "directx.type-inference": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.unresolved-source-type"
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["missingCapabilities"] == ["directx.type-inference"]
+    assert "source type metadata" in diagnostic["message"]
+    assert "simple.cgl" in diagnostic["message"]
+    assert "NoneType" not in diagnostic["message"]
+    assert "startswith" not in diagnostic["message"]
+    assert "NoneType" not in payload["artifacts"][0]["error"]
+
+
 def test_translate_project_reports_glsl_fragment_invocation_density_as_unsupported(
     tmp_path,
 ):
@@ -31252,6 +31338,103 @@ def test_translate_project_opencl_targets_do_not_leak_resource_parameter_syntax(
     assert "const device float* in_ [[buffer(1)]]" in outputs["metal"]
     assert "constant scale_Args& scale_Args [[buffer(2)]]" in outputs["metal"]
     assert "kernel void kernel_scale(" in outputs["metal"]
+
+
+def test_translate_project_opencl_directx_allocates_generated_parameter_bindings(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "ops.cl").write_text(
+        textwrap.dedent("""
+            kernel void scale(global float *out_a,
+                              global const float *in_a,
+                              const float factor) {
+                uint i = get_global_id(0);
+                out_a[i] = in_a[i] * factor;
+            }
+
+            kernel void bias(global float *out_b,
+                             global const float *in_b,
+                             const float offset) {
+                uint i = get_global_id(0);
+                out_b[i] = in_b[i] + offset;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "RWStructuredBuffer<float> out_a : register(u0);" in output
+    assert "StructuredBuffer<float> in_a : register(t1);" in output
+    assert "RWStructuredBuffer<float> out_b : register(u1);" in output
+    assert "StructuredBuffer<float> in_b : register(t2);" in output
+    assert "cbuffer scale_Args : register(b2)" in output
+    assert "cbuffer bias_Args : register(b3)" in output
+    assert output.count(": register(b2)") == 1
+
+
+def test_translate_project_metal_directx_relocates_stage_entry_buffer_bindings(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "kernels.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct ParamsA {
+                uint n;
+            };
+
+            struct ParamsB {
+                uint n;
+            };
+
+            kernel void first(device float* out [[buffer(0)]],
+                              constant ParamsA& params [[buffer(2)]],
+                              uint gid [[thread_position_in_grid]]) {
+                out[gid] = float(params.n);
+            }
+
+            kernel void second(device float* dst [[buffer(0)]],
+                               constant ParamsB& params [[buffer(2)]],
+                               uint gid [[thread_position_in_grid]]) {
+                dst[gid] = float(params.n);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("directx", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "RWStructuredBuffer<float> out_ : register(u0);" in output
+    assert "ConstantBuffer<ParamsA> params : register(b2);" in output
+    assert "RWStructuredBuffer<float> dst : register(u1);" in output
+    assert "ConstantBuffer<ParamsB> second_params : register(b3);" in output
+    assert output.count(": register(b2)") == 1
 
 
 def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(

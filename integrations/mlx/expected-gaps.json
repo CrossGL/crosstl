@@ -16,28 +16,16 @@
       "summary": "Lower Metal SIMD-group helper intrinsics for OpenGL validation."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/890",
-      "scope": "directx-steel-type-crashes",
+      "issue": "https://github.com/CrossGL/crosstl/issues/915",
+      "scope": "directx-steel-source-types",
       "status": "open",
-      "summary": "Replace DirectX NoneType crashes with translation or structured diagnostics."
+      "summary": "Resolve MLX Steel source type metadata for DirectX project translation."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/891",
-      "scope": "directx-project-bindings",
-      "status": "open",
-      "summary": "Allocate non-overlapping DirectX bindings for project-scale parameter blocks."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/892",
-      "scope": "directx-groupshared-names",
-      "status": "open",
-      "summary": "Disambiguate promoted DirectX groupshared names for project kernels."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/893",
+      "issue": "https://github.com/CrossGL/crosstl/issues/916",
       "scope": "vulkan-storage-buffer-overloads",
       "status": "open",
-      "summary": "Resolve overloaded storage-buffer helper calls for Vulkan project translation."
+      "summary": "Resolve the remaining MLX sort storage-buffer overload in SPIR-V project translation."
     },
     {
       "issue": "https://github.com/CrossGL/crosstl/issues/894",

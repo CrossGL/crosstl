@@ -22,7 +22,10 @@ from crosstl.translator.ast import (
     UnaryOpNode,
     create_legacy_shader_node,
 )
-from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+from crosstl.translator.codegen.directx_codegen import (
+    DirectXUnresolvedSourceTypeError,
+    HLSLCodeGen,
+)
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -86,6 +89,34 @@ def hlsl_scalar_vector_zero_diagnostics(code: str):
     return [
         match.group(0) for match in HLSL_SCALAR_VECTOR_ZERO_DIAGNOSTIC.finditer(code)
     ]
+
+
+def test_directx_unresolved_texture_source_type_raises_project_diagnostic():
+    shader = """
+    shader MissingTextureType {
+        compute {
+            void main() {
+                vec4 color = texture(missingTex, vec2(0.0));
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(shader))
+
+    with pytest.raises(DirectXUnresolvedSourceTypeError) as excinfo:
+        generate_code(ast)
+
+    diagnostic = excinfo.value
+    assert (
+        diagnostic.project_diagnostic_code == "project.translate.unresolved-source-type"
+    )
+    assert diagnostic.missing_capabilities == ("directx.type-inference",)
+    message = str(diagnostic)
+    assert "missingTex" in message
+    assert "operation 'texture'" in message
+    assert "function 'main'" in message
+    assert "NoneType" not in message
 
 
 def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics():
@@ -205,6 +236,12 @@ def test_glsl_fragment_fragcoord_lowers_to_hlsl_position_input(tmp_path):
 
     assert "gl_FragCoord" not in generated_code
     assert "float4 _crossglFragCoord : SV_Position" in generated_code
+    assert (
+        "float4 PSMain(float4 _crossglFragCoord : SV_Position): SV_Target0"
+        in generated_code
+    )
+    assert "): fragColor" not in generated_code
+    assert "return fragColor;" in generated_code
     assert "_crossglFragCoord.x" in generated_code
     assert "_crossglFragCoord.y" in generated_code
 
@@ -5183,14 +5220,15 @@ def test_hlsl_cbuffer_register_overlap_raises():
     }
     """
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Conflicting DirectX resource binding for 'Material': "
-            "b2 overlaps 'Camera' b2"
-        ),
-    ):
+    with pytest.raises(ValueError) as exc_info:
         generate_code(parse_code(tokenize_code(code)))
+    message = str(exc_info.value)
+    assert (
+        "Conflicting DirectX resource binding for 'Material': "
+        "b2 overlaps 'Camera' b2"
+    ) in message
+    assert "Material: @binding(2) on cbuffer Material" in message
+    assert "Camera: @register(b2) on cbuffer Camera" in message
 
 
 def test_hlsl_cbuffer_register_spaces_are_independent():
@@ -10238,24 +10276,34 @@ def test_directx_function_local_groupshared_variables_lower_to_global_scope():
     )
 
 
-def test_directx_function_local_groupshared_duplicate_names_need_unique_source_names():
+def test_directx_function_local_threadgroup_duplicate_names_are_disambiguated():
     shader = """
     shader DuplicateLocalGroupShared {
         compute {
             void main() {
                 if (true) {
-                    groupshared uint scratch;
-                    scratch = 1u;
+                    threadgroup uint scratch[4];
+                    scratch[0] = 1u;
                 }
-                groupshared uint scratch;
-                scratch = 2u;
+                threadgroup uint scratch[4];
+                scratch[1] = 2u;
             }
         }
     }
     """
 
-    with pytest.raises(ValueError, match="unique source names"):
-        HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "groupshared uint main_scratch[4];" in generated
+    assert "groupshared uint main_scratch_[4];" in generated
+    assert "groupshared uint scratch" not in generated
+    assert "main_scratch[0] = 1u;" in generated
+    assert "main_scratch_[1] = 2u;" in generated
+    assert generated.index("groupshared uint main_scratch[4];") < generated.index(
+        "void CSMain()"
+    )
 
 
 def test_directx_dispatch_mesh_rejects_calls_outside_amplification_stages():

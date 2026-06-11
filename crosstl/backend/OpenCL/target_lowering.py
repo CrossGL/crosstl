@@ -18,6 +18,8 @@ from crosstl.translator.ast import (
 )
 
 OPENCL_TARGET_UNSUPPORTED_CODE = "opencl.target.unsupported"
+DIRECTX_BINDING_PROVENANCE_ANNOTATION = "directx.binding_provenance"
+DIRECTX_RELOCATABLE_BINDING_ANNOTATION = "directx.relocatable_binding"
 _TARGET_SCALAR_TYPE_ALIASES = {
     "f32": "float",
     "f64": "double",
@@ -219,6 +221,12 @@ def _binding_attribute(binding):
     )
 
 
+def _mark_directx_relocatable_binding(node, provenance):
+    node.add_annotation(DIRECTX_RELOCATABLE_BINDING_ANNOTATION, True)
+    node.add_annotation(DIRECTX_BINDING_PROVENANCE_ANNOTATION, provenance)
+    return node
+
+
 def _parameter_binding(parameter):
     for attribute in getattr(parameter, "attributes", []) or []:
         if str(getattr(attribute, "name", "")).lower() != "binding":
@@ -306,7 +314,10 @@ def _target_kernel_cbuffer(function_name, scalar_parameters, binding):
         attributes=[_binding_attribute(binding)],
     )
     cbuffer.is_cbuffer = True
-    return cbuffer
+    return _mark_directx_relocatable_binding(
+        cbuffer,
+        f"OpenCL target-lowered scalar parameter block {function_name}_Args",
+    )
 
 
 def _resource_qualifiers(parameter):
@@ -365,13 +376,19 @@ def normalize_opencl_intermediate_for_target(cgl_ast):
                     binding = next_binding
                 next_binding = max(next_binding, binding + 1)
                 global_variables.append(
-                    VariableNode(
-                        parameter.name,
-                        _structured_buffer_type(
-                            parameter,
-                            writable=_is_writable_storage_parameter(parameter),
+                    _mark_directx_relocatable_binding(
+                        VariableNode(
+                            parameter.name,
+                            _structured_buffer_type(
+                                parameter,
+                                writable=_is_writable_storage_parameter(parameter),
+                            ),
+                            attributes=[_binding_attribute(binding)],
                         ),
-                        attributes=[_binding_attribute(binding)],
+                        (
+                            "OpenCL target-lowered storage parameter "
+                            f"{function.name}.{parameter.name}"
+                        ),
                     )
                 )
                 continue

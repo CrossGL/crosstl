@@ -21378,7 +21378,7 @@ def test_metal_texture_array_helper_operation_variants():
         in generated_code
     )
     assert "textures[layer].gather(samplers[layer], uv)" in generated_code
-    assert "textures[layer].read(pixel, 0)" in generated_code
+    assert "textures[layer].read(uint2(pixel), uint(0))" in generated_code
     assert (
         "sampleOps(textures, samplers, input.layer, input.uv, input.pixel)"
         in generated_code
@@ -21450,7 +21450,9 @@ def test_metal_array_texture_types_split_coordinates_and_layers():
         in generated_code
     )
     assert "tex.gather(s, uvLayer.xy, uint(uvLayer.z))" in generated_code
-    assert "tex.read(pixelLayer.xy, uint(pixelLayer.z), 0)" in generated_code
+    assert (
+        "tex.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(0))" in generated_code
+    )
     assert (
         "float sampleShadowArray(depth2d_array<float> tex, sampler s, float3 uvLayer, float depth)"
         in generated_code
@@ -21576,9 +21578,9 @@ def test_metal_cube_array_and_multisample_texture_types():
         "float4 fetchMs(texture2d_ms<float> tex, texture2d_ms_array<float> texArray, int2 pixel, int3 pixelLayer, int sampleIndex)"
         in generated_code
     )
-    assert "tex.read(pixel, uint(sampleIndex))" in generated_code
+    assert "tex.read(uint2(pixel), uint(sampleIndex))" in generated_code
     assert (
-        "texArray.read(pixelLayer.xy, uint(pixelLayer.z), uint(sampleIndex))"
+        "texArray.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex))"
         in generated_code
     )
     assert "tex.sample(s, cubeLayer)" not in generated_code
@@ -22819,12 +22821,13 @@ def test_metal_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_memb
         in generated_code
     )
     assert (
-        "float4 fetched = colorMap.read((input.pixel + input.offset), int(input.lod));"
-        in generated_code
+        "float4 fetched = colorMap.read("
+        "uint2((input.pixel + input.offset)), uint(int(input.lod)));" in generated_code
     )
     assert (
-        "float4 fetchedLayer = layerMap.read((input.pixelLayer.xy + input.offset), uint(input.pixelLayer.z), int(input.lod));"
-        in generated_code
+        "float4 fetchedLayer = layerMap.read("
+        "uint2((input.pixelLayer.xy + input.offset)), "
+        "uint(input.pixelLayer.z), uint(int(input.lod)));" in generated_code
     )
     assert "textureOffset(" not in generated_code
     assert "textureLodOffset(" not in generated_code
@@ -27975,12 +27978,36 @@ def test_metal_texture_operation_variants():
     assert "colorMap.sample(" in generated_code
     assert "level(1.0)" in generated_code
     assert "gradient2d(float2(0.1), float2(0.2))" in generated_code
-    assert "colorMap.read(input.pixel, 0)" in generated_code
+    assert "colorMap.read(uint2(input.pixel), uint(0))" in generated_code
     assert "colorMap.gather(" in generated_code
     assert "textureLod(" not in generated_code
     assert "textureGrad(" not in generated_code
     assert "texelFetch(" not in generated_code
     assert "textureGather(" not in generated_code
+
+
+def test_metal_unsigned_texture_texel_fetch_uses_unsigned_read_coordinates():
+    shader = """
+    shader UnsignedTexelFetchReadCoordinates {
+        usampler2D srcRGB;
+
+        compute {
+            void main(uvec3 thread_position_in_grid @ SV_DispatchThreadID) {
+                uvec2 rgbBlock = texelFetch(srcRGB, thread_position_in_grid.xy, 0).xy;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "texture2d<uint> srcRGB [[texture(0)]]" in generated_code
+    assert (
+        "uint2 rgbBlock = srcRGB.read(uint2(thread_position_in_grid.xy), uint(0)).xy;"
+        in generated_code
+    )
+    assert "srcRGB.read(int2(" not in generated_code
+    assert "texelFetch(" not in generated_code
 
 
 def test_metal_texture_and_sampler_bindings_are_independent():

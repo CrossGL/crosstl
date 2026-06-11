@@ -61,13 +61,10 @@ The harness writes reports, generated artifacts, and command logs under
   project artifacts.
 - CrossGL/crosstl#889: lower Metal SIMD-group helper intrinsics for OpenGL
   validation.
-- CrossGL/crosstl#890: replace DirectX `NoneType` crashes in MLX Steel kernels
-  with translation or structured diagnostics.
-- CrossGL/crosstl#891: allocate non-overlapping DirectX bindings for
-  project-scale parameter blocks.
-- CrossGL/crosstl#892: disambiguate promoted DirectX `groupshared` names for
-  project kernels.
-- CrossGL/crosstl#893: resolve overloaded storage-buffer helper calls for
+- CrossGL/crosstl#915: resolve MLX Steel source type metadata for DirectX
+  project translation.
+- CrossGL/crosstl#916: resolve the remaining overloaded storage-buffer helper
+  call in `sort.metal` for
   Vulkan project translation.
 
 These gaps are translator work. Host runtime integration gaps should be handled

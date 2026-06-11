@@ -315,6 +315,16 @@ from .stage_utils import (
 )
 
 
+class DirectXUnresolvedSourceTypeError(ValueError):
+    """Diagnostic exception for source expressions with missing type metadata."""
+
+    project_diagnostic_code = "project.translate.unresolved-source-type"
+    missing_capabilities = ("directx.type-inference",)
+
+    def __init__(self, message):
+        super().__init__(message)
+
+
 class HLSLCodeGen:
     """Emit HLSL source from the shared CrossGL translator AST."""
 
@@ -599,6 +609,7 @@ class HLSLCodeGen:
         self.literal_bool_constants = {}
         self.current_identifier_aliases = {}
         self.current_identifier_reserved_names = set()
+        self.current_function_name = None
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.current_hlsl_visible_int_constants = None
@@ -625,9 +636,8 @@ class HLSLCodeGen:
         self.current_hlsl_dispatch_mesh_payload_types = set()
         self.current_hlsl_has_amplification_stage = False
         self.hlsl_hoisted_groupshared_declarations = []
-        self.hlsl_hoisted_groupshared_aliases_by_function = {}
+        self.hlsl_hoisted_groupshared_aliases_by_declaration = {}
         self.hlsl_hoisted_groupshared_declaration_ids = set()
-        self.hlsl_hoisted_groupshared_types_by_function = {}
         self.vertex_entry_input_struct_names = set()
         self.vertex_entry_output_struct_names = set()
         self.fragment_entry_input_struct_names = set()
@@ -1017,8 +1027,10 @@ class HLSLCodeGen:
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.required_hlsl_inverse_helpers = set()
+        self.directx_resource_register_overrides = {}
         self.current_identifier_aliases = {}
         self.current_identifier_reserved_names = set()
+        self.current_function_name = None
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.allow_hlsl_byteaddress_interlocked_member_expression = False
@@ -1035,9 +1047,8 @@ class HLSLCodeGen:
         self.current_hlsl_dispatch_mesh_payload_types = set()
         self.current_hlsl_has_amplification_stage = False
         self.hlsl_hoisted_groupshared_declarations = []
-        self.hlsl_hoisted_groupshared_aliases_by_function = {}
+        self.hlsl_hoisted_groupshared_aliases_by_declaration = {}
         self.hlsl_hoisted_groupshared_declaration_ids = set()
-        self.hlsl_hoisted_groupshared_types_by_function = {}
         self.vertex_entry_output_struct_names = set()
         self.fragment_entry_input_struct_names = set()
         self.hlsl_temp_variable_index = 0
@@ -1948,7 +1959,14 @@ class HLSLCodeGen:
 
         if cbuffers:
             code += "// Constant Buffers\n"
-            code += self.generate_cbuffers(ast, cbuffers, target_stage)
+            code += self.generate_cbuffers(
+                ast,
+                cbuffers,
+                target_stage,
+                used_resource_registers,
+                texture_registers,
+                cbuffer_registers,
+            )
 
         stage_entry_names = self.stage_entry_names(ast, target_stage)
         self.current_hlsl_hull_output_control_points = (
@@ -3058,7 +3076,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         view.constants = list(getattr(ast, "constants", []) or [])
         return view
 
-    def generate_cbuffers(self, ast, cbuffers=None, target_stage=None):
+    def generate_cbuffers(
+        self,
+        ast,
+        cbuffers=None,
+        target_stage=None,
+        used_resource_registers=None,
+        texture_registers=None,
+        cbuffer_registers=None,
+    ):
         code = ""
         cbuffers = list(
             cbuffers if cbuffers is not None else getattr(ast, "cbuffers", [])
@@ -3097,53 +3123,39 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "Cbuffer member name(s) conflict with DirectX global declaration(s): "
                 f"{names}"
             )
-        used_cbuffer_registers = {}
-        buffer_registers = {}
-        for node in cbuffers:
-            register_prefix = "t" if self.is_hlsl_tbuffer_node(node) else "b"
-            space = self.explicit_resource_register_space(node)
-            binding = self.explicit_resource_binding_index(
-                node, {"binding", "buffer"}, (register_prefix,)
-            )
-            if binding is None:
-                continue
-            self.reserve_resource_register_range(
-                used_cbuffer_registers,
-                register_prefix,
-                binding,
-                1,
-                node.name,
-                space,
-            )
+        used_resource_registers = (
+            used_resource_registers if used_resource_registers is not None else {}
+        )
+        texture_registers = texture_registers if texture_registers is not None else {}
+        cbuffer_registers = cbuffer_registers if cbuffer_registers is not None else {}
+        self.reserve_explicit_cbuffer_registers(cbuffers, used_resource_registers)
         for node in cbuffers:
             is_tbuffer = self.is_hlsl_tbuffer_node(node)
             buffer_keyword = "tbuffer" if is_tbuffer else "cbuffer"
             register_prefix = "t" if is_tbuffer else "b"
             space = self.explicit_resource_register_space(node)
+            register_cursors = texture_registers if is_tbuffer else cbuffer_registers
             binding = self.explicit_resource_binding_index(
                 node, {"binding", "buffer"}, (register_prefix,)
             )
             if binding is None:
-                cursor_key = (register_prefix, space)
                 binding = self.next_available_resource_register(
-                    used_cbuffer_registers,
+                    used_resource_registers,
                     register_prefix,
-                    {space: buffer_registers.get(cursor_key, 0)},
+                    register_cursors,
                     space,
                     1,
                 )
             self.reserve_resource_register_range(
-                used_cbuffer_registers,
+                used_resource_registers,
                 register_prefix,
                 binding,
                 1,
                 node.name,
                 space,
+                provenance=self.directx_resource_binding_provenance(node),
             )
-            cursor_key = (register_prefix, space)
-            buffer_registers[cursor_key] = max(
-                buffer_registers.get(cursor_key, 0), binding + 1
-            )
+            self.advance_resource_register(register_cursors, space, binding, 1)
             register = self.resource_register_suffix(register_prefix, binding, node)
             if isinstance(node, StructNode):
                 code += f"{buffer_keyword} {node.name}{register} {{\n"
@@ -3274,6 +3286,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         previous_local_variable_types = self.local_variable_types
         previous_identifier_aliases = self.current_identifier_aliases
         previous_identifier_reserved_names = self.current_identifier_reserved_names
+        previous_function_name = self.current_function_name
         previous_generic_function_substitutions = (
             self.current_generic_function_substitutions
         )
@@ -3304,16 +3317,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.current_generic_function_substitutions = (
             getattr(func, "_generic_substitutions", {}) or {}
         )
+        self.current_function_name = getattr(func, "name", None) or entry_name
         self.local_variable_types = {}
         self.current_identifier_aliases = {}
-        self.current_identifier_aliases.update(
-            self.hlsl_hoisted_groupshared_aliases_by_function.get(id(func), {})
-        )
         self.current_identifier_reserved_names = (
             self.collect_hlsl_function_identifier_names(func)
-        )
-        self.local_variable_types.update(
-            self.hlsl_hoisted_groupshared_types_by_function.get(id(func), {})
         )
         if hasattr(func, "qualifiers") and func.qualifiers:
             qualifier = func.qualifiers[0] if func.qualifiers else None
@@ -3562,6 +3570,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "HLSL", getattr(func, "name", None), unsupported_function_reason
             )
             self.current_function_return_type = previous_function_return_type
+            self.current_function_name = previous_function_name
             self.local_variable_types = previous_local_variable_types
             self.current_identifier_aliases = previous_identifier_aliases
             self.current_identifier_reserved_names = previous_identifier_reserved_names
@@ -3600,6 +3609,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"{return_semantic_attr};\n\n"
             )
             self.current_function_return_type = previous_function_return_type
+            self.current_function_name = previous_function_name
             self.local_variable_types = previous_local_variable_types
             self.current_identifier_aliases = previous_identifier_aliases
             self.current_identifier_reserved_names = previous_identifier_reserved_names
@@ -3710,12 +3720,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         try:
             for statement in parameter_prologue_statements:
                 code += f"{'    ' * (indent + 1)}{statement}\n"
-            if hasattr(body, "statements"):
-                for stmt in body.statements:
-                    code += self.generate_statement(stmt, indent + 1)
-            elif isinstance(body, list):
-                for stmt in body:
-                    code += self.generate_statement(stmt, indent + 1)
+            code += self.generate_statement_body(body, indent + 1)
         finally:
             self.current_hlsl_visible_int_constants = (
                 previous_hlsl_visible_int_constants
@@ -3735,6 +3740,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             previous_implicit_texture_query_lod_samplers
         )
         self.current_function_return_type = previous_function_return_type
+        self.current_function_name = previous_function_name
         self.local_variable_types = previous_local_variable_types
         self.current_identifier_aliases = previous_identifier_aliases
         self.current_identifier_reserved_names = previous_identifier_reserved_names
@@ -5108,13 +5114,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def generate_statement_body(self, body, indent):
         code = ""
         if hasattr(body, "statements"):
-            for stmt in body.statements:
-                code += self.generate_statement(stmt, indent)
+            statements = body.statements
         elif isinstance(body, list):
-            for stmt in body:
-                code += self.generate_statement(stmt, indent)
+            statements = body
         elif body is not None:
-            code += self.generate_statement(body, indent)
+            statements = [body]
+        else:
+            statements = []
+
+        for stmt in statements:
+            if isinstance(stmt, VariableNode):
+                self.activate_hlsl_hoisted_groupshared_declaration(stmt)
+            code += self.generate_statement(stmt, indent)
         return code
 
     def generate_for_initializer(self, init):
@@ -7158,12 +7169,46 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if mapped_type is None:
             return None
 
-        return VariableNode(
+        annotations = dict(getattr(parameter, "annotations", {}) or {})
+        proxy = VariableNode(
             name=parameter.name,
             var_type=mapped_type,
             attributes=list(getattr(parameter, "attributes", []) or []),
             qualifiers=list(getattr(parameter, "qualifiers", []) or []),
+            annotations=annotations,
         )
+        if self.directx_stage_entry_parameter_binding_allows_register_relocation(
+            parameter
+        ):
+            proxy.add_annotation("directx.relocatable_binding", True)
+            proxy.add_annotation(
+                "directx.binding_provenance",
+                self.directx_stage_entry_parameter_binding_provenance(parameter, func),
+            )
+        return proxy
+
+    def directx_stage_entry_parameter_binding_allows_register_relocation(
+        self, parameter
+    ):
+        attr_names = {
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(parameter, "attributes", []) or []
+        }
+        return bool(
+            "register" not in attr_names
+            and attr_names & {"binding", "buffer", "sampler", "texture", "uav"}
+        )
+
+    def directx_stage_entry_parameter_binding_provenance(self, parameter, func):
+        function_name = getattr(func, "name", None) or "<entry>"
+        parameter_name = getattr(parameter, "name", None) or "<anonymous>"
+        attribute_label = self.directx_resource_binding_attribute_label(parameter)
+        if attribute_label:
+            return (
+                f"stage-entry parameter {function_name}.{parameter_name} "
+                f"from {attribute_label}"
+            )
+        return f"stage-entry parameter {function_name}.{parameter_name}"
 
     def hlsl_entry_resource_parameter_global_type(self, parameter, func=None):
         raw_type = self.hlsl_parameter_raw_type(parameter)
@@ -12366,16 +12411,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         used_names.update(self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES)
         declarations = []
-        aliases_by_function = {}
-        types_by_function = {}
+        aliases_by_declaration = {}
         declaration_ids = set()
 
         for func in self.hlsl_emitted_functions_for_groupshared_lowering(
             ast, target_stage
         ):
-            aliases = {}
-            types = {}
-            declarations_by_name = {}
             func_name = getattr(func, "name", None) or "shader"
             for node in self.walk_ast(getattr(func, "body", [])):
                 if not isinstance(node, VariableNode):
@@ -12386,34 +12427,37 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 name = getattr(node, "name", None)
                 if not name:
                     continue
-                if name in declarations_by_name:
-                    raise ValueError(
-                        "DirectX cannot lower multiple function-local "
-                        f"groupshared/threadgroup declarations named '{name}' "
-                        f"in function '{func_name}'; unique source names are "
-                        "required for shader-scope lowering"
-                    )
 
                 alias_base = f"{func_name}_{name}"
                 alias = self.hlsl_unique_local_identifier(alias_base, used_names)
                 used_names.add(alias)
-                declarations_by_name[name] = node
-                aliases[name] = alias
                 declared_type = self.local_variable_declared_type(node)
                 declared_type_text = self.type_name_string(declared_type)
-                types[name] = declared_type_text
                 self.global_variable_types[alias] = declared_type_text
                 declarations.append((node, alias))
+                aliases_by_declaration[id(node)] = alias
                 declaration_ids.add(id(node))
 
-            if aliases:
-                aliases_by_function[id(func)] = aliases
-                types_by_function[id(func)] = types
-
         self.hlsl_hoisted_groupshared_declarations = declarations
-        self.hlsl_hoisted_groupshared_aliases_by_function = aliases_by_function
+        self.hlsl_hoisted_groupshared_aliases_by_declaration = aliases_by_declaration
         self.hlsl_hoisted_groupshared_declaration_ids = declaration_ids
-        self.hlsl_hoisted_groupshared_types_by_function = types_by_function
+
+    def activate_hlsl_hoisted_groupshared_declaration(self, node):
+        alias = self.hlsl_hoisted_groupshared_aliases_by_declaration.get(id(node))
+        if alias is None:
+            return False
+
+        name = getattr(node, "name", None)
+        if not name:
+            return True
+
+        declared_type = self.local_variable_declared_type(node)
+        declared_type_text = self.type_name_string(declared_type)
+        self.current_identifier_aliases[name] = alias
+        if declared_type_text:
+            self.local_variable_types[name] = declared_type_text
+            self.local_variable_types[alias] = declared_type_text
+        return True
 
     def hlsl_groupshared_declarations_to_emit(self, stage_groupshared_vars):
         declarations = [
@@ -14216,6 +14260,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 resource_count,
                 var_name,
                 space,
+                provenance=self.directx_resource_binding_provenance(node),
             )
 
         for node, metadata in relocatable_metadata:
@@ -14227,6 +14272,53 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 resource_count,
                 var_name,
                 space,
+                provenance=self.directx_resource_binding_provenance(node),
+            )
+            if resolved_binding != binding:
+                self.record_directx_resource_register_override(
+                    node, prefix, resolved_binding
+                )
+
+    def cbuffer_resource_register_metadata(self, node):
+        register_prefix = "t" if self.is_hlsl_tbuffer_node(node) else "b"
+        binding = self.explicit_resource_binding_index(
+            node, {"binding", "buffer"}, (register_prefix,)
+        )
+        if binding is None:
+            return None
+        space = self.explicit_resource_register_space(node)
+        return register_prefix, binding, space, 1, node.name
+
+    def reserve_explicit_cbuffer_registers(self, cbuffers, used_registers):
+        relocatable_metadata = []
+        for node in cbuffers:
+            metadata = self.cbuffer_resource_register_metadata(node)
+            if metadata is None:
+                continue
+            if self.directx_binding_allows_register_relocation(node):
+                relocatable_metadata.append((node, metadata))
+                continue
+            prefix, binding, space, resource_count, var_name = metadata
+            self.reserve_resource_register_range(
+                used_registers,
+                prefix,
+                binding,
+                resource_count,
+                var_name,
+                space,
+                provenance=self.directx_resource_binding_provenance(node),
+            )
+
+        for node, metadata in relocatable_metadata:
+            prefix, binding, space, resource_count, var_name = metadata
+            resolved_binding = self.reserve_relocatable_resource_register_range(
+                used_registers,
+                prefix,
+                binding,
+                resource_count,
+                var_name,
+                space,
+                provenance=self.directx_resource_binding_provenance(node),
             )
             if resolved_binding != binding:
                 self.record_directx_resource_register_override(
@@ -14238,18 +14330,36 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             str(getattr(attr, "name", "")).lower()
             for attr in getattr(node, "attributes", []) or []
         }
-        return (
-            "binding" in attr_names
-            and "set" in attr_names
-            and "register" not in attr_names
-        )
+        if "register" in attr_names:
+            return False
+        if self.directx_relocatable_binding_annotation(node):
+            return True
+        return "binding" in attr_names and "set" in attr_names
+
+    def directx_relocatable_binding_annotation(self, node):
+        if not hasattr(node, "get_annotation"):
+            return False
+        return bool(node.get_annotation("directx.relocatable_binding", False))
 
     def reserve_relocatable_resource_register_range(
-        self, used_registers, register_prefix, preferred, count, name, space=None
+        self,
+        used_registers,
+        register_prefix,
+        preferred,
+        count,
+        name,
+        space=None,
+        provenance=None,
     ):
         try:
             self.reserve_resource_register_range(
-                used_registers, register_prefix, preferred, count, name, space
+                used_registers,
+                register_prefix,
+                preferred,
+                count,
+                name,
+                space,
+                provenance=provenance,
             )
             return preferred
         except ValueError:
@@ -14258,7 +14368,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 used_registers, register_prefix, cursor, space, count
             )
             self.reserve_resource_register_range(
-                used_registers, register_prefix, binding, count, name, space
+                used_registers,
+                register_prefix,
+                binding,
+                count,
+                name,
+                space,
+                provenance=provenance,
             )
             return binding
 
@@ -14279,7 +14395,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         while True:
             end = binding + count - 1
             conflict_end = None
-            for used_start, used_end, _ in ranges:
+            for used_start, used_end, *_ in ranges:
                 if binding <= used_end and used_start <= end:
                     conflict_end = (
                         used_end
@@ -14295,23 +14411,42 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         register_cursors[space] = max(register_cursors.get(space, 0), start + count)
 
     def reserve_resource_register_range(
-        self, used_registers, register_prefix, start, count, name, space=None
+        self,
+        used_registers,
+        register_prefix,
+        start,
+        count,
+        name,
+        space=None,
+        provenance=None,
     ):
         count = max(count or 1, 1)
         end = start + count - 1
         namespace = (register_prefix, space)
         ranges = used_registers.setdefault(namespace, [])
-        for used_start, used_end, used_name in ranges:
+        for used_record in ranges:
+            used_start, used_end, used_name = used_record[:3]
+            used_provenance = used_record[3] if len(used_record) > 3 else None
             if start <= used_end and used_start <= end:
                 if used_start == start and used_end == end and used_name == name:
                     return
+                provenance_details = self.resource_binding_conflict_provenance_details(
+                    name,
+                    provenance,
+                    used_name,
+                    used_provenance,
+                )
+                provenance_suffix = (
+                    f" ({provenance_details})" if provenance_details else ""
+                )
                 raise ValueError(
                     f"Conflicting DirectX resource binding for '{name}': "
                     f"{self.resource_register_range_label(register_prefix, start, end, space)} "
                     f"overlaps '{used_name}' "
                     f"{self.resource_register_range_label(register_prefix, used_start, used_end, space)}"
+                    f"{provenance_suffix}"
                 )
-        ranges.append((start, end, name))
+        ranges.append((start, end, name, provenance))
 
     def resource_register_range_label(self, register_prefix, start, end, space=None):
         if start == end:
@@ -14321,6 +14456,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if space:
             return f"{label}, {space}"
         return label
+
+    def resource_binding_conflict_provenance_details(
+        self, name, provenance, used_name, used_provenance
+    ):
+        details = []
+        if provenance:
+            details.append(f"{name}: {provenance}")
+        if used_provenance:
+            details.append(f"{used_name}: {used_provenance}")
+        return "; ".join(details)
 
     def literal_int_value(self, expr, constants=None):
         return evaluate_literal_int_expression(expr, constants)
@@ -14608,6 +14753,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if self.texture_resource_type(args[0]) is not None:
             return
         arg_type = self.expression_result_type(args[0])
+        if arg_type is None:
+            raise self.unresolved_source_resource_type_error(
+                func_name, args[0], "texture or image resource"
+            )
         if arg_type is not None and self.is_texture_or_image_type(arg_type):
             return
 
@@ -14615,6 +14764,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         raise ValueError(
             f"DirectX texture operation '{func_name}' requires a declared "
             f"texture or image resource argument: {texture_name}"
+        )
+
+    def unresolved_source_resource_type_error(self, func_name, arg, resource_role):
+        expression_name = expression_debug_name(arg)
+        function_name = self.current_function_name or "<global>"
+        return DirectXUnresolvedSourceTypeError(
+            "DirectX translation could not resolve source type metadata for "
+            f"{resource_role} argument '{expression_name}' used by operation "
+            f"'{func_name}' in function '{function_name}'. Declare or annotate "
+            "the source resource type before translating to DirectX."
         )
 
     def validate_image_resource_argument(self, func_name, args):
@@ -14625,6 +14784,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         texture_type = self.texture_argument_resource_type(args[0])
         if self.is_storage_image_resource_type(texture_type):
             return
+        arg_type = self.expression_result_type(args[0])
+        if texture_type is None and arg_type is None:
+            raise self.unresolved_source_resource_type_error(
+                func_name, args[0], "storage image resource"
+            )
         texture_name = self.expression_name(args[0]) or str(args[0])
         raise ValueError(
             f"DirectX image operation '{func_name}' requires a storage "
@@ -17915,9 +18079,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
         if isinstance(value, str):
             return value
-        if hasattr(value, "name"):
+        if hasattr(value, "name") and value.name is not None:
             return str(value.name)
-        if hasattr(value, "value"):
+        if hasattr(value, "value") and value.value is not None:
             return str(value.value).strip('"')
         return str(value)
 
@@ -18018,6 +18182,56 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if binding is not None:
                 return binding
         return None
+
+    def directx_resource_binding_provenance(self, node):
+        if hasattr(node, "get_annotation"):
+            provenance = node.get_annotation("directx.binding_provenance", None)
+            if provenance:
+                return str(provenance)
+
+        attribute_label = self.directx_resource_binding_attribute_label(node)
+        if attribute_label is None:
+            return None
+        declaration_label = self.directx_resource_declaration_label(node)
+        if declaration_label:
+            return f"{attribute_label} on {declaration_label}"
+        return attribute_label
+
+    def directx_resource_binding_attribute_label(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            arguments = getattr(attr, "arguments", []) or []
+            if not attr_name or not arguments:
+                continue
+            attr_name = str(attr_name).lower()
+            if attr_name not in {
+                "binding",
+                "buffer",
+                "register",
+                "sampler",
+                "texture",
+                "uav",
+            }:
+                continue
+            argument_text = ", ".join(
+                str(
+                    self.attribute_value_to_string(argument)
+                    or expression_debug_name(argument)
+                    or argument
+                )
+                for argument in arguments
+            )
+            return f"@{attr_name}({argument_text})"
+        return None
+
+    def directx_resource_declaration_label(self, node):
+        name = getattr(node, "name", getattr(node, "variable_name", None))
+        if not name:
+            return None
+        if isinstance(node, StructNode) or getattr(node, "is_cbuffer", False):
+            keyword = "tbuffer" if self.is_hlsl_tbuffer_node(node) else "cbuffer"
+            return f"{keyword} {name}"
+        return f"resource {name}"
 
     def directx_resource_register_override(self, node, register_prefixes=()):
         overrides = self.directx_resource_register_overrides.get(id(node), {})

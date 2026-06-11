@@ -31,10 +31,8 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
 EXPECTED_METAL_KERNEL_COUNT = 40
 ISSUE_OPENGL_TEMPLATE_TYPES = "https://github.com/CrossGL/crosstl/issues/888"
 ISSUE_OPENGL_SIMD_INTRINSICS = "https://github.com/CrossGL/crosstl/issues/889"
-ISSUE_DIRECTX_STEEL_TYPE_CRASHES = "https://github.com/CrossGL/crosstl/issues/890"
-ISSUE_DIRECTX_BINDINGS = "https://github.com/CrossGL/crosstl/issues/891"
-ISSUE_DIRECTX_GROUPSHARED_NAMES = "https://github.com/CrossGL/crosstl/issues/892"
-ISSUE_VULKAN_SORT_OVERLOADS = "https://github.com/CrossGL/crosstl/issues/893"
+ISSUE_DIRECTX_STEEL_SOURCE_TYPES = "https://github.com/CrossGL/crosstl/issues/915"
+ISSUE_VULKAN_SORT_OVERLOADS = "https://github.com/CrossGL/crosstl/issues/916"
 ISSUE_RUNTIME_MANIFEST = "https://github.com/CrossGL/crosstl/issues/894"
 ISSUE_RUNTIME_VERIFICATION = "https://github.com/CrossGL/crosstl/issues/895"
 
@@ -496,9 +494,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
         "trackedIssues": [
             ISSUE_OPENGL_TEMPLATE_TYPES,
             ISSUE_OPENGL_SIMD_INTRINSICS,
-            ISSUE_DIRECTX_STEEL_TYPE_CRASHES,
-            ISSUE_DIRECTX_BINDINGS,
-            ISSUE_DIRECTX_GROUPSHARED_NAMES,
+            ISSUE_DIRECTX_STEEL_SOURCE_TYPES,
             ISSUE_VULKAN_SORT_OVERLOADS,
             ISSUE_RUNTIME_MANIFEST,
             ISSUE_RUNTIME_VERIFICATION,

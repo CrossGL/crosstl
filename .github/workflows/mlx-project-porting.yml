@@ -5,10 +5,8 @@ env:
   MLX_COMMIT: "968d264f2903d578e699c4452a4dbf48633921aa"
   MLX_OPENGL_TEMPLATE_TYPES_ISSUE: "https://github.com/CrossGL/crosstl/issues/888"
   MLX_OPENGL_SIMD_INTRINSICS_ISSUE: "https://github.com/CrossGL/crosstl/issues/889"
-  MLX_DIRECTX_STEEL_TYPE_CRASHES_ISSUE: "https://github.com/CrossGL/crosstl/issues/890"
-  MLX_DIRECTX_BINDINGS_ISSUE: "https://github.com/CrossGL/crosstl/issues/891"
-  MLX_DIRECTX_GROUPSHARED_NAMES_ISSUE: "https://github.com/CrossGL/crosstl/issues/892"
-  MLX_VULKAN_SORT_OVERLOADS_ISSUE: "https://github.com/CrossGL/crosstl/issues/893"
+  MLX_DIRECTX_STEEL_SOURCE_TYPES_ISSUE: "https://github.com/CrossGL/crosstl/issues/915"
+  MLX_VULKAN_SORT_OVERLOADS_ISSUE: "https://github.com/CrossGL/crosstl/issues/916"
   PROJECT_RUNTIME_MANIFEST_ISSUE: "https://github.com/CrossGL/crosstl/issues/894"
   PROJECT_RUNTIME_VERIFICATION_ISSUE: "https://github.com/CrossGL/crosstl/issues/895"
 
