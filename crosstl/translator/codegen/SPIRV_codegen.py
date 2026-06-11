@@ -1511,34 +1511,39 @@ class VulkanSPIRVCodeGen:
                 values.append(target_member)
             return self.composite_construct(target_type, values)
 
-        if not self.aggregate_types_are_layout_compatible(source_type, target_type):
-            return None
-
-        source_array = self.array_type_info_from_type(source_type)
-        target_array = self.array_type_info_from_type(target_type)
-        if source_array is not None or target_array is not None:
-            if source_array is None or target_array is None:
-                return None
-            source_element_type, source_size = source_array
-            target_element_type, target_size = target_array
-            if source_size is None or target_size is None or source_size != target_size:
-                return None
-
-            elements = []
-            for index in range(int(target_size)):
-                source_element = self.composite_extract(
-                    value_id, source_element_type, index
-                )
-                target_element = self.convert_value_to_type(
-                    source_element, target_element_type
-                )
-                if not self.value_has_type(target_element, target_element_type):
-                    return None
-                elements.append(target_element)
-            return self.composite_construct(target_type, elements)
-
         if source_members is None or target_members is None:
+            if not self.aggregate_types_are_layout_compatible(source_type, target_type):
+                return None
+
+            source_array = self.array_type_info_from_type(source_type)
+            target_array = self.array_type_info_from_type(target_type)
+            if source_array is not None or target_array is not None:
+                if source_array is None or target_array is None:
+                    return None
+                source_element_type, source_size = source_array
+                target_element_type, target_size = target_array
+                if (
+                    source_size is None
+                    or target_size is None
+                    or source_size != target_size
+                ):
+                    return None
+
+                elements = []
+                for index in range(int(target_size)):
+                    source_element = self.composite_extract(
+                        value_id, source_element_type, index
+                    )
+                    target_element = self.convert_value_to_type(
+                        source_element, target_element_type
+                    )
+                    if not self.value_has_type(target_element, target_element_type):
+                        return None
+                    elements.append(target_element)
+                return self.composite_construct(target_type, elements)
+
             return None
+
         if len(source_members) != len(target_members):
             return None
 

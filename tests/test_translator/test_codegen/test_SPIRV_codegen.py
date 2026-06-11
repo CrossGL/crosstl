@@ -1995,6 +1995,62 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_complex_helper_call_converts_materialized_struct_alias_argument(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ComplexHelperAliasCall {
+            struct complex64_t {
+                float real;
+                float imag;
+            }
+
+            struct MaterializedComplex {
+                float real;
+                float imag;
+            }
+
+            compute {
+                complex64_t passComplex(complex64_t value) {
+                    return value;
+                }
+
+                MaterializedComplex chooseAlias(bool flag) {
+                    MaterializedComplex first;
+                    MaterializedComplex second;
+                    return flag ? first : second;
+                }
+
+                void main() {
+                    MaterializedComplex values[2];
+                    complex64_t fromArray = passComplex(values[0]);
+                    complex64_t fromHelper = passComplex(chooseAlias(true));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        complex_type = spirv_named_id(spv_code, "complex64_t")
+        alias_type = spirv_named_id(spv_code, "MaterializedComplex")
+
+        assert complex_type is not None
+        assert alias_type is not None
+        assert re.search(
+            rf"%\d+ = OpLoad {re.escape(alias_type)} %\d+\n"
+            rf"(?:%\d+ = OpCompositeExtract %\d+ %\d+ \d+\n)+"
+            rf"(?P<converted>%\d+) = OpCompositeConstruct "
+            rf"{re.escape(complex_type)} %\d+ %\d+\n"
+            rf"%\d+ = OpFunctionCall {re.escape(complex_type)} %\d+ "
+            rf"(?P=converted)",
+            spv_code,
+        )
+        assert_spirv_function_calls_use_declared_parameter_types(spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_generic_functions_specialize_concrete_calls(self):
         source_code = """
         shader GenericFunctionDiagnostic {
