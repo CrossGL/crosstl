@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/vulkan/reduce.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 14,
+        "endLine": 13559,
+        "endOffset": 399285,
+        "file": "crosstl-out/vulkan/reduce.spvasm",
+        "length": 399285,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 103,
+        "endOffset": 3018,
+        "file": "reduce.cl",
+        "length": 3018,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}
