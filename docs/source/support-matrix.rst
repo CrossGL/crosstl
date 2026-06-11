@@ -40,7 +40,7 @@ implicitly supported.
    "DirectX / HLSL", "66", "0", "2", "0", "0", "0"
    "OpenGL / GLSL", "66", "0", "2", "0", "0", "0"
    "WebGL / GLSL ES", "37", "0", "22", "9", "0", "0"
-   "WebGPU / WGSL", "51", "0", "10", "7", "0", "0"
+   "WebGPU / WGSL", "52", "0", "9", "7", "0", "0"
    "Metal", "65", "0", "3", "0", "0", "0"
    "Vulkan SPIR-V", "66", "0", "2", "0", "0", "0"
    "CUDA", "61", "0", "7", "0", "0", "0"
@@ -153,7 +153,7 @@ Each category below uses the status codes from the legend.
 .. csv-table:: images
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "WebGPU / WGSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
-   "Storage image load/store", "Y", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Storage image load/store", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Image atomics", "Y", "Y", "D", "D", "Y", "Y", "D", "D", "Y", "Y", "Y"
    "Multisample storage images", "D", "Y", "D", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 

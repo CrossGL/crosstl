@@ -3634,10 +3634,16 @@
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "supported",
+          "notes": "Covers storage image load/store lowering to textureLoad/textureStore, write-only and inferred read/write access modes, storage cube images as array storage textures, complex shader storage-image contracts, and deterministic diagnostics for unsupported formats or missing access metadata.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_writeonly_uimage2d_to_storage_texture_store",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_infers_image2d_write_access_from_image_store",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_infers_image2d_read_access_from_image_load",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_imagecube_to_storage_texture_array",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_storage_image_without_representable_format",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_storage_image_without_access_metadata",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_translates_complex_shader_storage_image_contract"
           ]
         }
       }
