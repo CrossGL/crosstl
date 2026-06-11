@@ -522,7 +522,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 500,
+        "unsupported_marker_count": 509,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -615,7 +615,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1010
+        "test_count": 1011
       },
       "translator_codegen": {
         "exists": true,
