@@ -1102,9 +1102,7 @@ METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION = "max_template_specializations"
 METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION = (
     "template_specialization_limit_source"
 )
-METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION = (
-    "max_template_materialization_work"
-)
+METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_OPTION = "max_template_materialization_work"
 METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION = (
     "template_materialization_work_limit_source"
 )
@@ -9352,9 +9350,7 @@ class _MetalTemplateMaterializationWorkBudget:
             if self.unit is not None
             else None
         )
-        requested_signature = (
-            f"{self.pass_name}: {self.used} work items for {context}"
-        )
+        requested_signature = f"{self.pass_name}: {self.used} work items for {context}"
         suggested_action = (
             "raise max_template_materialization_work for this source pattern "
             "or backend, reduce implicit Metal template helper fan-out, or add "

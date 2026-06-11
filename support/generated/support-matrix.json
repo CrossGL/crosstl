@@ -399,7 +399,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 93,
+        "unsupported_marker_count": 95,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/wgsl_codegen.py",
@@ -493,7 +493,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 153
+        "test_count": 156
       },
       "translator_codegen": {
         "exists": true,
@@ -1337,16 +1337,7 @@
       "category": "resources",
       "feature": "Resource arrays",
       "feature_id": "resources.resource_arrays",
-      "notes": "WGSL partially supports resource arrays by expanding fixed sampled texture arrays into individual module-scope texture/sampler bindings, including dynamic-index switch helpers and selected function-call dispatch. Other resource-array forms remain diagnostic: sampler-only arrays, storage-image arrays, StructuredBuffer/RWStructuredBuffer arrays, unsized sampled texture arrays, multisampled array texture resources, and resource-array parameters.",
-      "status": "partial"
-    },
-    {
-      "backend": "WebGPU / WGSL",
-      "backend_id": "wgsl",
-      "category": "language",
-      "feature": "Array declarations and access",
-      "feature_id": "language.arrays",
-      "notes": "WGSL lowers fixed arrays in storage/workgroup resources, uniform/cbuffer structs with scalar-array padding, stage-interface array members via scalarized locations, and runtime-sized arrays in storage-buffer blocks. Uniform runtime arrays and unsupported buffer-block array shapes emit deterministic diagnostics. Ordinary value-array parameters and array-return behavior still need focused WGSL evidence before marking fully supported.",
+      "notes": "WGSL partially supports resource arrays by expanding fixed sampled texture arrays into individual module-scope texture/sampler bindings, including dynamic-index switch helpers and selected function-call dispatch. Other resource-array forms remain diagnostic: sampler-only arrays, storage-image arrays, StructuredBuffer/RWStructuredBuffer arrays, arrays of resource-bearing structs, unsized sampled texture arrays, multisampled array texture resources, and resource-array parameters.",
       "status": "partial"
     }
   ],
@@ -3438,9 +3429,10 @@
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_covers_universal_pbr_fragment_shadow_map_array",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_resource_array_declarations",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_resource_array_parameters",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_resource_bearing_struct_arrays",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_multisampled_array_texture_resources"
           ],
-          "notes": "WGSL partially supports resource arrays by expanding fixed sampled texture arrays into individual module-scope texture/sampler bindings, including dynamic-index switch helpers and selected function-call dispatch. Other resource-array forms remain diagnostic: sampler-only arrays, storage-image arrays, StructuredBuffer/RWStructuredBuffer arrays, unsized sampled texture arrays, multisampled array texture resources, and resource-array parameters.",
+          "notes": "WGSL partially supports resource arrays by expanding fixed sampled texture arrays into individual module-scope texture/sampler bindings, including dynamic-index switch helpers and selected function-call dispatch. Other resource-array forms remain diagnostic: sampler-only arrays, storage-image arrays, StructuredBuffer/RWStructuredBuffer arrays, arrays of resource-bearing structs, unsized sampled texture arrays, multisampled array texture resources, and resource-array parameters.",
           "status": "partial"
         }
       }
@@ -5444,14 +5436,16 @@
         "wgsl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_stage_interface_array_members",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_value_array_parameters_and_returns",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_mutating_value_array_parameters",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_emits_resource_address_spaces_and_bindings",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_pads_uniform_struct_scalar_arrays",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_glsl_buffer_blocks_to_storage_struct_bindings",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsized_array_members_in_uniform_buffers"
           ],
-          "notes": "WGSL lowers fixed arrays in storage/workgroup resources, uniform/cbuffer structs with scalar-array padding, stage-interface array members via scalarized locations, and runtime-sized arrays in storage-buffer blocks. Uniform runtime arrays and unsupported buffer-block array shapes emit deterministic diagnostics. Ordinary value-array parameters and array-return behavior still need focused WGSL evidence before marking fully supported.",
-          "status": "partial"
+          "notes": "WGSL lowers fixed local arrays, non-mutating value-array parameters and returns, fixed arrays in storage/workgroup resources, uniform/cbuffer structs with scalar-array padding, stage-interface array members via scalarized locations, and runtime-sized arrays in storage-buffer blocks. Assignment through by-value array parameters, uniform runtime arrays, and unsupported buffer-block array shapes emit deterministic diagnostics.",
+          "status": "supported"
         }
       }
     },
@@ -15475,7 +15469,7 @@
   },
   "summary": {
     "backend_count": 11,
-    "backlog_count": 2,
+    "backlog_count": 1,
     "feature_count": 68,
     "status_counts": {
       "cuda": {
@@ -15560,8 +15554,8 @@
       },
       "wgsl": {
         "diagnostic": 7,
-        "partial": 2,
-        "supported": 52,
+        "partial": 1,
+        "supported": 53,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 7

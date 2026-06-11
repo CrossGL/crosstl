@@ -25,7 +25,7 @@ implicitly supported.
    "DirectX / HLSL", "dx11, dx12, d3d11, d3d12", "directx-11, directx-12", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "native", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "1114", "297", "Microsoft Learn HLSL reference; HLSL specification project"
    "OpenGL / GLSL", "", "", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "native", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "1188", "186", "GLSL 4.60 specification; OpenGL registry"
    "WebGL / GLSL ES", "webgl2, essl, glsl-es", "", ".webgl.glsl", "crosstl/translator/codegen/webgl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_webgl_codegen.py", "43", "43", "WebGL 2.0 specification; OpenGL ES Shading Language 3.00 specification"
-   "WebGPU / WGSL", "webgpu", "", ".wgsl", "crosstl/translator/codegen/wgsl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_wgsl_codegen.py", "153", "93", "WGSL specification; WebGPU specification"
+   "WebGPU / WGSL", "webgpu", "", ".wgsl", "crosstl/translator/codegen/wgsl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_wgsl_codegen.py", "156", "95", "WGSL specification; WebGPU specification"
    "Metal", "", "", ".metal", "crosstl/translator/codegen/metal_codegen.py", "native", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "1006", "499", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", "", "", ".spvasm", "crosstl/translator/codegen/SPIRV_codegen.py", "native", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "1008", "45", "SPIR-V unified grammar; Khronos SPIR-V headers"
    "CUDA", "", "", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "native", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "780", "194", "CUDA C++ programming guide"
@@ -40,7 +40,7 @@ implicitly supported.
    "DirectX / HLSL", "66", "0", "2", "0", "0", "0"
    "OpenGL / GLSL", "66", "0", "2", "0", "0", "0"
    "WebGL / GLSL ES", "37", "0", "22", "9", "0", "0"
-   "WebGPU / WGSL", "52", "2", "7", "7", "0", "0"
+   "WebGPU / WGSL", "53", "1", "7", "7", "0", "0"
    "Metal", "65", "0", "3", "0", "0", "0"
    "Vulkan SPIR-V", "66", "0", "2", "0", "0", "0"
    "CUDA", "61", "0", "7", "0", "0", "0"
@@ -161,7 +161,7 @@ Each category below uses the status codes from the legend.
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "WebGPU / WGSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
    "Struct declarations and construction", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Array declarations and access", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Array declarations and access", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Function declarations and calls", "Y", "Y", "Y", "Y", "Y", "D", "D", "D", "D", "Y", "D"
    "Control flow", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Synchronization and memory barriers", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
@@ -217,8 +217,7 @@ implementation work can be scoped accurately.
 .. csv-table:: Actionable backlog rows
    :header: "Backend", "Category", "Feature", "Status", "Current gap", "Next scope", "Notes"
 
-   "WebGPU / WGSL", "resources", "Resource arrays", "partial", "WGSL partially supports resource arrays by expanding fixed sampled texture arrays into individual module-scope texture/sampler bindings, including dynamic-index switch helpers and selected function-call dispatch. Other resource-array forms remain diagnostic: sampler-only arrays, storage-image arrays, StructuredBuffer/RWStructuredBuffer arrays, unsized sampled texture arrays, multisampled array texture resources, and resource-array parameters.", "", "WGSL partially supports resource arrays by expanding fixed sampled texture arrays into individual module-scope texture/sampler bindings, including dynamic-index switch helpers and selected function-call dispatch. Other resource-array forms remain diagnostic: sampler-only arrays, storage-image arrays, StructuredBuffer/RWStructuredBuffer arrays, unsized sampled texture arrays, multisampled array texture resources, and resource-array parameters."
-   "WebGPU / WGSL", "language", "Array declarations and access", "partial", "WGSL lowers fixed arrays in storage/workgroup resources, uniform/cbuffer structs with scalar-array padding, stage-interface array members via scalarized locations, and runtime-sized arrays in storage-buffer blocks. Uniform runtime arrays and unsupported buffer-block array shapes emit deterministic diagnostics. Ordinary value-array parameters and array-return behavior still need focused WGSL evidence before marking fully supported.", "", "WGSL lowers fixed arrays in storage/workgroup resources, uniform/cbuffer structs with scalar-array padding, stage-interface array members via scalarized locations, and runtime-sized arrays in storage-buffer blocks. Uniform runtime arrays and unsupported buffer-block array shapes emit deterministic diagnostics. Ordinary value-array parameters and array-return behavior still need focused WGSL evidence before marking fully supported."
+   "WebGPU / WGSL", "resources", "Resource arrays", "partial", "WGSL partially supports resource arrays by expanding fixed sampled texture arrays into individual module-scope texture/sampler bindings, including dynamic-index switch helpers and selected function-call dispatch. Other resource-array forms remain diagnostic: sampler-only arrays, storage-image arrays, StructuredBuffer/RWStructuredBuffer arrays, arrays of resource-bearing structs, unsized sampled texture arrays, multisampled array texture resources, and resource-array parameters.", "", "WGSL partially supports resource arrays by expanding fixed sampled texture arrays into individual module-scope texture/sampler bindings, including dynamic-index switch helpers and selected function-call dispatch. Other resource-array forms remain diagnostic: sampler-only arrays, storage-image arrays, StructuredBuffer/RWStructuredBuffer arrays, arrays of resource-bearing structs, unsized sampled texture arrays, multisampled array texture resources, and resource-array parameters."
 
 Documentation Sources
 ---------------------

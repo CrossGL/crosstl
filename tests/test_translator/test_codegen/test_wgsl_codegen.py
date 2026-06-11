@@ -630,6 +630,88 @@ def test_wgsl_codegen_lowers_stage_interface_array_members():
     assert "input.coords_1" in generated
 
 
+def test_wgsl_codegen_lowers_value_array_parameters_and_returns(tmp_path):
+    shader = """
+    shader WGSLValueArrays {
+        float pick(float values[3], int index) {
+            return values[index];
+        }
+
+        float[3] makeValues(float x) {
+            float values[3] = {x, x + 1.0, x + 2.0};
+            return values;
+        }
+
+        fragment {
+            vec4 main(float x @ TEXCOORD0) @ gl_FragColor {
+                float values[3] = makeValues(x);
+                return vec4(pick(values, 1));
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "fn pick(values: array<f32, 3>, index: i32) -> f32" in generated
+    assert "fn makeValues(x: f32) -> array<f32, 3>" in generated
+    assert "var values: array<f32, 3> = array(x, (x + 1.0), (x + 2.0));" in generated
+    assert "var values: array<f32, 3> = makeValues(x);" in generated
+    assert "return values;" in generated
+    assert "return vec4<f32>(pick(values, 1));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_rejects_mutating_value_array_parameters():
+    shader = """
+    shader WGSLMutatingArrayParameter {
+        float writeArray(float values[4], int index) {
+            values[index] = 9.0;
+            return values[index];
+        }
+
+        fragment {
+            vec4 main(float x @ TEXCOORD0) @ gl_FragColor {
+                float values[4] = {x, x + 1.0, x + 2.0, x + 3.0};
+                return vec4(writeArray(values, 1));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="WGSL target does not support assignment through by-value array parameter values",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_resource_bearing_struct_arrays():
+    shader = """
+    shader WGSLResourceBearingStructArray {
+        struct Material {
+            sampler2D colorTex;
+            float tint;
+        };
+        sampler linearSampler;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                Material materials[2];
+                return texture(materials[0].colorTex, linearSampler, uv);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WGSL target does not support arrays of resource-bearing struct " "Material"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_maps_derivative_intrinsics():
     shader = """
     shader WGSLDerivatives {

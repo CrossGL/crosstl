@@ -735,6 +735,7 @@ class WGSLCodeGen:
         self._identifier_scopes = []
         self._identifier_alias_scopes = []
         self._pointer_identifier_scopes = []
+        self._immutable_array_parameter_scopes = []
         self._value_type_scopes = []
         self._resource_alias_scopes = []
         self._module_identifier_names = {}
@@ -786,6 +787,7 @@ class WGSLCodeGen:
         self._identifier_scopes = []
         self._identifier_alias_scopes = []
         self._pointer_identifier_scopes = []
+        self._immutable_array_parameter_scopes = []
         self._value_type_scopes = []
         self._resource_alias_scopes = []
         self._function_return_types = {}
@@ -1644,6 +1646,9 @@ class WGSLCodeGen:
                 f"{prefix}{parameter_name}: "
                 f"{self.buffer_pointer_parameter_type(node.param_type)}"
             )
+        self.validate_not_resource_bearing_struct_array(
+            node.param_type, f"parameter {node.name}"
+        )
         parameter = (
             f"{prefix}{parameter_name}: {self.type_name_string(node.param_type)}"
         )
@@ -2322,6 +2327,9 @@ class WGSLCodeGen:
                 "each texture, sampler, image, and storage-buffer element to be "
                 "expanded to individual module-scope bindings"
             )
+        self.validate_not_resource_bearing_struct_array(
+            node.var_type, f"global variable {node.name}"
+        )
         sampled_texture_type = self.sampled_texture_type(node.var_type)
         if sampled_texture_type is not None:
             return self.generate_sampled_texture_global_variable(
@@ -2642,6 +2650,9 @@ class WGSLCodeGen:
         if isinstance(stmt, VariableNode):
             mutable_keyword = "var" if stmt.is_mutable else "let"
             var_type = self.local_variable_declaration_type(stmt)
+            self.validate_not_resource_bearing_struct_array(
+                var_type, f"local variable {stmt.name}"
+            )
             initializer = ""
             if stmt.initial_value is not None:
                 initializer = " = " + self.generate_expression_for_target(
@@ -5225,14 +5236,22 @@ class WGSLCodeGen:
 
     def validate_not_resource_array(self, vtype):
         resource_type = self.resource_array_element_type_name(vtype)
-        if resource_type is None:
-            return
-        raise ValueError(
-            "WGSL target does not support resource arrays of "
-            f"{resource_type}; WebGPU/WGSL requires texture, sampler, image, "
-            "and storage-buffer resources to be declared as individual "
-            "module-scope bindings"
-        )
+        if resource_type is not None:
+            raise ValueError(
+                "WGSL target does not support resource arrays of "
+                f"{resource_type}; WebGPU/WGSL requires texture, sampler, image, "
+                "and storage-buffer resources to be declared as individual "
+                "module-scope bindings"
+            )
+
+    def validate_not_resource_bearing_struct_array(self, vtype, owner):
+        struct_type = self.resource_bearing_struct_array_element_name(vtype)
+        if struct_type is not None:
+            raise ValueError(
+                "WGSL target does not support arrays of resource-bearing struct "
+                f"{struct_type} in {owner}; WebGPU/WGSL requires resource member "
+                "elements to be expanded to individual module-scope bindings"
+            )
 
     def resource_array_element_type_name(self, vtype):
         if not isinstance(vtype, ArrayType):
@@ -5244,6 +5263,17 @@ class WGSLCodeGen:
         if resource_type is not None and self.is_resource_type_name(resource_type):
             return self.type_display_name(element_type)
         return self.storage_buffer_like_type_name(element_type)
+
+    def resource_bearing_struct_array_element_name(self, vtype):
+        if not isinstance(vtype, ArrayType):
+            return None
+        element_type = self.array_element_type(vtype)
+        struct_name = self.struct_type_name(element_type)
+        if not struct_name:
+            return None
+        if self.resource_paths_for_type(element_type):
+            return struct_name
+        return None
 
     def type_display_name(self, vtype):
         if isinstance(vtype, NamedType):
@@ -6450,7 +6480,25 @@ class WGSLCodeGen:
                 else parameter.param_type
             )
             self.register_value_type(parameter.name, value_type)
+            if self.is_by_value_array_parameter(parameter):
+                self.register_immutable_array_parameter(parameter.name)
             self.register_parameter_resource_aliases(parameter)
+
+    def is_by_value_array_parameter(self, parameter):
+        return isinstance(getattr(parameter, "param_type", None), ArrayType)
+
+    def register_immutable_array_parameter(self, name):
+        if self._immutable_array_parameter_scopes and name:
+            self._immutable_array_parameter_scopes[-1].add(name)
+
+    def is_immutable_array_parameter_identifier(self, name):
+        for identifiers, array_parameters in zip(
+            reversed(self._identifier_scopes),
+            reversed(self._immutable_array_parameter_scopes),
+        ):
+            if name in identifiers:
+                return name in array_parameters
+        return False
 
     def register_parameter_resource_aliases(self, parameter):
         for info in self.resource_paths_for_type(parameter.param_type):
@@ -6510,6 +6558,12 @@ class WGSLCodeGen:
             raise ValueError(
                 "WGSL target cannot write read-only GLSL buffer block resource "
                 f"{root_name}"
+            )
+        if self.is_immutable_array_parameter_identifier(root_name):
+            raise ValueError(
+                "WGSL target does not support assignment through by-value array "
+                f"parameter {root_name}; copy it to a local array before mutation "
+                "or pass a storage/workgroup pointer"
             )
 
     def resource_member_parameter_declarations(self, root_name, root_type):
@@ -7299,12 +7353,14 @@ class WGSLCodeGen:
         names = [name for name in names if name]
         self._identifier_scopes.append(set(names))
         self._identifier_alias_scopes.append(self.wgsl_identifier_map(names))
+        self._immutable_array_parameter_scopes.append(set())
         self._value_type_scopes.append({})
         self._resource_alias_scopes.append({})
 
     def pop_identifier_scope(self):
         self._identifier_scopes.pop()
         self._identifier_alias_scopes.pop()
+        self._immutable_array_parameter_scopes.pop()
         self._value_type_scopes.pop()
         self._resource_alias_scopes.pop()
 
