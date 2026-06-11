@@ -13555,6 +13555,71 @@ def test_translate_project_rust_option_helpers_lower_to_opengl_compute(tmp_path)
     assert_compute_glsl_validates_if_available(opengl_output, tmp_path)
 
 
+def test_translate_project_rust_option_helpers_lower_to_wgsl_compute(tmp_path):
+    repo = tmp_path / "repo"
+    source_dir = repo / "src"
+    source_dir.mkdir(parents=True)
+    (source_dir / "collatz.rs").write_text(
+        textwrap.dedent("""
+            fn collatz(n: u32) -> Option<u32> {
+                if n == 0u32 {
+                    return None;
+                }
+                return Some(n);
+            }
+
+            fn read_option(item: Option<u32>) -> u32 {
+                match item {
+                    Some(value) => { return value; },
+                    None => { return 0u32; }
+                }
+            }
+
+            #[spirv(compute(threads(1, 1, 1)))]
+            pub fn main() {
+                let value = read_option(collatz(7u32));
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["src"]
+            targets = ["wgsl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    wgsl_output = (repo / "translated" / "wgsl" / "src" / "collatz.wgsl").read_text(
+        encoding="utf-8"
+    )
+
+    assert validation["success"] is True
+    assert payload["summary"]["translatedCount"] == 1
+    assert "struct Option_u32" in wgsl_output
+    assert "fn Option_u32_Some_make(payload0: u32) -> Option_u32" in wgsl_output
+    assert "fn Option_u32_None_make() -> Option_u32" in wgsl_output
+    assert "fn collatz(n: u32) -> Option_u32" in wgsl_output
+    assert "fn read_option(item: Option_u32) -> u32" in wgsl_output
+    assert "return Option_u32_None_make();" in wgsl_output
+    assert "return Option_u32_Some_make(n);" in wgsl_output
+    assert "var value: u32 = item.Some_0;" in wgsl_output
+    assert "(item.variant == Option_None)" in wgsl_output
+    assert "Option<" not in wgsl_output
+    assert "Option::" not in wgsl_output
+    assert re.search(r"\bSome\s*\(", wgsl_output) is None
+    assert "return None;" not in wgsl_output
+    assert "== None" not in wgsl_output
+    assert "auto value" not in wgsl_output
+
+
 def test_validate_project_report_rejects_artifacts_with_undeclared_variants(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
