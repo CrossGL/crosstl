@@ -9986,6 +9986,67 @@ def _translation_failure_missing_capabilities(
     return ["batch.translation"]
 
 
+def _translation_failure_project_diagnostics(
+    exc: Exception,
+    target: str,
+    unit: ProjectTranslationUnit,
+    variant: str | None,
+    message: str,
+) -> list[ProjectDiagnostic]:
+    contracts = getattr(exc, "contracts", None)
+    if contracts:
+        diagnostics: list[ProjectDiagnostic] = []
+        location = _translation_failure_location(exc, unit)
+        for contract in contracts:
+            code = getattr(contract, "code", None)
+            if not _is_non_empty_string(code):
+                code = _translation_failure_code(exc, target)
+            format_message = getattr(contract, "format_project_message", None)
+            if callable(format_message):
+                diagnostic_message = format_message(target)
+            else:
+                diagnostic_message = str(contract)
+            capabilities = getattr(contract, "missing_capabilities", None)
+            if isinstance(capabilities, str):
+                missing_capabilities = [capabilities]
+            elif capabilities:
+                missing_capabilities = [
+                    str(capability) for capability in capabilities
+                ]
+            else:
+                missing_capabilities = _translation_failure_missing_capabilities(
+                    exc, target
+                )
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="error",
+                    code=code,
+                    message=diagnostic_message,
+                    location=location,
+                    target=target,
+                    source_backend=unit.source_backend,
+                    variant=variant,
+                    missing_capabilities=missing_capabilities,
+                )
+            )
+        return diagnostics
+
+    return [
+        ProjectDiagnostic(
+            severity="error",
+            code=_translation_failure_code(exc, target),
+            message=message,
+            location=_translation_failure_location(exc, unit),
+            target=target,
+            source_backend=unit.source_backend,
+            variant=variant,
+            missing_capabilities=_translation_failure_missing_capabilities(
+                exc, target
+            ),
+        )
+    ]
+
+
 def _is_metal_template_failure(exc: Exception, unit: ProjectTranslationUnit) -> bool:
     return (
         unit.source_backend == "metal"
@@ -10436,18 +10497,13 @@ def translate_project(
                     )
                     artifact["status"] = "failed"
                     artifact["error"] = failure_message
-                    diagnostics.append(
-                        ProjectDiagnostic(
-                            severity="error",
-                            code=_translation_failure_code(exc, target),
-                            message=failure_message,
-                            location=_translation_failure_location(exc, unit),
-                            target=target,
-                            source_backend=unit.source_backend,
-                            variant=variant,
-                            missing_capabilities=_translation_failure_missing_capabilities(
-                                exc, target
-                            ),
+                    diagnostics.extend(
+                        _translation_failure_project_diagnostics(
+                            exc,
+                            target,
+                            unit,
+                            variant,
+                            failure_message,
                         )
                     )
                     artifacts.append(artifact)
@@ -10532,18 +10588,13 @@ def translate_project(
                     artifact.pop("sourceMap", None)
                     artifact.pop("sourceRemap", None)
                     artifact_records = [artifact]
-                    diagnostics.append(
-                        ProjectDiagnostic(
-                            severity="error",
-                            code=_translation_failure_code(exc, target),
-                            message=failure_message,
-                            location=_translation_failure_location(exc, unit),
-                            target=target,
-                            source_backend=unit.source_backend,
-                            variant=variant,
-                            missing_capabilities=_translation_failure_missing_capabilities(
-                                exc, target
-                            ),
+                    diagnostics.extend(
+                        _translation_failure_project_diagnostics(
+                            exc,
+                            target,
+                            unit,
+                            variant,
+                            failure_message,
                         )
                     )
                 finally:

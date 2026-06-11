@@ -1,5 +1,7 @@
 """OpenCL-specific CrossGL AST lowering for target backend code generation."""
 
+from dataclasses import dataclass
+
 from crosstl.translator.ast import (
     ArrayType,
     AttributeNode,
@@ -18,6 +20,9 @@ from crosstl.translator.ast import (
 )
 
 OPENCL_TARGET_UNSUPPORTED_CODE = "opencl.target.unsupported"
+OPENCL_TARGET_UNRESOLVED_HELPER_CODE = "opencl.target.unresolved-helper"
+OPENCL_TARGET_POINTER_HELPER_CODE = "opencl.target.pointer-helper-parameter"
+OPENCL_TARGET_BUILTIN_CODE = "opencl.target.unsupported-builtin"
 DIRECTX_BINDING_PROVENANCE_ANNOTATION = "directx.binding_provenance"
 DIRECTX_RELOCATABLE_BINDING_ANNOTATION = "directx.relocatable_binding"
 _TARGET_SCALAR_TYPE_ALIASES = {
@@ -41,6 +46,45 @@ _SYNTHETIC_BUILTIN_ALIASES = {
 
 class OpenCLTargetUnsupportedError(ValueError):
     """Raised when OpenCL target lowering would emit invalid target code."""
+
+    project_diagnostic_code = OPENCL_TARGET_UNSUPPORTED_CODE
+    missing_capabilities = ("opencl.target-lowering",)
+
+    def __init__(self, message, *, contracts=()):
+        super().__init__(message)
+        self.contracts = tuple(contracts)
+
+
+@dataclass(frozen=True)
+class OpenCLTargetUnsupportedContract:
+    """One unsupported OpenCL contract discovered before target codegen."""
+
+    code: str
+    kind: str
+    name: str
+    signature: str
+    reason: str
+    action: str
+    missing_capabilities: tuple[str, ...]
+
+    def format_project_message(self, target_backend=None):
+        target = _target_backend_label(target_backend)
+        subject = self.signature or self.name
+        return (
+            f"OpenCL target lowering cannot lower {subject} to {target}: "
+            f"{self.reason}. Suggested action: {self.action}"
+        )
+
+    def to_json(self):
+        return {
+            "code": self.code,
+            "kind": self.kind,
+            "name": self.name,
+            "signature": self.signature,
+            "reason": self.reason,
+            "action": self.action,
+            "missingCapabilities": list(self.missing_capabilities),
+        }
 
 
 def _target_backend_label(target_backend):
@@ -96,6 +140,16 @@ def _pointer_parameter_labels(function):
     return labels
 
 
+def _function_signature_label(function):
+    params = []
+    for parameter in getattr(function, "parameters", []) or []:
+        params.append(f"{parameter.name}: {_type_label(parameter.param_type)}")
+    return (
+        f"{function.name}({', '.join(params)}) -> "
+        f"{_type_label(function.return_type)}"
+    )
+
+
 def _function_call_name(call):
     function = getattr(call, "function", None)
     if isinstance(function, IdentifierNode):
@@ -119,9 +173,7 @@ def _format_list(values):
     return ", ".join(sorted(set(values)))
 
 
-def validate_opencl_intermediate_for_target(cgl_ast, target_backend=None):
-    """Reject OpenCL intermediates that target codegen cannot lower correctly."""
-
+def _opencl_target_contracts(cgl_ast):
     functions = [
         function
         for function in getattr(cgl_ast, "functions", []) or []
@@ -131,10 +183,84 @@ def validate_opencl_intermediate_for_target(cgl_ast, target_backend=None):
     for function in functions:
         called_names.update(_collect_called_function_names(function))
 
-    unsupported = []
+    contracts = []
+    for function in functions:
+        if not _is_empty_nonvoid_function(function):
+            continue
+        contracts.append(
+            OpenCLTargetUnsupportedContract(
+                code=OPENCL_TARGET_UNRESOLVED_HELPER_CODE,
+                kind="unresolved-helper-declaration",
+                name=function.name,
+                signature=_function_signature_label(function),
+                reason=(
+                    "non-void helper declaration has no body, so reduction "
+                    "semantics would be lost before target codegen"
+                ),
+                action=(
+                    "provide an OpenCL helper body, materialize a known reduction "
+                    "helper specialization, or keep the source on an OpenCL path"
+                ),
+                missing_capabilities=("opencl.helper-resolution",),
+            )
+        )
 
+    for function in functions:
+        labels = _pointer_parameter_labels(function)
+        for label in labels:
+            contracts.append(
+                OpenCLTargetUnsupportedContract(
+                    code=OPENCL_TARGET_POINTER_HELPER_CODE,
+                    kind="pointer-helper-parameter",
+                    name=function.name,
+                    signature=f"{function.name}({label})",
+                    reason=(
+                        "helper pointer parameters do not preserve OpenCL "
+                        "address-space and local-memory aliasing semantics in "
+                        "target codegen"
+                    ),
+                    action=(
+                        "rewrite the helper as kernel-local logic, pass scalar "
+                        "values explicitly, or keep the source on an OpenCL path"
+                    ),
+                    missing_capabilities=("opencl.local-pointer-helper",),
+                )
+            )
+
+    for builtin_name in sorted(called_names.intersection(_EVENT_LOCAL_MEMORY_BUILTINS)):
+        contracts.append(
+            OpenCLTargetUnsupportedContract(
+                code=OPENCL_TARGET_BUILTIN_CODE,
+                kind="event-local-memory-builtin",
+                name=builtin_name,
+                signature=f"{builtin_name}(...)",
+                reason=(
+                    "event/local-memory builtin semantics are not preserved by "
+                    "target lowering"
+                ),
+                action=(
+                    "replace the builtin with explicit target synchronization and "
+                    "copy logic, or keep the source on an OpenCL path"
+                ),
+                missing_capabilities=("opencl.event-local-memory",),
+            )
+        )
+
+    return tuple(contracts)
+
+
+def validate_opencl_intermediate_for_target(cgl_ast, target_backend=None):
+    """Reject OpenCL intermediates that target codegen cannot lower correctly."""
+
+    contracts = _opencl_target_contracts(cgl_ast)
+    if not contracts:
+        return
+
+    unsupported = []
     empty_helpers = [
-        function.name for function in functions if _is_empty_nonvoid_function(function)
+        contract.name
+        for contract in contracts
+        if contract.kind == "unresolved-helper-declaration"
     ]
     if empty_helpers:
         unsupported.append(
@@ -142,32 +268,34 @@ def validate_opencl_intermediate_for_target(cgl_ast, target_backend=None):
             f"{_format_list(empty_helpers)}"
         )
 
-    pointer_helpers = []
-    for function in functions:
-        labels = _pointer_parameter_labels(function)
-        if labels:
-            pointer_helpers.append(f"{function.name}({', '.join(labels)})")
+    pointer_helpers = [
+        contract.signature
+        for contract in contracts
+        if contract.kind == "pointer-helper-parameter"
+    ]
     if pointer_helpers:
         unsupported.append(
             "OpenCL pointer helper parameters are not representable in target "
             f"codegen: {_format_list(pointer_helpers)}"
         )
 
-    event_local_calls = called_names.intersection(_EVENT_LOCAL_MEMORY_BUILTINS)
+    event_local_calls = [
+        contract.name
+        for contract in contracts
+        if contract.kind == "event-local-memory-builtin"
+    ]
     if event_local_calls:
         unsupported.append(
             "OpenCL event/local-memory builtins require semantics not preserved by "
             f"target lowering: {_format_list(event_local_calls)}"
         )
 
-    if not unsupported:
-        return
-
     target = _target_backend_label(target_backend)
     details = "; ".join(unsupported)
     raise OpenCLTargetUnsupportedError(
         f"{OPENCL_TARGET_UNSUPPORTED_CODE}: cannot lower OpenCL source to "
-        f"{target} because target lowering would produce invalid artifacts: {details}"
+        f"{target} because target lowering would produce invalid artifacts: {details}",
+        contracts=contracts,
     )
 
 
