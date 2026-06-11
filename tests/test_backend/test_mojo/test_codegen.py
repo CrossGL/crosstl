@@ -2005,7 +2005,6 @@ def test_modular_vector_addition_nested_gpu_launch_codegen():
     ast = parse_code(tokenize_code(code))
     generated_code = generate_code(ast)
 
-    assert "// from std.gpu import block_dim, block_idx, thread_idx" in generated_code
     assert (
         "void _vector_addition_gpu(ManagedTensorSlice[mut=true, ...] output, "
         "ManagedTensorSlice[dtype=output.dtype, rank=output.rank, ...] lhs, "

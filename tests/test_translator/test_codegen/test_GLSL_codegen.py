@@ -1138,8 +1138,8 @@ def test_append_consume_structured_buffers_use_sidecar_counters():
         in generated
     )
     assert (
-        "appendValues[atomicAdd(appendValuesCounter[0], 1u)] = int(main_value_Args_value);"
-        in generated
+        "appendValues[atomicAdd(appendValuesCounter[0], 1u)] = "
+        "int(main_value_Args_value);" in generated
     )
     assert (
         "int consumed = consumeValues[(atomicAdd(consumeValuesCounter[0], uint(-1)) - 1u)];"

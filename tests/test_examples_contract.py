@@ -94,7 +94,11 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
     ("graphics/ComplexShader.cgl", "wgsl"),
 )
 
-ADDITIONAL_FIXED_CASES = (("cross_platform/UniversalPBRShader.cgl", "slang"),)
+ADDITIONAL_FIXED_CASES = (
+    ("advanced/GenericPatternMatching.cgl", "hip"),
+    ("advanced/GenericPatternMatching.cgl", "slang"),
+    ("cross_platform/UniversalPBRShader.cgl", "slang"),
+)
 
 GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES = (
     (
