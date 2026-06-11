@@ -39078,6 +39078,79 @@ def test_translate_project_metal_call_site_template_limit_blocks_opengl_material
     )
 
 
+def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_materialization(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "out"
+
+            [project.source_options.metal]
+            max_template_specializations = 4
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "bounded_source_instantiations.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            T adjust_value(T value) {
+                return value + T(1);
+            }
+
+            template <typename T>
+            [[kernel]] void launch(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = adjust_value(T(gid));
+            }
+
+            instantiate_kernel("launch_f32_a", launch, float)
+            instantiate_kernel("launch_f32_b", launch, float)
+            instantiate_kernel("launch_f32_c", launch, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert "templateMaterialization" not in artifact
+    assert not (repo / artifact["path"]).exists()
+    assert "work limit exceeded before GLSL codegen" in artifact["error"]
+    assert "6 source-instantiation/template work items requested" in artifact["error"]
+    assert (
+        "limit 4 from project.source_options.metal.max_template_specializations"
+        in artifact["error"]
+    )
+    assert "First source declaration: bounded_source_instantiations.metal:9:1" in (
+        artifact["error"]
+    )
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-template-specialization": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.metal-template-specialization"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert diagnostic["location"]["file"] == "bounded_source_instantiations.metal"
+    assert diagnostic["location"]["line"] == 9
+    assert diagnostic["location"]["column"] == 1
+    assert "work limit exceeded before GLSL codegen" in diagnostic["message"]
+
+
 def test_translate_project_metal_variant_template_materializes_for_opengl(
     tmp_path,
 ):
