@@ -4740,14 +4740,11 @@ def _external_corpus_manifest_entry_duplicate_reasons(
     entry: Mapping[str, Any],
     *,
     seen_ids: Mapping[str, int],
-    seen_paths: Mapping[str, int],
 ) -> list[str]:
-    entry_id, path = _external_corpus_manifest_entry_identity(entry)
+    entry_id, _path = _external_corpus_manifest_entry_identity(entry)
     reasons = []
     if entry_id is not None and entry_id in seen_ids:
         reasons.append(f"id duplicates entry {seen_ids[entry_id] + 1}")
-    if path is not None and path in seen_paths:
-        reasons.append(f"path duplicates entry {seen_paths[path] + 1}")
     return reasons
 
 
@@ -4756,22 +4753,18 @@ def _valid_external_corpus_manifest_entries(
 ) -> list[tuple[int, Mapping[str, Any]]]:
     entries = []
     seen_ids: dict[str, int] = {}
-    seen_paths: dict[str, int] = {}
     for index, entry in enumerate(manifest.get("entries", [])):
         if _external_corpus_manifest_entry_reasons(entry):
             continue
         duplicate_reasons = _external_corpus_manifest_entry_duplicate_reasons(
             entry,
             seen_ids=seen_ids,
-            seen_paths=seen_paths,
         )
         if duplicate_reasons:
             continue
-        entry_id, path = _external_corpus_manifest_entry_identity(entry)
+        entry_id, _path = _external_corpus_manifest_entry_identity(entry)
         if entry_id is not None:
             seen_ids[entry_id] = index
-        if path is not None:
-            seen_paths[path] = index
         entries.append((index, entry))
     return entries
 
@@ -4898,6 +4891,7 @@ def _external_corpus_report(
     manifest_entry_count = len(manifest.get("entries", []))
 
     entries = []
+    emitted_entry_ids: set[str] = set()
     for index, raw_entry in valid_manifest_entries:
         path = str(raw_entry.get("path", "")).replace("\\", "/")
         entry_targets = _manifest_entry_targets(raw_entry, targets)
@@ -4921,8 +4915,12 @@ def _external_corpus_report(
             and entry_path.exists()
         )
         discovered = unit is not None
+        entry_id = str(raw_entry.get("id") or path or f"entry-{index + 1}")
+        if entry_id in emitted_entry_ids:
+            entry_id = f"{entry_id}#entry-{index + 1}"
+        emitted_entry_ids.add(entry_id)
         entry_payload = {
-            "id": str(raw_entry.get("id") or path or f"entry-{index + 1}"),
+            "id": entry_id,
             "path": path,
             "sourceBackend": source_backend,
             "targets": entry_targets,
@@ -6890,21 +6888,17 @@ def _external_corpus_entry_diagnostics(
     diagnostics: list[ProjectDiagnostic] = []
     location = _config_location(config)
     seen_ids: dict[str, int] = {}
-    seen_paths: dict[str, int] = {}
     for index, entry in enumerate(manifest.get("entries", [])):
         reasons = _external_corpus_manifest_entry_reasons(entry)
         if not reasons and isinstance(entry, Mapping):
             reasons = _external_corpus_manifest_entry_duplicate_reasons(
                 entry,
                 seen_ids=seen_ids,
-                seen_paths=seen_paths,
             )
         if not reasons:
-            entry_id, path = _external_corpus_manifest_entry_identity(entry)
+            entry_id, _path = _external_corpus_manifest_entry_identity(entry)
             if entry_id is not None:
                 seen_ids[entry_id] = index
-            if path is not None:
-                seen_paths[path] = index
             continue
         diagnostics.append(
             ProjectDiagnostic(
@@ -31087,9 +31081,6 @@ def _external_corpus_contract_reasons(
             )
         reasons.extend(
             _duplicate_field_contract_reasons("externalCorpus.entries", entries, "id")
-        )
-        reasons.extend(
-            _duplicate_path_contract_reasons("externalCorpus.entries", entries)
         )
     reasons.extend(
         _external_corpus_summary_contract_reasons(

@@ -17027,7 +17027,9 @@ def test_translate_project_skips_invalid_external_corpus_provenance(tmp_path):
     )
 
 
-def test_translate_project_skips_duplicate_external_corpus_entries(tmp_path):
+def test_translate_project_preserves_external_corpus_entries_with_shared_path(
+    tmp_path,
+):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
@@ -17038,19 +17040,27 @@ def test_translate_project_skips_duplicate_external_corpus_entries(tmp_path):
                 "schemaVersion": 1,
                 "entries": [
                     {
-                        "id": "repo/simple",
+                        "id": "repo/simple-a",
                         "path": "simple.cgl",
                         "sourceBackend": "cgl",
                         "targets": ["cgl"],
+                        "repository": "https://github.com/example/project",
+                        "sourceUrl": (
+                            "https://github.com/example/project/blob/main/a.cgl"
+                        ),
                     },
                     {
-                        "id": "repo/simple-path-duplicate",
+                        "id": "repo/simple-b",
                         "path": "simple.cgl",
                         "sourceBackend": "cgl",
                         "targets": ["cgl"],
+                        "repository": "https://github.com/example/project",
+                        "sourceUrl": (
+                            "https://github.com/example/project/blob/main/b.cgl"
+                        ),
                     },
                     {
-                        "id": "repo/simple",
+                        "id": "repo/simple-a",
                         "path": "other.cgl",
                         "sourceBackend": "cgl",
                         "targets": ["cgl"],
@@ -17078,19 +17088,25 @@ def test_translate_project_skips_duplicate_external_corpus_entries(tmp_path):
     assert validation["success"] is True
     external_corpus = payload["externalCorpus"]
     assert external_corpus["summary"]["manifestEntryCount"] == 3
-    assert external_corpus["summary"]["validEntryCount"] == 1
-    assert external_corpus["summary"]["invalidEntryCount"] == 2
-    assert [entry["path"] for entry in external_corpus["entries"]] == ["simple.cgl"]
-    assert payload["diagnosticCounts"] == {"note": 0, "warning": 2, "error": 0}
+    assert external_corpus["summary"]["validEntryCount"] == 2
+    assert external_corpus["summary"]["invalidEntryCount"] == 1
+    assert [entry["id"] for entry in external_corpus["entries"]] == [
+        "repo/simple-a",
+        "repo/simple-b",
+    ]
+    assert [entry["path"] for entry in external_corpus["entries"]] == [
+        "simple.cgl",
+        "simple.cgl",
+    ]
+    assert [entry["sourceUrl"] for entry in external_corpus["entries"]] == [
+        "https://github.com/example/project/blob/main/a.cgl",
+        "https://github.com/example/project/blob/main/b.cgl",
+    ]
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
     diagnostics = payload["diagnostics"]
-    assert all(
-        diagnostic["code"] == "project.config.external-corpus-entry-invalid"
-        for diagnostic in diagnostics
-    )
-    assert "entry 2" in diagnostics[0]["message"]
-    assert "path duplicates entry 1" in diagnostics[0]["message"]
-    assert "entry 3" in diagnostics[1]["message"]
-    assert "id duplicates entry 1" in diagnostics[1]["message"]
+    assert diagnostics[0]["code"] == "project.config.external-corpus-entry-invalid"
+    assert "entry 3" in diagnostics[0]["message"]
+    assert "id duplicates entry 1" in diagnostics[0]["message"]
 
 
 def test_validate_project_report_accepts_generated_source_maps(tmp_path):
@@ -22878,7 +22894,7 @@ def test_validate_project_report_rejects_external_corpus_entry_state_mismatches(
     ) in diagnostic["message"]
 
 
-def test_validate_project_report_rejects_duplicate_external_corpus_entries(
+def test_validate_project_report_rejects_duplicate_external_corpus_entry_ids(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -22948,10 +22964,6 @@ def test_validate_project_report_rejects_duplicate_external_corpus_entries(
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
         "externalCorpus.entries[1].id duplicates externalCorpus.entries[0].id"
-        in diagnostic["message"]
-    )
-    assert (
-        "externalCorpus.entries[1].path duplicates externalCorpus.entries[0].path"
         in diagnostic["message"]
     )
 
