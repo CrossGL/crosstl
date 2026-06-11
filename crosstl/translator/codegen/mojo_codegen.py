@@ -5433,6 +5433,16 @@ class MojoCodeGen:
             )
 
         if not self.parameter_semantic_type_matches(expected_type, param_type):
+            normalized_semantic = self.normalized_semantic_key(semantic)
+            if (
+                expected_type == "integer_vec3"
+                and normalized_semantic == "global_invocation_id"
+                and (
+                    self.is_scalar_integer_type(param_type)
+                    or self.is_integer_vector_width(param_type, 2)
+                )
+            ):
+                return
             expected = self.parameter_semantic_expected_type(expected_type)
             raise ValueError(
                 f"Unsupported {semantic} parameter semantic for Mojo codegen; "
@@ -6027,6 +6037,8 @@ class MojoCodeGen:
             getattr(func, "body", []), param_names
         )
         params = []
+        local_alias_declarations = []
+        emitted_param_names = set()
         parameter_semantic_comments = []
         used_parameter_semantics = {}
         for p, param_type in param_infos:
@@ -6038,6 +6050,32 @@ class MojoCodeGen:
                 semantic,
                 used_parameter_semantics,
             )
+
+            dispatch_thread_id_bridge = (
+                self.mojo_compute_global_invocation_id_parameter_bridge(
+                    p,
+                    param_type,
+                    semantic,
+                    emitted_param_names,
+                    param_names,
+                )
+                if shader_type == "compute"
+                else None
+            )
+            if dispatch_thread_id_bridge is not None:
+                param_name, native_type, local_alias = dispatch_thread_id_bridge
+                self.register_variable_type(param_name, native_type)
+                self.register_variable_type(p.name, param_type)
+                if semantic:
+                    parameter_semantic_comments.append(
+                        self.generate_parameter_semantic_comment(
+                            shader_type, p.name, semantic
+                        )
+                    )
+                params.append(f"{param_name}: {self.map_type(native_type)}")
+                local_alias_declarations.append(local_alias)
+                emitted_param_names.add(param_name)
+                continue
 
             self.register_variable_type(p.name, param_type)
             self.register_resource_access_metadata(p, param_type)
@@ -6103,6 +6141,8 @@ class MojoCodeGen:
                 f"{'    ' * (indent + 1)}var {self.mojo_identifier(output_name)}: "
                 f"{self.map_type(output_type)}\n"
             )
+        for declaration in local_alias_declarations:
+            code += "    " * (indent + 1) + declaration + "\n"
 
         body = getattr(func, "body", [])
         statements = None
@@ -6171,6 +6211,43 @@ class MojoCodeGen:
             and self.type_name(return_type) == "void"
             and self.current_shader_stage_count <= 1
         )
+
+    def mojo_compute_global_invocation_id_parameter_bridge(
+        self, parameter, param_type, semantic, emitted_param_names, parameter_names
+    ):
+        if semantic is None:
+            return None
+        if self.normalized_semantic_key(semantic) != "global_invocation_id":
+            return None
+
+        mapped_type = self.map_type(param_type)
+        if mapped_type not in {"UInt", "UInt32", "SIMD[DType.uint32, 2]"}:
+            return None
+
+        source_name = getattr(parameter, "name", None)
+        if not isinstance(source_name, str) or not source_name:
+            return None
+
+        local_name = self.mojo_identifier(source_name)
+        used_names = set(emitted_param_names)
+        used_names.update(parameter_names)
+        used_names.update(self.variable_types)
+        native_name = self.mojo_unique_local_identifier(
+            f"{local_name}_globalInvocationID", used_names
+        )
+        if mapped_type in {"UInt", "UInt32"}:
+            alias_value = f"{native_name}[0]"
+        else:
+            alias_value = (
+                f"SIMD[DType.uint32, 2]({native_name}[0], {native_name}[1])"
+            )
+        return native_name, "uint3", f"var {local_name}: {mapped_type} = {alias_value}"
+
+    def mojo_unique_local_identifier(self, candidate, used_names):
+        candidate = self.mojo_identifier(candidate)
+        while candidate in used_names or candidate in self.mojo_reserved_identifiers():
+            candidate = f"{candidate}_"
+        return candidate
 
     def collect_mutated_parameters(self, body, param_names):
         mutated = set()

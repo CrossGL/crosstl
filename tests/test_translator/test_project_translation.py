@@ -36199,6 +36199,119 @@ def test_translate_project_metal_matmul_device_buffers_do_not_emit_directx_param
     assert "void CSMain(float*" not in output
 
 
+def test_translate_project_metal_matmul_uint2_grid_id_normalizes_for_compute_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "matmul.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct MatMulParams {
+                uint row_dim_x;
+                uint col_dim_x;
+                uint inner_dim;
+            };
+
+            kernel void mat_mul_simple1(
+                constant MatMulParams& params [[buffer(0)]],
+                device const float* A [[buffer(1)]],
+                device const float* B [[buffer(2)]],
+                device float* X [[buffer(3)]],
+                uint2 id [[thread_position_in_grid]]
+            ) {
+                uint row = id.y;
+                uint col = id.x;
+                float sum = 0.0;
+
+                if (row < params.row_dim_x && col < params.col_dim_x) {
+                    for (uint inner = 0; inner < params.inner_dim; inner++) {
+                        uint index_A = (row * params.inner_dim) + inner;
+                        uint index_B = (inner * params.col_dim_x) + col;
+                        sum += A[index_A] * B[index_B];
+                    }
+
+                    uint index = (row * params.col_dim_x) + col;
+                    X[index] = sum;
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["cuda", "hip", "mojo", "rust", "slang"],
+        output_dir="out",
+        validate=True,
+    ).to_json()
+
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticCounts"]["error"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("cuda", "translated"),
+        ("hip", "translated"),
+        ("mojo", "translated"),
+        ("rust", "translated"),
+        ("slang", "translated"),
+    }
+
+    outputs = {
+        artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in payload["artifacts"]
+    }
+
+    cuda = outputs["cuda"]
+    assert (
+        'extern "C" __global__ void mat_mul_simple1(const MatMulParams& params, '
+        "const float* A, const float* B, float* X)"
+    ) in cuda
+    assert "uint row = (blockIdx.y * blockDim.y + threadIdx.y);" in cuda
+    assert "uint col = (blockIdx.x * blockDim.x + threadIdx.x);" in cuda
+    assert "uint2 id" not in cuda
+
+    hip = outputs["hip"]
+    assert (
+        "__global__ void mat_mul_simple1(const MatMulParams& params, "
+        "const float* A, const float* B, float* X)"
+    ) in hip
+    assert "unsigned int row = (blockIdx.y * blockDim.y + threadIdx.y);" in hip
+    assert "unsigned int col = (blockIdx.x * blockDim.x + threadIdx.x);" in hip
+    assert "uint2 id" not in hip
+
+    mojo = outputs["mojo"]
+    assert "id_globalInvocationID: SIMD[DType.uint32, 4]" in mojo
+    assert (
+        "var id: SIMD[DType.uint32, 2] = "
+        "SIMD[DType.uint32, 2](id_globalInvocationID[0], "
+        "id_globalInvocationID[1])"
+    ) in mojo
+    assert "var row: UInt32 = id[1]" in mojo
+    assert "var col: UInt32 = id[0]" in mojo
+
+    rust = outputs["rust"]
+    assert "id_globalInvocationID: Vec3<u32>" in rust
+    assert (
+        "let id: Vec2<u32> = "
+        "Vec2::<u32>::new(id_globalInvocationID.x, id_globalInvocationID.y);"
+    ) in rust
+    assert "let row: u32 = id.y;" in rust
+    assert "let col: u32 = id.x;" in rust
+
+    slang = outputs["slang"]
+    assert "uint3 id_dispatchThreadID : SV_DispatchThreadID" in slang
+    assert "uint2 id = id_dispatchThreadID.xy;" in slang
+    assert "uint row = id.y;" in slang
+    assert "uint col = id.x;" in slang
+
+    for output in outputs.values():
+        assert "thread_position_in_grid" not in output
+
+
 def test_translate_project_metal_matmul_buffers_lower_to_wgsl_resources(
     tmp_path,
 ):

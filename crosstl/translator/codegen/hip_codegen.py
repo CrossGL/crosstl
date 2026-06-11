@@ -285,6 +285,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
         self.stage_builtin_aliases = {}
+        self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
         self.current_expression_expected_type = None
         self.structs_by_name = {}
@@ -746,6 +747,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
         self.stage_builtin_aliases = {}
+        self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
         self.current_stage_name = None
         self.hip_function_capture_params = {}
@@ -1826,6 +1828,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         saved_current_function_return_type = self.current_function_return_type
         saved_current_function_name = self.current_function_name
         saved_stage_builtin_aliases = self.stage_builtin_aliases
+        saved_stage_builtin_alias_types = self.stage_builtin_alias_types
         saved_current_function_is_kernel_entry = self.current_function_is_kernel_entry
         saved_structured_buffer_length_parameters = (
             self.current_structured_buffer_length_parameters
@@ -1833,6 +1836,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.current_function_name = node.name
         self.current_structured_buffer_length_parameters = {}
         self.stage_builtin_aliases = {}
+        self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
 
         qualifiers = []
@@ -1941,6 +1945,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             if param_name and builtin_role is not None:
                 self.register_variable_type(param_name, param_type, param)
                 self.stage_builtin_aliases[param_name] = builtin_role
+                self.stage_builtin_alias_types[param_name] = param_type
                 continue
 
             param_declarations.append(self.visit_parameter(param))
@@ -2059,6 +2064,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.glsl_buffer_block_layouts = saved_glsl_buffer_block_layouts
         self.current_function_name = saved_current_function_name
         self.stage_builtin_aliases = saved_stage_builtin_aliases
+        self.stage_builtin_alias_types = saved_stage_builtin_alias_types
         self.current_function_is_kernel_entry = saved_current_function_is_kernel_entry
         self.current_structured_buffer_length_parameters = (
             saved_structured_buffer_length_parameters
@@ -3080,7 +3086,25 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         role = self.stage_builtin_aliases.get(name)
         if role is None:
             return None
-        return self.hip_compute_builtin_expression(role, component)
+        expression = self.hip_compute_builtin_expression(role, component)
+        if component is not None or expression is None:
+            return expression
+
+        alias_type = self.stage_builtin_alias_types.get(name)
+        if alias_type is None or role != "global_invocation_id":
+            return expression
+        mapped_type = self.map_type(alias_type)
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        if array_suffix:
+            return expression
+        if base_type in {"uint", "unsigned int"}:
+            return self.hip_compute_builtin_expression(role, "x")
+        if base_type == "uint2":
+            x = self.hip_compute_builtin_expression(role, "x")
+            y = self.hip_compute_builtin_expression(role, "y")
+            if x is not None and y is not None:
+                return f"make_uint2({x}, {y})"
+        return expression
 
     def source_identifier_shadows_builtin(self, name):
         """Return whether a source variable should block builtin-name lowering."""
@@ -3095,6 +3119,13 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
     ):
         actual_type = self.map_type(self.get_parameter_type(param))
         if actual_type == expected_type:
+            return
+        semantic_key = self.hip_stage_parameter_semantic_key(semantic)
+        if (
+            expected_type == "uint3"
+            and semantic_key in {"gl_globalinvocationid", "SV_DISPATCHTHREADID"}
+            and actual_type in {"uint", "unsigned int", "uint2"}
+        ):
             return
         raise ValueError(
             f"Unsupported {semantic} stage parameter semantic for HIP codegen; "

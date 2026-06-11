@@ -3993,6 +3993,16 @@ class SlangCodeGen:
         type_name = self.slang_parameter_type_name(parameter)
         if self.slang_parameter_semantic_type_matches(type_name, expected_type):
             return
+        mapped_semantic = self.map_semantic(semantic, "compute")
+        mapped_type = self.convert_type(type_name)
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        if (
+            expected_type == "uint3"
+            and mapped_semantic == "SV_DispatchThreadID"
+            and not array_suffix
+            and base_type in {"uint", "uint2"}
+        ):
+            return
 
         raise ValueError(
             f"Unsupported {semantic} stage parameter semantic for Slang codegen; "
@@ -5752,6 +5762,8 @@ class SlangCodeGen:
         else:
             self.validate_slang_ray_query_calls(node, "function", effective_param_list)
         params = []
+        local_alias_declarations = []
+        emitted_param_names = set()
         if effective_param_list:
             if effective_param_list and hasattr(effective_param_list[0], "name"):
                 for param in effective_param_list:
@@ -5772,6 +5784,29 @@ class SlangCodeGen:
                     else:
                         param_type_name = "float"
                         param_type = "float"
+                    semantic = self.semantic_from_node(param)
+                    dispatch_thread_id_bridge = (
+                        self.slang_compute_global_invocation_id_parameter_bridge(
+                            param,
+                            param_type,
+                            semantic,
+                            emitted_param_names,
+                            effective_param_list,
+                        )
+                        if shader_type == "compute"
+                        else None
+                    )
+                    if dispatch_thread_id_bridge is not None:
+                        declaration, local_alias, native_name = (
+                            dispatch_thread_id_bridge
+                        )
+                        self.register_variable_type(native_name, "uint3", param)
+                        self.register_variable_type(param.name, param_type_name, param)
+                        params.append(declaration)
+                        local_alias_declarations.append(local_alias)
+                        emitted_param_names.add(native_name)
+                        continue
+
                     declaration = format_c_style_array_declaration(
                         param_type, param.name
                     )
@@ -5811,9 +5846,10 @@ class SlangCodeGen:
                     params.append(
                         declaration
                         + self.semantic_suffix(
-                            self.semantic_from_node(param), shader_type
+                            semantic, shader_type
                         )
                     )
+                    emitted_param_names.add(param.name)
             else:
                 for param_type, param_name in effective_param_list:
                     self.register_variable_type(param_name, param_type)
@@ -5913,6 +5949,8 @@ class SlangCodeGen:
                 fragment_output_rewrite["parameter"],
             )
             result += f"{self.indent()}{local_type} {local_name};\n"
+        for declaration in local_alias_declarations:
+            result += f"{self.indent()}{declaration}\n"
 
         for statement_index, stmt in enumerate(body_statements):
             result += (
@@ -6344,6 +6382,44 @@ class SlangCodeGen:
             if existing_param_name and existing_param_name != node.name:
                 aliases[node.name] = existing_param_name
         return aliases
+
+    def slang_compute_global_invocation_id_parameter_bridge(
+        self, parameter, param_type, semantic, emitted_param_names, param_list
+    ):
+        if semantic is None:
+            return None
+        if self.map_semantic(semantic, "compute") != "SV_DispatchThreadID":
+            return None
+
+        base_type, array_suffix = split_array_type_suffix(str(param_type))
+        if array_suffix or base_type not in {"uint", "uint2"}:
+            return None
+
+        source_name = getattr(parameter, "name", None)
+        if not isinstance(source_name, str) or not source_name:
+            return None
+
+        used_names = set(emitted_param_names)
+        used_names.update(
+            getattr(param, "name", None)
+            for param in param_list or []
+            if getattr(param, "name", None)
+        )
+        used_names.update(self.variable_types)
+        native_name = self.slang_unique_local_identifier(
+            f"{source_name}_dispatchThreadID", used_names
+        )
+        declaration = f"uint3 {native_name} : SV_DispatchThreadID"
+        if base_type == "uint":
+            local_alias = f"uint {source_name} = {native_name}.x;"
+        else:
+            local_alias = f"uint2 {source_name} = {native_name}.xy;"
+        return declaration, local_alias, native_name
+
+    def slang_unique_local_identifier(self, candidate, used_names):
+        while candidate in used_names:
+            candidate = f"{candidate}_"
+        return candidate
 
     def slang_stage_intrinsic_builtin_aliases(
         self, body_statements, shader_type, param_list
