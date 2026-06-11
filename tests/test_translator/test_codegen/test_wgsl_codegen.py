@@ -1191,6 +1191,144 @@ def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls():
     assert "return sampleEnv(envMap, envMap_sampler, normal);" in generated
 
 
+def test_wgsl_codegen_lowers_split_sampler_lod_grad_and_offset_calls():
+    shader = """
+    shader WGSLTextureSamplingForms {
+        sampler2D colorTex;
+        sampler linearSampler;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec2 ddx = vec2(0.1, 0.0);
+                vec2 ddy = vec2(0.0, 0.1);
+                ivec2 offset = ivec2(1, 0);
+                return textureLodOffset(colorTex, linearSampler, uv, 1.0, offset)
+                    + textureGrad(colorTex, linearSampler, uv, ddx, ddy)
+                    + textureGradOffset(colorTex, linearSampler, uv, ddx, ddy, offset)
+                    + textureOffset(colorTex, linearSampler, uv, offset)
+                    + textureOffset(colorTex, linearSampler, uv, offset, 0.25)
+                    + textureOffset(colorTex, uv, offset, 0.5);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "textureSampleLevel(colorTex, linearSampler, uv, 1.0, offset)"
+        in generated
+    )
+    assert "textureSampleGrad(colorTex, linearSampler, uv, ddx, ddy)" in generated
+    assert (
+        "textureSampleGrad(colorTex, linearSampler, uv, ddx, ddy, offset)"
+        in generated
+    )
+    assert "textureSample(colorTex, linearSampler, uv, offset)" in generated
+    assert (
+        "textureSampleBias(colorTex, linearSampler, uv, 0.25, offset)"
+        in generated
+    )
+    assert "textureSampleBias(colorTex, colorTex_sampler, uv, 0.5, offset)" in generated
+
+
+def test_wgsl_codegen_lowers_shadow_textures_and_comparison_samplers():
+    shader = """
+    shader WGSLShadowTexture {
+        sampler2DShadow shadowMap;
+        samplerComparisonState compareSampler;
+        float sampleShadow(sampler2DShadow tex, vec2 uv, float depth) {
+            return textureCompare(tex, uv, depth);
+        }
+        fragment {
+            float main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureCompare(shadowMap, compareSampler, uv, 0.5)
+                    + textureCompareOffset(shadowMap, compareSampler, uv, 0.25, ivec2(1, 0))
+                    + textureCompareLod(shadowMap, compareSampler, uv, 0.75, 0)
+                    + textureCompareLodOffset(shadowMap, compareSampler, uv, 0.875, 0, ivec2(0, 1))
+                    + sampleShadow(shadowMap, uv, 0.625);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(0)\nvar shadowMap: texture_depth_2d;" in generated
+    assert (
+        "@group(0) @binding(1)\nvar shadowMap_sampler: sampler_comparison;"
+        in generated
+    )
+    assert "@group(0) @binding(2)\nvar compareSampler: sampler_comparison;" in generated
+    assert (
+        "fn sampleShadow(tex: texture_depth_2d, tex_sampler: sampler_comparison, "
+        "uv: vec2<f32>, depth: f32) -> f32"
+    ) in generated
+    assert "return textureSampleCompare(tex, tex_sampler, uv, depth);" in generated
+    assert (
+        "textureSampleCompare(shadowMap, compareSampler, uv, 0.5)"
+        in generated
+    )
+    assert (
+        "textureSampleCompare(shadowMap, compareSampler, uv, 0.25, "
+        "vec2<i32>(1, 0))"
+    ) in generated
+    assert (
+        "textureSampleCompareLevel(shadowMap, compareSampler, uv, 0.75)"
+        in generated
+    )
+    assert (
+        "textureSampleCompareLevel(shadowMap, compareSampler, uv, 0.875, "
+        "vec2<i32>(0, 1))"
+    ) in generated
+    assert "sampleShadow(shadowMap, shadowMap_sampler, uv, 0.625)" in generated
+
+
+def test_wgsl_codegen_rejects_plain_sampler_for_explicit_shadow_compare():
+    shader = """
+    shader WGSLBadShadowSampler {
+        sampler2DShadow shadowMap;
+        sampler plainSampler;
+        fragment {
+            float main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureCompare(shadowMap, plainSampler, uv, 0.5);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target requires textureCompare\(\) explicit sampler operand "
+            r"to use samplerComparisonState"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_nonzero_shadow_compare_lod():
+    shader = """
+    shader WGSLBadShadowLod {
+        sampler2DShadow shadowMap;
+        samplerComparisonState compareSampler;
+        fragment {
+            float main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureCompareLod(shadowMap, compareSampler, uv, 0.5, 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"WGSL target only lowers textureCompareLod\(\) when the explicit "
+            r"LOD operand is literal 0"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_lowers_mod_builtin_to_floor_semantics_expression():
     shader = """
     shader WGSLModBuiltin {
