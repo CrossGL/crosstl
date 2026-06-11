@@ -24,7 +24,7 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/ternary.metal",
 )
 EXPECTED_METAL_KERNEL_COUNT = 40
-FRONTIER_VALIDATION_TRACKED_ISSUES = ("https://github.com/CrossGL/crosstl/issues/1317",)
+FRONTIER_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()
 FULL_CORPUS_TRACKED_ISSUES = (*FRONTIER_VALIDATION_TRACKED_ISSUES,)
 RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1300",
@@ -100,6 +100,7 @@ RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1261",
     "https://github.com/CrossGL/crosstl/issues/1274",
     "https://github.com/CrossGL/crosstl/issues/1287",
+    "https://github.com/CrossGL/crosstl/issues/1317",
 )
 
 
@@ -136,6 +137,12 @@ def _load_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise PortingCheckError(f"{path} must contain a JSON object")
     return payload
+
+
+def _records(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _require(condition: bool, message: str) -> None:
@@ -254,6 +261,134 @@ def _verify_mlx_checkout(mlx_root: Path, python: str, log_dir: Path) -> dict[str
     }
 
 
+def _target_toolchain(payload: dict[str, Any], target: str) -> dict[str, Any] | None:
+    validation = payload.get("validation", {})
+    if not isinstance(validation, dict):
+        return None
+    for toolchain in _records(validation.get("toolchains")):
+        if toolchain.get("target") == target:
+            return toolchain
+    return None
+
+
+def _target_toolchain_runs(
+    payload: dict[str, Any],
+    target: str,
+) -> list[dict[str, Any]]:
+    validation = payload.get("validation", {})
+    if not isinstance(validation, dict):
+        return []
+    return [
+        run
+        for run in _records(validation.get("toolchainRuns"))
+        if run.get("target") == target
+    ]
+
+
+def _target_artifacts(payload: dict[str, Any], target: str) -> list[dict[str, Any]]:
+    return [
+        artifact
+        for artifact in _records(payload.get("artifacts"))
+        if artifact.get("target") == target and artifact.get("status") == "translated"
+    ]
+
+
+def _missing_tool_names(toolchain: dict[str, Any] | None) -> list[str]:
+    if not isinstance(toolchain, dict):
+        return []
+    missing = []
+    for tool in _records(toolchain.get("tools")):
+        if tool.get("available") is False and isinstance(tool.get("name"), str):
+            missing.append(tool["name"])
+    return missing
+
+
+def _require_target_toolchain_smoke(
+    payload: dict[str, Any],
+    target: str,
+    *,
+    label: str,
+) -> dict[str, Any]:
+    toolchain = _target_toolchain(payload, target)
+    _require(
+        isinstance(toolchain, dict),
+        f"{label} required {target} toolchain smoke checks, but no toolchain status was recorded",
+    )
+    missing_tools = _missing_tool_names(toolchain)
+    _require(
+        toolchain.get("status") == "available",
+        "{} required {} toolchain smoke checks, but the toolchain was {}{}".format(
+            label,
+            target,
+            toolchain.get("status", "unknown"),
+            f" (missing: {', '.join(missing_tools)})" if missing_tools else "",
+        ),
+    )
+
+    artifacts = _target_artifacts(payload, target)
+    expected_paths = {
+        str(artifact.get("path"))
+        for artifact in artifacts
+        if isinstance(artifact.get("path"), str) and artifact.get("path")
+    }
+    _require(
+        bool(expected_paths),
+        f"{label} required {target} toolchain smoke checks, but no translated artifacts were recorded",
+    )
+
+    runs = _target_toolchain_runs(payload, target)
+    failed_runs = [run for run in runs if run.get("status") != "ok"]
+    if failed_runs:
+        first = failed_runs[0]
+        detail = first.get("stderr") or first.get("stdout") or "no tool output"
+        raise PortingCheckError(
+            "{} required {} toolchain smoke checks, but {} failed: {}".format(
+                label,
+                target,
+                first.get("path", "an artifact"),
+                str(detail).splitlines()[0],
+            )
+        )
+
+    ok_paths = {
+        str(run.get("path"))
+        for run in runs
+        if run.get("status") == "ok" and isinstance(run.get("path"), str)
+    }
+    missing_paths = sorted(expected_paths - ok_paths)
+    _require(
+        not missing_paths,
+        "{} required {} toolchain smoke checks, but checks were missing or skipped for: {}".format(
+            label,
+            target,
+            ", ".join(missing_paths[:5]),
+        ),
+    )
+    return {
+        "target": target,
+        "status": "validated",
+        "artifactCount": len(expected_paths),
+        "runCount": len(runs),
+    }
+
+
+def _toolchain_run_counts_by_target(
+    runs: Sequence[dict[str, Any]],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for run in runs:
+        target = run.get("target")
+        if not isinstance(target, str) or not target:
+            continue
+        row = counts.setdefault(target, {"runCount": 0, "okCount": 0, "failedCount": 0})
+        row["runCount"] += 1
+        if run.get("status") == "ok":
+            row["okCount"] += 1
+        elif run.get("status") == "failed":
+            row["failedCount"] += 1
+    return {target: counts[target] for target in sorted(counts)}
+
+
 def _scan_metal_kernels(
     mlx_root: Path,
     work_dir: Path,
@@ -322,6 +457,7 @@ def _translate_directx_vulkan_frontier(
     log_dir: Path,
     python: str,
     *,
+    require_directx_toolchain: bool,
     require_vulkan_toolchain: bool,
 ) -> dict[str, Any]:
     config_path = config_dir / "directx-vulkan-frontier.toml"
@@ -332,7 +468,11 @@ def _translate_directx_vulkan_frontier(
         targets=("directx", "vulkan"),
         output_dir=_relpath(work_dir / "out-directx-vulkan-frontier", mlx_root),
     )
-    run_toolchains = not FRONTIER_VALIDATION_TRACKED_ISSUES
+    run_toolchains = (
+        not FRONTIER_VALIDATION_TRACKED_ISSUES
+        or require_directx_toolchain
+        or require_vulkan_toolchain
+    )
     validation_flag = "--run-toolchains" if run_toolchains else "--validate"
     _run_command(
         "translate-directx-vulkan-frontier",
@@ -393,22 +533,23 @@ def _translate_directx_vulkan_frontier(
     )
     toolchain_runs = validation.get("toolchainRuns", [])
     _require(isinstance(toolchain_runs, list), "toolchainRuns must be a list")
-    vulkan_runs = [
-        run
-        for run in toolchain_runs
-        if isinstance(run, dict) and run.get("target") == "vulkan"
-    ]
-    if require_vulkan_toolchain and run_toolchains:
-        _require(
-            len(vulkan_runs) == frontier_count,
-            "Vulkan toolchain validation was required for every frontier artifact",
+    typed_toolchain_runs = _records(toolchain_runs)
+    required_toolchains = []
+    if require_directx_toolchain:
+        required_toolchains.append(
+            _require_target_toolchain_smoke(
+                payload,
+                "directx",
+                label="DirectX/Vulkan frontier",
+            )
         )
-    for run in vulkan_runs:
-        _require(run.get("status") == "ok", "Vulkan toolchain validation failed")
-    if require_vulkan_toolchain and not run_toolchains:
-        _require(
-            not vulkan_runs,
-            "Vulkan toolchain validation ran while active validation issues are tracked",
+    if require_vulkan_toolchain:
+        required_toolchains.append(
+            _require_target_toolchain_smoke(
+                payload,
+                "vulkan",
+                label="DirectX/Vulkan frontier",
+            )
         )
     return {
         "name": "directx-vulkan-frontier",
@@ -418,11 +559,11 @@ def _translate_directx_vulkan_frontier(
         "unitCount": frontier_count,
         "artifactCount": frontier_count * 2,
         "targets": ["directx", "vulkan"],
-        "toolchainRuns": len(toolchain_runs),
+        "toolchainRuns": len(typed_toolchain_runs),
+        "toolchainRunsByTarget": _toolchain_run_counts_by_target(typed_toolchain_runs),
+        "requiredToolchains": required_toolchains,
+        "directxToolchainRequired": require_directx_toolchain,
         "vulkanToolchainRequired": require_vulkan_toolchain,
-        "vulkanValidationStatus": (
-            "validated" if run_toolchains else "blocked-by-tracked-issues"
-        ),
         "trackedIssues": list(FRONTIER_VALIDATION_TRACKED_ISSUES),
     }
 
@@ -434,6 +575,8 @@ def _check_arange_opengl(
     report_dir: Path,
     log_dir: Path,
     python: str,
+    *,
+    require_opengl_toolchain: bool,
 ) -> dict[str, Any]:
     config_path = config_dir / "arange-opengl.toml"
     report_path = report_dir / "arange-opengl.json"
@@ -455,6 +598,7 @@ def _check_arange_opengl(
             str(config_path),
             "--report",
             str(report_path),
+            "--run-toolchains" if require_opengl_toolchain else "--validate",
         ],
         log_dir=log_dir,
         check=False,
@@ -506,6 +650,21 @@ def _check_arange_opengl(
         and "#pragma metal" not in generated_lower,
         "OpenGL arange artifact retained a Metal system preprocessor line",
     )
+    validation = payload.get("validation", {})
+    toolchain_runs = (
+        _records(validation.get("toolchainRuns"))
+        if isinstance(validation, dict)
+        else []
+    )
+    required_toolchains = []
+    if require_opengl_toolchain:
+        required_toolchains.append(
+            _require_target_toolchain_smoke(
+                payload,
+                "opengl",
+                label="OpenGL arange",
+            )
+        )
     return {
         "name": "arange-opengl",
         "status": "passed",
@@ -513,6 +672,10 @@ def _check_arange_opengl(
         "source": MLX_ARANGE_SOURCE,
         "target": "opengl",
         "metalIncludesFiltered": True,
+        "toolchainRuns": len(toolchain_runs),
+        "toolchainRunsByTarget": _toolchain_run_counts_by_target(toolchain_runs),
+        "requiredToolchains": required_toolchains,
+        "openglToolchainRequired": require_opengl_toolchain,
     }
 
 
@@ -544,6 +707,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             report_dir,
             log_dir,
             args.python,
+            require_directx_toolchain=args.require_directx_toolchain,
             require_vulkan_toolchain=args.require_vulkan_toolchain,
         ),
         _check_arange_opengl(
@@ -553,6 +717,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             report_dir,
             log_dir,
             args.python,
+            require_opengl_toolchain=args.require_opengl_toolchain,
         ),
     ]
     return {
@@ -591,6 +756,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--python",
         default=sys.executable,
         help="Python executable used to invoke `python -m crosstl`.",
+    )
+    parser.add_argument(
+        "--require-directx-toolchain",
+        action="store_true",
+        help="Fail unless the DirectX smoke checks run successfully.",
+    )
+    parser.add_argument(
+        "--require-opengl-toolchain",
+        action="store_true",
+        help="Fail unless the OpenGL smoke checks run successfully.",
     )
     parser.add_argument(
         "--require-vulkan-toolchain",
