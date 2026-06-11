@@ -7168,6 +7168,100 @@ def test_hlsl_user_defined_mod_is_not_lowered():
     assert "floor(" not in generated_code
 
 
+def test_hlsl_fma_lowers_to_mad_intrinsic():
+    shader = """
+    shader HlslFmaBuiltinLowering {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float value = float(tid.x);
+                float scale = 2.0;
+                float bias = 1.0;
+                float fused = fma(value, scale, bias);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float fused = mad(value, scale, bias);" in generated_code
+    assert "fma(" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_fma_lowers_to_mad_with_shadowing_local_renamed():
+    shader = """
+    shader HlslFmaMadShadowing {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float value = float(tid.x);
+                float scale = 2.0;
+                float bias = 1.0;
+                float mad = bias;
+                float fused = fma(value, scale, mad);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float mad_ = bias;" in generated_code
+    assert "float fused = mad(value, scale, mad_);" in generated_code
+    assert "float mad = bias;" not in generated_code
+    assert "fma(" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_user_defined_fma_function_is_preserved():
+    shader = """
+    shader HlslUserFma {
+        float fma(float value, float scale, float bias) {
+            return (value * scale) + bias;
+        }
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float value = float(tid.x);
+                float fused = fma(value, 2.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float fma(float value, float scale, float bias)" in generated_code
+    assert "float fused = fma(value, 2.0, 1.0);" in generated_code
+    assert "mad(" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_user_defined_mad_function_is_renamed_consistently():
+    shader = """
+    shader HlslUserMad {
+        float mad(float value, float scale, float bias) {
+            return (value * scale) + bias;
+        }
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float value = float(tid.x);
+                float fused = mad(value, 2.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float mad_(float value, float scale, float bias)" in generated_code
+    assert "float fused = mad_(value, 2.0, 1.0);" in generated_code
+    assert "float mad(float value, float scale, float bias)" not in generated_code
+    assert "float fused = mad(value, 2.0, 1.0);" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
 def test_hlsl_two_argument_atan_lowers_to_atan2_intrinsic():
     shader = """
     shader HlslAtanBuiltinLowering {
