@@ -40,7 +40,11 @@ from .match_utils import (
 from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
-from .stage_utils import normalize_stage_name, stage_matches
+from .stage_utils import (
+    is_fragment_output_parameter,
+    normalize_stage_name,
+    stage_matches,
+)
 from .vector_arithmetic import VectorArithmeticMixin
 
 CUDA_WAVE_OP_ARITIES = {
@@ -1224,7 +1228,37 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.current_function_return_type = "void"
             return_type = "void"
 
+        param_list = list(getattr(node, "parameters", getattr(node, "params", [])))
+        param_list.extend(self.cuda_function_capture_params.get(node.name, []))
         return_semantic = self.semantic_from_node(node)
+        fragment_output_param = None
+        fragment_output_params = [
+            param
+            for param in param_list
+            if is_fragment_output_parameter(
+                stage_name,
+                param,
+                self.semantic_from_node(param),
+            )
+        ]
+        if (
+            fragment_output_params
+            and return_semantic is None
+            and self.convert_crossgl_type_to_cuda(self.current_function_return_type)
+            == "void"
+        ):
+            fragment_output_param = fragment_output_params[0]
+            self.current_function_return_type = self.get_parameter_type(
+                fragment_output_param
+            )
+            return_type = self.convert_crossgl_type_to_cuda(
+                self.current_function_return_type
+            )
+            return_semantic = self.semantic_from_node(fragment_output_param)
+            param_list = [
+                param for param in param_list if param is not fragment_output_param
+            ]
+
         self.validate_cuda_return_semantic(
             stage_name, self.current_function_return_type, return_semantic
         )
@@ -1238,8 +1272,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         qualifier_str = " ".join(qualifiers)
 
         params = []
-        param_list = list(getattr(node, "parameters", getattr(node, "params", [])))
-        param_list.extend(self.cuda_function_capture_params.get(node.name, []))
         self.validate_cuda_stage_parameter_semantics(stage_name, param_list)
         if stage_name == "geometry":
             self.validate_cuda_geometry_stage(node, param_list)
@@ -1358,11 +1390,35 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         self.indent_level += 1
 
+        fragment_output_name = None
+        if fragment_output_param is not None:
+            fragment_output_name = getattr(
+                fragment_output_param,
+                "name",
+                getattr(fragment_output_param, "param_name", None),
+            )
+            fragment_output_type = self.resource_type_with_access(
+                self.get_parameter_type(fragment_output_param),
+                fragment_output_param,
+            )
+            self.register_variable_type(
+                fragment_output_name,
+                fragment_output_type,
+                fragment_output_param,
+            )
+            self.emit(
+                f"{self.format_typed_declarator(fragment_output_type, fragment_output_name)};"
+            )
+
         for local_var in getattr(self, "current_stage_local_variables", []) or []:
             if self.is_cuda_shared_variable(local_var):
                 self.visit(local_var)
 
         self.emit_body(body)
+        if fragment_output_name is not None and not self.statement_body_terminates(
+            body
+        ):
+            self.emit(f"return {fragment_output_name};")
 
         self.indent_level -= 1
         self.emit("}")

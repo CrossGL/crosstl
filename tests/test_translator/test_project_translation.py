@@ -38637,6 +38637,85 @@ def test_translate_project_rust_gpu_graphics_entry_io_lowers_for_targets(
     assert re.search(r'OpName %\d+ "output"', spirv) is None
 
 
+def test_translate_project_rust_gpu_mutable_fragment_output_lowers_for_native_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "lib.rs").write_text(
+        textwrap.dedent("""
+            use spirv_std::glam::{vec4, Vec4};
+
+            #[spirv(fragment)]
+            pub fn main_fs(output: &mut Vec4) {
+                *output = vec4(1.0, 0.0, 0.0, 1.0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["cuda", "hip", "mojo", "rust", "slang"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("cuda", "translated"),
+        ("hip", "translated"),
+        ("mojo", "translated"),
+        ("rust", "translated"),
+        ("slang", "translated"),
+    }
+
+    outputs = {
+        artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in payload["artifacts"]
+    }
+
+    cuda = outputs["cuda"]
+    assert "__device__ float4 main_fs()" in cuda
+    assert "float4 output;" in cuda
+    assert "output = make_float4(1.0, 0.0, 0.0, 1.0);" in cuda
+    assert "return output;" in cuda
+    assert "main_fs(float4 output" not in cuda
+    assert "CrossGL parameter semantic: output" not in cuda
+
+    hip = outputs["hip"]
+    assert "__device__ float4 main_fs()" in hip
+    assert "float4 output;" in hip
+    assert "output = make_float4(1.0, 0.0, 0.0, 1.0);" in hip
+    assert "return output;" in hip
+    assert "main_fs(float4 output" not in hip
+    assert "CrossGL parameter semantic: output" not in hip
+
+    mojo = outputs["mojo"]
+    assert "fn main_fs() -> SIMD[DType.float32, 4]:" in mojo
+    assert "var output: SIMD[DType.float32, 4]" in mojo
+    assert "output = SIMD[DType.float32, 4](1.0, 0.0, 0.0, 1.0)" in mojo
+    assert "return output" in mojo
+    assert "fn main_fs(output" not in mojo
+    assert "CrossGL parameter semantic" not in mojo
+
+    rust = outputs["rust"]
+    assert "pub fn main_fs() -> Vec4<f32>" in rust
+    assert "let mut output: Vec4<f32>;" in rust
+    assert "output = Vec4::<f32>::new(1.0, 0.0, 0.0, 1.0);" in rust
+    assert "return output;" in rust
+    assert "pub fn main_fs(output" not in rust
+    assert "CrossGL parameter semantic: output" not in rust
+
+    slang = outputs["slang"]
+    assert "float4 main_fs() : SV_Target" in slang
+    assert "float4 output;" in slang
+    assert "output = float4(1.0, 0.0, 0.0, 1.0);" in slang
+    assert "return output;" in slang
+    assert "main_fs(float4 output" not in slang
+
+
 def test_translate_project_rust_gpu_plain_vertex_input_lowers_to_metal_attribute(
     tmp_path,
 ):

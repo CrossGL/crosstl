@@ -102,7 +102,11 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
-from .stage_utils import compute_local_size, normalize_stage_name
+from .stage_utils import (
+    compute_local_size,
+    is_fragment_output_parameter,
+    normalize_stage_name,
+)
 
 
 class SlangCodeGen:
@@ -5664,6 +5668,31 @@ class SlangCodeGen:
         param_list = self.slang_merge_function_parameters(
             param_list, extra_parameters, shader_type
         )
+        fragment_output_rewrite = None
+        if self.convert_type(ret_type_name) == "void" and semantic is None:
+            for parameter in param_list:
+                parameter_semantic = self.semantic_from_node(parameter)
+                if is_fragment_output_parameter(
+                    shader_type,
+                    parameter,
+                    parameter_semantic,
+                ):
+                    ret_type_name = self.slang_parameter_type_name(parameter)
+                    ret_type = self.convert_type(ret_type_name)
+                    semantic = parameter_semantic
+                    fragment_output_rewrite = {
+                        "parameter": parameter,
+                        "local_name": getattr(parameter, "name", None),
+                        "return_type_name": ret_type_name,
+                    }
+                    break
+        if fragment_output_rewrite is not None:
+            output_parameter = fragment_output_rewrite["parameter"]
+            param_list = [
+                parameter
+                for parameter in param_list
+                if parameter is not output_parameter
+            ]
         self.validate_slang_return_semantic(
             shader_type, semantic, stage_role, ret_type_name
         )
@@ -5873,6 +5902,17 @@ class SlangCodeGen:
             local_type = self.convert_type(hull_output_rewrite["return_type_name"])
             local_name = hull_output_rewrite["local_name"]
             result += f"{self.indent()}{local_type} {local_name};\n"
+        if fragment_output_rewrite is not None:
+            local_type = self.convert_type(
+                fragment_output_rewrite["return_type_name"]
+            )
+            local_name = fragment_output_rewrite["local_name"]
+            self.register_variable_type(
+                local_name,
+                fragment_output_rewrite["return_type_name"],
+                fragment_output_rewrite["parameter"],
+            )
+            result += f"{self.indent()}{local_type} {local_name};\n"
 
         for statement_index, stmt in enumerate(body_statements):
             result += (
@@ -5889,6 +5929,14 @@ class SlangCodeGen:
             result += f"{self.indent()}return {builtin_return_rewrite['local_name']};\n"
         if hull_output_rewrite is not None:
             result += f"{self.indent()}return {hull_output_rewrite['local_name']};\n"
+        if (
+            fragment_output_rewrite is not None
+            and not self.statement_body_terminates(body_statements)
+        ):
+            result += (
+                f"{self.indent()}return "
+                f"{fragment_output_rewrite['local_name']};\n"
+            )
 
         self.indent_level -= 1
         result += "}"
