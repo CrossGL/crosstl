@@ -859,6 +859,18 @@ def substitute_generic_type_name(type_name, substitutions):
     if type_name in substitutions:
         return substitutions[type_name]
 
+    stripped_reference = _strip_reference_wrappers(type_name)
+    if stripped_reference != type_name:
+        substituted = substitute_generic_type_name(stripped_reference, substitutions)
+        if type_name.lstrip().startswith("&"):
+            return f"&{substituted}"
+        return f"{substituted}&"
+
+    if type_name.strip().endswith("*"):
+        pointee_type = type_name.strip()[:-1].strip()
+        if pointee_type:
+            return f"{substitute_generic_type_name(pointee_type, substitutions)}*"
+
     base_name, generic_args = generic_type_parts(type_name)
     if not generic_args:
         return substitutions.get(base_name, type_name)
@@ -880,6 +892,15 @@ def generic_enum_specialization_name(type_name):
 
 def sanitize_type_name(type_name):
     return re.sub(r"_+", "_", re.sub(r"[^0-9A-Za-z_]", "_", str(type_name))).strip("_")
+
+
+def _strip_reference_wrappers(type_name):
+    type_name = str(type_name or "").strip()
+    while type_name.startswith("&"):
+        type_name = type_name[1:].strip()
+    while type_name.endswith("&"):
+        type_name = type_name[:-1].strip()
+    return type_name
 
 
 def generic_type_parts(type_name):

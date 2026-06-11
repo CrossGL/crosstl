@@ -558,8 +558,30 @@ def _collect_type_parameter_bindings(
 
     expected_type = str(expected_type)
     actual_type = str(actual_type)
+    expected_inner = _strip_reference_wrappers(expected_type)
+    actual_inner = _strip_reference_wrappers(actual_type)
+    if expected_inner != expected_type or actual_inner != actual_type:
+        _collect_type_parameter_bindings(
+            expected_inner,
+            actual_inner,
+            substitutions,
+            generic_params,
+        )
+        return
+
     if expected_type in generic_params:
         substitutions.setdefault(expected_type, actual_type)
+        return
+
+    expected_pointee = _pointer_pointee_type(expected_type)
+    actual_pointee = _pointer_pointee_type(actual_type)
+    if expected_pointee is not None and actual_pointee is not None:
+        _collect_type_parameter_bindings(
+            expected_pointee,
+            actual_pointee,
+            substitutions,
+            generic_params,
+        )
         return
 
     expected_base, expected_args = generic_type_parts(expected_type)
@@ -617,11 +639,12 @@ def _types_compatible(generator, expected_type, actual_type):
         compatible = None
     if compatible is not None:
         try:
-            expected_base = generator.array_base_type_name(str(expected_type))
-            actual_base = generator.array_base_type_name(str(actual_type))
-            if generator.structured_buffer_type_info(
-                expected_base
-            ) or generator.structured_buffer_type_info(actual_base):
+            is_storage_buffer = getattr(
+                generator, "is_storage_buffer_resource_type_name", None
+            )
+            if is_storage_buffer is not None and (
+                is_storage_buffer(expected_type) or is_storage_buffer(actual_type)
+            ):
                 return compatible(expected_type, actual_type)
         except (AttributeError, TypeError, ValueError):
             pass
@@ -641,3 +664,20 @@ def _types_compatible(generator, expected_type, actual_type):
 def _function_call_name(call):
     func_expr = getattr(call, "function", getattr(call, "name", None))
     return getattr(func_expr, "name", func_expr) if func_expr is not None else None
+
+
+def _strip_reference_wrappers(type_text):
+    type_text = str(type_text or "").strip()
+    while type_text.startswith("&"):
+        type_text = type_text[1:].strip()
+    while type_text.endswith("&"):
+        type_text = type_text[:-1].strip()
+    return type_text
+
+
+def _pointer_pointee_type(type_text):
+    type_text = _strip_reference_wrappers(type_text)
+    if not type_text.endswith("*"):
+        return None
+    pointee_type = type_text[:-1].strip()
+    return pointee_type or None
