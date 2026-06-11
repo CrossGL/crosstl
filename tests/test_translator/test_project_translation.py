@@ -22560,6 +22560,126 @@ def test_translate_project_rewrites_directx_nontype_startswith_failure(
     assert "NoneType" not in payload["artifacts"][0]["error"]
 
 
+def test_translate_project_directx_translates_mlx_steel_issue_943_frontier(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    issue_paths = [
+        "mlx/backend/metal/kernels/steel/attn/kernels/steel_attention_nax.metal",
+        "mlx/backend/metal/kernels/steel/gemm/kernels/steel_gemm_fused.metal",
+        "mlx/backend/metal/kernels/steel/gemm/kernels/steel_gemm_gather.metal",
+        "mlx/backend/metal/kernels/steel/gemm/kernels/steel_gemm_masked.metal",
+        "mlx/backend/metal/kernels/steel/gemm/kernels/steel_gemm_segmented.metal",
+        "mlx/backend/metal/kernels/steel/gemm/kernels/steel_gemm_splitk.metal",
+    ]
+    for offset, relative_path in enumerate(issue_paths, start=1):
+        source_path = repo / relative_path
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text(
+            textwrap.dedent(f"""
+                #include <metal_stdlib>
+                using namespace metal;
+
+                #define instantiate_steel(name, itype, offset) \\
+                    instantiate_kernel("issue943_" #name, steel_kernel, itype, offset)
+
+                template <typename T>
+                struct FragValue {{
+                    T value;
+                }};
+
+                template <typename T>
+                struct RecursiveTile {{
+                    using NAXFrag_t = RecursiveTile<T>;
+
+                    template <typename U>
+                    using dtype_frag_t = FragValue<U>;
+                }};
+
+                template <typename T, typename NAXTile_t>
+                struct TransformNone {{
+                    using CFrag = typename NAXTile_t::NAXFrag_t;
+                    using cfrag_t = typename CFrag::template dtype_frag_t<T>;
+
+                    cfrag_t celems;
+                }};
+
+                inline float steel_dependent_value(float value) {{
+                    TransformNone<float, RecursiveTile<float>> transform;
+                    transform.celems.value = value;
+                    return transform.celems.value;
+                }}
+
+                template <typename T, int Offset>
+                [[kernel]] void steel_kernel(
+                    device T* out [[buffer(0)]],
+                    uint gid [[thread_position_in_grid]]) {{
+                    T value = T(steel_dependent_value(float(gid + Offset)));
+                    out[gid] = value;
+                }}
+
+                instantiate_steel(float32, float, {offset})
+                """).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["mlx/backend/metal/kernels/steel"]
+            include = [
+              "mlx/backend/metal/kernels/steel/attn/kernels/steel_attention_nax.metal",
+              "mlx/backend/metal/kernels/steel/gemm/kernels/steel_gemm_fused.metal",
+              "mlx/backend/metal/kernels/steel/gemm/kernels/steel_gemm_gather.metal",
+              "mlx/backend/metal/kernels/steel/gemm/kernels/steel_gemm_masked.metal",
+              "mlx/backend/metal/kernels/steel/gemm/kernels/steel_gemm_segmented.metal",
+              "mlx/backend/metal/kernels/steel/gemm/kernels/steel_gemm_splitk.metal",
+            ]
+            targets = ["directx"]
+            output_dir = "out"
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["summary"]["artifactCount"] == len(issue_paths)
+    assert payload["summary"]["translatedCount"] == len(issue_paths)
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+    assert payload["summary"]["artifactsByTarget"] == {
+        "directx": {
+            "artifactCount": len(issue_paths),
+            "translatedCount": len(issue_paths),
+            "failedCount": 0,
+        }
+    }
+    assert payload["summary"]["artifactsBySourceBackend"] == {
+        "metal": {
+            "artifactCount": len(issue_paths),
+            "translatedCount": len(issue_paths),
+            "failedCount": 0,
+        }
+    }
+    assert payload["diagnostics"] == []
+
+    translated_sources = {
+        artifact["source"]
+        for artifact in payload["artifacts"]
+        if artifact["status"] == "translated"
+    }
+    assert translated_sources == set(issue_paths)
+    for artifact in payload["artifacts"]:
+        generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+        assert "struct RecursiveTile" in generated
+        assert "float steel_dependent_value(float value)" in generated
+        assert "RWStructuredBuffer<float> out_" in generated
+        assert "SV_DispatchThreadID" in generated
+
+
 def test_translate_project_reports_glsl_fragment_invocation_density_as_unsupported(
     tmp_path,
 ):
