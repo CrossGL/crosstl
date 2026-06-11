@@ -2324,9 +2324,9 @@ class HLSLCodeGen:
                     declaration_type = f"{member_type}[]"
                 else:
                     declaration_type = f"{member_type}[1024]"
-                semantic = self.hlsl_struct_member_declared_semantic(member)
+                semantic = default_member_semantics.get(member.name)
                 if semantic is None:
-                    semantic = default_member_semantics.get(member.name)
+                    semantic = self.hlsl_struct_member_declared_semantic(member)
                 self.validate_hlsl_struct_member_semantic_type(
                     node.name,
                     member.name,
@@ -2393,9 +2393,9 @@ class HLSLCodeGen:
                 if array_size is None:
                     member_type = f"{self.map_struct_member_type(node.name, member.name, raw_element_type)}[1024]"
 
-            semantic = self.hlsl_struct_member_declared_semantic(member)
+            semantic = default_member_semantics.get(member.name)
             if semantic is None:
-                semantic = default_member_semantics.get(member.name)
+                semantic = self.hlsl_struct_member_declared_semantic(member)
 
             self.validate_hlsl_struct_member_semantic_type(
                 node.name,
@@ -12833,7 +12833,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         used_semantics = set()
         for member in getattr(struct_node, "members", []) or []:
             semantic = self.hlsl_struct_member_declared_semantic(member)
-            if semantic is not None:
+            if semantic is not None and self.hlsl_location_attribute_index(
+                member
+            ) is None:
                 used_semantics.add(self.hlsl_semantic_key(semantic))
 
         defaults = {}
@@ -12842,13 +12844,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             member_name = getattr(member, "name", None)
             if not member_name:
                 continue
-            if self.hlsl_struct_member_declared_semantic(member) is not None:
-                continue
             if not self.hlsl_can_default_fragment_input_semantic(
                 self.hlsl_struct_member_type_name(member)
             ):
                 continue
 
+            declared_semantic = self.hlsl_struct_member_declared_semantic(member)
+            location_index = self.hlsl_location_attribute_index(member)
+            if declared_semantic is not None and location_index is None:
+                continue
+
+            if location_index is not None:
+                next_texcoord = location_index
             while self.hlsl_semantic_key(f"TEXCOORD{next_texcoord}") in used_semantics:
                 next_texcoord += 1
             semantic = f"TEXCOORD{next_texcoord}"
@@ -18514,21 +18521,34 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return name
 
     def hlsl_location_return_semantic(self, attr):
-        name = getattr(attr, "name", None)
-        if str(name).lower() != "location":
-            return None
-        arguments = getattr(attr, "arguments", None) or getattr(attr, "args", None)
-        if not arguments:
-            return None
-        index_arg = arguments[0]
-        index = getattr(index_arg, "value", None)
-        if index is None:
-            index = getattr(index_arg, "name", None)
-        if index is None:
-            index = self.attribute_value_to_string(index_arg)
+        index = self.hlsl_location_attribute_index(attr)
         if index is None:
             return None
         return f"SV_Target{index}"
+
+    def hlsl_location_attribute_index(self, node):
+        if hasattr(node, "attributes"):
+            attributes = getattr(node, "attributes", [])
+        else:
+            attributes = [node]
+        for attr in attributes or []:
+            name = getattr(attr, "name", None)
+            if str(name).lower() != "location":
+                continue
+            arguments = getattr(attr, "arguments", None) or getattr(attr, "args", None)
+            if not arguments:
+                continue
+            index_arg = arguments[0]
+            index = getattr(index_arg, "value", None)
+            if index is None:
+                index = getattr(index_arg, "name", None)
+            if index is None:
+                index = self.attribute_value_to_string(index_arg)
+            if isinstance(index, int):
+                return index
+            if str(index).isdigit():
+                return int(index)
+        return None
 
     def semantic_from_struct_member(self, member):
         if isinstance(member, ArrayNode):
