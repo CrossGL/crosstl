@@ -327,6 +327,26 @@ GLSL_FRAGMENT_INVOCATION_DENSITY_SOURCE = textwrap.dedent("""
     }
     """).strip()
 
+GLSL_FRAGMENT_INVOCATION_DENSITY_HELPER_SOURCE = textwrap.dedent("""
+    #version 450 core
+    #extension GL_EXT_fragment_invocation_density : require
+    layout(location = 0) out vec4 fragColor;
+
+    vec4 FragmentDensityToColor() {
+        float invocationArea = float(
+            gl_FragSizeEXT.x * gl_FragSizeEXT.y
+        );
+        float h = (
+            clamp(1.0 - 1.0 / invocationArea, 0.0, 1.0)
+        ) / 1.35;
+        return vec4(h, h, h, 1.0);
+    }
+
+    void main() {
+        fragColor = FragmentDensityToColor();
+    }
+    """).strip()
+
 GLSLANG_SPEC_CONSTANT_VERTEX_SOURCE = textwrap.dedent("""
     #version 400
     layout(constant_id = 16) const int arraySize = 5;
@@ -27125,6 +27145,56 @@ def test_translate_project_models_glsl_fragment_invocation_density_by_target(
     assert "gl_FragSizeEXT" in opengl_code
 
 
+def test_translate_project_lowers_fragment_invocation_density_helpers_by_target(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "CubeFDM_fs.glsl").write_text(
+        GLSL_FRAGMENT_INVOCATION_DENSITY_HELPER_SOURCE, encoding="utf-8"
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx", "metal"],
+        output_dir="out",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["artifactCount"] == 2
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.unsupported-feature": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "glsl.builtin.gl_FragSizeEXT": 1,
+        "glsl.extension.GL_EXT_fragment_invocation_density": 1,
+    }
+
+    artifacts_by_target = {
+        artifact["target"]: artifact for artifact in payload["artifacts"]
+    }
+    directx_artifact = artifacts_by_target["directx"]
+    metal_artifact = artifacts_by_target["metal"]
+
+    assert directx_artifact["status"] == "translated"
+    directx_code = (repo / directx_artifact["path"]).read_text(encoding="utf-8")
+    assert "SV_ShadingRate" in directx_code
+    assert "CrossGLFragmentSizeFromShadingRate" in directx_code
+    assert "float4 FragmentDensityToColor(uint2 _crossglFragSize)" in directx_code
+    assert "FragmentDensityToColor(_crossglFragSize)" in directx_code
+    assert "gl_FragSizeEXT" not in directx_code
+    assert_directx_fragment_validates_if_available(directx_code, tmp_path)
+
+    assert metal_artifact["status"] == "failed"
+    assert "GL_EXT_fragment_invocation_density" in metal_artifact["error"]
+    assert "gl_FragSizeEXT" in metal_artifact["error"]
+    assert "generatedHash" not in metal_artifact
+    assert "generatedSizeBytes" not in metal_artifact
+    assert not (repo / metal_artifact["path"]).exists()
+
+
 def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -37800,8 +37870,7 @@ def test_translate_project_metal_matmul_device_buffers_do_not_emit_directx_param
     assert "uint2 id = id_dispatchThreadID.xy;" in output
     assert (
         "X[((row * col_dim_x) + col)] = "
-        "(A.Load(((row * inner_dim) + col)) + B.Load(col));"
-        in output
+        "(A.Load(((row * inner_dim) + col)) + B.Load(col));" in output
     )
     assert "X.Store(" not in output
     assert "A.Load(((row * inner_dim) + col))" in output
@@ -40626,8 +40695,7 @@ def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(
         assert not (repo / artifact["path"]).exists()
         assert "opencl.target.unsupported" in artifact["error"]
         assert (
-            "unresolved non-void helper declarations without bodies: "
-            "op"
+            "unresolved non-void helper declarations without bodies: " "op"
         ) in artifact["error"]
         if artifact["target"] == "cgl":
             assert "read_local(shared_: ptr<i32>)" in artifact["error"]
