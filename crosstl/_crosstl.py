@@ -170,6 +170,8 @@ def translate(
             if not source_spec.reverse_codegen_factory:
                 raise ValueError(f"Reverse translation not supported for: {file_path}")
             codegen = source_spec.reverse_codegen_factory()
+            if source_spec.name == "opencl":
+                codegen.normalize_target_safe_cgl = True
             generated_code = codegen.generate(ast)
             if source_spec.name == "opencl":
                 cgl_spec = SOURCE_REGISTRY.get("cgl")
