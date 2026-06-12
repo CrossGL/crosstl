@@ -117,11 +117,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p support/generated/demo-reports/${{ matrix.os }}
-          readarray -t demo_test_files < <(python tools/demo_ci_metadata.py emit-pytest-files)
+          demo_test_files=()
+          while IFS= read -r demo_test_file; do
+            demo_test_file="${demo_test_file%$'\r'}"
+            demo_test_files+=("$demo_test_file")
+          done < <(python tools/demo_ci_metadata.py emit-pytest-files)
           demo_selector="$(python tools/demo_ci_metadata.py emit-pytest-selector)"
-          for index in "${!demo_test_files[@]}"; do
-            demo_test_files[$index]="${demo_test_files[$index]%$'\r'}"
-          done
           demo_selector="${demo_selector%$'\r'}"
           python -m pytest -q \
             "${demo_test_files[@]}" \

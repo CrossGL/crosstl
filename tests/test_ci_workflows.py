@@ -295,17 +295,18 @@ def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
     assert '"tests/test_translator/test_project_translation.py"' in demo
     assert '"tools/demo_ci_metadata.py"' in demo
     assert "id: run_demo_tests" in demo
-    assert (
-        "readarray -t demo_test_files < <(python tools/demo_ci_metadata.py "
-        "emit-pytest-files)"
-    ) in demo
+    assert "readarray" not in demo
+    assert "demo_test_files=()" in demo
+    assert "while IFS= read -r demo_test_file; do" in demo
+    assert "demo_test_file=\"${demo_test_file%$'\\r'}\"" in demo
+    assert 'demo_test_files+=("$demo_test_file")' in demo
+    assert "done < <(python tools/demo_ci_metadata.py emit-pytest-files)" in demo
     assert (
         'demo_selector="$(python tools/demo_ci_metadata.py emit-pytest-selector)"'
         in demo
     )
     assert '"${demo_test_files[@]}"' in demo
     assert '-k "$demo_selector"' in demo
-    assert "demo_test_files[$index]=\"${demo_test_files[$index]%$'\\r'}\"" in demo
     assert "demo_selector=\"${demo_selector%$'\\r'}\"" in demo
     for selector in demo_selectors:
         assert selector not in demo
