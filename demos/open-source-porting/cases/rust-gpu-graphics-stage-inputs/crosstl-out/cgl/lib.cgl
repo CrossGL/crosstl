@@ -1,0 +1,23 @@
+shader main {
+    // use spirv_std::glam::{vec3, Vec2, Vec3, Vec4}
+    // use spirv_std::spirv
+    vec3 tonemap(vec3 color) {
+        return color;
+    }
+
+    // Fragment Shader
+    fragment main_fs {
+        void main(out vec4 output @ gl_FragColor) {
+            let color = vec3(1.0, 0.5, 0.25);
+            output = vec4(tonemap(color), 1.0);
+        }
+    }
+
+    // Vertex Shader
+    vertex main_vs {
+        void main(vec2 pos, out vec4 builtin_pos @ gl_Position) {
+            builtin_pos = vec4(vec3(pos, 0.0), 1.0);
+        }
+    }
+
+}

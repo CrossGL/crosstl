@@ -201,6 +201,11 @@ def test_full_suite_keeps_required_compiler_smoke_coverage():
         assert tool in full_suite
     assert "Jimver/cuda-toolkit@v0.2.35" in full_suite
     assert 'CUDA_VERSION: "13.2.0"' in full_suite
+    assert "id: install_cuda" in full_suite
+    assert "steps.install_cuda.outcome == 'failure'" in full_suite
+    assert "Reset CUDA apt metadata before retry" in full_suite
+    assert "Retry CUDA compiler install after repository sync" in full_suite
+    assert "compiler-smoke-linux-retry.txt" in full_suite
     assert "SLANG_VERSION: v2026.9.1" in full_suite
     assert "test_external_shader_validators.py" in full_suite
 
@@ -261,8 +266,8 @@ def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
     assert re.search(r"\bpull_request\s*:", demo)
     assert "workflow_dispatch:" in demo
     assert "permissions:\n  contents: read" in demo
-    assert "timeout-minutes: 45" in demo
-    assert "os: [ubuntu-latest]" in demo
+    assert "timeout-minutes: 60" in demo
+    assert _matrix_values(demo, "os") == RUNNER_OSES
     demo_push_paths = set(_workflow_event_paths(demo, "push"))
     demo_pull_request_paths = set(_workflow_event_paths(demo, "pull_request"))
     assert demo_push_paths == demo_pull_request_paths
@@ -290,16 +295,19 @@ def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
     assert '"tests/test_translator/test_project_translation.py"' in demo
     assert '"tools/demo_ci_metadata.py"' in demo
     assert "id: run_demo_tests" in demo
-    assert (
-        "readarray -t demo_test_files < <(python tools/demo_ci_metadata.py "
-        "emit-pytest-files)"
-    ) in demo
+    assert "readarray" not in demo
+    assert "demo_test_files=()" in demo
+    assert "while IFS= read -r demo_test_file; do" in demo
+    assert "demo_test_file=\"${demo_test_file%$'\\r'}\"" in demo
+    assert 'demo_test_files+=("$demo_test_file")' in demo
+    assert "done < <(python tools/demo_ci_metadata.py emit-pytest-files)" in demo
     assert (
         'demo_selector="$(python tools/demo_ci_metadata.py emit-pytest-selector)"'
         in demo
     )
     assert '"${demo_test_files[@]}"' in demo
     assert '-k "$demo_selector"' in demo
+    assert "demo_selector=\"${demo_selector%$'\\r'}\"" in demo
     for selector in demo_selectors:
         assert selector not in demo
     assert (
@@ -319,9 +327,8 @@ def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
     assert "name: Upload demo reports" in demo
     assert "name: open-source-porting-demo-reports-${{ matrix.os }}" in demo
     assert "name: Upload demo failure summary" in demo
-    assert (
-        "name: open-source-porting-demo-failure-summary-${{ matrix.os }}" in demo
-    )
+    assert "name: open-source-porting-demo-failure-summary-${{ matrix.os }}" in demo
+    assert "profile=\"${profile%$'\\r'}\"" in demo
     assert "if: failure() && steps.run_demo_tests.outcome == 'failure'" in demo
     assert "if-no-files-found: ignore" in demo
     assert "retention-days: 30" in demo
@@ -1223,8 +1230,7 @@ def test_ci_coverage_reports_missing_support_planner_tests():
     assert "support-issue-sync.yml missing workflow_run_full_tests" in errors
     assert "support-issue-sync.yml missing workflow_run_backend_tests" in errors
     assert (
-        "support-issue-sync.yml missing workflow_run_open_source_porting_demo"
-        in errors
+        "support-issue-sync.yml missing workflow_run_open_source_porting_demo" in errors
     )
     assert "support-issue-sync.yml missing workflow_run_translator_tests" in errors
     assert "support-issue-sync.yml missing downloads_test_failure_summaries" in errors

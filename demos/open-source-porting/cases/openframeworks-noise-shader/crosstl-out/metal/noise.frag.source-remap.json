@@ -1,0 +1,182 @@
+{
+  "generatedFile": "crosstl-out/metal/noise.frag.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 111,
+        "file": "crosstl-out/metal/noise.frag.metal",
+        "length": 24,
+        "line": 7,
+        "offset": 87
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 73,
+        "file": "noise.frag",
+        "length": 26,
+        "line": 4,
+        "offset": 47
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 133,
+        "file": "crosstl-out/metal/noise.frag.metal",
+        "length": 19,
+        "line": 9,
+        "offset": 114
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 142,
+        "file": "noise.frag",
+        "length": 34,
+        "line": 9,
+        "offset": 108
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 294,
+        "file": "crosstl-out/metal/noise.frag.metal",
+        "length": 161,
+        "line": 10,
+        "offset": 133
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 47,
+        "file": "noise.frag",
+        "length": 33,
+        "line": 3,
+        "offset": 14
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 316,
+        "file": "crosstl-out/metal/noise.frag.metal",
+        "length": 22,
+        "line": 11,
+        "offset": 294
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 94,
+        "file": "noise.frag",
+        "length": 20,
+        "line": 6,
+        "offset": 74
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 354,
+        "file": "crosstl-out/metal/noise.frag.metal",
+        "length": 38,
+        "line": 12,
+        "offset": 316
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 352,
+        "file": "noise.frag",
+        "length": 33,
+        "line": 14,
+        "offset": 319
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 392,
+        "file": "crosstl-out/metal/noise.frag.metal",
+        "length": 38,
+        "line": 13,
+        "offset": 354
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 385,
+        "file": "noise.frag",
+        "length": 33,
+        "line": 15,
+        "offset": 352
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 506,
+        "file": "crosstl-out/metal/noise.frag.metal",
+        "length": 114,
+        "line": 14,
+        "offset": 392
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 535,
+        "file": "noise.frag",
+        "length": 58,
+        "line": 18,
+        "offset": 477
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 548,
+        "file": "crosstl-out/metal/noise.frag.metal",
+        "length": 42,
+        "line": 15,
+        "offset": 506
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 568,
+        "file": "noise.frag",
+        "length": 33,
+        "line": 19,
+        "offset": 535
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

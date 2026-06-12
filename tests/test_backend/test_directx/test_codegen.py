@@ -651,7 +651,7 @@ def test_effect_compile_pixel_shader_wires_vulkan_fragment_entry_body():
         parse_crossgl(generate_crossgl(monogame_sprite_effect_hlsl()))
     )
 
-    assert 'OpEntryPoint Fragment' in generated
+    assert "OpEntryPoint Fragment" in generated
     assert '"SpritePixelShader"' in generated
     assert "OpImageSampleImplicitLod" in generated
     assert "OpFMul" in generated

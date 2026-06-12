@@ -1,0 +1,72 @@
+{
+  "generatedFile": "crosstl-out/vulkan/headless.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 451,
+        "file": "crosstl-out/vulkan/headless.spvasm",
+        "length": 35,
+        "line": 19,
+        "offset": 416
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 436,
+        "file": "headless.comp",
+        "length": 39,
+        "line": 27,
+        "offset": 397
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 638,
+        "file": "crosstl-out/vulkan/headless.spvasm",
+        "length": 25,
+        "line": 26,
+        "offset": 613
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 47,
+        "file": "headless.comp",
+        "length": 33,
+        "line": 3,
+        "offset": 14
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 841,
+        "file": "crosstl-out/vulkan/headless.spvasm",
+        "length": 20,
+        "line": 35,
+        "offset": 821
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 195,
+        "file": "headless.comp",
+        "length": 58,
+        "line": 9,
+        "offset": 137
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

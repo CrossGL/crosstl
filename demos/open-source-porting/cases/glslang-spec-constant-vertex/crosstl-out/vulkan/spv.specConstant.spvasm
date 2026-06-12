@@ -1,0 +1,183 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 111
+OpCapability Shader
+OpCapability Float64
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %71 "main" %74 %76 %78 %81
+OpName %13 "VertexInput"
+OpMemberName %13 0 "ucol"
+OpMemberName %13 1 "dupUcol"
+OpName %14 "VertexOutput"
+OpMemberName %14 0 "color"
+OpMemberName %14 1 "size"
+OpName %15 "arraySize"
+OpName %16 "spBool"
+OpName %17 "spFloat"
+OpName %19 "spDouble"
+OpName %21 "scale"
+OpName %22 "dupArraySize"
+OpName %23 "spDupBool"
+OpName %24 "spDupFloat"
+OpName %25 "spDupDouble"
+OpName %26 "dupScale"
+OpName %31 "input"
+OpName %32 "output"
+OpName %67 "result"
+OpName %74 "CrossGL_vertex_output_main_color"
+OpName %76 "CrossGL_vertex_output_main_size"
+OpName %78 "CrossGL_vertex_input_input_ucol"
+OpName %81 "CrossGL_vertex_input_input_dupUcol"
+OpName %84 "input"
+OpName %85 "output"
+OpDecorate %15 SpecId 16
+OpDecorate %16 SpecId 17
+OpDecorate %17 SpecId 18
+OpDecorate %19 SpecId 19
+OpDecorate %21 SpecId 22
+OpDecorate %22 SpecId 116
+OpDecorate %23 SpecId 117
+OpDecorate %24 SpecId 118
+OpDecorate %25 SpecId 119
+OpDecorate %26 SpecId 122
+OpDecorate %74 Location 0
+OpDecorate %76 Location 1
+OpDecorate %78 Location 0
+OpDecorate %81 Location 5
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%10 = OpConstant %4 5
+%9 = OpTypeArray %8 %10
+%12 = OpConstant %4 12
+%11 = OpTypeArray %8 %12
+%13 = OpTypeStruct %9 %11
+%14 = OpTypeStruct %8 %4
+%15 = OpSpecConstant %4 5
+%16 = OpSpecConstantTrue %3
+%17 = OpSpecConstant %5 3.14
+%18 = OpTypeFloat 64
+%19 = OpSpecConstant %18 3.141592653589793
+%20 = OpTypeInt 32 0
+%21 = OpSpecConstant %20 2
+%22 = OpSpecConstant %4 12
+%23 = OpSpecConstantTrue %3
+%24 = OpSpecConstant %5 3.14
+%25 = OpSpecConstant %18 3.141592653589793
+%26 = OpSpecConstant %20 2
+%27 = OpTypePointer Function %13
+%28 = OpTypePointer Function %14
+%29 = OpTypeFunction %2 %27 %28
+%34 = OpConstant %4 0
+%35 = OpTypePointer Function %8
+%38 = OpConstant %4 2
+%39 = OpConstant %4 1
+%40 = OpTypePointer Function %11
+%45 = OpTypePointer Function %4
+%64 = OpTypeFunction %4
+%68 = OpConstant %4 8
+%70 = OpTypeFunction %2
+%73 = OpTypePointer Output %8
+%75 = OpTypePointer Output %4
+%77 = OpTypePointer Input %9
+%80 = OpTypePointer Input %11
+%86 = OpTypePointer Function %9
+%74 = OpVariable %73 Output
+%76 = OpVariable %75 Output
+%78 = OpVariable %77 Input
+%81 = OpVariable %80 Input
+%30 = OpFunction %2 None %29
+%31 = OpFunctionParameter %27
+%32 = OpFunctionParameter %28
+%33 = OpLabel
+%36 = OpAccessChain %35 %32 %34
+%37 = OpLoad %8 %36
+%41 = OpAccessChain %40 %31 %39
+%42 = OpAccessChain %35 %41 %38
+%43 = OpLoad %8 %42
+%44 = OpFAdd %8 %37 %43
+OpStore %36 %44
+%46 = OpAccessChain %45 %32 %39
+%47 = OpLoad %4 %46
+%48 = OpIAdd %4 %47 %22
+OpStore %46 %48
+OpSelectionMerge %49 None
+OpBranchConditional %23 %50 %51
+%50 = OpLabel
+%52 = OpAccessChain %35 %32 %34
+%53 = OpLoad %8 %52
+%54 = OpConvertUToF %5 %26
+%55 = OpCompositeConstruct %8 %54 %54 %54 %54
+%56 = OpFMul %8 %53 %55
+OpStore %52 %56
+OpBranch %49
+%51 = OpLabel
+OpBranch %49
+%49 = OpLabel
+%57 = OpAccessChain %35 %32 %34
+%58 = OpLoad %8 %57
+%59 = OpFConvert %18 %24
+%60 = OpFDiv %18 %25 %59
+%61 = OpFConvert %5 %60
+%62 = OpCompositeConstruct %8 %61 %61 %61 %61
+%63 = OpFAdd %8 %58 %62
+OpStore %57 %63
+OpReturn
+OpFunctionEnd
+%65 = OpFunction %4 None %64
+%66 = OpLabel
+%67 = OpVariable %45 Function
+OpStore %67 %68
+%69 = OpLoad %4 %67
+OpReturnValue %69
+OpFunctionEnd
+%71 = OpFunction %2 None %70
+%72 = OpLabel
+%84 = OpVariable %27 Function
+%85 = OpVariable %28 Function
+%79 = OpLoad %9 %78
+%82 = OpLoad %11 %81
+%83 = OpCompositeConstruct %13 %79 %82
+OpStore %84 %83
+%87 = OpAccessChain %86 %84 %34
+%88 = OpAccessChain %35 %87 %38
+%89 = OpLoad %8 %88
+%90 = OpAccessChain %35 %85 %34
+OpStore %90 %89
+%91 = OpAccessChain %45 %85 %39
+OpStore %91 %15
+OpSelectionMerge %92 None
+OpBranchConditional %16 %93 %94
+%93 = OpLabel
+%95 = OpAccessChain %35 %85 %34
+%96 = OpLoad %8 %95
+%97 = OpConvertUToF %5 %21
+%98 = OpCompositeConstruct %8 %97 %97 %97 %97
+%99 = OpFMul %8 %96 %98
+OpStore %95 %99
+OpBranch %92
+%94 = OpLabel
+OpBranch %92
+%92 = OpLabel
+%100 = OpAccessChain %35 %85 %34
+%101 = OpLoad %8 %100
+%102 = OpFConvert %18 %17
+%103 = OpFDiv %18 %19 %102
+%104 = OpFConvert %5 %103
+%105 = OpCompositeConstruct %8 %104 %104 %104 %104
+%106 = OpFAdd %8 %101 %105
+OpStore %100 %106
+%107 = OpFunctionCall %2 %30 %84 %85
+%108 = OpLoad %14 %85
+%109 = OpCompositeExtract %8 %108 0
+OpStore %74 %109
+%110 = OpCompositeExtract %4 %108 1
+OpStore %76 %110
+OpReturn
+OpFunctionEnd

@@ -1,0 +1,15 @@
+#version 110
+
+shader main {
+    struct FragmentInput {
+    vec3 color;
+    };
+
+    fragment {
+    vec4 main(FragmentInput input) @ gl_FragColor {
+        vec4 gl_FragColor;
+        gl_FragColor = vec4(input.color, 1.0);
+        return gl_FragColor;
+    }
+    }
+}

@@ -1,0 +1,50 @@
+{
+  "generatedFile": "crosstl-out/vulkan/Cube_cube.frag.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 338,
+        "file": "crosstl-out/vulkan/Cube_cube.frag.spvasm",
+        "length": 38,
+        "line": 12,
+        "offset": 300
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 1266,
+        "file": "Cube_cube.frag",
+        "length": 41,
+        "line": 27,
+        "offset": 1225
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 435,
+        "file": "crosstl-out/vulkan/Cube_cube.frag.spvasm",
+        "length": 26,
+        "line": 15,
+        "offset": 409
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 1266,
+        "file": "Cube_cube.frag",
+        "length": 41,
+        "line": 27,
+        "offset": 1225
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

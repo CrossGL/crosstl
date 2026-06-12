@@ -1,0 +1,50 @@
+{
+  "generatedFile": "crosstl-out/metal/flat-color.vert.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 170,
+        "file": "crosstl-out/metal/flat-color.vert.metal",
+        "length": 37,
+        "line": 9,
+        "offset": 133
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 232,
+        "file": "flat-color.vert",
+        "length": 31,
+        "line": 14,
+        "offset": 201
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 439,
+        "file": "crosstl-out/metal/flat-color.vert.metal",
+        "length": 56,
+        "line": 18,
+        "offset": 383
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 232,
+        "file": "flat-color.vert",
+        "length": 31,
+        "line": 14,
+        "offset": 201
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

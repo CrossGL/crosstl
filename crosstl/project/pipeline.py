@@ -8390,8 +8390,8 @@ def _webgl_split_stage_artifacts(
             continue
 
         stage_path = _webgl_stage_path(output_path, stage)
-        with stage_path.open("w", encoding="utf-8", newline="") as file:
-            file.write(stage_source)
+        with stage_path.open("w", encoding="utf-8", newline="") as stage_file:
+            stage_file.write(stage_source)
         stage_artifact = dict(artifact)
         stage_artifact["stage"] = stage_label
         stage_artifact["path"] = _artifact_report_path(stage_path, config)
@@ -12450,6 +12450,35 @@ def _source_offset_in_spans(offset: int, spans: Sequence[tuple[int, int]]) -> bo
     return any(start <= offset < end for start, end in spans)
 
 
+def _metal_template_arguments_are_local_constants(
+    preprocessor: Any,
+    source: str,
+    offset: int,
+    names: Sequence[str],
+    template_spans: Sequence[tuple[int, int]],
+) -> bool:
+    if not names:
+        return False
+    for function in preprocessor._find_non_template_function_definitions(
+        source,
+        list(template_spans),
+    ):
+        body_start, body_end = function.body_span
+        if not (body_start <= offset < body_end):
+            continue
+        prefix = source[body_start:offset]
+        return all(
+            re.search(
+                rf"\b(?:static\s+)?(?:constexpr|const)\s+"
+                rf"(?:[A-Za-z_][A-Za-z0-9_:<>]*\s+)+{re.escape(name)}\s*=",
+                prefix,
+            )
+            is not None
+            for name in names
+        )
+    return False
+
+
 def _template_argument_missing_parameters(
     argument: str,
     template_parameter_names: set[str],
@@ -12560,6 +12589,14 @@ def _unresolved_metal_template_type_records(
             arguments,
             template_parameter_names,
         )
+        if _metal_template_arguments_are_local_constants(
+            preprocessor,
+            source,
+            match.start(),
+            missing,
+            declaration_spans,
+        ):
+            continue
         if not missing:
             continue
 
@@ -12943,7 +12980,30 @@ def _project_template_materialization_for_artifact(
         for name, value in defines.items()
         if name not in configured_parameters
     }
-    if unsupported_type_records:
+    preprocessor = MetalPreprocessor(
+        **base_preprocessor_kwargs,
+        defines=parser_defines,
+    )
+    try:
+        preprocessed = _metal_preprocess_without_template_materialization(
+            preprocessor,
+            source,
+            file_path=str(unit.path),
+        )
+        templates = preprocessor._find_template_functions(preprocessed)
+    except Exception:  # noqa: BLE001
+        return None
+    source_instantiations = preprocessor._find_project_template_instantiations(
+        preprocessed
+    )
+    source_instantiations_use_decltype = any(
+        "decltype" in preprocessed[instantiation.span[0] : instantiation.span[1]]
+        for instantiation in source_instantiations
+    )
+    if unsupported_type_records and (
+        not source_instantiations
+        or (unmaterialized_functor_records and source_instantiations_use_decltype)
+    ):
         metadata = _template_materialization_metadata(
             specializations=[],
             configured_parameters={},
@@ -12986,20 +13046,6 @@ def _project_template_materialization_for_artifact(
             blocked=True,
             error=message,
         )
-
-    preprocessor = MetalPreprocessor(
-        **base_preprocessor_kwargs,
-        defines=parser_defines,
-    )
-    try:
-        preprocessed = _metal_preprocess_without_template_materialization(
-            preprocessor,
-            source,
-            file_path=str(unit.path),
-        )
-        templates = preprocessor._find_template_functions(preprocessed)
-    except Exception:  # noqa: BLE001
-        return None
     if not templates:
         return None
     preprocessed, stripped_diagnostic_helpers = (
@@ -13016,9 +13062,6 @@ def _project_template_materialization_for_artifact(
     source_instantiation_unsupported: list[dict[str, Any]] = []
     source_instantiation_partial_templates: set[str] = set()
     template_lookup = {template.name: template for template in templates}
-    source_instantiations = preprocessor._find_project_template_instantiations(
-        preprocessed
-    )
     if target == "opengl" and source_instantiations:
         materialization_work_items = len(source_instantiations) * max(
             1,
@@ -20903,6 +20946,12 @@ def _runtime_loader_validation_command(
             adapter, tools, package_root=package_root
         )
         return commands[0] if commands else None
+
+    if normalized_target == "vulkan":
+        command_path = _runtime_loader_package_command_path(package_path)
+        if PurePosixPath(command_path).suffix.lower() == ".spvasm" and len(tools) > 1:
+            return [tools[1], command_path, "-o", os.devnull]
+        return [tools[0], command_path]
 
     smoke_command = _toolchain_smoke_command(
         normalized_target,

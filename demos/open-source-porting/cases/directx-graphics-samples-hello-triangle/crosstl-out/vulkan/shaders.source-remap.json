@@ -1,0 +1,72 @@
+{
+  "generatedFile": "crosstl-out/vulkan/shaders.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 447,
+        "file": "crosstl-out/vulkan/shaders.spvasm",
+        "length": 48,
+        "line": 15,
+        "offset": 399
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 147,
+        "file": "shaders.hlsl",
+        "length": 65,
+        "line": 7,
+        "offset": 82
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 552,
+        "file": "crosstl-out/vulkan/shaders.spvasm",
+        "length": 40,
+        "line": 18,
+        "offset": 512
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 318,
+        "file": "shaders.hlsl",
+        "length": 24,
+        "line": 19,
+        "offset": 294
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 705,
+        "file": "crosstl-out/vulkan/shaders.spvasm",
+        "length": 48,
+        "line": 23,
+        "offset": 657
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 318,
+        "file": "shaders.hlsl",
+        "length": 24,
+        "line": 19,
+        "offset": 294
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

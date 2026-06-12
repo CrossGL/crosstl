@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/opengl/rectangle.frag.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 13,
+        "file": "crosstl-out/opengl/rectangle.frag.glsl",
+        "length": 13,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 762,
+        "file": "rectangle.frag.glsl",
+        "length": 13,
+        "line": 19,
+        "offset": 749
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 55,
+        "file": "crosstl-out/opengl/rectangle.frag.glsl",
+        "length": 42,
+        "line": 2,
+        "offset": 13
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 805,
+        "file": "rectangle.frag.glsl",
+        "length": 42,
+        "line": 21,
+        "offset": 763
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 115,
+        "file": "crosstl-out/opengl/rectangle.frag.glsl",
+        "length": 41,
+        "line": 4,
+        "offset": 74
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 846,
+        "file": "rectangle.frag.glsl",
+        "length": 40,
+        "line": 23,
+        "offset": 806
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 187,
+        "file": "crosstl-out/opengl/rectangle.frag.glsl",
+        "length": 39,
+        "line": 7,
+        "offset": 148
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 898,
+        "file": "rectangle.frag.glsl",
+        "length": 37,
+        "line": 27,
+        "offset": 861
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

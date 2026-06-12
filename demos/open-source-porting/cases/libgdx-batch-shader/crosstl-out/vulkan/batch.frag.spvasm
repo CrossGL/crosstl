@@ -1,0 +1,67 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 41
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %15 "main" %18 %20 %23
+OpExecutionMode %15 OriginUpperLeft
+OpName %9 "FragmentInput"
+OpMemberName %9 0 "v_color"
+OpMemberName %9 1 "v_texCoords"
+OpName %13 "u_texture"
+OpName %18 "main_return_gl_FragColor"
+OpName %20 "CrossGL_fragment_input_input_v_color"
+OpName %23 "CrossGL_fragment_input_input_v_texCoords"
+OpName %27 "input"
+OpName %29 "gl_FragColor"
+OpDecorate %13 DescriptorSet 0
+OpDecorate %13 Binding 0
+OpDecorate %18 Location 0
+OpDecorate %20 Location 0
+OpDecorate %23 Location 1
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypeStruct %8 %6
+%10 = OpTypeImage %5 2D 0 0 0 1 Unknown
+%11 = OpTypeSampledImage %10
+%12 = OpTypePointer UniformConstant %11
+%14 = OpTypeFunction %2
+%17 = OpTypePointer Output %8
+%19 = OpTypePointer Input %8
+%22 = OpTypePointer Input %6
+%26 = OpTypePointer Function %9
+%28 = OpTypePointer Function %8
+%30 = OpConstant %4 0
+%34 = OpConstant %4 1
+%35 = OpTypePointer Function %6
+%13 = OpVariable %12 UniformConstant
+%18 = OpVariable %17 Output
+%20 = OpVariable %19 Input
+%23 = OpVariable %22 Input
+%15 = OpFunction %2 None %14
+%16 = OpLabel
+%27 = OpVariable %26 Function
+%29 = OpVariable %28 Function
+%21 = OpLoad %8 %20
+%24 = OpLoad %6 %23
+%25 = OpCompositeConstruct %9 %21 %24
+OpStore %27 %25
+%31 = OpAccessChain %28 %27 %30
+%32 = OpLoad %8 %31
+%33 = OpLoad %11 %13
+%36 = OpAccessChain %35 %27 %34
+%37 = OpLoad %6 %36
+%38 = OpImageSampleImplicitLod %8 %33 %37
+%39 = OpFMul %8 %32 %38
+OpStore %29 %39
+%40 = OpLoad %8 %29
+OpStore %18 %40
+OpReturn
+OpFunctionEnd

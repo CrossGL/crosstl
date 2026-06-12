@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/vulkan/noise.frag.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 346,
+        "file": "crosstl-out/vulkan/noise.frag.spvasm",
+        "length": 27,
+        "line": 13,
+        "offset": 319
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 47,
+        "file": "noise.frag",
+        "length": 33,
+        "line": 3,
+        "offset": 14
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

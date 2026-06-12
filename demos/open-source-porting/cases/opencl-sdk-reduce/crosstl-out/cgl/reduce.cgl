@@ -1,0 +1,59 @@
+// OpenCL to CrossGL conversion
+// Function: op
+i32 op(i32 lhs, i32 rhs) {
+    return min(lhs, rhs);
+}
+
+// Function: work_group_reduce_op
+i32 work_group_reduce_op(i32 val) {
+}
+
+// Function: sub_group_reduce_op
+i32 sub_group_reduce_op(i32 val) {
+}
+
+// Function: read_local
+i32 read_local(array<i32, 1024> shared_, u32 count, i32 zero, u32 i) {
+    return ((i < count) ? shared_[i] : zero);
+}
+
+// Function: zmin
+u32 zmin(u32 a, u32 b) {
+    return ((a < b) ? a : b);
+}
+
+// Kernel: reduce
+@compute
+@workgroup_size(1, 1, 1)
+fn reduce(
+    @group(0) @binding(0) var<storage, read_write> front: array<i32>,
+    @group(0) @binding(1) var<storage, read_write> back: array<i32>,
+    var<workgroup> shared_: array<i32>,
+    u64 length,
+    i32 zero_elem
+) {
+    let thread_id = gl_GlobalInvocationID;
+    let block_id = gl_WorkGroupID;
+    let thread_local_id = gl_LocalInvocationID;
+    let block_dim = gl_WorkGroupSize;
+
+    var lid: u32 = gl_LocalInvocationID.x;
+    var lsi: u32 = gl_WorkGroupSize.x;
+    var wid: u32 = gl_WorkGroupID.x;
+    var wsi: u32 = gl_NumWorkGroups.x;
+    var wg_stride: u32 = (lsi * 2);
+    var valid_count: u32 = zmin(wg_stride, (u32(length) - (wid * wg_stride)));
+    if ((lid < valid_count)) {
+        shared_[lid] = front[((wid * wg_stride) + lid)];
+    }
+    workgroupBarrier();
+    for (var i: i32 = lsi; (i != 0); i /= 2) {
+        if ((lid < i)) {
+            shared_[lid] = op(read_local(shared_, valid_count, zero_elem, lid), read_local(shared_, valid_count, zero_elem, (lid + i)));
+        }
+        workgroupBarrier();
+    }
+    if ((lid == 0)) {
+        back[wid] = shared_[0];
+    }
+}

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "name": "SaschaWillems Vulkan Headless Compute",
+  "description": "Pinned GLSL compute shader used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "sascha-willems-vulkan-headless-compute",
+      "path": "headless.comp",
+      "sourceBackend": "opengl",
+      "targets": [
+        "cgl",
+        "opengl",
+        "metal",
+        "directx",
+        "vulkan"
+      ],
+      "repository": "https://github.com/SaschaWillems/Vulkan",
+      "commit": "2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade",
+      "sourceUrl": "https://github.com/SaschaWillems/Vulkan/blob/2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade/shaders/glsl/computeheadless/headless.comp"
+    }
+  ]
+}

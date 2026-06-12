@@ -1,0 +1,85 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 50
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %18 "main" %21 %23 %26
+OpExecutionMode %18 OriginUpperLeft
+OpName %9 "FragmentInput"
+OpMemberName %9 0 "fragTexCoord"
+OpMemberName %9 1 "fragColor"
+OpName %10 "Uniforms"
+OpMemberName %10 0 "colDiffuse"
+OpName %12 "Uniforms"
+OpName %16 "texture0"
+OpName %21 "CrossGL_fragment_output_main"
+OpName %23 "CrossGL_fragment_input_input_fragTexCoord"
+OpName %26 "CrossGL_fragment_input_input_fragColor"
+OpName %30 "input"
+OpName %32 "finalColor"
+OpName %33 "texelColor"
+OpDecorate %10 Block
+OpMemberDecorate %10 0 Offset 0
+OpDecorate %12 DescriptorSet 0
+OpDecorate %12 Binding 0
+OpDecorate %16 DescriptorSet 0
+OpDecorate %16 Binding 1
+OpDecorate %21 Location 0
+OpDecorate %23 Location 0
+OpDecorate %26 Location 1
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypeStruct %6 %8
+%10 = OpTypeStruct %8
+%11 = OpTypePointer Uniform %10
+%13 = OpTypeImage %5 2D 0 0 0 1 Unknown
+%14 = OpTypeSampledImage %13
+%15 = OpTypePointer UniformConstant %14
+%17 = OpTypeFunction %2
+%20 = OpTypePointer Output %8
+%22 = OpTypePointer Input %6
+%25 = OpTypePointer Input %8
+%29 = OpTypePointer Function %9
+%31 = OpTypePointer Function %8
+%35 = OpConstant %4 0
+%36 = OpTypePointer Function %6
+%41 = OpTypePointer Uniform %8
+%45 = OpConstant %4 1
+%12 = OpVariable %11 Uniform
+%16 = OpVariable %15 UniformConstant
+%21 = OpVariable %20 Output
+%23 = OpVariable %22 Input
+%26 = OpVariable %25 Input
+%18 = OpFunction %2 None %17
+%19 = OpLabel
+%30 = OpVariable %29 Function
+%32 = OpVariable %31 Function
+%33 = OpVariable %31 Function
+%24 = OpLoad %6 %23
+%27 = OpLoad %8 %26
+%28 = OpCompositeConstruct %9 %24 %27
+OpStore %30 %28
+%34 = OpLoad %14 %16
+%37 = OpAccessChain %36 %30 %35
+%38 = OpLoad %6 %37
+%39 = OpImageSampleImplicitLod %8 %34 %38
+OpStore %33 %39
+%40 = OpLoad %8 %33
+%42 = OpAccessChain %41 %12 %35
+%43 = OpLoad %8 %42
+%44 = OpFMul %8 %40 %43
+%46 = OpAccessChain %31 %30 %45
+%47 = OpLoad %8 %46
+%48 = OpFMul %8 %44 %47
+OpStore %32 %48
+%49 = OpLoad %8 %32
+OpStore %21 %49
+OpReturn
+OpFunctionEnd

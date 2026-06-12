@@ -1,0 +1,622 @@
+{
+  "generatedFile": "crosstl-out/opengl/lighting.fs.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 13,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 13,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 13,
+        "file": "lighting.fs",
+        "length": 13,
+        "line": 1,
+        "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 57,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 22,
+        "line": 3,
+        "offset": 35
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 106,
+        "file": "lighting.fs",
+        "length": 22,
+        "line": 5,
+        "offset": 84
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 128,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 17,
+        "line": 7,
+        "offset": 111
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 459,
+        "file": "lighting.fs",
+        "length": 17,
+        "line": 23,
+        "offset": 442
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 142,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 14,
+        "line": 8,
+        "offset": 128
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 473,
+        "file": "lighting.fs",
+        "length": 14,
+        "line": 24,
+        "offset": 459
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 178,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 17,
+        "line": 10,
+        "offset": 161
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 509,
+        "file": "lighting.fs",
+        "length": 17,
+        "line": 26,
+        "offset": 492
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 194,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 16,
+        "line": 11,
+        "offset": 178
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 525,
+        "file": "lighting.fs",
+        "length": 16,
+        "line": 27,
+        "offset": 509
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 226,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 28,
+        "line": 14,
+        "offset": 198
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 198,
+        "file": "lighting.fs",
+        "length": 28,
+        "line": 10,
+        "offset": 170
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 340,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 18,
+        "line": 19,
+        "offset": 322
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 33,
+        "endOffset": 610,
+        "file": "lighting.fs",
+        "length": 22,
+        "line": 32,
+        "offset": 588
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 380,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 19,
+        "line": 22,
+        "offset": 361
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 47,
+        "endOffset": 1000,
+        "file": "lighting.fs",
+        "length": 54,
+        "line": 46,
+        "offset": 946
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 515,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 55,
+        "line": 26,
+        "offset": 460
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 39,
+        "endOffset": 751,
+        "file": "lighting.fs",
+        "length": 55,
+        "line": 38,
+        "offset": 696
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 546,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 31,
+        "line": 27,
+        "offset": 515
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 40,
+        "endOffset": 782,
+        "file": "lighting.fs",
+        "length": 31,
+        "line": 39,
+        "offset": 751
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 587,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 41,
+        "line": 28,
+        "offset": 546
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 41,
+        "endOffset": 823,
+        "file": "lighting.fs",
+        "length": 41,
+        "line": 40,
+        "offset": 782
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 641,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 54,
+        "line": 29,
+        "offset": 587
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 42,
+        "endOffset": 875,
+        "file": "lighting.fs",
+        "length": 52,
+        "line": 41,
+        "offset": 823
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 672,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 31,
+        "line": 30,
+        "offset": 641
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 43,
+        "endOffset": 906,
+        "file": "lighting.fs",
+        "length": 31,
+        "line": 42,
+        "offset": 875
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 714,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 42,
+        "line": 31,
+        "offset": 672
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 45,
+        "endOffset": 945,
+        "file": "lighting.fs",
+        "length": 38,
+        "line": 44,
+        "offset": 907
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 33,
+        "endOffset": 752,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 38,
+        "line": 32,
+        "offset": 714
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 49,
+        "endOffset": 1042,
+        "file": "lighting.fs",
+        "length": 41,
+        "line": 48,
+        "offset": 1001
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 34,
+        "endOffset": 792,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 40,
+        "line": 33,
+        "offset": 752
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 51,
+        "endOffset": 1084,
+        "file": "lighting.fs",
+        "length": 36,
+        "line": 50,
+        "offset": 1048
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 35,
+        "endOffset": 828,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 36,
+        "line": 34,
+        "offset": 792
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 53,
+        "endOffset": 1130,
+        "file": "lighting.fs",
+        "length": 36,
+        "line": 52,
+        "offset": 1094
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 37,
+        "endOffset": 948,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 79,
+        "line": 36,
+        "offset": 869
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 57,
+        "endOffset": 1273,
+        "file": "lighting.fs",
+        "length": 75,
+        "line": 56,
+        "offset": 1198
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 40,
+        "endOffset": 1075,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 72,
+        "line": 39,
+        "offset": 1003
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 62,
+        "endOffset": 1419,
+        "file": "lighting.fs",
+        "length": 70,
+        "line": 61,
+        "offset": 1349
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 42,
+        "endOffset": 1145,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 56,
+        "line": 41,
+        "offset": 1089
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 65,
+        "endOffset": 1490,
+        "file": "lighting.fs",
+        "length": 56,
+        "line": 64,
+        "offset": 1434
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 43,
+        "endOffset": 1200,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 55,
+        "line": 42,
+        "offset": 1145
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 66,
+        "endOffset": 1541,
+        "file": "lighting.fs",
+        "length": 51,
+        "line": 65,
+        "offset": 1490
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 44,
+        "endOffset": 1232,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 32,
+        "line": 43,
+        "offset": 1200
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 68,
+        "endOffset": 1574,
+        "file": "lighting.fs",
+        "length": 32,
+        "line": 67,
+        "offset": 1542
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 46,
+        "endOffset": 1350,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 85,
+        "line": 45,
+        "offset": 1265
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 69,
+        "endOffset": 1694,
+        "file": "lighting.fs",
+        "length": 120,
+        "line": 68,
+        "offset": 1574
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 48,
+        "endOffset": 1396,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 32,
+        "line": 47,
+        "offset": 1364
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 70,
+        "endOffset": 1726,
+        "file": "lighting.fs",
+        "length": 32,
+        "line": 69,
+        "offset": 1694
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 51,
+        "endOffset": 1498,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 86,
+        "line": 50,
+        "offset": 1412
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 74,
+        "endOffset": 1825,
+        "file": "lighting.fs",
+        "length": 82,
+        "line": 73,
+        "offset": 1743
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 52,
+        "endOffset": 1558,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 60,
+        "line": 51,
+        "offset": 1498
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 75,
+        "endOffset": 1875,
+        "file": "lighting.fs",
+        "length": 50,
+        "line": 74,
+        "offset": 1825
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 53,
+        "endOffset": 1611,
+        "file": "crosstl-out/opengl/lighting.fs.glsl",
+        "length": 53,
+        "line": 52,
+        "offset": 1558
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 78,
+        "endOffset": 1949,
+        "file": "lighting.fs",
+        "length": 49,
+        "line": 77,
+        "offset": 1900
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

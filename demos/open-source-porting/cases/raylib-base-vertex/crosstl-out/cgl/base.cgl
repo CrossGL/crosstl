@@ -1,0 +1,30 @@
+#version 330
+
+shader main {
+    struct VertexInput {
+    vec3 vertexPosition;
+    vec2 vertexTexCoord;
+    vec3 vertexNormal;
+    vec4 vertexColor;
+    };
+
+    struct VertexOutput {
+    vec2 fragTexCoord;
+    vec4 fragColor;
+    vec4 gl_Position @ gl_Position;
+    };
+
+    cbuffer Uniforms {
+    mat4 mvp;
+    };
+
+    vertex {
+    VertexOutput main(VertexInput input) {
+        VertexOutput output;
+        output.fragTexCoord = input.vertexTexCoord;
+        output.fragColor = input.vertexColor;
+        output.gl_Position = (mvp * vec4(input.vertexPosition, 1.0));
+        return output;
+    }
+    }
+}

@@ -1,0 +1,6 @@
+[project]
+source_roots = ["."]
+include = ["base.vs"]
+targets = ["cgl", "opengl", "metal", "directx", "vulkan"]
+output_dir = "crosstl-out"
+external_corpus_manifest = "corpus.json"

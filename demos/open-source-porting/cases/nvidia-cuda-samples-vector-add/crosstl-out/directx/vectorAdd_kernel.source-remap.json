@@ -1,0 +1,160 @@
+{
+  "generatedFile": "crosstl-out/directx/vectorAdd_kernel.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 45,
+        "file": "crosstl-out/directx/vectorAdd_kernel.hlsl",
+        "length": 44,
+        "line": 2,
+        "offset": 1
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 1812,
+        "file": "vectorAdd_kernel.cu",
+        "length": 96,
+        "line": 35,
+        "offset": 1716
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 89,
+        "file": "crosstl-out/directx/vectorAdd_kernel.hlsl",
+        "length": 44,
+        "line": 3,
+        "offset": 45
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 1812,
+        "file": "vectorAdd_kernel.cu",
+        "length": 96,
+        "line": 35,
+        "offset": 1716
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 133,
+        "file": "crosstl-out/directx/vectorAdd_kernel.hlsl",
+        "length": 44,
+        "line": 4,
+        "offset": 89
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 1812,
+        "file": "vectorAdd_kernel.cu",
+        "length": 96,
+        "line": 35,
+        "offset": 1716
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 214,
+        "file": "crosstl-out/directx/vectorAdd_kernel.hlsl",
+        "length": 21,
+        "line": 7,
+        "offset": 193
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 1812,
+        "file": "vectorAdd_kernel.cu",
+        "length": 96,
+        "line": 35,
+        "offset": 1716
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 403,
+        "file": "crosstl-out/directx/vectorAdd_kernel.hlsl",
+        "length": 64,
+        "line": 12,
+        "offset": 339
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 38,
+        "endOffset": 1865,
+        "file": "vectorAdd_kernel.cu",
+        "length": 51,
+        "line": 37,
+        "offset": 1814
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 432,
+        "file": "crosstl-out/directx/vectorAdd_kernel.hlsl",
+        "length": 29,
+        "line": 13,
+        "offset": 403
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 40,
+        "endOffset": 1893,
+        "file": "vectorAdd_kernel.cu",
+        "length": 27,
+        "line": 39,
+        "offset": 1866
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 462,
+        "file": "crosstl-out/directx/vectorAdd_kernel.hlsl",
+        "length": 30,
+        "line": 14,
+        "offset": 432
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 41,
+        "endOffset": 1921,
+        "file": "vectorAdd_kernel.cu",
+        "length": 28,
+        "line": 40,
+        "offset": 1893
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

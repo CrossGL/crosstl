@@ -1,0 +1,85 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 61
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %29 "main" %32 %34 %39
+OpName %9 "VertexOutput"
+OpMemberName %9 0 "fragColor"
+OpMemberName %9 1 "gl_Position"
+OpName %20 "positions"
+OpName %27 "colors"
+OpName %32 "CrossGL_vertex_output_main_fragColor"
+OpName %34 "gl_Position"
+OpName %36 "output"
+OpName %39 "gl_VertexIndex"
+OpDecorate %32 Location 0
+OpDecorate %34 BuiltIn Position
+OpDecorate %39 BuiltIn VertexIndex
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypeStruct %7 %8
+%11 = OpConstant %4 3
+%10 = OpTypeArray %6 %11
+%12 = OpConstant %5 0.0
+%13 = OpConstant %5 -0.5
+%14 = OpConstantComposite %6 %12 %13
+%15 = OpConstant %5 0.5
+%16 = OpConstantComposite %6 %15 %15
+%17 = OpConstantComposite %6 %13 %15
+%18 = OpConstantComposite %10 %14 %16 %17
+%19 = OpTypePointer Private %10
+%21 = OpTypeArray %7 %11
+%22 = OpConstantComposite %7 %15 %15 %12
+%23 = OpConstantComposite %7 %12 %15 %15
+%24 = OpConstantComposite %7 %15 %12 %15
+%25 = OpConstantComposite %21 %22 %23 %24
+%26 = OpTypePointer Private %21
+%28 = OpTypeFunction %2
+%31 = OpTypePointer Output %7
+%33 = OpTypePointer Output %8
+%35 = OpTypePointer Function %9
+%37 = OpTypeInt 32 0
+%38 = OpTypePointer Input %37
+%41 = OpTypePointer Private %6
+%44 = OpConstant %5 1.0
+%48 = OpConstant %4 1
+%49 = OpTypePointer Function %8
+%52 = OpTypePointer Private %7
+%55 = OpConstant %4 0
+%56 = OpTypePointer Function %7
+%20 = OpVariable %19 Private %18
+%27 = OpVariable %26 Private %25
+%32 = OpVariable %31 Output
+%34 = OpVariable %33 Output
+%39 = OpVariable %38 Input
+%29 = OpFunction %2 None %28
+%30 = OpLabel
+%36 = OpVariable %35 Function
+%40 = OpLoad %37 %39
+%42 = OpAccessChain %41 %20 %40
+%43 = OpLoad %6 %42
+%45 = OpCompositeExtract %5 %43 0
+%46 = OpCompositeExtract %5 %43 1
+%47 = OpCompositeConstruct %8 %45 %46 %12 %44
+%50 = OpAccessChain %49 %36 %48
+OpStore %50 %47
+%51 = OpLoad %37 %39
+%53 = OpAccessChain %52 %27 %51
+%54 = OpLoad %7 %53
+%57 = OpAccessChain %56 %36 %55
+OpStore %57 %54
+%58 = OpLoad %9 %36
+%59 = OpCompositeExtract %7 %58 0
+OpStore %32 %59
+%60 = OpCompositeExtract %8 %58 1
+OpStore %34 %60
+OpReturn
+OpFunctionEnd

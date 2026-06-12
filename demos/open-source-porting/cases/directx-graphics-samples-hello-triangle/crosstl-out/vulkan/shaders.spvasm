@@ -1,0 +1,87 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 46
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %11 "VSMain" %14 %15 %17 %21
+OpEntryPoint Fragment %35 "PSMain" %37 %38 %40
+OpExecutionMode %35 OriginUpperLeft
+OpName %9 "PSInput"
+OpMemberName %9 0 "position"
+OpMemberName %9 1 "color"
+OpName %14 "gl_Position"
+OpName %15 "CrossGL_vertex_output_VSMain_color"
+OpName %17 "CrossGL_vertex_input_position"
+OpName %20 "position"
+OpName %21 "CrossGL_vertex_input_color"
+OpName %23 "color"
+OpName %25 "result"
+OpName %37 "PSMain_return_gl_FragColor"
+OpName %38 "gl_FragCoord"
+OpName %40 "CrossGL_fragment_input_input_color"
+OpName %43 "input"
+OpDecorate %14 BuiltIn Position
+OpDecorate %15 Location 0
+OpDecorate %17 Location 0
+OpDecorate %21 Location 1
+OpDecorate %37 Location 0
+OpDecorate %38 BuiltIn FragCoord
+OpDecorate %40 Location 1
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypeStruct %8 %8
+%10 = OpTypeFunction %2
+%13 = OpTypePointer Output %8
+%16 = OpTypePointer Input %8
+%19 = OpTypePointer Function %8
+%24 = OpTypePointer Function %9
+%27 = OpConstant %4 0
+%30 = OpConstant %4 1
+%14 = OpVariable %13 Output
+%15 = OpVariable %13 Output
+%17 = OpVariable %16 Input
+%21 = OpVariable %16 Input
+%37 = OpVariable %13 Output
+%38 = OpVariable %16 Input
+%40 = OpVariable %16 Input
+%11 = OpFunction %2 None %10
+%12 = OpLabel
+%20 = OpVariable %19 Function
+%23 = OpVariable %19 Function
+%25 = OpVariable %24 Function
+%18 = OpLoad %8 %17
+OpStore %20 %18
+%22 = OpLoad %8 %21
+OpStore %23 %22
+%26 = OpLoad %8 %20
+%28 = OpAccessChain %19 %25 %27
+OpStore %28 %26
+%29 = OpLoad %8 %23
+%31 = OpAccessChain %19 %25 %30
+OpStore %31 %29
+%32 = OpLoad %9 %25
+%33 = OpCompositeExtract %8 %32 0
+OpStore %14 %33
+%34 = OpCompositeExtract %8 %32 1
+OpStore %15 %34
+OpReturn
+OpFunctionEnd
+%35 = OpFunction %2 None %10
+%36 = OpLabel
+%43 = OpVariable %24 Function
+%39 = OpLoad %8 %38
+%41 = OpLoad %8 %40
+%42 = OpCompositeConstruct %9 %39 %41
+OpStore %43 %42
+%44 = OpAccessChain %19 %43 %30
+%45 = OpLoad %8 %44
+OpStore %37 %45
+OpReturn
+OpFunctionEnd

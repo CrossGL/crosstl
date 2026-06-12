@@ -1,0 +1,20 @@
+shader main {
+    struct VertexInput {
+    vec4 a_position;
+    vec2 a_texCoord;
+    };
+
+    struct VertexOutput {
+    vec2 v_texCoord;
+    vec4 gl_Position @ gl_Position;
+    };
+
+    vertex {
+    VertexOutput main(VertexInput input) {
+        VertexOutput output;
+        output.gl_Position = input.a_position;
+        output.v_texCoord = input.a_texCoord;
+        return output;
+    }
+    }
+}

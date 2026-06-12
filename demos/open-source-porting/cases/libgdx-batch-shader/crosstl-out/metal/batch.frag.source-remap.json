@@ -1,0 +1,138 @@
+{
+  "generatedFile": "crosstl-out/metal/batch.frag.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 92,
+        "file": "crosstl-out/metal/batch.frag.metal",
+        "length": 20,
+        "line": 6,
+        "offset": 72
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 98,
+        "file": "batch.frag",
+        "length": 22,
+        "line": 7,
+        "offset": 76
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 116,
+        "file": "crosstl-out/metal/batch.frag.metal",
+        "length": 24,
+        "line": 7,
+        "offset": 92
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 124,
+        "file": "batch.frag",
+        "length": 26,
+        "line": 8,
+        "offset": 98
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 247,
+        "file": "crosstl-out/metal/batch.frag.metal",
+        "length": 109,
+        "line": 10,
+        "offset": 138
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 200,
+        "file": "batch.frag",
+        "length": 61,
+        "line": 11,
+        "offset": 139
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 272,
+        "file": "crosstl-out/metal/batch.frag.metal",
+        "length": 25,
+        "line": 11,
+        "offset": 247
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 200,
+        "file": "batch.frag",
+        "length": 61,
+        "line": 11,
+        "offset": 139
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 393,
+        "file": "crosstl-out/metal/batch.frag.metal",
+        "length": 121,
+        "line": 12,
+        "offset": 272
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 200,
+        "file": "batch.frag",
+        "length": 61,
+        "line": 11,
+        "offset": 139
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 418,
+        "file": "crosstl-out/metal/batch.frag.metal",
+        "length": 25,
+        "line": 13,
+        "offset": 393
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 200,
+        "file": "batch.frag",
+        "length": 61,
+        "line": 11,
+        "offset": 139
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

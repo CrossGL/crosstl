@@ -1,0 +1,160 @@
+{
+  "generatedFile": "crosstl-out/cgl/SpriteEffect.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 236,
+        "file": "crosstl-out/cgl/SpriteEffect.cgl",
+        "length": 23,
+        "line": 10,
+        "offset": 213
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 423,
+        "file": "SpriteEffect.fx",
+        "length": 49,
+        "line": 17,
+        "offset": 374
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 443,
+        "file": "crosstl-out/cgl/SpriteEffect.cgl",
+        "length": 25,
+        "line": 15,
+        "offset": 418
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 34,
+        "endOffset": 775,
+        "file": "SpriteEffect.fx",
+        "length": 21,
+        "line": 33,
+        "offset": 754
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 499,
+        "file": "crosstl-out/cgl/SpriteEffect.cgl",
+        "length": 56,
+        "line": 16,
+        "offset": 443
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 35,
+        "endOffset": 829,
+        "file": "SpriteEffect.fx",
+        "length": 54,
+        "line": 34,
+        "offset": 775
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 529,
+        "file": "crosstl-out/cgl/SpriteEffect.cgl",
+        "length": 30,
+        "line": 17,
+        "offset": 499
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 855,
+        "file": "SpriteEffect.fx",
+        "length": 26,
+        "line": 35,
+        "offset": 829
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 565,
+        "file": "crosstl-out/cgl/SpriteEffect.cgl",
+        "length": 36,
+        "line": 18,
+        "offset": 529
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 37,
+        "endOffset": 887,
+        "file": "SpriteEffect.fx",
+        "length": 32,
+        "line": 36,
+        "offset": 855
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 716,
+        "file": "crosstl-out/cgl/SpriteEffect.cgl",
+        "length": 76,
+        "line": 26,
+        "offset": 640
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 42,
+        "endOffset": 964,
+        "file": "SpriteEffect.fx",
+        "length": 54,
+        "line": 41,
+        "offset": 910
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 779,
+        "file": "crosstl-out/cgl/SpriteEffect.cgl",
+        "length": 63,
+        "line": 27,
+        "offset": 716
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 44,
+        "endOffset": 1032,
+        "file": "SpriteEffect.fx",
+        "length": 66,
+        "line": 43,
+        "offset": 966
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

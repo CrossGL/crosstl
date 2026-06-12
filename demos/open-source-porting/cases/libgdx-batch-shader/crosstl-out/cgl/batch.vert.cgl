@@ -1,0 +1,27 @@
+shader main {
+    struct VertexInput {
+    vec4 a_position;
+    vec4 a_color;
+    vec2 a_texCoord0;
+    };
+
+    struct VertexOutput {
+    vec4 v_color;
+    vec2 v_texCoords;
+    vec4 gl_Position @ gl_Position;
+    };
+
+    cbuffer Uniforms {
+    mat4 u_projTrans;
+    };
+
+    vertex {
+    VertexOutput main(VertexInput input) {
+        VertexOutput output;
+        output.v_color = input.a_color;
+        output.v_texCoords = input.a_texCoord0;
+        output.gl_Position = (u_projTrans * input.a_position);
+        return output;
+    }
+    }
+}
