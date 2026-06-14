@@ -44,6 +44,28 @@ def _test_function_names(path):
     }
 
 
+def test_open_source_demo_case_targets_use_toml_project_config(tmp_path):
+    runner = _load_demo_runner()
+    (tmp_path / "crosstl.toml").write_text(
+        """
+        [project]
+        output_dir = "crosstl-out"
+        targets = [
+            "cgl", # checked source-form target
+            "opengl",
+            # keep this trailing entry on a separate line
+            "vulkan",
+        ]
+
+        [project.sources]
+        "shaders/*.hlsl" = "directx"
+        """,
+        encoding="utf-8",
+    )
+
+    assert runner._case_targets(tmp_path) == ["cgl", "opengl", "vulkan"]
+
+
 def test_open_source_demo_cases_have_pinned_manifests_and_references():
     runner = _load_demo_runner()
     case_dirs = sorted(path for path in CASE_ROOT.iterdir() if path.is_dir())
