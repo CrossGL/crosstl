@@ -200,11 +200,14 @@ def test_default_mlx_harness_marks_full_corpus_not_run(monkeypatch, tmp_path):
         "https://github.com/CrossGL/crosstl/issues/1362"
         in summary["resolvedFrontierIssues"]
     )
-    for issue in (1354, 1355):
-        assert (
-            f"https://github.com/CrossGL/crosstl/issues/{issue}"
-            in summary["trackedIssues"]
-        )
+    assert "https://github.com/CrossGL/crosstl/issues/1354" in summary["trackedIssues"]
+    assert (
+        "https://github.com/CrossGL/crosstl/issues/1355" not in summary["trackedIssues"]
+    )
+    assert (
+        "https://github.com/CrossGL/crosstl/issues/1355"
+        in summary["resolvedFrontierIssues"]
+    )
 
 
 def test_full_corpus_flag_enforces_clean_artifact_counts(monkeypatch, tmp_path):
@@ -258,6 +261,6 @@ def test_full_corpus_failure_is_issue_linked(monkeypatch, tmp_path):
 
     message = str(excinfo.value)
     assert "full-corpus translation is not clean" in message
-    for issue in (1354, 1355):
-        assert f"https://github.com/CrossGL/crosstl/issues/{issue}" in message
+    assert "https://github.com/CrossGL/crosstl/issues/1354" in message
+    assert "https://github.com/CrossGL/crosstl/issues/1355" not in message
     assert "https://github.com/CrossGL/crosstl/issues/1362" not in message

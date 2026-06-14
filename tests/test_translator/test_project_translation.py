@@ -40834,6 +40834,61 @@ def test_metal_project_materialization_default_work_budget_scales_source_instant
     )
 
 
+def test_translate_project_metal_local_declaration_comments_are_not_template_placeholders(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "out"
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "commented_locals.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            [[kernel]] void launch(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                // Get lane position in simdgroup const short.
+                const short lane = short(gid);
+                /* OR BUSINESS INTERRUPTION, HOWEVER CAUSED, AND ON ANY THEORY. */
+                const short value = lane;
+                out[gid] = T(value);
+            }
+
+            instantiate_kernel("launch_float32", launch, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["unsupported"] == []
+    assert artifact["templateMaterialization"]["specializations"] == [
+        {
+            "name": "launch",
+            "materializedName": "launch_float32",
+            "parameters": {"T": "float"},
+            "parameterSources": {"T": "source-instantiation"},
+            "source": "source-instantiation",
+            "hostName": "launch_float32",
+        }
+    ]
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "void main()" in output
+
+
 def test_translate_project_applies_metal_target_source_pattern_materialization_work_limit(
     tmp_path,
 ):

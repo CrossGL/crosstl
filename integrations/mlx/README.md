@@ -23,8 +23,9 @@ The current harness verifies:
 The default CI harness does not claim full-corpus success. The latest
 issue-backed full-corpus scout against the same pinned MLX revision translated
 57 of 120 target artifacts and reported 63 failed artifacts. CrossGL/crosstl#1354
-tracks remaining project-scale Metal template materialization gaps,
-and CrossGL/crosstl#1355 tracks the remaining OpenGL template binding failures.
+tracks remaining project-scale Metal template materialization gaps. The previous
+OpenGL template binding tracker, CrossGL/crosstl#1355, is closed and no longer
+listed as an active MLX blocker.
 Full-corpus pass states must come from a successful `--full-corpus` harness run,
 not from stale metadata.
 
@@ -67,9 +68,8 @@ python integrations/mlx/run_mlx_porting.py \
   --require-vulkan-toolchain
 ```
 
-Until CrossGL/crosstl#1354 and CrossGL/crosstl#1355 are closed by fixes, the
-full-corpus check is expected to fail instead of recording an unverified pass
-state.
+Until CrossGL/crosstl#1354 is closed by fixes, the full-corpus check is expected
+to fail instead of recording an unverified pass state.
 
 The harness writes reports, generated artifacts, and command logs under
 `<mlx-root>/.crosstl-mlx-porting`.
@@ -78,9 +78,9 @@ The harness writes reports, generated artifacts, and command logs under
 
 The pinned reduced frontier emits all DirectX and Vulkan artifacts, and the
 Vulkan SPIR-V artifacts validate with SPIR-V Tools. The optional full-corpus
-check is blocked by CrossGL/crosstl#1354 and CrossGL/crosstl#1355.
-CrossGL/crosstl#1362, CrossGL/crosstl#1317, and CrossGL/crosstl#1300 are closed
-or covered by current fixes and tracked with the resolved frontier issues below.
+check is blocked by CrossGL/crosstl#1354. CrossGL/crosstl#1362,
+CrossGL/crosstl#1355, CrossGL/crosstl#1317, and CrossGL/crosstl#1300 are closed
+or covered by current fixes and tracked with the resolved issues below.
 Future scouts should add issue-backed blockers only when there are concrete
 repros. Host runtime integration gaps should be handled in MLX-specific
 integration code or downstream runtime adapters, not hidden as shader translation

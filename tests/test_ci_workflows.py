@@ -1839,19 +1839,22 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
             f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
             in harness
         )
-    for tracked_issue_number in (1354, 1355):
-        assert (
-            f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}"
-            not in mlx_porting
-        )
-        assert (
-            f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}"
-            in harness
-        )
-        assert (
-            f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}"
-            in expected_gaps["tracked_issues"]
-        )
+    assert "https://github.com/CrossGL/crosstl/issues/1354" not in mlx_porting
+    assert "https://github.com/CrossGL/crosstl/issues/1354" in harness
+    assert (
+        "https://github.com/CrossGL/crosstl/issues/1354"
+        in expected_gaps["tracked_issues"]
+    )
+    assert "https://github.com/CrossGL/crosstl/issues/1355" not in mlx_porting
+    assert "https://github.com/CrossGL/crosstl/issues/1355" in harness
+    assert (
+        "https://github.com/CrossGL/crosstl/issues/1355"
+        not in expected_gaps["tracked_issues"]
+    )
+    assert (
+        "https://github.com/CrossGL/crosstl/issues/1355"
+        in expected_gaps["resolved_issues"]
+    )
     assert (
         "https://github.com/CrossGL/crosstl/issues/1317"
         not in expected_gaps["tracked_issues"]
