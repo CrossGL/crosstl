@@ -44,6 +44,42 @@ def _test_function_names(path):
     }
 
 
+def _upstream_source_path(entry):
+    source_prefix = f"{entry['repository']}/blob/{entry['commit']}/"
+    if not entry["sourceUrl"].startswith(source_prefix):
+        raise AssertionError(f"sourceUrl does not match repository/commit: {entry}")
+    return entry["sourceUrl"][len(source_prefix) :]
+
+
+def test_open_source_demo_third_party_notices_cover_manifest_sources():
+    notices = (DEMO_ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+    notice_blocks = [
+        block for block in re.split(r"(?m)^## ", notices) if block.strip()
+    ]
+    missing = []
+
+    for case_dir in sorted(path for path in CASE_ROOT.iterdir() if path.is_dir()):
+        manifest = json.loads((case_dir / "corpus.json").read_text(encoding="utf-8"))
+
+        for entry in manifest["entries"]:
+            source_path = _upstream_source_path(entry)
+            covered = any(
+                entry["repository"] in block
+                and entry["commit"] in block
+                and (source_path in block or entry["sourceUrl"] in block)
+                for block in notice_blocks
+            )
+            if not covered:
+                missing.append(
+                    f"{case_dir.name}:{entry['id']} missing {source_path}"
+                )
+
+    assert not missing, (
+        "Missing third-party notice coverage for manifest sources:\n"
+        + "\n".join(missing)
+    )
+
+
 def test_open_source_demo_cases_have_pinned_manifests_and_references():
     runner = _load_demo_runner()
     case_dirs = sorted(path for path in CASE_ROOT.iterdir() if path.is_dir())
