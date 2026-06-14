@@ -1,0 +1,27 @@
+#version 330 core
+precision highp float;
+precision highp int;
+
+shader main {
+    struct VertexInput {
+    vec4 Position @location(0);
+    };
+
+    struct VertexOutput {
+    vec4 gl_Position @ gl_Position;
+    };
+
+    cbuffer Uniforms {
+    mat4 MVP;
+    };
+
+    vertex {
+    layout(std140, column_major) uniform;
+
+    VertexOutput main(VertexInput input) {
+        VertexOutput output;
+        output.gl_Position = (MVP * input.Position);
+        return output;
+    }
+    }
+}

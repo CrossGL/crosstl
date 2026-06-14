@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/directx/basic_src.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 265,
+        "file": "crosstl-out/directx/basic_src.hlsl",
+        "length": 265,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 51,
+        "endOffset": 1328,
+        "file": "basic_src.spvasm",
+        "length": 1328,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

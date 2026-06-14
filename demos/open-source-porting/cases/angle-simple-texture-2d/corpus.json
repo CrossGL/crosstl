@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "name": "ANGLE SimpleTexture2D shaders",
+  "description": "Pinned GLSL ES shader strings extracted from the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "angle-simple-texture-2d-vertex",
+      "path": "SimpleTexture2D.vert",
+      "sourceBackend": "opengl",
+      "targets": [
+        "cgl",
+        "opengl",
+        "metal",
+        "directx",
+        "vulkan"
+      ],
+      "repository": "https://github.com/google/angle",
+      "commit": "52232eaf409a28d77947df5622af274e1ef770c6",
+      "sourceUrl": "https://github.com/google/angle/blob/52232eaf409a28d77947df5622af274e1ef770c6/samples/simple_texture_2d/SimpleTexture2D.cpp"
+    },
+    {
+      "id": "angle-simple-texture-2d-fragment",
+      "path": "SimpleTexture2D.frag",
+      "sourceBackend": "opengl",
+      "targets": [
+        "cgl",
+        "opengl",
+        "metal",
+        "directx",
+        "vulkan"
+      ],
+      "repository": "https://github.com/google/angle",
+      "commit": "52232eaf409a28d77947df5622af274e1ef770c6",
+      "sourceUrl": "https://github.com/google/angle/blob/52232eaf409a28d77947df5622af274e1ef770c6/samples/simple_texture_2d/SimpleTexture2D.cpp"
+    }
+  ]
+}

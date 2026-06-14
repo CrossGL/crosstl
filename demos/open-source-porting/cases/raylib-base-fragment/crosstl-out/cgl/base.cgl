@@ -1,0 +1,22 @@
+#version 330
+
+shader main {
+    struct FragmentInput {
+    vec2 fragTexCoord;
+    vec4 fragColor;
+    };
+
+    sampler2D texture0;
+    cbuffer Uniforms {
+    vec4 colDiffuse;
+    };
+
+    fragment {
+    vec4 main(FragmentInput input) @location(0) {
+        vec4 finalColor;
+        vec4 texelColor = texture(texture0, input.fragTexCoord);
+        finalColor = ((texelColor * colDiffuse) * input.fragColor);
+        return finalColor;
+    }
+    }
+}

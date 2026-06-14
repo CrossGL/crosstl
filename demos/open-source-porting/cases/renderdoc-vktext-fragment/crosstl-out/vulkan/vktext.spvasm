@@ -1,0 +1,146 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 110
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %15 "main" %18 %20 %23
+OpExecutionMode %15 OriginUpperLeft
+OpName %9 "FragmentInput"
+OpMemberName %9 0 "tex"
+OpMemberName %9 1 "glyphuv"
+OpName %13 "tex0"
+OpName %18 "CrossGL_fragment_output_main"
+OpName %20 "CrossGL_fragment_input_input_tex"
+OpName %23 "CrossGL_fragment_input_input_glyphuv"
+OpName %27 "input"
+OpName %29 "color_out"
+OpName %31 "text"
+OpName %62 "uv"
+OpDecorate %13 DescriptorSet 0
+OpDecorate %13 Binding 3
+OpDecorate %18 Location 0
+OpDecorate %20 Location 0
+OpDecorate %23 Location 1
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypeStruct %8 %6
+%10 = OpTypeImage %5 2D 0 0 0 1 Unknown
+%11 = OpTypeSampledImage %10
+%12 = OpTypePointer UniformConstant %11
+%14 = OpTypeFunction %2
+%17 = OpTypePointer Output %8
+%19 = OpTypePointer Input %8
+%22 = OpTypePointer Input %6
+%26 = OpTypePointer Function %9
+%28 = OpTypePointer Function %8
+%30 = OpTypePointer Function %5
+%32 = OpConstant %5 0.0
+%33 = OpConstant %4 1
+%34 = OpTypePointer Function %6
+%44 = OpConstant %5 1.0
+%63 = OpConstant %4 0
+%102 = OpConstant %5 0.5
+%13 = OpVariable %12 UniformConstant
+%18 = OpVariable %17 Output
+%20 = OpVariable %19 Input
+%23 = OpVariable %22 Input
+%15 = OpFunction %2 None %14
+%16 = OpLabel
+%27 = OpVariable %26 Function
+%29 = OpVariable %28 Function
+%31 = OpVariable %30 Function
+%62 = OpVariable %34 Function
+%21 = OpLoad %8 %20
+%24 = OpLoad %6 %23
+%25 = OpCompositeConstruct %9 %21 %24
+OpStore %27 %25
+OpStore %31 %32
+%35 = OpAccessChain %34 %27 %33
+%36 = OpAccessChain %34 %27 %33
+%37 = OpLoad %6 %36
+%38 = OpCompositeExtract %5 %37 0
+%39 = OpFOrdGreaterThanEqual %3 %38 %32
+%40 = OpAccessChain %34 %27 %33
+%41 = OpAccessChain %34 %27 %33
+%42 = OpLoad %6 %41
+%43 = OpCompositeExtract %5 %42 0
+%45 = OpFOrdLessThanEqual %3 %43 %44
+%46 = OpLogicalAnd %3 %39 %45
+%47 = OpAccessChain %34 %27 %33
+%48 = OpAccessChain %34 %27 %33
+%49 = OpLoad %6 %48
+%50 = OpCompositeExtract %5 %49 1
+%51 = OpFOrdGreaterThanEqual %3 %50 %32
+%52 = OpLogicalAnd %3 %46 %51
+%53 = OpAccessChain %34 %27 %33
+%54 = OpAccessChain %34 %27 %33
+%55 = OpLoad %6 %54
+%56 = OpCompositeExtract %5 %55 1
+%57 = OpFOrdLessThanEqual %3 %56 %44
+%58 = OpLogicalAnd %3 %52 %57
+OpSelectionMerge %59 None
+OpBranchConditional %58 %60 %61
+%60 = OpLabel
+%64 = OpAccessChain %28 %27 %63
+%65 = OpAccessChain %28 %27 %63
+%66 = OpLoad %8 %65
+%67 = OpCompositeExtract %5 %66 0
+%68 = OpAccessChain %28 %27 %63
+%69 = OpAccessChain %28 %27 %63
+%70 = OpLoad %8 %69
+%71 = OpCompositeExtract %5 %70 2
+%72 = OpAccessChain %34 %27 %33
+%73 = OpAccessChain %34 %27 %33
+%74 = OpLoad %6 %73
+%75 = OpCompositeExtract %5 %74 0
+%76 = OpExtInst %5 %1 FMix %67 %71 %75
+%77 = OpLoad %6 %62
+%78 = OpCompositeInsert %6 %76 %77 0
+OpStore %62 %78
+%79 = OpAccessChain %28 %27 %63
+%80 = OpAccessChain %28 %27 %63
+%81 = OpLoad %8 %80
+%82 = OpCompositeExtract %5 %81 1
+%83 = OpAccessChain %28 %27 %63
+%84 = OpAccessChain %28 %27 %63
+%85 = OpLoad %8 %84
+%86 = OpCompositeExtract %5 %85 3
+%87 = OpAccessChain %34 %27 %33
+%88 = OpAccessChain %34 %27 %33
+%89 = OpLoad %6 %88
+%90 = OpCompositeExtract %5 %89 1
+%91 = OpExtInst %5 %1 FMix %82 %86 %90
+%92 = OpLoad %6 %62
+%93 = OpCompositeInsert %6 %91 %92 1
+OpStore %62 %93
+%94 = OpLoad %11 %13
+%95 = OpLoad %6 %62
+%96 = OpVectorShuffle %6 %95 %95 0 1
+%97 = OpImageSampleImplicitLod %8 %94 %96
+%98 = OpCompositeExtract %5 %97 0
+OpStore %31 %98
+OpBranch %59
+%61 = OpLabel
+OpBranch %59
+%59 = OpLabel
+%99 = OpLoad %5 %31
+%100 = OpCompositeConstruct %7 %99 %99 %99
+%101 = OpLoad %5 %31
+%103 = OpFAdd %5 %101 %102
+%104 = OpExtInst %5 %1 FClamp %103 %32 %44
+%105 = OpCompositeExtract %5 %100 0
+%106 = OpCompositeExtract %5 %100 1
+%107 = OpCompositeExtract %5 %100 2
+%108 = OpCompositeConstruct %8 %105 %106 %107 %104
+OpStore %29 %108
+%109 = OpLoad %8 %29
+OpStore %18 %109
+OpReturn
+OpFunctionEnd

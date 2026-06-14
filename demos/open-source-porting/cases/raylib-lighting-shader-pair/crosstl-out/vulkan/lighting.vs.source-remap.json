@@ -1,0 +1,226 @@
+{
+  "generatedFile": "crosstl-out/vulkan/lighting.vs.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 584,
+        "file": "crosstl-out/vulkan/lighting.vs.spvasm",
+        "length": 33,
+        "line": 19,
+        "offset": 551
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 747,
+        "file": "lighting.vs",
+        "length": 49,
+        "line": 31,
+        "offset": 698
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 767,
+        "file": "crosstl-out/vulkan/lighting.vs.spvasm",
+        "length": 53,
+        "line": 25,
+        "offset": 714
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 272,
+        "file": "lighting.vs",
+        "length": 49,
+        "line": 14,
+        "offset": 223
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 820,
+        "file": "crosstl-out/vulkan/lighting.vs.spvasm",
+        "length": 53,
+        "line": 26,
+        "offset": 767
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 272,
+        "file": "lighting.vs",
+        "length": 49,
+        "line": 14,
+        "offset": 223
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 870,
+        "file": "crosstl-out/vulkan/lighting.vs.spvasm",
+        "length": 50,
+        "line": 27,
+        "offset": 820
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 272,
+        "file": "lighting.vs",
+        "length": 49,
+        "line": 14,
+        "offset": 223
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 921,
+        "file": "crosstl-out/vulkan/lighting.vs.spvasm",
+        "length": 51,
+        "line": 28,
+        "offset": 870
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 272,
+        "file": "lighting.vs",
+        "length": 49,
+        "line": 14,
+        "offset": 223
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 946,
+        "file": "crosstl-out/vulkan/lighting.vs.spvasm",
+        "length": 25,
+        "line": 29,
+        "offset": 921
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 747,
+        "file": "lighting.vs",
+        "length": 49,
+        "line": 31,
+        "offset": 698
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 1001,
+        "file": "crosstl-out/vulkan/lighting.vs.spvasm",
+        "length": 55,
+        "line": 30,
+        "offset": 946
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 41,
+        "file": "lighting.vs",
+        "length": 27,
+        "line": 3,
+        "offset": 14
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 1056,
+        "file": "crosstl-out/vulkan/lighting.vs.spvasm",
+        "length": 55,
+        "line": 31,
+        "offset": 1001
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 41,
+        "file": "lighting.vs",
+        "length": 27,
+        "line": 3,
+        "offset": 14
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 33,
+        "endOffset": 1109,
+        "file": "crosstl-out/vulkan/lighting.vs.spvasm",
+        "length": 53,
+        "line": 32,
+        "offset": 1056
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 41,
+        "file": "lighting.vs",
+        "length": 27,
+        "line": 3,
+        "offset": 14
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 34,
+        "endOffset": 1161,
+        "file": "crosstl-out/vulkan/lighting.vs.spvasm",
+        "length": 52,
+        "line": 33,
+        "offset": 1109
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 41,
+        "file": "lighting.vs",
+        "length": 27,
+        "line": 3,
+        "offset": 14
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

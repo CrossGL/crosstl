@@ -1,0 +1,204 @@
+{
+  "generatedFile": "crosstl-out/directx/batch.vert.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 56,
+        "file": "crosstl-out/directx/batch.vert.hlsl",
+        "length": 34,
+        "line": 3,
+        "offset": 22
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 27,
+        "file": "batch.vert",
+        "length": 27,
+        "line": 1,
+        "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 87,
+        "file": "crosstl-out/directx/batch.vert.hlsl",
+        "length": 31,
+        "line": 4,
+        "offset": 56
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 51,
+        "file": "batch.vert",
+        "length": 24,
+        "line": 2,
+        "offset": 27
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 122,
+        "file": "crosstl-out/directx/batch.vert.hlsl",
+        "length": 35,
+        "line": 5,
+        "offset": 87
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 79,
+        "file": "batch.vert",
+        "length": 28,
+        "line": 3,
+        "offset": 51
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 178,
+        "file": "crosstl-out/directx/batch.vert.hlsl",
+        "length": 31,
+        "line": 8,
+        "offset": 147
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 129,
+        "file": "batch.vert",
+        "length": 22,
+        "line": 7,
+        "offset": 107
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 213,
+        "file": "crosstl-out/directx/batch.vert.hlsl",
+        "length": 35,
+        "line": 9,
+        "offset": 178
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 155,
+        "file": "batch.vert",
+        "length": 26,
+        "line": 8,
+        "offset": 129
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 250,
+        "file": "crosstl-out/directx/batch.vert.hlsl",
+        "length": 37,
+        "line": 10,
+        "offset": 213
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 260,
+        "file": "batch.vert",
+        "length": 42,
+        "line": 13,
+        "offset": 218
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 455,
+        "file": "crosstl-out/directx/batch.vert.hlsl",
+        "length": 36,
+        "line": 19,
+        "offset": 419
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 190,
+        "file": "batch.vert",
+        "length": 20,
+        "line": 11,
+        "offset": 170
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 499,
+        "file": "crosstl-out/directx/batch.vert.hlsl",
+        "length": 44,
+        "line": 20,
+        "offset": 455
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 218,
+        "file": "batch.vert",
+        "length": 28,
+        "line": 12,
+        "offset": 190
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 560,
+        "file": "crosstl-out/directx/batch.vert.hlsl",
+        "length": 61,
+        "line": 21,
+        "offset": 499
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 260,
+        "file": "batch.vert",
+        "length": 42,
+        "line": 13,
+        "offset": 218
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

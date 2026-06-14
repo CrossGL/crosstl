@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/vulkan/rectangle.frag.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 302,
+        "file": "crosstl-out/vulkan/rectangle.frag.spvasm",
+        "length": 32,
+        "line": 11,
+        "offset": 270
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 805,
+        "file": "rectangle.frag.glsl",
+        "length": 42,
+        "line": 21,
+        "offset": 763
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/vulkan/main.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 14,
+        "endLine": 79,
+        "endOffset": 2051,
+        "file": "crosstl-out/vulkan/main.spvasm",
+        "length": 2051,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 1470,
+        "file": "main.hip",
+        "length": 1470,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

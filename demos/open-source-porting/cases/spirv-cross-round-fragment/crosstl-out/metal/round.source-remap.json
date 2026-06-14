@@ -1,0 +1,116 @@
+{
+  "generatedFile": "crosstl-out/metal/round.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 104,
+        "file": "crosstl-out/metal/round.metal",
+        "length": 32,
+        "line": 6,
+        "offset": 72
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 47,
+        "file": "round.frag",
+        "length": 33,
+        "line": 3,
+        "offset": 14
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 135,
+        "file": "crosstl-out/metal/round.metal",
+        "length": 31,
+        "line": 7,
+        "offset": 104
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 81,
+        "file": "round.frag",
+        "length": 34,
+        "line": 4,
+        "offset": 47
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 245,
+        "file": "crosstl-out/metal/round.metal",
+        "length": 22,
+        "line": 11,
+        "offset": 223
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 122,
+        "file": "round.frag",
+        "length": 41,
+        "line": 5,
+        "offset": 81
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 278,
+        "file": "crosstl-out/metal/round.metal",
+        "length": 33,
+        "line": 12,
+        "offset": 245
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 161,
+        "file": "round.frag",
+        "length": 24,
+        "line": 9,
+        "offset": 137
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 312,
+        "file": "crosstl-out/metal/round.metal",
+        "length": 34,
+        "line": 13,
+        "offset": 278
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 186,
+        "file": "round.frag",
+        "length": 25,
+        "line": 10,
+        "offset": 161
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

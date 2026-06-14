@@ -1,0 +1,160 @@
+{
+  "generatedFile": "crosstl-out/metal/shaders.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 206,
+        "file": "crosstl-out/metal/shaders.metal",
+        "length": 19,
+        "line": 11,
+        "offset": 187
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 501,
+        "file": "shaders.hlsl",
+        "length": 19,
+        "line": 14,
+        "offset": 482
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 230,
+        "file": "crosstl-out/metal/shaders.metal",
+        "length": 24,
+        "line": 12,
+        "offset": 206
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 525,
+        "file": "shaders.hlsl",
+        "length": 24,
+        "line": 15,
+        "offset": 501
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 585,
+        "file": "crosstl-out/metal/shaders.metal",
+        "length": 20,
+        "line": 23,
+        "offset": 565
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 698,
+        "file": "shaders.hlsl",
+        "length": 20,
+        "line": 26,
+        "offset": 678
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 646,
+        "file": "crosstl-out/metal/shaders.metal",
+        "length": 61,
+        "line": 24,
+        "offset": 585
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 740,
+        "file": "shaders.hlsl",
+        "length": 41,
+        "line": 28,
+        "offset": 699
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 672,
+        "file": "crosstl-out/metal/shaders.metal",
+        "length": 26,
+        "line": 25,
+        "offset": 646
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 766,
+        "file": "shaders.hlsl",
+        "length": 26,
+        "line": 29,
+        "offset": 740
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 831,
+        "file": "crosstl-out/metal/shaders.metal",
+        "length": 118,
+        "line": 30,
+        "offset": 713
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 35,
+        "endOffset": 830,
+        "file": "shaders.hlsl",
+        "length": 41,
+        "line": 34,
+        "offset": 789
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 855,
+        "file": "crosstl-out/metal/shaders.metal",
+        "length": 24,
+        "line": 31,
+        "offset": 831
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 37,
+        "endOffset": 856,
+        "file": "shaders.hlsl",
+        "length": 24,
+        "line": 36,
+        "offset": 832
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

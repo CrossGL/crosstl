@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/directx/triangle.frag.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 53,
+        "file": "crosstl-out/directx/triangle.frag.hlsl",
+        "length": 29,
+        "line": 3,
+        "offset": 24
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 34,
+        "file": "triangle.frag",
+        "length": 20,
+        "line": 3,
+        "offset": 14
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 148,
+        "file": "crosstl-out/directx/triangle.frag.hlsl",
+        "length": 25,
+        "line": 7,
+        "offset": 123
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 86,
+        "file": "triangle.frag",
+        "length": 37,
+        "line": 7,
+        "offset": 49
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 193,
+        "file": "crosstl-out/directx/triangle.frag.hlsl",
+        "length": 45,
+        "line": 8,
+        "offset": 148
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 86,
+        "file": "triangle.frag",
+        "length": 37,
+        "line": 7,
+        "offset": 49
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 218,
+        "file": "crosstl-out/directx/triangle.frag.hlsl",
+        "length": 25,
+        "line": 9,
+        "offset": 193
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 86,
+        "file": "triangle.frag",
+        "length": 37,
+        "line": 7,
+        "offset": 49
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

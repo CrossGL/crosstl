@@ -1,0 +1,50 @@
+{
+  "generatedFile": "crosstl-out/vulkan/lighting.fs.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 650,
+        "file": "crosstl-out/vulkan/lighting.fs.spvasm",
+        "length": 28,
+        "line": 23,
+        "offset": 622
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 51,
+        "endOffset": 1084,
+        "file": "lighting.fs",
+        "length": 36,
+        "line": 50,
+        "offset": 1048
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 794,
+        "file": "crosstl-out/vulkan/lighting.fs.spvasm",
+        "length": 42,
+        "line": 28,
+        "offset": 752
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 249,
+        "file": "lighting.fs",
+        "length": 25,
+        "line": 13,
+        "offset": 224
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

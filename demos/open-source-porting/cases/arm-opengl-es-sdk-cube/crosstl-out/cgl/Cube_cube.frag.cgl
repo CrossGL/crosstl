@@ -1,0 +1,15 @@
+precision lowp float;
+
+shader main {
+    struct FragmentInput {
+    vec3 vv3colour;
+    };
+
+    fragment {
+    vec4 main(FragmentInput input) @ gl_FragColor {
+        vec4 gl_FragColor;
+        gl_FragColor = vec4(input.vv3colour, 1.0);
+        return gl_FragColor;
+    }
+    }
+}

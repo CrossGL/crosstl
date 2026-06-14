@@ -1,0 +1,204 @@
+{
+  "generatedFile": "crosstl-out/cgl/default-parameter.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 56,
+        "file": "crosstl-out/cgl/default-parameter.cgl",
+        "length": 42,
+        "line": 2,
+        "offset": 14
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 305,
+        "file": "default-parameter.slang",
+        "length": 38,
+        "line": 6,
+        "offset": 267
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 92,
+        "file": "crosstl-out/cgl/default-parameter.cgl",
+        "length": 36,
+        "line": 3,
+        "offset": 56
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 338,
+        "file": "default-parameter.slang",
+        "length": 32,
+        "line": 8,
+        "offset": 306
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 150,
+        "file": "crosstl-out/cgl/default-parameter.cgl",
+        "length": 27,
+        "line": 7,
+        "offset": 123
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 381,
+        "file": "default-parameter.slang",
+        "length": 18,
+        "line": 13,
+        "offset": 363
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 197,
+        "file": "crosstl-out/cgl/default-parameter.cgl",
+        "length": 47,
+        "line": 8,
+        "offset": 150
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 426,
+        "file": "default-parameter.slang",
+        "length": 43,
+        "line": 15,
+        "offset": 383
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 291,
+        "file": "crosstl-out/cgl/default-parameter.cgl",
+        "length": 73,
+        "line": 12,
+        "offset": 218
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 451,
+        "file": "default-parameter.slang",
+        "length": 22,
+        "line": 18,
+        "offset": 429
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 379,
+        "file": "crosstl-out/cgl/default-parameter.cgl",
+        "length": 88,
+        "line": 13,
+        "offset": 291
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 514,
+        "file": "default-parameter.slang",
+        "length": 63,
+        "line": 19,
+        "offset": 451
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 424,
+        "file": "crosstl-out/cgl/default-parameter.cgl",
+        "length": 45,
+        "line": 14,
+        "offset": 379
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 558,
+        "file": "default-parameter.slang",
+        "length": 42,
+        "line": 21,
+        "offset": 516
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 458,
+        "file": "crosstl-out/cgl/default-parameter.cgl",
+        "length": 34,
+        "line": 15,
+        "offset": 424
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 588,
+        "file": "default-parameter.slang",
+        "length": 30,
+        "line": 22,
+        "offset": 558
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 509,
+        "file": "crosstl-out/cgl/default-parameter.cgl",
+        "length": 51,
+        "line": 16,
+        "offset": 458
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 635,
+        "file": "default-parameter.slang",
+        "length": 47,
+        "line": 23,
+        "offset": 588
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

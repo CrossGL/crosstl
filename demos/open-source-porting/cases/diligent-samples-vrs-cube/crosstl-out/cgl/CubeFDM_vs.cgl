@@ -1,0 +1,34 @@
+#version 450 core
+
+shader main {
+    struct g_Constants {
+    mat4x4 WorldViewProj;
+    int PrimitiveShadingRate;
+    int DrawMode;
+};
+
+    struct VertexInput {
+    vec3 in_Pos @location(0);
+    vec2 in_UV @location(1);
+    };
+
+    struct VertexOutput {
+    vec2 out_UV @location(0);
+    vec4 gl_Position @ gl_Position;
+    };
+
+    cbuffer Uniforms {
+    mat4x4 WorldViewProj;
+    int PrimitiveShadingRate;
+    int DrawMode;
+    };
+
+    vertex {
+    VertexOutput main(VertexInput input) {
+        VertexOutput output;
+        output.gl_Position = (vec4(input.in_Pos, 1.0) * WorldViewProj);
+        output.out_UV = input.in_UV;
+        return output;
+    }
+    }
+}

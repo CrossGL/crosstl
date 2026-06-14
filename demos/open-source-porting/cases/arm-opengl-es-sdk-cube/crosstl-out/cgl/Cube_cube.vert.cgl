@@ -1,0 +1,24 @@
+shader main {
+    struct VertexInput {
+    vec4 av4position;
+    vec3 av3colour;
+    };
+
+    struct VertexOutput {
+    vec3 vv3colour;
+    vec4 gl_Position @ gl_Position;
+    };
+
+    cbuffer Uniforms {
+    mat4 mvp;
+    };
+
+    vertex {
+    VertexOutput main(VertexInput input) {
+        VertexOutput output;
+        output.vv3colour = input.av3colour;
+        output.gl_Position = (mvp * input.av4position);
+        return output;
+    }
+    }
+}

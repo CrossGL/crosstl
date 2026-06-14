@@ -1,0 +1,50 @@
+{
+  "generatedFile": "crosstl-out/metal/main.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 476,
+        "file": "crosstl-out/metal/main.metal",
+        "length": 116,
+        "line": 7,
+        "offset": 360
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 1408,
+        "file": "main.hip",
+        "length": 60,
+        "line": 27,
+        "offset": 1348
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 512,
+        "file": "crosstl-out/metal/main.metal",
+        "length": 36,
+        "line": 8,
+        "offset": 476
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 1445,
+        "file": "main.hip",
+        "length": 36,
+        "line": 29,
+        "offset": 1409
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

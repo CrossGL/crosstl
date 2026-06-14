@@ -1,0 +1,72 @@
+{
+  "generatedFile": "crosstl-out/directx/cube.psh.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 135,
+        "file": "crosstl-out/directx/cube.psh.hlsl",
+        "length": 115,
+        "line": 3,
+        "offset": 20
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 128,
+        "file": "cube.psh",
+        "length": 30,
+        "line": 9,
+        "offset": 98
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 166,
+        "file": "crosstl-out/directx/cube.psh.hlsl",
+        "length": 31,
+        "line": 4,
+        "offset": 135
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 546,
+        "file": "cube.psh",
+        "length": 31,
+        "line": 18,
+        "offset": 515
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 191,
+        "file": "crosstl-out/directx/cube.psh.hlsl",
+        "length": 25,
+        "line": 5,
+        "offset": 166
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 734,
+        "file": "cube.psh",
+        "length": 25,
+        "line": 23,
+        "offset": 709
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

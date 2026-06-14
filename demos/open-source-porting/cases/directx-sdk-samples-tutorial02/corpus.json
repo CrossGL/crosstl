@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "DirectX SDK Samples Tutorial02 shader",
+  "description": "Pinned HLSL effect include used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "directx-sdk-samples-tutorial02",
+      "path": "Tutorial02.fxh",
+      "sourceBackend": "directx",
+      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
+      "repository": "https://github.com/walbourn/directx-sdk-samples-reworked",
+      "commit": "1ad8f0f6a3e4d9be7e54ca52640ac12b6565ab0c",
+      "sourceUrl": "https://github.com/walbourn/directx-sdk-samples-reworked/blob/1ad8f0f6a3e4d9be7e54ca52640ac12b6565ab0c/Direct3D11Tutorials/Tutorial02/Tutorial02.fxh"
+    }
+  ]
+}

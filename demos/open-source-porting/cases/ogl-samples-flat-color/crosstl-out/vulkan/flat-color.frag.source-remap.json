@@ -1,0 +1,50 @@
+{
+  "generatedFile": "crosstl-out/vulkan/flat-color.frag.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 505,
+        "file": "crosstl-out/vulkan/flat-color.frag.spvasm",
+        "length": 26,
+        "line": 19,
+        "offset": 479
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 204,
+        "file": "flat-color.frag",
+        "length": 57,
+        "line": 10,
+        "offset": 147
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 528,
+        "file": "crosstl-out/vulkan/flat-color.frag.spvasm",
+        "length": 23,
+        "line": 20,
+        "offset": 505
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 204,
+        "file": "flat-color.frag",
+        "length": 57,
+        "line": 10,
+        "offset": 147
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

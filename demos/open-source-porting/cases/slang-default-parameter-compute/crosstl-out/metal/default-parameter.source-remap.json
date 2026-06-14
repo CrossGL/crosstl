@@ -1,0 +1,138 @@
+{
+  "generatedFile": "crosstl-out/metal/default-parameter.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 78,
+        "file": "crosstl-out/metal/default-parameter.metal",
+        "length": 29,
+        "line": 5,
+        "offset": 49
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 338,
+        "file": "default-parameter.slang",
+        "length": 32,
+        "line": 8,
+        "offset": 306
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 121,
+        "file": "crosstl-out/metal/default-parameter.metal",
+        "length": 20,
+        "line": 9,
+        "offset": 101
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 381,
+        "file": "default-parameter.slang",
+        "length": 18,
+        "line": 13,
+        "offset": 363
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 307,
+        "file": "crosstl-out/metal/default-parameter.metal",
+        "length": 118,
+        "line": 14,
+        "offset": 189
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 514,
+        "file": "default-parameter.slang",
+        "length": 63,
+        "line": 19,
+        "offset": 451
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 348,
+        "file": "crosstl-out/metal/default-parameter.metal",
+        "length": 41,
+        "line": 15,
+        "offset": 307
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 558,
+        "file": "default-parameter.slang",
+        "length": 42,
+        "line": 21,
+        "offset": 516
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 378,
+        "file": "crosstl-out/metal/default-parameter.metal",
+        "length": 30,
+        "line": 16,
+        "offset": 348
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 588,
+        "file": "default-parameter.slang",
+        "length": 30,
+        "line": 22,
+        "offset": 558
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 425,
+        "file": "crosstl-out/metal/default-parameter.metal",
+        "length": 47,
+        "line": 17,
+        "offset": 378
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 635,
+        "file": "default-parameter.slang",
+        "length": 47,
+        "line": 23,
+        "offset": 588
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

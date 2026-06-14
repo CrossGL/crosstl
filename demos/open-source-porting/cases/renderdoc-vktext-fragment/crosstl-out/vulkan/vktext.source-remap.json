@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/vulkan/vktext.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 299,
+        "file": "crosstl-out/vulkan/vktext.spvasm",
+        "length": 24,
+        "line": 11,
+        "offset": 275
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 1429,
+        "file": "vktext.frag",
+        "length": 34,
+        "line": 29,
+        "offset": 1395
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 327,
+        "file": "crosstl-out/vulkan/vktext.spvasm",
+        "length": 28,
+        "line": 12,
+        "offset": 299
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 1467,
+        "file": "vktext.frag",
+        "length": 38,
+        "line": 30,
+        "offset": 1429
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 615,
+        "file": "crosstl-out/vulkan/vktext.spvasm",
+        "length": 25,
+        "line": 22,
+        "offset": 590
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 1352,
+        "file": "vktext.frag",
+        "length": 44,
+        "line": 25,
+        "offset": 1308
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 693,
+        "file": "crosstl-out/vulkan/vktext.spvasm",
+        "length": 26,
+        "line": 25,
+        "offset": 667
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 1467,
+        "file": "vktext.frag",
+        "length": 38,
+        "line": 30,
+        "offset": 1429
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

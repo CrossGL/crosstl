@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/metal/vectorAdd_kernel.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 114,
+        "file": "crosstl-out/metal/vectorAdd_kernel.metal",
+        "length": 21,
+        "line": 7,
+        "offset": 93
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 1812,
+        "file": "vectorAdd_kernel.cu",
+        "length": 96,
+        "line": 35,
+        "offset": 1716
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 515,
+        "file": "crosstl-out/metal/vectorAdd_kernel.metal",
+        "length": 380,
+        "line": 10,
+        "offset": 135
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 1812,
+        "file": "vectorAdd_kernel.cu",
+        "length": 96,
+        "line": 35,
+        "offset": 1716
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 622,
+        "file": "crosstl-out/metal/vectorAdd_kernel.metal",
+        "length": 107,
+        "line": 11,
+        "offset": 515
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 38,
+        "endOffset": 1865,
+        "file": "vectorAdd_kernel.cu",
+        "length": 51,
+        "line": 37,
+        "offset": 1814
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 692,
+        "file": "crosstl-out/metal/vectorAdd_kernel.metal",
+        "length": 28,
+        "line": 13,
+        "offset": 664
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 41,
+        "endOffset": 1921,
+        "file": "vectorAdd_kernel.cu",
+        "length": 28,
+        "line": 40,
+        "offset": 1893
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

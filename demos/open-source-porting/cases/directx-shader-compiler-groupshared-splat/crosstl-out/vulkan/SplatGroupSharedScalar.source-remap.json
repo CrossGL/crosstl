@@ -1,0 +1,50 @@
+{
+  "generatedFile": "crosstl-out/vulkan/SplatGroupSharedScalar.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 238,
+        "file": "crosstl-out/vulkan/SplatGroupSharedScalar.spvasm",
+        "length": 37,
+        "line": 9,
+        "offset": 201
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 492,
+        "file": "SplatGroupSharedScalar.hlsl",
+        "length": 23,
+        "line": 11,
+        "offset": 469
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 320,
+        "file": "crosstl-out/vulkan/SplatGroupSharedScalar.spvasm",
+        "length": 20,
+        "line": 14,
+        "offset": 300
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 400,
+        "file": "SplatGroupSharedScalar.hlsl",
+        "length": 91,
+        "line": 7,
+        "offset": 309
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

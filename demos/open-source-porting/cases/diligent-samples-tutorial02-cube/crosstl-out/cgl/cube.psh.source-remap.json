@@ -1,0 +1,50 @@
+{
+  "generatedFile": "crosstl-out/cgl/cube.psh.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 200,
+        "file": "crosstl-out/cgl/cube.psh.cgl",
+        "length": 33,
+        "line": 5,
+        "offset": 167
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 546,
+        "file": "cube.psh",
+        "length": 31,
+        "line": 18,
+        "offset": 515
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 229,
+        "file": "crosstl-out/cgl/cube.psh.cgl",
+        "length": 29,
+        "line": 6,
+        "offset": 200
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 734,
+        "file": "cube.psh",
+        "length": 25,
+        "line": 23,
+        "offset": 709
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

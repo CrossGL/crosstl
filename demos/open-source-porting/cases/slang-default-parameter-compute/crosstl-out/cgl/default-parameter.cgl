@@ -1,0 +1,21 @@
+shader main {
+    RWStructuredBuffer<int> outputBuffer;
+       int helper(int val, int a) {
+        return val + a;
+    }
+
+       int test(int val) {
+        return helper(val) + helper(val, 256);
+    }
+
+    compute {
+        layout(local_size_x = 4, local_size_y = 1, local_size_z = 1) in;
+       void computeMain(uvec3 dispatchThreadID @ gl_GlobalInvocationID) @ stage_entry {
+        int inVal = int(dispatchThreadID.x);
+        int outVal = test(inVal);
+        outputBuffer[dispatchThreadID.x] = outVal;
+    }
+
+    }
+
+}

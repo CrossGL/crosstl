@@ -1,0 +1,54 @@
+#version 400
+
+shader main {
+    struct VertexInput {
+    vec4 ucol[arraySize];
+    vec4 dupUcol[dupArraySize];
+    };
+
+    struct VertexOutput {
+    vec4 color;
+    int size;
+    };
+
+    const int arraySize @constant_id(16) = 5;
+    const bool spBool @constant_id(17) = true;
+    const float spFloat @constant_id(18) = 3.14;
+    const double spDouble @constant_id(19) = 3.1415926535897932384626433832795;
+    const uint scale @constant_id(22) = 2;
+    const int dupArraySize @constant_id(116) = 12;
+    const bool spDupBool @constant_id(117) = true;
+    const float spDupFloat @constant_id(118) = 3.14;
+    const double spDupDouble @constant_id(119) = 3.1415926535897932384626433832795;
+    const uint dupScale @constant_id(122) = 2;
+
+     gl_MaxImageUnits @constant_id(24);
+
+    vertex {
+    void foo(vec4 p[arraySize]) {
+        output.color += input.dupUcol[2];
+        output.size += dupArraySize;
+        if (spDupBool) {
+            output.color *= dupScale;
+        }
+        output.color += float((spDupDouble / spDupFloat));
+    }
+
+    int builtin_spec_constant() {
+        int result = gl_MaxImageUnits;
+        return result;
+    }
+
+    VertexOutput main(VertexInput input) {
+        VertexOutput output;
+        output.color = input.ucol[2];
+        output.size = arraySize;
+        if (spBool) {
+            output.color *= scale;
+        }
+        output.color += float((spDouble / spFloat));
+        foo(input.ucol);
+        return output;
+    }
+    }
+}

@@ -1,0 +1,50 @@
+shader main {
+    // use glam::UVec3
+    // use spirv_std::{glam, spirv}
+    Option<u32> collatz(uint n) {
+        let mut i = 0;
+        if ((n == 0)) {
+            return None;
+        }
+        while ((n != 1)) {
+            if (((n % 2) == 0)) {
+                n = (n / 2);
+            } else {
+                if ((n >= 1431655765)) {
+                    return None;
+                }
+                n = ((3 * n) + 1);
+            }
+            i += 1;
+        }
+        return Some(i);
+    }
+
+    // Compute Shader
+    compute main_cs {
+        void main(uvec3 id @ gl_GlobalInvocationID, RWStructuredBuffer<uint> prime_indices @ set(0) @ binding(0)) @numthreads(64, 1, 1) {
+            let index = uint(id.x);
+            prime_indices[index] = collatz_unwrap_or(prime_indices[index], 4294967295u);
+        }
+    }
+
+    uint collatz_unwrap_or(uint n, uint _rust_option_fallback) {
+        let mut i = 0;
+        if ((n == 0)) {
+            return _rust_option_fallback;
+        }
+        while ((n != 1)) {
+            if (((n % 2) == 0)) {
+                n = (n / 2);
+            } else {
+                if ((n >= 1431655765)) {
+                    return _rust_option_fallback;
+                }
+                n = ((3 * n) + 1);
+            }
+            i += 1;
+        }
+        return i;
+    }
+
+}
