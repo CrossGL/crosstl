@@ -62,6 +62,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macOS-latest, windows-latest]
+    env:
+      DEMO_FAILURE_SUMMARY_DIR: support/generated/demo-reports/${{ matrix.os }}
 
     steps:
       - name: Checkout repository
@@ -112,6 +114,58 @@ jobs:
           python -m pip install -e . pytest
         shell: bash
 
+      - name: Prepare demo failure summary helper
+        shell: bash
+        run: |
+          mkdir -p "$DEMO_FAILURE_SUMMARY_DIR"
+          cat > support/generated/demo-failure-summary.sh <<'BASH'
+          command_text() {
+            local text
+            printf -v text "%q " "$@"
+            printf "%s" "${text% }"
+          }
+
+          demo_case_from_artifact_path() {
+            local relative="${1#demos/open-source-porting/cases/}"
+            printf "%s" "${relative%%/*}"
+          }
+
+          write_demo_failure_summary() {
+            local summary_base="$1"
+            local step_name="$2"
+            local case_name="$3"
+            local target_backend="$4"
+            local category="$5"
+            local failed_command="$6"
+            local report_path="${7:-}"
+            local artifact_path="${8:-}"
+            local summary_dir="${DEMO_FAILURE_SUMMARY_DIR:?DEMO_FAILURE_SUMMARY_DIR is required}"
+            local summary_json="$summary_dir/${summary_base}-failure-summary.json"
+            local summary_markdown="$summary_dir/${summary_base}-failure-summary.md"
+            local summary_args=(
+              python tools/pytest_failure_summary.py
+              --demo-step
+              --demo-step-name "$step_name"
+              --case-name "$case_name"
+              --target-backend "$target_backend"
+              --category "$category"
+              --command "$failed_command"
+              --json-output "$summary_json"
+              --markdown-output "$summary_markdown"
+            )
+            if [ -n "$report_path" ]; then
+              summary_args+=(--report-path "$report_path")
+            fi
+            if [ -n "$artifact_path" ]; then
+              summary_args+=(--artifact-path "$artifact_path")
+            fi
+            "${summary_args[@]}"
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              cat "$summary_markdown" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          }
+          BASH
+
       - name: Run open-source porting demo tests
         id: run_demo_tests
         shell: bash
@@ -141,56 +195,163 @@ jobs:
 
       - name: Verify checked-in demo artifacts
         run: |
-          python demos/open-source-porting/run_demo.py \
-            --check \
-            --reports-dir support/generated/demo-reports/${{ matrix.os }}/artifacts
+          set -euo pipefail
+          source support/generated/demo-failure-summary.sh
+          reports_dir="support/generated/demo-reports/${{ matrix.os }}/artifacts"
+          while IFS= read -r config_path; do
+            config_path="${config_path%$'\r'}"
+            case_dir="$(dirname "$config_path")"
+            case_name="$(basename "$case_dir")"
+            command=(
+              python demos/open-source-porting/run_demo.py
+              --check
+              --case="$case_name"
+              --reports-dir "$reports_dir"
+            )
+            failed_command="$(command_text "${command[@]}")"
+            if ! "${command[@]}"; then
+              write_demo_failure_summary \
+                open-source-porting-demo-artifacts \
+                "Verify checked-in demo artifacts" \
+                "$case_name" \
+                all \
+                demo_artifact \
+                "$failed_command" \
+                "$reports_dir/$case_name-portability-report.json"
+              exit 1
+            fi
+          done < <(find demos/open-source-porting/cases -mindepth 2 -maxdepth 2 -name crosstl.toml | sort)
         shell: bash
 
       - name: Linux OpenGL smoke checks
         if: runner.os == 'Linux'
         run: |
-          python demos/open-source-porting/run_demo.py \
-            --check \
-            --run-toolchains \
-            --require-toolchain-runs \
-            $(python demos/open-source-porting/run_demo.py --emit-case-args opengl) \
-            --target opengl \
-            --reports-dir support/generated/demo-reports/linux-opengl
+          set -euo pipefail
+          source support/generated/demo-failure-summary.sh
+          reports_dir="support/generated/demo-reports/linux-opengl"
+          case_args=()
+          read -r -a case_args <<< "$(python demos/open-source-porting/run_demo.py --emit-case-args opengl)"
+          for ((index = 1; index < ${#case_args[@]}; index += 2)); do
+            case_name="${case_args[$index]}"
+            case_name="${case_name%$'\r'}"
+            command=(
+              python demos/open-source-porting/run_demo.py
+              --check
+              --run-toolchains
+              --require-toolchain-runs
+              --case="$case_name"
+              --target opengl
+              --reports-dir "$reports_dir"
+            )
+            failed_command="$(command_text "${command[@]}")"
+            if ! "${command[@]}"; then
+              write_demo_failure_summary \
+                open-source-porting-demo-linux-opengl \
+                "Linux OpenGL smoke checks" \
+                "$case_name" \
+                opengl \
+                demo_toolchain \
+                "$failed_command" \
+                "$reports_dir/$case_name-portability-report.json"
+              exit 1
+            fi
+          done
         shell: bash
 
       - name: Linux Vulkan smoke checks
         if: runner.os == 'Linux'
         run: |
-          python demos/open-source-porting/run_demo.py \
-            --check \
-            --run-toolchains \
-            --require-toolchain-runs \
-            $(python demos/open-source-porting/run_demo.py --emit-case-args vulkan) \
-            --target vulkan \
-            --reports-dir support/generated/demo-reports/linux-vulkan
+          set -euo pipefail
+          source support/generated/demo-failure-summary.sh
+          reports_dir="support/generated/demo-reports/linux-vulkan"
+          case_args=()
+          read -r -a case_args <<< "$(python demos/open-source-porting/run_demo.py --emit-case-args vulkan)"
+          for ((index = 1; index < ${#case_args[@]}; index += 2)); do
+            case_name="${case_args[$index]}"
+            case_name="${case_name%$'\r'}"
+            command=(
+              python demos/open-source-porting/run_demo.py
+              --check
+              --run-toolchains
+              --require-toolchain-runs
+              --case="$case_name"
+              --target vulkan
+              --reports-dir "$reports_dir"
+            )
+            failed_command="$(command_text "${command[@]}")"
+            if ! "${command[@]}"; then
+              write_demo_failure_summary \
+                open-source-porting-demo-linux-vulkan \
+                "Linux Vulkan smoke checks" \
+                "$case_name" \
+                vulkan \
+                demo_toolchain \
+                "$failed_command" \
+                "$reports_dir/$case_name-portability-report.json"
+              exit 1
+            fi
+          done
         shell: bash
 
       - name: macOS Metal smoke checks
         if: runner.os == 'macOS'
         run: |
-          python demos/open-source-porting/run_demo.py \
-            --check \
-            --run-toolchains \
-            --require-toolchain-runs \
-            $(python demos/open-source-porting/run_demo.py --emit-case-args metal) \
-            --target metal \
-            --reports-dir support/generated/demo-reports/macos-metal
+          set -euo pipefail
+          source support/generated/demo-failure-summary.sh
+          reports_dir="support/generated/demo-reports/macos-metal"
+          case_args=()
+          read -r -a case_args <<< "$(python demos/open-source-porting/run_demo.py --emit-case-args metal)"
+          for ((index = 1; index < ${#case_args[@]}; index += 2)); do
+            case_name="${case_args[$index]}"
+            case_name="${case_name%$'\r'}"
+            command=(
+              python demos/open-source-porting/run_demo.py
+              --check
+              --run-toolchains
+              --require-toolchain-runs
+              --case="$case_name"
+              --target metal
+              --reports-dir "$reports_dir"
+            )
+            failed_command="$(command_text "${command[@]}")"
+            if ! "${command[@]}"; then
+              write_demo_failure_summary \
+                open-source-porting-demo-macos-metal \
+                "macOS Metal smoke checks" \
+                "$case_name" \
+                metal \
+                demo_toolchain \
+                "$failed_command" \
+                "$reports_dir/$case_name-portability-report.json"
+              exit 1
+            fi
+          done
         shell: bash
 
       - name: macOS Metal compile references
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
+          source support/generated/demo-failure-summary.sh
           out_dir="${RUNNER_TEMP}/demo-metal-air"
           mkdir -p "$out_dir"
           while IFS= read -r shader; do
+            shader="${shader%$'\r'}"
             output="$(printf '%s' "$shader" | tr '/.' '__').air"
-            xcrun -sdk macosx metal -c "$shader" -o "$out_dir/$output"
+            command=(xcrun -sdk macosx metal -c "$shader" -o "$out_dir/$output")
+            failed_command="$(command_text "${command[@]}")"
+            if ! "${command[@]}"; then
+              write_demo_failure_summary \
+                open-source-porting-demo-macos-metal-compile \
+                "macOS Metal compile references" \
+                "$(demo_case_from_artifact_path "$shader")" \
+                metal \
+                demo_toolchain \
+                "$failed_command" \
+                "" \
+                "$shader"
+              exit 1
+            fi
           done < <(
             python demos/open-source-porting/run_demo.py \
               --emit-artifact-paths metal \
@@ -201,19 +362,43 @@ jobs:
       - name: Windows DirectX smoke checks
         if: runner.os == 'Windows'
         run: |
-          python demos/open-source-porting/run_demo.py \
-            --check \
-            --run-toolchains \
-            --require-toolchain-runs \
-            $(python demos/open-source-porting/run_demo.py --emit-case-args directx) \
-            --target directx \
-            --reports-dir support/generated/demo-reports/windows-directx
+          set -euo pipefail
+          source support/generated/demo-failure-summary.sh
+          reports_dir="support/generated/demo-reports/windows-directx"
+          case_args=()
+          read -r -a case_args <<< "$(python demos/open-source-porting/run_demo.py --emit-case-args directx)"
+          for ((index = 1; index < ${#case_args[@]}; index += 2)); do
+            case_name="${case_args[$index]}"
+            case_name="${case_name%$'\r'}"
+            command=(
+              python demos/open-source-porting/run_demo.py
+              --check
+              --run-toolchains
+              --require-toolchain-runs
+              --case="$case_name"
+              --target directx
+              --reports-dir "$reports_dir"
+            )
+            failed_command="$(command_text "${command[@]}")"
+            if ! "${command[@]}"; then
+              write_demo_failure_summary \
+                open-source-porting-demo-windows-directx \
+                "Windows DirectX smoke checks" \
+                "$case_name" \
+                directx \
+                demo_toolchain \
+                "$failed_command" \
+                "$reports_dir/$case_name-portability-report.json"
+              exit 1
+            fi
+          done
         shell: bash
 
       - name: Windows DirectX compile references
         if: runner.os == 'Windows'
         run: |
           set -euo pipefail
+          source support/generated/demo-failure-summary.sh
           out_dir="${RUNNER_TEMP}/demo-directx-dxil"
           mkdir -p "$out_dir"
           compile_hlsl() {
@@ -222,7 +407,20 @@ jobs:
             local profile="$3"
             local output
             output="$(printf '%s_%s_%s' "$shader" "$entry" "$profile" | tr '/.:' '____').dxil"
-            dxc -T "$profile" -E "$entry" "$shader" -Fo "$out_dir/$output"
+            command=(dxc -T "$profile" -E "$entry" "$shader" -Fo "$out_dir/$output")
+            failed_command="$(command_text "${command[@]}")"
+            if ! "${command[@]}"; then
+              write_demo_failure_summary \
+                open-source-porting-demo-windows-directx-compile \
+                "Windows DirectX compile references" \
+                "$(demo_case_from_artifact_path "$shader")" \
+                directx \
+                demo_toolchain \
+                "$failed_command" \
+                "" \
+                "$shader"
+              return 1
+            fi
           }
           while read -r shader entry profile; do
             shader="${shader%$'\r'}"
@@ -246,7 +444,7 @@ jobs:
           retention-days: 30
 
       - name: Upload demo failure summary
-        if: failure() && steps.run_demo_tests.outcome == 'failure'
+        if: failure()
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
@@ -255,5 +453,7 @@ jobs:
             support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-pytest.xml
             support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.json
             support/generated/demo-reports/${{ matrix.os }}/open-source-porting-demo-failure-summary.md
+            support/generated/demo-reports/**/*-failure-summary.json
+            support/generated/demo-reports/**/*-failure-summary.md
           if-no-files-found: ignore
           retention-days: 30

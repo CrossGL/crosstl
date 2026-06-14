@@ -142,6 +142,65 @@ def test_cli_writes_json_and_markdown_outputs(tmp_path):
     assert "support_automation" in markdown
 
 
+def test_cli_writes_demo_step_failure_summary(tmp_path):
+    json_output = tmp_path / "demo-summary.json"
+    markdown_output = tmp_path / "demo-summary.md"
+    report_path = (
+        "support/generated/demo-reports/linux-opengl/"
+        "glfw-opengl-triangle-portability-report.json"
+    )
+    command = (
+        "python demos/open-source-porting/run_demo.py --check "
+        "--case glfw-opengl-triangle --target opengl"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--demo-step",
+            "--demo-step-name",
+            "Linux OpenGL smoke checks",
+            "--case-name",
+            "glfw-opengl-triangle",
+            "--target-backend",
+            "opengl",
+            "--command",
+            command,
+            "--category",
+            "demo_toolchain",
+            "--report-path",
+            report_path,
+            "--json-output",
+            str(json_output),
+            "--markdown-output",
+            str(markdown_output),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(json_output.read_text(encoding="utf-8"))
+    markdown = markdown_output.read_text(encoding="utf-8")
+    failure = payload["failures"][0]
+    assert payload["generator"] == "tools/pytest_failure_summary.py"
+    assert payload["summary"]["categories"] == {"demo_toolchain": 1}
+    assert payload["summary"]["backends"] == {"opengl": 1}
+    assert payload["reports"][0]["failed_testcases"] == [failure]
+    assert failure["name"] == "glfw-opengl-triangle"
+    assert failure["backend"] == "opengl"
+    assert failure["command"] == command
+    assert failure["report_path"] == report_path
+    assert "case=glfw-opengl-triangle" in failure["message"]
+    assert "target=opengl" in failure["message"]
+    assert "command=python demos/open-source-porting/run_demo.py" in failure["message"]
+    assert "demo_toolchain" in markdown
+    assert "glfw-opengl-triangle" in markdown
+
+
 def test_cli_writes_clean_workflow_summary_without_junit_input(tmp_path):
     json_output = tmp_path / "clean-summary.json"
     markdown_output = tmp_path / "clean-summary.md"
