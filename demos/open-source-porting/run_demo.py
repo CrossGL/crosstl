@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import difflib
 import json
 import re
@@ -14,11 +13,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+from crosstl.project import load_project_config
+
 DEMO_ROOT = Path(__file__).resolve().parent
 CASE_ROOT = DEMO_ROOT / "cases"
 OUTPUT_DIR_NAME = "crosstl-out"
 REPORT_NAME = "portability-report.json"
-TARGET_RE = re.compile(r"(?m)^\s*targets\s*=\s*(\[[^\]]*\])")
 DIRECTX_DEFAULT_ENTRY_PROFILES = (
     ("VSMain", "vs_6_0"),
     ("PSMain", "ps_6_0"),
@@ -37,15 +37,9 @@ def _case_dirs() -> list[Path]:
 
 
 def _case_targets(case_dir: Path) -> list[str]:
-    config_text = (case_dir / "crosstl.toml").read_text(encoding="utf-8")
-    match = TARGET_RE.search(config_text)
-    if match is None:
+    targets = list(load_project_config(case_dir).targets)
+    if not targets:
         raise ValueError(f"{case_dir}/crosstl.toml does not declare project targets")
-    targets = ast.literal_eval(match.group(1))
-    if not isinstance(targets, list) or not all(
-        isinstance(target, str) for target in targets
-    ):
-        raise ValueError(f"{case_dir}/crosstl.toml targets must be a string list")
     return targets
 
 
