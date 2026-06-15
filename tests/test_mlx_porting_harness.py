@@ -397,6 +397,86 @@ def test_full_corpus_mode_reports_tracked_timeout_without_report(tmp_path, monke
     ]
 
 
+def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
+    tmp_path, monkeypatch
+):
+    module = _load_harness()
+    monkeypatch.setattr(module, "FRONTIER_VALIDATION_TRACKED_ISSUES", ())
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / ".crosstl-mlx-porting"
+    config_dir = work_dir / "configs"
+    report_dir = work_dir / "reports"
+    log_dir = work_dir / "logs"
+    for directory in (config_dir, report_dir, log_dir):
+        directory.mkdir(parents=True)
+
+    frontier_count = len(module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
+    vulkan_paths = [
+        f".crosstl/out/vulkan/{Path(source).with_suffix('.spvasm')}"
+        for source in module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    ]
+
+    def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
+        report = {
+            "summary": {
+                "unitCount": frontier_count,
+                "artifactCount": frontier_count * 2,
+                "translatedCount": frontier_count * 2,
+                "failedCount": 0,
+                "diagnosticCounts": {"error": 0},
+                "artifactsByTarget": {
+                    "directx": {
+                        "translatedCount": frontier_count,
+                        "failedCount": 0,
+                    },
+                    "vulkan": {
+                        "translatedCount": frontier_count,
+                        "failedCount": 0,
+                    },
+                },
+            },
+            "artifacts": [
+                {"target": "vulkan", "path": path, "status": "translated"}
+                for path in vulkan_paths
+            ],
+            "validation": {
+                "summary": {"failedCount": 0},
+                "toolchainRuns": [
+                    {
+                        "target": "vulkan",
+                        "path": path,
+                        "status": "ok",
+                    }
+                    for path in vulkan_paths
+                    for _ in range(2)
+                ],
+            },
+        }
+        (report_dir / "directx-vulkan-frontier.json").write_text(
+            json.dumps(report), encoding="utf-8"
+        )
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    result = module._translate_directx_vulkan_frontier(
+        mlx_root,
+        work_dir,
+        config_dir,
+        report_dir,
+        log_dir,
+        "python",
+        require_vulkan_toolchain=True,
+    )
+
+    assert result["toolchainRuns"] == frontier_count * 2
+    assert result["vulkanValidationStatus"] == "validated"
+
+
 def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatch):
     module = _load_harness()
     mlx_root = tmp_path / "mlx"

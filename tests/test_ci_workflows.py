@@ -2140,7 +2140,6 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     for tracked_issue_number in (
         1312,
         1354,
-        1362,
         1376,
         1388,
         1392,
@@ -2176,6 +2175,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         1340,
         1346,
         1355,
+        1362,
         1300,
         1317,
     ):

@@ -40,7 +40,7 @@ FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK = 131072
 FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS = 900
 REDUCED_FRONTIER_MODE = "reduced-frontier"
 FULL_CORPUS_MODE = "full-corpus"
-FRONTIER_VALIDATION_TRACKED_ISSUES = ("https://github.com/CrossGL/crosstl/issues/1362",)
+FRONTIER_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()
 FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1354",
     "https://github.com/CrossGL/crosstl/issues/1376",
@@ -68,6 +68,7 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *RUNTIME_READINESS_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1362",
     "https://github.com/CrossGL/crosstl/issues/1317",
     "https://github.com/CrossGL/crosstl/issues/1300",
     "https://github.com/CrossGL/crosstl/issues/939",
@@ -477,8 +478,22 @@ def _translate_directx_vulkan_frontier(
         if isinstance(run, dict) and run.get("target") == "vulkan"
     ]
     if require_vulkan_toolchain and run_toolchains:
+        vulkan_artifact_paths = {
+            artifact.get("path")
+            for artifact in payload.get("artifacts", [])
+            if isinstance(artifact, dict)
+            and artifact.get("target") == "vulkan"
+            and artifact.get("status") == "translated"
+            and isinstance(artifact.get("path"), str)
+        }
+        validated_vulkan_paths = {
+            run.get("path")
+            for run in vulkan_runs
+            if run.get("status") == "ok" and isinstance(run.get("path"), str)
+        }
         _require(
-            len(vulkan_runs) == frontier_count,
+            len(vulkan_artifact_paths) == frontier_count
+            and vulkan_artifact_paths <= validated_vulkan_paths,
             "Vulkan toolchain validation was required for every frontier artifact",
         )
     for run in vulkan_runs:
