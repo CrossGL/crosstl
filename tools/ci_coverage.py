@@ -241,6 +241,113 @@ EXAMPLES_REQUIRED_POLICIES = {
         'echo "[ERROR] Output file is too small ($FILE_SIZE bytes)"'
     ),
 }
+DEMO_REQUIRED_POLICIES = {
+    "workflow_name": "name: Open-Source Porting Demo",
+    "push_on_main": "push:",
+    "pull_request_on_main": "pull_request:",
+    "workflow_dispatch": "workflow_dispatch:",
+    "read_only_contents": "permissions:\n  contents: read",
+    "python_312": 'python-version: "3.12"',
+    "metadata_pytest_files": "tools/demo_ci_metadata.py emit-pytest-files",
+    "metadata_pytest_selector": "tools/demo_ci_metadata.py emit-pytest-selector",
+    "pytest_selector_filter": '-k "$demo_selector"',
+}
+DEMO_REQUIRED_PATH_FILTERS = [
+    ".github/workflows/demo.yml",
+    "crosstl/backend/**",
+    "crosstl/project/**",
+    "crosstl/translator/ast.py",
+    "crosstl/translator/codegen/**",
+    "crosstl/translator/lexer.py",
+    "crosstl/translator/parser.py",
+    "crosstl/translator/source_registry.py",
+    "crosstl/translator/validation.py",
+    "demos/open-source-porting/**",
+    "docs/source/project-porting.rst",
+    "support/demo-ci-metadata.json",
+    "support/generated/project-porting-roadmap.json",
+    "tests/test_demo_open_source_porting.py",
+    "tests/test_project_test_runner.py",
+    "tests/test_translator/test_project_translation.py",
+    "tools/demo_ci_metadata.py",
+    "tools/pytest_failure_summary.py",
+]
+DEMO_FORBIDDEN_BROAD_PATH_FILTERS = [
+    ".github/**",
+    "crosstl/**",
+    "crosstl/translator/**",
+    "support/**",
+    "tools/**",
+]
+DEMO_TOOLCHAIN_SMOKE_STEPS = {
+    "opengl": {
+        "step": "Linux OpenGL smoke checks",
+        "runner": "runner.os == 'Linux'",
+        "emit_args": "--emit-case-args opengl",
+        "target": "--target opengl",
+        "reports_dir": "support/generated/demo-reports/linux-opengl",
+    },
+    "vulkan": {
+        "step": "Linux Vulkan smoke checks",
+        "runner": "runner.os == 'Linux'",
+        "emit_args": "--emit-case-args vulkan",
+        "target": "--target vulkan",
+        "reports_dir": "support/generated/demo-reports/linux-vulkan",
+    },
+    "metal": {
+        "step": "macOS Metal smoke checks",
+        "runner": "runner.os == 'macOS'",
+        "emit_args": "--emit-case-args metal",
+        "target": "--target metal",
+        "reports_dir": "support/generated/demo-reports/macos-metal",
+    },
+    "directx": {
+        "step": "Windows DirectX smoke checks",
+        "runner": "runner.os == 'Windows'",
+        "emit_args": "--emit-case-args directx",
+        "target": "--target directx",
+        "reports_dir": "support/generated/demo-reports/windows-directx",
+    },
+}
+DEMO_COMPILE_REFERENCE_STEPS = {
+    "metal": {
+        "step": "macOS Metal compile references",
+        "runner": "runner.os == 'macOS'",
+        "artifact_command": "--emit-artifact-paths metal",
+        "compile_command": "xcrun -sdk macosx metal -c",
+        "output_suffix": ".air",
+    },
+    "directx": {
+        "step": "Windows DirectX compile references",
+        "runner": "runner.os == 'Windows'",
+        "artifact_command": "--emit-directx-compile-jobs",
+        "compile_command": 'dxc -T "$profile" -E "$entry" "$shader"',
+        "output_suffix": ".dxil",
+    },
+}
+DEMO_FAILURE_SUMMARY_FIELDS = (
+    "run_shell_bash",
+    "writes_junit",
+    "summary_shell_bash",
+    "writes_failure_summary",
+    "appends_to_step_summary",
+    "summary_on_pytest_failure",
+    "summary_after_run",
+    "uploads_failure_summary",
+    "upload_on_pytest_failure",
+    "upload_ignores_missing_files",
+    "upload_retention",
+    "upload_nonfatal",
+    "upload_after_summary",
+)
+DEMO_REPORT_ARTIFACT_FIELDS = (
+    "uploads_reports",
+    "upload_on_always",
+    "upload_ignores_missing_files",
+    "upload_retention",
+    "upload_nonfatal",
+    "upload_after_artifact_verification",
+)
 WORKFLOW_WRITE_PERMISSION_ALLOWLIST = {
     "issue_assign.yml": ["issues"],
     "pr-issue-links.yml": ["issues", "pull-requests"],
@@ -332,9 +439,13 @@ def yaml_list_values(section: list[str], key: str) -> list[str]:
     return []
 
 
+def workflow_event_path_filters(workflow: str, event_name: str) -> list[str]:
+    event = nested_yaml_section(workflow, event_name, 2)
+    return yaml_list_values(event, "paths")
+
+
 def pull_request_path_filters(workflow: str) -> list[str]:
-    pull_request = nested_yaml_section(workflow, "pull_request", 2)
-    return yaml_list_values(pull_request, "paths")
+    return workflow_event_path_filters(workflow, "pull_request")
 
 
 def workflow_run_workflows(workflow: str) -> list[str]:
@@ -1433,6 +1544,206 @@ def examples_report(workflow: str, expected_backends: list[str]) -> dict[str, An
     }
 
 
+def open_source_porting_demo_failure_summary_report(
+    workflow: str,
+) -> dict[str, bool]:
+    job = "open-source-porting"
+    run_step = workflow_job_step_section(
+        workflow,
+        job,
+        "Run open-source porting demo tests",
+    )
+    summary_step = workflow_job_step_section(
+        workflow,
+        job,
+        "Write demo failure summary",
+    )
+    upload_step = workflow_job_step_section(
+        workflow,
+        job,
+        "Upload demo failure summary",
+    )
+    junit = (
+        "support/generated/demo-reports/${{ matrix.os }}/"
+        "open-source-porting-demo-pytest.xml"
+    )
+    json_report = (
+        "support/generated/demo-reports/${{ matrix.os }}/"
+        "open-source-porting-demo-failure-summary.json"
+    )
+    markdown_report = (
+        "support/generated/demo-reports/${{ matrix.os }}/"
+        "open-source-porting-demo-failure-summary.md"
+    )
+    failure_condition = "if: failure() && steps.run_demo_tests.outcome == 'failure'"
+    return {
+        "run_shell_bash": "shell: bash" in run_step,
+        "writes_junit": f"--junitxml {junit}" in run_step,
+        "summary_shell_bash": "shell: bash" in summary_step,
+        "writes_failure_summary": (
+            "python tools/pytest_failure_summary.py" in summary_step
+            and junit in summary_step
+            and f"--json-output {json_report}" in summary_step
+            and f"--markdown-output {markdown_report}" in summary_step
+        ),
+        "appends_to_step_summary": (
+            f'cat {markdown_report} >> "$GITHUB_STEP_SUMMARY"' in summary_step
+        ),
+        "summary_on_pytest_failure": failure_condition in summary_step,
+        "summary_after_run": workflow_job_step_after(
+            workflow,
+            job,
+            "Write demo failure summary",
+            "Run open-source porting demo tests",
+        ),
+        "uploads_failure_summary": (
+            "actions/upload-artifact@v4" in upload_step
+            and "name: open-source-porting-demo-failure-summary-${{ matrix.os }}"
+            in upload_step
+            and junit in upload_step
+            and json_report in upload_step
+            and markdown_report in upload_step
+        ),
+        # The demo upload step intentionally fires on any step failure
+        # (artifact verification and toolchain smoke checks emit their own
+        # failure summaries), so accept the broader ``if: failure()`` guard in
+        # addition to the run-scoped condition used by the test job.
+        "upload_on_pytest_failure": (
+            failure_condition in upload_step or "if: failure()" in upload_step
+        ),
+        "upload_ignores_missing_files": "if-no-files-found: ignore" in upload_step,
+        "upload_retention": "retention-days: 30" in upload_step,
+        "upload_nonfatal": "continue-on-error: true" in upload_step,
+        "upload_after_summary": workflow_job_step_after(
+            workflow,
+            job,
+            "Upload demo failure summary",
+            "Write demo failure summary",
+        ),
+    }
+
+
+def open_source_porting_demo_report_artifact_report(
+    workflow: str,
+) -> dict[str, bool]:
+    job = "open-source-porting"
+    upload_step = workflow_job_step_section(workflow, job, "Upload demo reports")
+    return {
+        "uploads_reports": (
+            "actions/upload-artifact@v4" in upload_step
+            and "name: open-source-porting-demo-reports-${{ matrix.os }}" in upload_step
+            and "path: support/generated/demo-reports" in upload_step
+        ),
+        "upload_on_always": "if: always()" in upload_step,
+        "upload_ignores_missing_files": "if-no-files-found: ignore" in upload_step,
+        "upload_retention": "retention-days: 30" in upload_step,
+        "upload_nonfatal": "continue-on-error: true" in upload_step,
+        "upload_after_artifact_verification": workflow_job_step_after(
+            workflow,
+            job,
+            "Upload demo reports",
+            "Verify checked-in demo artifacts",
+        ),
+    }
+
+
+def open_source_porting_demo_report(workflow: str) -> dict[str, Any]:
+    job = "open-source-porting"
+    job_text = workflow_job_text(workflow, job)
+    push_path_filters = workflow_event_path_filters(workflow, "push")
+    pull_request_path_filters = workflow_event_path_filters(workflow, "pull_request")
+    path_filter_set = set(push_path_filters) | set(pull_request_path_filters)
+
+    checked_artifact_step = workflow_job_step_section(
+        workflow,
+        job,
+        "Verify checked-in demo artifacts",
+    )
+    checked_in_artifacts = {
+        "runs_demo_check": (
+            "python demos/open-source-porting/run_demo.py" in checked_artifact_step
+            and "--check" in checked_artifact_step
+        ),
+        "uses_matrix_reports_dir": (
+            "--reports-dir support/generated/demo-reports/${{ matrix.os }}/artifacts"
+            in checked_artifact_step
+        ),
+        "shell_bash": "shell: bash" in checked_artifact_step,
+        "after_demo_tests": workflow_job_step_after(
+            workflow,
+            job,
+            "Verify checked-in demo artifacts",
+            "Run open-source porting demo tests",
+        ),
+    }
+
+    target_toolchain_smoke_checks = {}
+    for target, config in DEMO_TOOLCHAIN_SMOKE_STEPS.items():
+        step = workflow_job_step_section(workflow, job, config["step"])
+        target_toolchain_smoke_checks[target] = (
+            config["runner"] in step
+            and "python demos/open-source-porting/run_demo.py" in step
+            and "--check" in step
+            and "--run-toolchains" in step
+            and "--require-toolchain-runs" in step
+            and config["emit_args"] in step
+            and config["target"] in step
+            and config["reports_dir"] in step
+            and "shell: bash" in step
+            and workflow_job_step_after(
+                workflow,
+                job,
+                config["step"],
+                "Verify checked-in demo artifacts",
+            )
+        )
+
+    compile_reference_steps = {}
+    for target, config in DEMO_COMPILE_REFERENCE_STEPS.items():
+        step = workflow_job_step_section(workflow, job, config["step"])
+        smoke_step = DEMO_TOOLCHAIN_SMOKE_STEPS[target]["step"]
+        compile_reference_steps[target] = (
+            config["runner"] in step
+            and config["artifact_command"] in step
+            and config["compile_command"] in step
+            and config["output_suffix"] in step
+            and "shell: bash" in step
+            and workflow_job_step_after(workflow, job, config["step"], smoke_step)
+        )
+
+    required_path_filters = {
+        f"push:{path}": path in push_path_filters for path in DEMO_REQUIRED_PATH_FILTERS
+    }
+    required_path_filters.update(
+        {
+            f"pull_request:{path}": path in pull_request_path_filters
+            for path in DEMO_REQUIRED_PATH_FILTERS
+        }
+    )
+
+    return {
+        "workflow": "demo.yml",
+        "required_policies": {
+            name: marker in workflow for name, marker in DEMO_REQUIRED_POLICIES.items()
+        },
+        "oses": compare_sets(matrix_values(workflow, "os"), RUNNER_OSES),
+        "fail_fast_false": "fail-fast: false" in job_text,
+        "required_path_filters": required_path_filters,
+        "push_pull_request_path_filters_match": (
+            set(push_path_filters) == set(pull_request_path_filters)
+        ),
+        "forbidden_broad_path_filters_absent": {
+            path: path not in path_filter_set
+            for path in DEMO_FORBIDDEN_BROAD_PATH_FILTERS
+        },
+        "checked_in_artifacts": checked_in_artifacts,
+        "target_toolchain_smoke_checks": target_toolchain_smoke_checks,
+        "compile_reference_steps": compile_reference_steps,
+        "report_artifact": open_source_porting_demo_report_artifact_report(workflow),
+        "failure_summary": open_source_porting_demo_failure_summary_report(workflow),
+    }
+
+
 def build_report() -> dict[str, Any]:
     backends = load_backends()
     native_backends = native_source_backends(backends)
@@ -1451,6 +1762,7 @@ def build_report() -> dict[str, Any]:
     examples_workflow = workflow_texts["examples-test.yml"]
     full_workflow = workflow_texts["full-tests.yml"]
     full_workflow_action_text = local_action_text("install-linux-dxc")
+    demo_workflow = workflow_texts["demo.yml"]
     support_matrix_workflow = workflow_texts["support-matrix.yml"]
     support_issue_workflow = workflow_texts["support-issue-sync.yml"]
     pr_issue_links_workflow = workflow_texts["pr-issue-links.yml"]
@@ -1485,6 +1797,7 @@ def build_report() -> dict[str, Any]:
                 full_workflow,
                 full_workflow_action_text,
             ),
+            "open_source_porting_demo": open_source_porting_demo_report(demo_workflow),
             "support_matrix": support_matrix_report(support_matrix_workflow),
             "support_issue_sync": support_issue_sync_report(support_issue_workflow),
             "pr_issue_links": pr_issue_links_report(pr_issue_links_workflow),
@@ -1674,6 +1987,43 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
                 examples["diagnostic_continue_on_error_count"]
             )
         )
+
+    demo = report["workflows"]["open_source_porting_demo"]
+    for policy, present in demo["required_policies"].items():
+        if not present:
+            errors.append(f"demo.yml missing policy: {policy}")
+    if not dimension_ok(demo["oses"]):
+        errors.append(
+            "demo.yml OS matrix mismatch: missing={}, extra={}".format(
+                demo["oses"]["missing"],
+                demo["oses"]["extra"],
+            )
+        )
+    if not demo["fail_fast_false"]:
+        errors.append("demo.yml must keep fail-fast: false")
+    for path_filter, present in demo["required_path_filters"].items():
+        if not present:
+            errors.append(f"demo.yml missing path filter: {path_filter}")
+    if not demo["push_pull_request_path_filters_match"]:
+        errors.append("demo.yml push and pull_request path filters must match")
+    for path_filter, absent in demo["forbidden_broad_path_filters_absent"].items():
+        if not absent:
+            errors.append(f"demo.yml must not use broad path filter: {path_filter}")
+    for field, present in demo["checked_in_artifacts"].items():
+        if not present:
+            errors.append(f"demo.yml missing checked artifact verification: {field}")
+    for target, present in demo["target_toolchain_smoke_checks"].items():
+        if not present:
+            errors.append(f"demo.yml missing target toolchain smoke check: {target}")
+    for target, present in demo["compile_reference_steps"].items():
+        if not present:
+            errors.append(f"demo.yml missing compile reference step: {target}")
+    for field in DEMO_REPORT_ARTIFACT_FIELDS:
+        if not demo["report_artifact"][field]:
+            errors.append(f"demo.yml missing report artifact policy: {field}")
+    for field in DEMO_FAILURE_SUMMARY_FIELDS:
+        if not demo["failure_summary"][field]:
+            errors.append(f"demo.yml missing demo failure summary policy: {field}")
 
     full_tests = report["workflows"]["full_tests"]
     if not full_tests["pytest_all_tests"]:
@@ -2108,6 +2458,75 @@ def build_ci_coverage_comparison(
             current_examples[dimension],
         )
 
+    baseline_demo = baseline["workflows"]["open_source_porting_demo"]
+    current_demo = current["workflows"]["open_source_porting_demo"]
+    add_bool_map_change(
+        "demo.yml",
+        "required_policies",
+        baseline_demo["required_policies"],
+        current_demo["required_policies"],
+    )
+    add_set_change(
+        "demo.yml",
+        "oses",
+        baseline_demo["oses"]["actual"],
+        current_demo["oses"]["actual"],
+    )
+    add_bool_change(
+        "demo.yml",
+        "fail_fast_false",
+        baseline_demo["fail_fast_false"],
+        current_demo["fail_fast_false"],
+    )
+    add_bool_map_change(
+        "demo.yml",
+        "required_path_filters",
+        baseline_demo["required_path_filters"],
+        current_demo["required_path_filters"],
+    )
+    add_bool_change(
+        "demo.yml",
+        "push_pull_request_path_filters_match",
+        baseline_demo["push_pull_request_path_filters_match"],
+        current_demo["push_pull_request_path_filters_match"],
+    )
+    add_bool_map_change(
+        "demo.yml",
+        "forbidden_broad_path_filters_absent",
+        baseline_demo["forbidden_broad_path_filters_absent"],
+        current_demo["forbidden_broad_path_filters_absent"],
+    )
+    add_bool_map_change(
+        "demo.yml",
+        "checked_in_artifacts",
+        baseline_demo["checked_in_artifacts"],
+        current_demo["checked_in_artifacts"],
+    )
+    add_bool_map_change(
+        "demo.yml",
+        "target_toolchain_smoke_checks",
+        baseline_demo["target_toolchain_smoke_checks"],
+        current_demo["target_toolchain_smoke_checks"],
+    )
+    add_bool_map_change(
+        "demo.yml",
+        "compile_reference_steps",
+        baseline_demo["compile_reference_steps"],
+        current_demo["compile_reference_steps"],
+    )
+    add_bool_map_change(
+        "demo.yml",
+        "report_artifact",
+        baseline_demo["report_artifact"],
+        current_demo["report_artifact"],
+    )
+    add_bool_map_change(
+        "demo.yml",
+        "failure_summary",
+        baseline_demo["failure_summary"],
+        current_demo["failure_summary"],
+    )
+
     add_bool_change(
         "full-tests.yml",
         "pytest_all_tests",
@@ -2382,6 +2801,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     translator_tests = report["workflows"]["translator_tests"]
     docs = report["workflows"]["docs"]
     examples = report["workflows"]["examples"]
+    demo = report["workflows"]["open_source_porting_demo"]
     full_tests = report["workflows"]["full_tests"]
     support_matrix = report["workflows"]["support_matrix"]
     pr_issue_links = report["workflows"]["pr_issue_links"]
@@ -2652,6 +3072,57 @@ def render_markdown(report: dict[str, Any]) -> str:
                 [
                     "Diagnostic continue-on-error steps",
                     examples["diagnostic_continue_on_error_count"],
+                ],
+            ],
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "## Open-Source Porting Demo",
+            "",
+        ]
+    )
+    lines.extend(
+        markdown_table(
+            ["Check", "Status"],
+            [
+                ["OS matrix", dimension_summary(demo["oses"])],
+                [
+                    "Required policies",
+                    ok_text(all(demo["required_policies"].values())),
+                ],
+                [
+                    "Required path filters",
+                    ok_text(all(demo["required_path_filters"].values())),
+                ],
+                [
+                    "Push and pull_request path filters match",
+                    ok_text(demo["push_pull_request_path_filters_match"]),
+                ],
+                [
+                    "Broad path filters absent",
+                    ok_text(all(demo["forbidden_broad_path_filters_absent"].values())),
+                ],
+                [
+                    "Checked-in artifact verification",
+                    ok_text(all(demo["checked_in_artifacts"].values())),
+                ],
+                [
+                    "Target toolchain smoke checks",
+                    ok_text(all(demo["target_toolchain_smoke_checks"].values())),
+                ],
+                [
+                    "Metal and DirectX compile references",
+                    ok_text(all(demo["compile_reference_steps"].values())),
+                ],
+                [
+                    "Demo report artifact",
+                    ok_text(all(demo["report_artifact"].values())),
+                ],
+                [
+                    "Demo failure summary artifact",
+                    ok_text(all(demo["failure_summary"].values())),
                 ],
             ],
         )

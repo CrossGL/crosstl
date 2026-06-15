@@ -44,6 +44,61 @@ def _test_function_names(path):
     }
 
 
+def _upstream_source_path(entry):
+    source_prefix = f"{entry['repository']}/blob/{entry['commit']}/"
+    if not entry["sourceUrl"].startswith(source_prefix):
+        raise AssertionError(f"sourceUrl does not match repository/commit: {entry}")
+    return entry["sourceUrl"][len(source_prefix) :]
+
+
+def test_open_source_demo_third_party_notices_cover_manifest_sources():
+    notices = (DEMO_ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+    notice_blocks = [block for block in re.split(r"(?m)^## ", notices) if block.strip()]
+    missing = []
+
+    for case_dir in sorted(path for path in CASE_ROOT.iterdir() if path.is_dir()):
+        manifest = json.loads((case_dir / "corpus.json").read_text(encoding="utf-8"))
+
+        for entry in manifest["entries"]:
+            source_path = _upstream_source_path(entry)
+            covered = any(
+                entry["repository"] in block
+                and entry["commit"] in block
+                and (source_path in block or entry["sourceUrl"] in block)
+                for block in notice_blocks
+            )
+            if not covered:
+                missing.append(f"{case_dir.name}:{entry['id']} missing {source_path}")
+
+    assert (
+        not missing
+    ), "Missing third-party notice coverage for manifest sources:\n" + "\n".join(
+        missing
+    )
+
+
+def test_open_source_demo_case_targets_use_toml_project_config(tmp_path):
+    runner = _load_demo_runner()
+    (tmp_path / "crosstl.toml").write_text(
+        """
+        [project]
+        output_dir = "crosstl-out"
+        targets = [
+            "cgl", # checked source-form target
+            "opengl",
+            # keep this trailing entry on a separate line
+            "vulkan",
+        ]
+
+        [project.sources]
+        "shaders/*.hlsl" = "directx"
+        """,
+        encoding="utf-8",
+    )
+
+    assert runner._case_targets(tmp_path) == ["cgl", "opengl", "vulkan"]
+
+
 def test_open_source_demo_cases_have_pinned_manifests_and_references():
     runner = _load_demo_runner()
     case_dirs = sorted(path for path in CASE_ROOT.iterdir() if path.is_dir())
@@ -149,6 +204,13 @@ def test_open_source_demo_workflow_runs_platform_toolchain_smokes():
     assert "--emit-directx-compile-jobs" in workflow
     assert "profile=\"${profile%$'\\r'}\"" in workflow
     assert "open-source-porting-demo-reports-${{ matrix.os }}" in workflow
+    assert "write_demo_failure_summary" in workflow
+    assert "--demo-step" in workflow
+    assert "open-source-porting-demo-linux-opengl" in workflow
+    assert "open-source-porting-demo-linux-vulkan" in workflow
+    assert "open-source-porting-demo-macos-metal-compile" in workflow
+    assert "open-source-porting-demo-windows-directx-compile" in workflow
+    assert "support/generated/demo-reports/**/*-failure-summary.json" in workflow
 
 
 def _workflow_step_block(workflow: str, step_name: str) -> str:
@@ -171,6 +233,8 @@ def _assert_workflow_step_uses_case_generator(
 ) -> None:
     block = _workflow_step_block(workflow, step_name)
     assert f"--emit-case-args {target}" in block
+    assert '--case="$case_name"' in block
+    assert "write_demo_failure_summary \\" in block
     assert "--case " not in block
 
 

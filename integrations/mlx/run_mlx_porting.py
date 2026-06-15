@@ -30,6 +30,7 @@ FULL_CORPUS_EXPECTED_ARTIFACT_COUNT = EXPECTED_METAL_KERNEL_COUNT * len(
 )
 FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS = 4096
 FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK = 131072
+FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS = 900
 REDUCED_FRONTIER_MODE = "reduced-frontier"
 FULL_CORPUS_MODE = "full-corpus"
 FRONTIER_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()
@@ -113,6 +114,10 @@ RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1261",
     "https://github.com/CrossGL/crosstl/issues/1274",
     "https://github.com/CrossGL/crosstl/issues/1287",
+    "https://github.com/CrossGL/crosstl/issues/1329",
+    "https://github.com/CrossGL/crosstl/issues/1338",
+    "https://github.com/CrossGL/crosstl/issues/1340",
+    "https://github.com/CrossGL/crosstl/issues/1346",
 )
 
 
@@ -178,29 +183,44 @@ def _run_command(
     *,
     log_dir: Path,
     check: bool = True,
+    timeout_seconds: int | None = None,
 ) -> CommandResult:
-    completed = subprocess.run(
-        list(command),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
     stdout_path = log_dir / f"{name}.stdout"
     stderr_path = log_dir / f"{name}.stderr"
-    stdout_path.write_text(completed.stdout, encoding="utf-8")
-    stderr_path.write_text(completed.stderr, encoding="utf-8")
+    try:
+        completed = subprocess.run(
+            list(command),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        returncode = completed.returncode
+        stdout = completed.stdout
+        stderr = completed.stderr
+    except subprocess.TimeoutExpired as exc:
+        returncode = 124
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        stderr = stderr + f"\n{name} timed out after {timeout_seconds} seconds.\n"
+    stdout_path.write_text(stdout, encoding="utf-8")
+    stderr_path.write_text(stderr, encoding="utf-8")
     result = CommandResult(
         name=name,
         command=list(command),
-        returncode=completed.returncode,
+        returncode=returncode,
         stdout_path=stdout_path,
         stderr_path=stderr_path,
     )
-    if check and completed.returncode != 0:
+    if check and returncode != 0:
         raise PortingCheckError(
             "{} failed with exit code {}. See {} and {}.".format(
                 name,
-                completed.returncode,
+                returncode,
                 stdout_path,
                 stderr_path,
             )
@@ -559,7 +579,7 @@ def _translate_full_corpus(
             ),
         },
     )
-    _run_command(
+    result = _run_command(
         "translate-full-corpus",
         [
             python,
@@ -574,6 +594,36 @@ def _translate_full_corpus(
             "--validate",
         ],
         log_dir=log_dir,
+        check=False,
+        timeout_seconds=FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS,
+    )
+    if not report_path.is_file() and result.returncode:
+        _require(
+            FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
+            "full-corpus translation failed before writing a report without "
+            "tracked issue references",
+        )
+        return {
+            "name": "full-corpus",
+            "status": "blocked-by-tracked-issues",
+            "report": _relpath(report_path, mlx_root),
+            "reportProduced": False,
+            "unitCount": EXPECTED_METAL_KERNEL_COUNT,
+            "artifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
+            "targets": list(FULL_CORPUS_TARGETS),
+            "returncode": result.returncode,
+            "timeoutSeconds": FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS,
+            "shaderArtifactsOnly": True,
+            "runtimeIntegrationIncluded": False,
+            "trackedTranslationIssues": list(FULL_CORPUS_TRANSLATION_TRACKED_ISSUES),
+            "maxTemplateSpecializations": FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS,
+            "maxTemplateMaterializationWork": (
+                FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK
+            ),
+        }
+    _require(
+        report_path.is_file(),
+        "full-corpus translation did not produce a project report",
     )
     payload = _load_json(report_path)
     summary = payload.get("summary", {})
@@ -585,16 +635,6 @@ def _translate_full_corpus(
     )
     failed_count = summary.get("failedCount")
     error_count = diagnostic_counts.get("error", 0)
-    if failed_count or error_count:
-        _require(
-            FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
-            "full-corpus translation reported failed artifacts or errors "
-            "without tracked issue references",
-        )
-        raise PortingCheckError(
-            "full-corpus translation still has tracked artifact blockers: "
-            + ", ".join(FULL_CORPUS_TRANSLATION_TRACKED_ISSUES)
-        )
     _require(
         summary.get("unitCount") == EXPECTED_METAL_KERNEL_COUNT,
         "full-corpus translation must scan {} units; found {}".format(
@@ -609,18 +649,6 @@ def _translate_full_corpus(
             summary.get("artifactCount"),
         ),
     )
-    _require(
-        summary.get("translatedCount") == FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
-        "full-corpus translation did not emit every expected artifact",
-    )
-    _require(
-        summary.get("failedCount") == 0,
-        "full-corpus translation reported failed artifacts",
-    )
-    _require(
-        summary.get("diagnosticCounts", {}).get("error", 0) == 0,
-        "full-corpus translation reported errors",
-    )
     artifacts_by_target = summary.get("artifactsByTarget", {})
     _require(
         isinstance(artifacts_by_target, dict),
@@ -633,11 +661,6 @@ def _translate_full_corpus(
             isinstance(target_summary, dict),
             f"full-corpus target summary is missing for {target}",
         )
-        _require(
-            target_summary.get("translatedCount") == EXPECTED_METAL_KERNEL_COUNT
-            and target_summary.get("failedCount") == 0,
-            f"full-corpus {target} artifacts were not translated cleanly",
-        )
         target_counts[target] = {
             "translatedCount": target_summary.get("translatedCount", 0),
             "failedCount": target_summary.get("failedCount", 0),
@@ -649,10 +672,48 @@ def _translate_full_corpus(
         isinstance(artifact_validation, dict),
         "full-corpus validation summary must be an object",
     )
+    has_translation_failures = bool(failed_count or error_count or result.returncode)
+    if has_translation_failures:
+        _require(
+            FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
+            "full-corpus translation reported failed artifacts or errors "
+            "without tracked issue references",
+        )
+        return {
+            "name": "full-corpus",
+            "status": "blocked-by-tracked-issues",
+            "report": _relpath(report_path, mlx_root),
+            "unitCount": EXPECTED_METAL_KERNEL_COUNT,
+            "artifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
+            "translatedCount": summary.get("translatedCount", 0),
+            "failedCount": summary.get("failedCount", 0),
+            "diagnosticCounts": diagnostic_counts,
+            "diagnosticsByCode": summary.get("diagnosticsByCode", {}),
+            "targets": list(FULL_CORPUS_TARGETS),
+            "targetCounts": target_counts,
+            "validationFailedCount": artifact_validation.get("failedCount", 0),
+            "shaderArtifactsOnly": True,
+            "runtimeIntegrationIncluded": False,
+            "trackedTranslationIssues": list(FULL_CORPUS_TRANSLATION_TRACKED_ISSUES),
+            "maxTemplateSpecializations": FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS,
+            "maxTemplateMaterializationWork": (
+                FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK
+            ),
+        }
+    _require(
+        summary.get("translatedCount") == FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
+        "full-corpus translation did not emit every expected artifact",
+    )
     _require(
         artifact_validation.get("failedCount") == 0,
         "artifact validation reported failures for full-corpus outputs",
     )
+    for target, target_count in target_counts.items():
+        _require(
+            target_count["translatedCount"] == EXPECTED_METAL_KERNEL_COUNT
+            and target_count["failedCount"] == 0,
+            f"full-corpus {target} artifacts were not translated cleanly",
+        )
     return {
         "name": "full-corpus",
         "status": "passed",

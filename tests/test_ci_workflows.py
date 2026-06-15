@@ -328,10 +328,64 @@ def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
     assert "name: open-source-porting-demo-reports-${{ matrix.os }}" in demo
     assert "name: Upload demo failure summary" in demo
     assert "name: open-source-porting-demo-failure-summary-${{ matrix.os }}" in demo
+    assert (
+        "DEMO_FAILURE_SUMMARY_DIR: support/generated/demo-reports/${{ matrix.os }}"
+        in demo
+    )
+    assert "name: Prepare demo failure summary helper" in demo
+    assert "write_demo_failure_summary()" in demo
+    assert "python tools/pytest_failure_summary.py" in demo
+    assert "--demo-step" in demo
+    assert '--case-name "$case_name"' in demo
+    assert '--target-backend "$target_backend"' in demo
+    assert '--command "$failed_command"' in demo
+    assert "demo_artifact" in demo
+    assert "demo_toolchain" in demo
+    for summary_base in (
+        "open-source-porting-demo-artifacts",
+        "open-source-porting-demo-linux-opengl",
+        "open-source-porting-demo-linux-vulkan",
+        "open-source-porting-demo-macos-metal",
+        "open-source-porting-demo-macos-metal-compile",
+        "open-source-porting-demo-windows-directx",
+        "open-source-porting-demo-windows-directx-compile",
+    ):
+        assert summary_base in demo
+    assert "${summary_base}-failure-summary.json" in demo
+    assert "${summary_base}-failure-summary.md" in demo
     assert "profile=\"${profile%$'\\r'}\"" in demo
     assert "if: failure() && steps.run_demo_tests.outcome == 'failure'" in demo
+    assert "support/generated/demo-reports/**/*-failure-summary.json" in demo
+    assert "support/generated/demo-reports/**/*-failure-summary.md" in demo
     assert "if-no-files-found: ignore" in demo
     assert "retention-days: 30" in demo
+
+
+def test_ci_coverage_report_tracks_open_source_porting_demo_guarantees():
+    module = _load_ci_coverage_module()
+
+    report = module.build_report()
+    demo = report["workflows"]["open_source_porting_demo"]
+
+    assert demo["workflow"] == "demo.yml"
+    assert set(demo["oses"]["actual"]) == RUNNER_OSES
+    assert demo["oses"]["missing"] == []
+    assert set(demo["target_toolchain_smoke_checks"]) == {
+        "directx",
+        "metal",
+        "opengl",
+        "vulkan",
+    }
+    assert set(demo["compile_reference_steps"]) == {"directx", "metal"}
+    assert all(demo["required_policies"].values())
+    assert all(demo["required_path_filters"].values())
+    assert demo["push_pull_request_path_filters_match"] is True
+    assert all(demo["forbidden_broad_path_filters_absent"].values())
+    assert all(demo["checked_in_artifacts"].values())
+    assert all(demo["target_toolchain_smoke_checks"].values())
+    assert all(demo["compile_reference_steps"].values())
+    assert all(demo["report_artifact"].values())
+    assert all(demo["failure_summary"].values())
 
 
 def test_ci_coverage_report_summarizes_required_workflow_dimensions():
@@ -405,6 +459,45 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
     assert all(report["workflows"]["examples"]["required_policies"].values())
     assert report["workflows"]["examples"]["backend_specific_strict"] is True
     assert report["workflows"]["examples"]["stability_fails_on_regression"] is True
+    assert report["workflows"]["open_source_porting_demo"]["oses"]["missing"] == []
+    assert all(
+        report["workflows"]["open_source_porting_demo"]["required_policies"].values()
+    )
+    assert all(
+        report["workflows"]["open_source_porting_demo"][
+            "required_path_filters"
+        ].values()
+    )
+    assert (
+        report["workflows"]["open_source_porting_demo"][
+            "push_pull_request_path_filters_match"
+        ]
+        is True
+    )
+    assert all(
+        report["workflows"]["open_source_porting_demo"][
+            "forbidden_broad_path_filters_absent"
+        ].values()
+    )
+    assert all(
+        report["workflows"]["open_source_porting_demo"]["checked_in_artifacts"].values()
+    )
+    assert all(
+        report["workflows"]["open_source_porting_demo"][
+            "target_toolchain_smoke_checks"
+        ].values()
+    )
+    assert all(
+        report["workflows"]["open_source_porting_demo"][
+            "compile_reference_steps"
+        ].values()
+    )
+    assert all(
+        report["workflows"]["open_source_porting_demo"]["report_artifact"].values()
+    )
+    assert all(
+        report["workflows"]["open_source_porting_demo"]["failure_summary"].values()
+    )
     assert all(report["workflows"]["full_tests"]["required_tools"].values())
     assert all(
         all(fields.values())
@@ -833,6 +926,12 @@ def test_ci_coverage_summary_command_writes_markdown(tmp_path):
     assert "## Documentation" in text
     assert "## Examples" in text
     assert "Backend-specific failures are fatal" in text
+    assert "## Open-Source Porting Demo" in text
+    assert "Checked-in artifact verification" in text
+    assert "Target toolchain smoke checks" in text
+    assert "Metal and DirectX compile references" in text
+    assert "Demo report artifact" in text
+    assert "Demo failure summary artifact" in text
     assert "## Support Matrix" in text
     assert "Support matrix check artifact" in text
     assert "Support evidence artifact" in text
@@ -948,6 +1047,41 @@ def test_ci_coverage_reports_missing_examples_coverage_and_strictness():
     assert "examples-test.yml backend-specific job must fail on errors" in errors
     assert "examples-test.yml stability job must fail on regression" in errors
     assert "examples-test.yml has too many continue-on-error steps: 2" in errors
+
+
+def test_ci_coverage_reports_missing_open_source_porting_demo_fields():
+    module = _load_ci_coverage_module()
+    report = module.build_report()
+    demo = report["workflows"]["open_source_porting_demo"]
+    demo["required_policies"]["metadata_pytest_selector"] = False
+    demo["oses"]["actual"].remove("macOS-latest")
+    demo["oses"]["missing"] = ["macOS-latest"]
+    demo["fail_fast_false"] = False
+    demo["required_path_filters"]["push:demos/open-source-porting/**"] = False
+    demo["push_pull_request_path_filters_match"] = False
+    demo["forbidden_broad_path_filters_absent"]["crosstl/**"] = False
+    demo["checked_in_artifacts"]["runs_demo_check"] = False
+    demo["target_toolchain_smoke_checks"]["metal"] = False
+    demo["compile_reference_steps"]["directx"] = False
+    demo["report_artifact"]["uploads_reports"] = False
+    demo["failure_summary"]["uploads_failure_summary"] = False
+
+    errors = module.validation_errors(report)
+
+    assert "demo.yml missing policy: metadata_pytest_selector" in errors
+    assert "demo.yml OS matrix mismatch: missing=['macOS-latest'], extra=[]" in errors
+    assert "demo.yml must keep fail-fast: false" in errors
+    assert "demo.yml missing path filter: push:demos/open-source-porting/**" in errors
+    assert "demo.yml push and pull_request path filters must match" in errors
+    assert "demo.yml must not use broad path filter: crosstl/**" in errors
+    assert "demo.yml missing checked artifact verification: runs_demo_check" in errors
+    assert "demo.yml missing target toolchain smoke check: metal" in errors
+    assert "demo.yml missing compile reference step: directx" in errors
+    assert "demo.yml missing report artifact policy: uploads_reports" in errors
+    assert (
+        "demo.yml missing demo failure summary policy: uploads_failure_summary"
+        in errors
+    )
 
 
 def test_ci_coverage_reports_missing_compiler_smoke_tooling():
@@ -1766,6 +1900,49 @@ def test_ci_coverage_comparison_reports_examples_backend_shrink():
     } in comparison["shrinks"]
 
 
+def test_ci_coverage_comparison_reports_demo_workflow_shrink():
+    module = _load_ci_coverage_module()
+    baseline = module.build_report()
+    current = copy.deepcopy(baseline)
+    demo = current["workflows"]["open_source_porting_demo"]
+    demo["target_toolchain_smoke_checks"]["vulkan"] = False
+    demo["compile_reference_steps"]["metal"] = False
+    demo["report_artifact"]["uploads_reports"] = False
+    demo["failure_summary"]["uploads_failure_summary"] = False
+
+    comparison = module.build_ci_coverage_comparison(baseline, current)
+
+    assert comparison["summary"] == {
+        "ok": False,
+        "shrink_count": 4,
+        "growth_count": 0,
+    }
+    assert {
+        "scope": "demo.yml",
+        "dimension": "target_toolchain_smoke_checks",
+        "removed": ["vulkan"],
+        "added": [],
+    } in comparison["shrinks"]
+    assert {
+        "scope": "demo.yml",
+        "dimension": "compile_reference_steps",
+        "removed": ["metal"],
+        "added": [],
+    } in comparison["shrinks"]
+    assert {
+        "scope": "demo.yml",
+        "dimension": "report_artifact",
+        "removed": ["uploads_reports"],
+        "added": [],
+    } in comparison["shrinks"]
+    assert {
+        "scope": "demo.yml",
+        "dimension": "failure_summary",
+        "removed": ["uploads_failure_summary"],
+        "added": [],
+    } in comparison["shrinks"]
+
+
 def test_ci_coverage_compare_command_fails_on_shrink(tmp_path):
     module = _load_ci_coverage_module()
     baseline = module.build_report()
@@ -1960,6 +2137,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "FULL_CORPUS_EXPECTED_ARTIFACT_COUNT" in harness
     assert "FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS = 4096" in harness
     assert "FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK = 131072" in harness
+    assert "FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS = 900" in harness
+    assert "blocked-by-tracked-issues" in harness
     assert "without tracked issue references" in harness
     for resolved_issue_number in (
         1184,
@@ -1982,11 +2161,15 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         1261,
         1274,
         1287,
-        1300,
-        1317,
+        1329,
+        1338,
+        1340,
+        1346,
         1354,
         1355,
         1362,
+        1300,
+        1317,
     ):
         assert (
             f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
@@ -1996,37 +2179,30 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
             f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
             in harness
         )
-    assert expected_gaps["tracked_issues"] == []
     for resolved_issue_number in (1317, 1354, 1355, 1362):
+        assert (
+            f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
+            not in mlx_porting
+        )
+        assert (
+            f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
+            in harness
+        )
         assert (
             f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
             in expected_gaps["resolved_issues"]
         )
-    assert (
-        "https://github.com/CrossGL/crosstl/issues/1317"
-        not in expected_gaps["tracked_issues"]
-    )
-    assert (
-        "https://github.com/CrossGL/crosstl/issues/1317"
-        in expected_gaps["resolved_issues"]
-    )
-    assert (
-        "https://github.com/CrossGL/crosstl/issues/1362"
-        not in expected_gaps["tracked_issues"]
-    )
-    assert (
-        "https://github.com/CrossGL/crosstl/issues/1362"
-        in expected_gaps["resolved_issues"]
-    )
+    assert expected_gaps["tracked_issues"] == []
+    assert expected_gaps["frontier_status"]["status"] == "passing"
+    assert expected_gaps["frontier_status"]["blocked_by"] == []
     assert expected_gaps["full_corpus_scout"]["status"] == "passing"
+    assert expected_gaps["full_corpus_scout"]["validation_blocked_by"] == []
+    assert expected_gaps["full_corpus_scout"]["runtime_blocked_by"] == []
+    assert expected_gaps["full_corpus_scout"]["translation_blocked_by"] == []
     assert expected_gaps["full_corpus_scout"]["last_completed"] == {
         "translated_artifacts": 120,
         "failed_artifacts": 0,
-        "translated_by_target": {
-            "directx": 40,
-            "opengl": 40,
-            "vulkan": 40,
-        },
+        "translated_by_target": {"directx": 40, "opengl": 40, "vulkan": 40},
     }
     assert "MLX_DIRECTX_VULKAN_FRONTIER_SOURCES" in harness
     assert "mlx/backend/metal/kernels/binary_two.metal" in harness
@@ -2035,7 +2211,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "mlx/backend/metal/kernels/ternary.metal" in harness
     assert "arange-opengl" in harness
     assert "metalIncludesFiltered" in harness
-    assert "--mode" in harness
+    assert "--mode" in mlx_porting
     assert "full-corpus" in harness
 
 

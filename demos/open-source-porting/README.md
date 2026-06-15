@@ -310,6 +310,98 @@ write them to a separate reports directory for inspection. The runner disables
 optional code formatting during generation so artifact comparisons do not
 depend on host `clang-format` availability.
 
+### Inspecting generated reports
+
+Use `--reports-dir` when a demo check fails or when you want the generated
+reports next to local logs:
+
+```bash
+python demos/open-source-porting/run_demo.py \
+  --check \
+  --case directx-shader-compiler-neg1 \
+  --target cgl \
+  --reports-dir /tmp/crosstl-demo-reports
+```
+
+During a `--check` run, each case is copied into a temporary directory and the
+raw translator report is written as
+`<temp-case>/crosstl-out/portability-report.json`. When `--reports-dir` is set,
+the runner copies that report to
+`<reports-dir>/<case>-portability-report.json` and writes the validation payload
+to `<reports-dir>/<case>-validation.json`. Inspect the copied files because the
+temporary case directory is removed after the run. In `--update` mode, the
+checked-in `crosstl-out/` directory is regenerated, but the report is still
+removed from the case after validation; use `--reports-dir` to keep it.
+
+For reports whose recorded project root still exists, start with the bounded
+text view when the raw report is too large to review directly:
+
+```bash
+python -m crosstl inspect-report \
+  /tmp/crosstl-demo-reports/directx-shader-compiler-neg1-portability-report.json \
+  --format text
+```
+
+Copied `--check` reports may emit that text and still exit nonzero after the
+runner removes the temporary case directory, because freshness checks can no
+longer find `project.root`, `project.config`, or external corpus files. Treat
+those stale-root diagnostics as a consequence of demo cleanup; use the copied
+JSON fields below and `<case>-validation.json` for the run-time result that was
+computed before cleanup.
+
+For direct JSON triage, the most useful fields in
+`<case>-portability-report.json` are:
+
+- `summary.diagnosticCounts`, `summary.diagnosticsByCode`,
+  `summary.diagnosticsByTarget`, `summary.diagnosticsBySourceBackend`,
+  `summary.diagnosticsByVariant`, and `summary.diagnosticsByCheckKind` group
+  translation and validation diagnostics by severity, diagnostic code, target,
+  source backend, variant, and check kind. Any nonzero `error` count explains a
+  nonzero project translation exit.
+- `diagnostics[]` contains the individual diagnostic messages and source or
+  generated-artifact locations. Use the grouped summary first, then open the
+  matching diagnostic records for the failing case.
+- `summary.missingCapabilityCounts` groups unsupported source features,
+  include/define processing gaps, provenance issues, artifact validation gaps,
+  and optional toolchain-validation gaps.
+- `artifactMatrix` and `artifacts[]` show the expected target/source/variant
+  artifact plan and the emitted artifact records. Check `artifactMatrix` for
+  missing, extra, or failed counts, then inspect `artifacts[].status`,
+  `artifacts[].path`, `artifacts[].target`, `artifacts[].sourceBackend`,
+  `artifacts[].sourceMap`, and `artifacts[].sourceRemap`.
+- `validation.summary` and `validation.artifacts[]` record source and generated
+  hash status, byte-size status, source-map status, source-remap status, and the
+  final per-artifact validation `status`.
+- `validation.toolchains[]` records target tool availability. `available` means
+  the configured tools were found, `unavailable` means a configured tool is
+  missing in the current environment, and `not-configured` means that target has
+  no validation hook.
+- `validation.toolchainRuns[]` appears when `--run-toolchains` is used. Each
+  record includes `status`, `checkKind`, `source`, `path`, `target`,
+  `sourceBackend`, `command`, `returncode`, `stdout`, and `stderr`. Failed runs
+  are also reflected in diagnostics and in the validation report rollups.
+
+The sibling `<case>-validation.json` is the `validate-project` JSON output. It
+repeats the quick triage rollups under fields such as `success`,
+`diagnosticCounts`, `missingCapabilityCounts`, `artifactStatusByTarget`,
+`toolchainStatusCounts`, `toolchainRunStatusCounts`,
+`toolchainRunStatusByTarget`, `toolchainRunStatusBySourceBackend`,
+`toolchainRunStatusByCheckKind`, and `toolchainRunStatusByTool`. Use this file
+for automation or a fast status check; use `<case>-portability-report.json` for
+the full source, artifact, diagnostic, and validation detail.
+
+CI keeps the same report files under `support/generated/demo-reports` and
+uploads them from the `Open-Source Porting Demo` workflow as the artifact named
+`open-source-porting-demo-reports-${{ matrix.os }}`. The reproducibility check
+writes per-case reports under
+`support/generated/demo-reports/${{ matrix.os }}/artifacts`, and platform smoke
+checks write under `support/generated/demo-reports/linux-opengl`,
+`support/generated/demo-reports/linux-vulkan`,
+`support/generated/demo-reports/macos-metal`, or
+`support/generated/demo-reports/windows-directx`. If the pytest selection fails,
+CI also uploads `open-source-porting-demo-failure-summary-${{ matrix.os }}`
+with the JUnit XML and failure-summary JSON/Markdown files.
+
 ## Third-party notices
 
 The source slices remain under their upstream project licenses. See

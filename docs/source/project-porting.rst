@@ -472,6 +472,26 @@ runtime API references. The plan is a target-scoped integration contract; it
 does not rewrite host application code, execute device code, generate runtime
 framework code, or install target SDKs.
 
+Materialize runtime adapter descriptor files from a runtime package manifest:
+
+.. code-block:: bash
+
+   python -m crosstl materialize-runtime-adapters \
+     crosstl-runtime-package/runtime-package.json \
+     --adapter-dir crosstl-runtime-adapters \
+     --format text
+
+Runtime adapter descriptor packages emit a
+``crosstl-runtime-adapter-package`` JSON document and write a deterministic
+``runtime-adapters.json`` manifest, an ``ADAPTERS.md`` summary, and one
+``adapters/<target>/*.adapter.json`` descriptor per ready or blocked runtime
+adapter plan record. Each descriptor preserves the packaged artifact path,
+target adapter identity, source-remap handoff path, host-interface metadata,
+required tools, host responsibilities, and validation readiness for downstream
+host loader or build-system tooling. The descriptor package is metadata only:
+it does not rewrite host application code, execute device code, generate
+runtime framework code, or install target SDKs.
+
 Runtime Adapter Execution Contracts
 -----------------------------------
 
