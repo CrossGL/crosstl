@@ -53,9 +53,7 @@ def _upstream_source_path(entry):
 
 def test_open_source_demo_third_party_notices_cover_manifest_sources():
     notices = (DEMO_ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
-    notice_blocks = [
-        block for block in re.split(r"(?m)^## ", notices) if block.strip()
-    ]
+    notice_blocks = [block for block in re.split(r"(?m)^## ", notices) if block.strip()]
     missing = []
 
     for case_dir in sorted(path for path in CASE_ROOT.iterdir() if path.is_dir()):
@@ -70,13 +68,12 @@ def test_open_source_demo_third_party_notices_cover_manifest_sources():
                 for block in notice_blocks
             )
             if not covered:
-                missing.append(
-                    f"{case_dir.name}:{entry['id']} missing {source_path}"
-                )
+                missing.append(f"{case_dir.name}:{entry['id']} missing {source_path}")
 
-    assert not missing, (
-        "Missing third-party notice coverage for manifest sources:\n"
-        + "\n".join(missing)
+    assert (
+        not missing
+    ), "Missing third-party notice coverage for manifest sources:\n" + "\n".join(
+        missing
     )
 
 
@@ -100,6 +97,7 @@ def test_open_source_demo_case_targets_use_toml_project_config(tmp_path):
     )
 
     assert runner._case_targets(tmp_path) == ["cgl", "opengl", "vulkan"]
+
 
 def test_open_source_demo_cases_have_pinned_manifests_and_references():
     runner = _load_demo_runner()
