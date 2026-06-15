@@ -45,6 +45,8 @@ RUNTIME_PACKAGE_KIND = "crosstl-runtime-package"
 RUNTIME_HOST_BINDING_PLAN_KIND = "crosstl-runtime-host-binding-plan"
 RUNTIME_PACKAGE_INSPECTION_KIND = "crosstl-runtime-package-inspection"
 RUNTIME_ADAPTER_PLAN_KIND = "crosstl-runtime-adapter-plan"
+RUNTIME_ADAPTER_PACKAGE_KIND = "crosstl-runtime-adapter-package"
+RUNTIME_ADAPTER_DESCRIPTOR_KIND = "crosstl-runtime-adapter-descriptor"
 RUNTIME_LOADER_MANIFEST_KIND = "crosstl-runtime-loader-manifest"
 RUNTIME_HOST_LOADER_SCAFFOLDS_KIND = "crosstl-runtime-host-loader-scaffolds"
 RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_KIND = (
@@ -74,6 +76,7 @@ RUNTIME_PACKAGE_SCOPE = "runtime-artifact-handoff-package"
 RUNTIME_HOST_BINDING_PLAN_SCOPE = "host-binding-planning"
 RUNTIME_PACKAGE_INSPECTION_SCOPE = "runtime-package-readiness-inspection"
 RUNTIME_ADAPTER_PLAN_SCOPE = "runtime-adapter-integration-planning"
+RUNTIME_ADAPTER_PACKAGE_SCOPE = "runtime-adapter-descriptor-package"
 RUNTIME_LOADER_MANIFEST_SCOPE = "runtime-loader-metadata-contract"
 RUNTIME_HOST_LOADER_SCAFFOLDS_SCOPE = "host-loader-scaffold-generation"
 RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_SCOPE = (
@@ -121,6 +124,12 @@ RUNTIME_PACKAGE_INSPECTION_NON_GOALS = (
     "target-sdk-installation",
 )
 RUNTIME_ADAPTER_PLAN_NON_GOALS = (
+    "host-code-rewriting",
+    "device-execution",
+    "runtime-framework-generation",
+    "target-sdk-installation",
+)
+RUNTIME_ADAPTER_PACKAGE_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
     "runtime-framework-generation",
@@ -676,6 +685,88 @@ RUNTIME_ADAPTER_PLAN_ACTION_FIELDS = frozenset(
         "adapter",
         "binding",
         "packagePath",
+    )
+)
+RUNTIME_ADAPTER_PACKAGE_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourcePackage",
+        "sourcePackageHash",
+        "generatedAt",
+        "success",
+        "scope",
+        "nonGoals",
+        "packageRoot",
+        "adapterRoot",
+        "adapterManifest",
+        "project",
+        "summary",
+        "targets",
+        "descriptors",
+        "actions",
+        "runtimePlan",
+        "adapterPlan",
+        "packageInspection",
+        "diagnosticCounts",
+        "diagnostics",
+    )
+)
+RUNTIME_ADAPTER_PACKAGE_TARGET_FIELDS = frozenset(
+    (
+        "target",
+        "adapterKind",
+        "adapterCount",
+        "descriptorCount",
+        "readyDescriptorCount",
+        "blockedDescriptorCount",
+        "runtimeReferenceCount",
+        "requiredTools",
+        "descriptors",
+        "packagePaths",
+    )
+)
+RUNTIME_ADAPTER_PACKAGE_DESCRIPTOR_FIELDS = frozenset(
+    (
+        "id",
+        "target",
+        "adapterKind",
+        "artifactFormat",
+        "binding",
+        "artifact",
+        "packagePath",
+        "descriptorPath",
+        "descriptorHash",
+        "descriptorSizeBytes",
+        "hostInterfaceStatus",
+        "requiredTools",
+    )
+)
+RUNTIME_ADAPTER_DESCRIPTOR_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourcePackage",
+        "sourcePackageHash",
+        "packageRoot",
+        "adapterPlan",
+        "id",
+        "target",
+        "adapterKind",
+        "artifactFormat",
+        "binding",
+        "artifact",
+        "packagePath",
+        "sourcePath",
+        "sourceBackend",
+        "stage",
+        "variant",
+        "defines",
+        "sourceRemap",
+        "hostInterface",
+        "requiredTools",
+        "hostResponsibilities",
+        "validation",
     )
 )
 RUNTIME_LOADER_MANIFEST_FIELDS = frozenset(
@@ -20448,6 +20539,307 @@ def plan_runtime_adapters(
             else []
         ),
     }
+
+
+def _runtime_adapter_descriptor_slug(value: Any, fallback: str) -> str:
+    text = value if isinstance(value, str) else ""
+    text = text.strip().lower()
+    text = re.sub(r"[^a-z0-9._-]+", "-", text)
+    text = re.sub(r"-+", "-", text).strip(".-_")
+    text = re.sub(r"-+\.", ".", text)
+    return text or fallback
+
+
+def _runtime_adapter_descriptor_path(
+    adapter: Mapping[str, Any], used: set[str], index: int
+) -> str:
+    target = _runtime_adapter_descriptor_slug(adapter.get("target"), "target")
+    seed = adapter.get("id") or adapter.get("packagePath") or f"adapter-{index}"
+    slug = _runtime_adapter_descriptor_slug(seed, f"adapter-{index}")
+    candidate = f"adapters/{target}/{slug}.adapter.json"
+    suffix = 2
+    while candidate in used:
+        candidate = f"adapters/{target}/{slug}-{suffix}.adapter.json"
+        suffix += 1
+    used.add(candidate)
+    return candidate
+
+
+def _runtime_adapter_descriptor_payload(
+    adapter_plan: Mapping[str, Any], adapter: Mapping[str, Any]
+) -> dict[str, Any]:
+    source_hash = (
+        dict(adapter_plan.get("sourcePackageHash"))
+        if isinstance(adapter_plan.get("sourcePackageHash"), Mapping)
+        else None
+    )
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_ADAPTER_DESCRIPTOR_KIND,
+        "sourcePackage": adapter_plan.get("sourcePackage"),
+        "sourcePackageHash": source_hash,
+        "packageRoot": adapter_plan.get("packageRoot"),
+        "adapterPlan": {
+            "kind": adapter_plan.get("kind"),
+            "success": adapter_plan.get("success"),
+            "scope": adapter_plan.get("scope"),
+        },
+        "id": adapter.get("id"),
+        "target": adapter.get("target"),
+        "adapterKind": adapter.get("adapterKind"),
+        "artifactFormat": adapter.get("artifactFormat"),
+        "binding": adapter.get("binding"),
+        "artifact": adapter.get("artifact"),
+        "packagePath": adapter.get("packagePath"),
+        "sourcePath": adapter.get("sourcePath"),
+        "sourceBackend": adapter.get("sourceBackend"),
+        "stage": adapter.get("stage"),
+        "variant": adapter.get("variant"),
+        "defines": (
+            dict(adapter.get("defines"))
+            if isinstance(adapter.get("defines"), Mapping)
+            else {}
+        ),
+        "sourceRemap": (
+            dict(adapter.get("sourceRemap"))
+            if isinstance(adapter.get("sourceRemap"), Mapping)
+            else None
+        ),
+        "hostInterface": (
+            dict(adapter.get("hostInterface"))
+            if isinstance(adapter.get("hostInterface"), Mapping)
+            else {}
+        ),
+        "requiredTools": (
+            list(adapter.get("requiredTools"))
+            if isinstance(adapter.get("requiredTools"), list)
+            else []
+        ),
+        "hostResponsibilities": (
+            list(adapter.get("hostResponsibilities"))
+            if isinstance(adapter.get("hostResponsibilities"), list)
+            else []
+        ),
+        "validation": (
+            dict(adapter.get("validation"))
+            if isinstance(adapter.get("validation"), Mapping)
+            else {}
+        ),
+    }
+
+
+def _runtime_adapter_descriptor_record(
+    adapter: Mapping[str, Any], descriptor_path: str, descriptor_file: Path
+) -> dict[str, Any]:
+    host_interface = (
+        adapter.get("hostInterface")
+        if isinstance(adapter.get("hostInterface"), Mapping)
+        else {}
+    )
+    return {
+        "id": adapter.get("id"),
+        "target": adapter.get("target"),
+        "adapterKind": adapter.get("adapterKind"),
+        "artifactFormat": adapter.get("artifactFormat"),
+        "binding": adapter.get("binding"),
+        "artifact": adapter.get("artifact"),
+        "packagePath": adapter.get("packagePath"),
+        "descriptorPath": descriptor_path,
+        "descriptorHash": _source_hash(descriptor_file),
+        "descriptorSizeBytes": descriptor_file.stat().st_size,
+        "hostInterfaceStatus": host_interface.get("status"),
+        "requiredTools": (
+            list(adapter.get("requiredTools"))
+            if isinstance(adapter.get("requiredTools"), list)
+            else []
+        ),
+    }
+
+
+def _runtime_adapter_package_target(
+    target: Mapping[str, Any], descriptors: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    target_name = target.get("target")
+    target_descriptors = [
+        descriptor
+        for descriptor in descriptors
+        if descriptor.get("target") == target_name
+    ]
+    ready_descriptors = [
+        descriptor
+        for descriptor in target_descriptors
+        if descriptor.get("hostInterfaceStatus") == "ready"
+    ]
+    blocked_descriptors = [
+        descriptor
+        for descriptor in target_descriptors
+        if descriptor.get("hostInterfaceStatus") != "ready"
+    ]
+    return {
+        "target": target_name,
+        "adapterKind": target.get("adapterKind"),
+        "adapterCount": target.get("readyBindingCount", len(target_descriptors)),
+        "descriptorCount": len(target_descriptors),
+        "readyDescriptorCount": len(ready_descriptors),
+        "blockedDescriptorCount": len(blocked_descriptors),
+        "runtimeReferenceCount": target.get("runtimeReferenceCount", 0),
+        "requiredTools": (
+            list(target.get("requiredTools"))
+            if isinstance(target.get("requiredTools"), list)
+            else []
+        ),
+        "descriptors": [descriptor.get("id") for descriptor in target_descriptors],
+        "packagePaths": [
+            descriptor.get("packagePath")
+            for descriptor in target_descriptors
+            if _is_non_empty_string(descriptor.get("packagePath"))
+        ],
+    }
+
+
+def _runtime_adapter_package_readme(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# CrossTL Runtime Adapter Descriptors",
+        "",
+        "This bundle contains metadata descriptors for downstream host loader or build-system tooling.",
+        "",
+        f"- Adapter manifest: {payload.get('adapterManifest')}",
+        f"- Source package: {payload.get('sourcePackage')}",
+        f"- Adapter descriptors: {payload.get('summary', {}).get('descriptorCount', 0)}",
+        "",
+        "Scope",
+        "",
+        "The descriptors preserve target adapter identity, packaged artifact paths, source-remap handoff paths, host-interface metadata, required tools, host responsibilities, and validation readiness.",
+        "They do not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def materialize_runtime_adapters(
+    package_manifest_path: str | os.PathLike[str],
+    adapter_dir: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Write deterministic runtime adapter descriptors from a runtime package."""
+
+    package_path = _filesystem_path_arg(
+        package_manifest_path, field_name="Runtime package manifest path"
+    )
+    adapter_root = _filesystem_path_arg(
+        adapter_dir, field_name="Runtime adapter descriptor dir"
+    )
+    adapter_plan = plan_runtime_adapters(package_path)
+    adapters = [
+        adapter
+        for adapter in _record_sequence(adapter_plan.get("adapters"))
+        if isinstance(adapter, Mapping)
+    ]
+    targets = [
+        target
+        for target in _record_sequence(adapter_plan.get("targets"))
+        if isinstance(target, Mapping)
+    ]
+
+    adapter_root.mkdir(parents=True, exist_ok=True)
+    used_paths: set[str] = set()
+    descriptors: list[dict[str, Any]] = []
+    for index, adapter in enumerate(adapters, start=1):
+        descriptor_path = _runtime_adapter_descriptor_path(adapter, used_paths, index)
+        descriptor_file = adapter_root / descriptor_path
+        descriptor_file.parent.mkdir(parents=True, exist_ok=True)
+        descriptor_payload = _runtime_adapter_descriptor_payload(adapter_plan, adapter)
+        descriptor_file.write_text(
+            json.dumps(descriptor_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        descriptors.append(
+            _runtime_adapter_descriptor_record(
+                adapter, descriptor_path, descriptor_file
+            )
+        )
+
+    adapter_summary = (
+        adapter_plan.get("summary")
+        if isinstance(adapter_plan.get("summary"), Mapping)
+        else {}
+    )
+    ready_descriptor_count = sum(
+        1
+        for descriptor in descriptors
+        if descriptor.get("hostInterfaceStatus") == "ready"
+    )
+    blocked_descriptor_count = len(descriptors) - ready_descriptor_count
+    payload = {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_ADAPTER_PACKAGE_KIND,
+        "sourcePackage": str(package_path),
+        "sourcePackageHash": _optional_source_hash(package_path),
+        "generatedAt": int(time.time()),
+        "success": bool(adapter_plan.get("success")),
+        "scope": RUNTIME_ADAPTER_PACKAGE_SCOPE,
+        "nonGoals": list(RUNTIME_ADAPTER_PACKAGE_NON_GOALS),
+        "packageRoot": adapter_plan.get("packageRoot"),
+        "adapterRoot": str(adapter_root),
+        "adapterManifest": "runtime-adapters.json",
+        "project": (
+            dict(adapter_plan.get("project"))
+            if isinstance(adapter_plan.get("project"), Mapping)
+            else {"targets": []}
+        ),
+        "summary": {
+            "targetCount": adapter_summary.get("targetCount", 0),
+            "adapterCount": len(adapters),
+            "descriptorCount": len(descriptors),
+            "readyDescriptorCount": ready_descriptor_count,
+            "blockedDescriptorCount": blocked_descriptor_count,
+            "actionCount": adapter_summary.get("actionCount", 0),
+            "runtimeReferenceCount": adapter_summary.get("runtimeReferenceCount", 0),
+        },
+        "targets": [
+            _runtime_adapter_package_target(target, descriptors) for target in targets
+        ],
+        "descriptors": descriptors,
+        "actions": (
+            [dict(action) for action in adapter_plan.get("actions", [])]
+            if isinstance(adapter_plan.get("actions"), list)
+            else []
+        ),
+        "runtimePlan": (
+            dict(adapter_plan.get("runtimePlan"))
+            if isinstance(adapter_plan.get("runtimePlan"), Mapping)
+            else {}
+        ),
+        "adapterPlan": {
+            "kind": adapter_plan.get("kind"),
+            "success": adapter_plan.get("success"),
+            "adapterCount": adapter_summary.get("adapterCount", len(adapters)),
+            "actionCount": adapter_summary.get("actionCount", 0),
+        },
+        "packageInspection": (
+            dict(adapter_plan.get("packageInspection"))
+            if isinstance(adapter_plan.get("packageInspection"), Mapping)
+            else {}
+        ),
+        "diagnosticCounts": (
+            dict(adapter_plan.get("diagnosticCounts"))
+            if isinstance(adapter_plan.get("diagnosticCounts"), Mapping)
+            else {}
+        ),
+        "diagnostics": (
+            [dict(diagnostic) for diagnostic in adapter_plan.get("diagnostics", [])]
+            if isinstance(adapter_plan.get("diagnostics"), list)
+            else []
+        ),
+    }
+    (adapter_root / "runtime-adapters.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (adapter_root / "ADAPTERS.md").write_text(
+        _runtime_adapter_package_readme(payload),
+        encoding="utf-8",
+    )
+    return payload
 
 
 def _runtime_loader_metadata_source(

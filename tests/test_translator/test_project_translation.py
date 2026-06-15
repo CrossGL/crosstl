@@ -33,6 +33,7 @@ from crosstl.project import (
     inspect_runtime_host_loader_scaffolds,
     inspect_runtime_package,
     load_project_config,
+    materialize_runtime_adapters,
     plan_runtime_adapters,
     plan_runtime_host_bindings,
     plan_runtime_host_integration_execution,
@@ -562,6 +563,7 @@ def test_project_package_exposes_public_api_surface():
         "load_runtime_verification_fixtures",
         "load_runtime_test_manifest",
         "load_project_config",
+        "materialize_runtime_adapters",
         "native_runtime_parity_adapter",
         "native_runtime_parity_adapters",
         "parse_runtime_verification_fixtures",
@@ -12684,6 +12686,7 @@ def test_metal_project_materialization_concretizes_steel_attention_load_helper(
         "Rows": "2",
         "T": "float",
     }
+    assert "LoadTile<float,Rows,Cols>" not in materialized.text
     assert "LoadTile<float,2,2> tile;" in materialized.text
     assert "load_float_2_2(tile, src[gid]);" in materialized.text
     assert not re.search(r"\bload\s*\(", materialized.text)
@@ -35009,6 +35012,148 @@ def test_project_cli_plan_runtime_adapters_json_writes_output(tmp_path):
     assert payload["kind"] == project_pipeline.RUNTIME_ADAPTER_PLAN_KIND
     assert payload["summary"]["adapterCount"] == 1
     assert payload["adapters"][0]["adapterKind"] == "crossgl-source-adapter"
+
+
+def test_materialize_runtime_adapters_writes_descriptor_bundle(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("opengl",))
+    package_manifest = package_dir / "runtime-package.json"
+    adapter_dir = package_dir / "runtime-adapters"
+
+    payload = materialize_runtime_adapters(package_manifest, adapter_dir)
+
+    assert set(payload) == project_pipeline.RUNTIME_ADAPTER_PACKAGE_FIELDS
+    assert payload["kind"] == project_pipeline.RUNTIME_ADAPTER_PACKAGE_KIND
+    assert payload["success"] is True
+    assert payload["scope"] == project_pipeline.RUNTIME_ADAPTER_PACKAGE_SCOPE
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_ADAPTER_PACKAGE_NON_GOALS
+    )
+    assert payload["sourcePackage"] == str(package_manifest)
+    assert payload["adapterRoot"] == str(adapter_dir)
+    assert payload["adapterManifest"] == "runtime-adapters.json"
+    assert payload["summary"]["targetCount"] == 1
+    assert payload["summary"]["adapterCount"] == 1
+    assert payload["summary"]["descriptorCount"] == 1
+    assert payload["summary"]["readyDescriptorCount"] == 1
+    assert payload["summary"]["blockedDescriptorCount"] == 0
+
+    assert len(payload["targets"]) == 1
+    target = payload["targets"][0]
+    assert set(target) == project_pipeline.RUNTIME_ADAPTER_PACKAGE_TARGET_FIELDS
+    assert target["target"] == "opengl"
+    assert target["adapterKind"] == "opengl-glsl-adapter"
+    assert target["descriptorCount"] == 1
+    assert target["readyDescriptorCount"] == 1
+    assert target["blockedDescriptorCount"] == 0
+
+    assert len(payload["descriptors"]) == 1
+    descriptor_record = payload["descriptors"][0]
+    assert (
+        set(descriptor_record)
+        == project_pipeline.RUNTIME_ADAPTER_PACKAGE_DESCRIPTOR_FIELDS
+    )
+    assert descriptor_record["target"] == "opengl"
+    assert descriptor_record["adapterKind"] == "opengl-glsl-adapter"
+    assert descriptor_record["hostInterfaceStatus"] == "ready"
+    assert descriptor_record["descriptorPath"].startswith("adapters/opengl/")
+    assert descriptor_record["descriptorPath"].endswith(".adapter.json")
+
+    descriptor_file = adapter_dir / descriptor_record["descriptorPath"]
+    assert descriptor_file.is_file()
+    assert descriptor_record["descriptorSizeBytes"] == descriptor_file.stat().st_size
+    assert descriptor_record["descriptorHash"]["algorithm"] == "sha256"
+    assert descriptor_record["descriptorHash"]["value"]
+
+    descriptor = json.loads(descriptor_file.read_text(encoding="utf-8"))
+    assert set(descriptor) == project_pipeline.RUNTIME_ADAPTER_DESCRIPTOR_FIELDS
+    assert descriptor["kind"] == project_pipeline.RUNTIME_ADAPTER_DESCRIPTOR_KIND
+    assert descriptor["sourcePackage"] == str(package_manifest)
+    assert descriptor["sourcePackageHash"] == payload["sourcePackageHash"]
+    assert descriptor["adapterPlan"]["kind"] == (
+        project_pipeline.RUNTIME_ADAPTER_PLAN_KIND
+    )
+    assert descriptor["adapterPlan"]["success"] is True
+    assert descriptor["adapterKind"] == "opengl-glsl-adapter"
+    assert descriptor["hostInterface"]["status"] == "ready"
+    assert descriptor["sourceRemap"]["packagePath"].startswith("source-remaps/")
+
+    manifest = json.loads(
+        (adapter_dir / "runtime-adapters.json").read_text(encoding="utf-8")
+    )
+    assert manifest["kind"] == project_pipeline.RUNTIME_ADAPTER_PACKAGE_KIND
+    assert manifest["descriptors"][0]["descriptorPath"] == (
+        descriptor_record["descriptorPath"]
+    )
+    readme = (adapter_dir / "ADAPTERS.md").read_text(encoding="utf-8")
+    assert "CrossTL Runtime Adapter Descriptors" in readme
+    assert "execute device code" in readme
+
+
+def test_project_cli_materialize_runtime_adapters_text_outputs_descriptors(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("opengl",))
+    package_manifest = package_dir / "runtime-package.json"
+    adapter_dir = package_dir / "runtime-adapters"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "materialize-runtime-adapters",
+            str(package_manifest),
+            "--adapter-dir",
+            str(adapter_dir),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Runtime adapter descriptors: {package_manifest}" in result.stdout
+    assert "Status: ok" in result.stdout
+    assert "Adapter manifest: runtime-adapters.json" in result.stdout
+    assert "Descriptor scope: runtime-adapter-descriptor-package" in result.stdout
+    assert "Summary: 1 targets, 1 descriptors, 1 ready" in result.stdout
+    assert "- opengl: 1 descriptors, 1 ready" in result.stdout
+    assert "Runtime adapter descriptors:" in result.stdout
+    assert "opengl-glsl-adapter" in result.stdout
+    assert "descriptor: adapters/opengl/" in result.stdout
+    assert (adapter_dir / "runtime-adapters.json").is_file()
+
+
+def test_project_cli_materialize_runtime_adapters_json_writes_output(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
+    adapter_dir = package_dir / "runtime-adapters"
+    output_path = package_dir / "runtime-adapter-package.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "materialize-runtime-adapters",
+            str(package_dir / "runtime-package.json"),
+            "--adapter-dir",
+            str(adapter_dir),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == project_pipeline.RUNTIME_ADAPTER_PACKAGE_KIND
+    assert payload["summary"]["descriptorCount"] == 1
+    assert (adapter_dir / payload["descriptors"][0]["descriptorPath"]).is_file()
 
 
 def test_build_runtime_loader_manifest_from_runtime_package(tmp_path):
