@@ -1,0 +1,50 @@
+{
+  "generatedFile": "crosstl-out/opengl/shaders.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 401,
+        "file": "crosstl-out/opengl/shaders.glsl",
+        "length": 17,
+        "line": 16,
+        "offset": 384
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 501,
+        "file": "shaders.hlsl",
+        "length": 19,
+        "line": 14,
+        "offset": 482
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 423,
+        "file": "crosstl-out/opengl/shaders.glsl",
+        "length": 22,
+        "line": 17,
+        "offset": 401
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 525,
+        "file": "shaders.hlsl",
+        "length": 24,
+        "line": 15,
+        "offset": 501
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

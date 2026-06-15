@@ -1,0 +1,50 @@
+{
+  "generatedFile": "crosstl-out/directx/neg1.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 61,
+        "file": "crosstl-out/directx/neg1.hlsl",
+        "length": 41,
+        "line": 3,
+        "offset": 20
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 104,
+        "file": "neg1.hlsl",
+        "length": 38,
+        "line": 4,
+        "offset": 66
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 81,
+        "file": "crosstl-out/directx/neg1.hlsl",
+        "length": 20,
+        "line": 4,
+        "offset": 61
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 124,
+        "file": "neg1.hlsl",
+        "length": 18,
+        "line": 6,
+        "offset": 106
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

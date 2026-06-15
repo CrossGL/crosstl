@@ -1,0 +1,6 @@
+[project]
+source_roots = ["."]
+include = ["CubeFDM_vs.glsl", "CubeFDM_fs.glsl"]
+targets = ["cgl", "opengl", "directx", "vulkan"]
+output_dir = "crosstl-out"
+external_corpus_manifest = "corpus.json"

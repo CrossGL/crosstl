@@ -1,0 +1,17 @@
+// OpenCL to CrossGL conversion
+// Kernel: saxpy
+@compute
+@workgroup_size(1, 1, 1)
+fn saxpy(
+    f32 a,
+    @group(0) @binding(0) var<storage, read_write> x: array<f32>,
+    @group(0) @binding(1) var<storage, read_write> y: array<f32>
+) {
+    let thread_id = gl_GlobalInvocationID;
+    let block_id = gl_WorkGroupID;
+    let thread_local_id = gl_LocalInvocationID;
+    let block_dim = gl_WorkGroupSize;
+
+    var gid: i32 = gl_GlobalInvocationID.x;
+    y[gid] = fma(a, x[gid], y[gid]);
+}

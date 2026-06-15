@@ -1,0 +1,72 @@
+{
+  "generatedFile": "crosstl-out/directx/main.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 457,
+        "file": "crosstl-out/directx/main.hlsl",
+        "length": 70,
+        "line": 14,
+        "offset": 387
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 1597,
+        "file": "main.hip",
+        "length": 67,
+        "line": 29,
+        "offset": 1530
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 520,
+        "file": "crosstl-out/directx/main.hlsl",
+        "length": 63,
+        "line": 15,
+        "offset": 457
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 1647,
+        "file": "main.hip",
+        "length": 50,
+        "line": 30,
+        "offset": 1597
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 573,
+        "file": "crosstl-out/directx/main.hlsl",
+        "length": 53,
+        "line": 16,
+        "offset": 520
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 33,
+        "endOffset": 1698,
+        "file": "main.hip",
+        "length": 50,
+        "line": 32,
+        "offset": 1648
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

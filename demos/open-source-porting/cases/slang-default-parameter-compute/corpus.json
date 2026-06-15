@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "Slang default-parameter compute shader",
+  "description": "Pinned Slang compute source used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "slang-default-parameter-compute",
+      "path": "default-parameter.slang",
+      "sourceBackend": "slang",
+      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
+      "repository": "https://github.com/shader-slang/slang",
+      "commit": "adc996670ec281aa8a4ee131f30b324648cbbe60",
+      "sourceUrl": "https://github.com/shader-slang/slang/blob/adc996670ec281aa8a4ee131f30b324648cbbe60/tests/compute/default-parameter.slang"
+    }
+  ]
+}

@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/opengl/Cube_cube.frag.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 40,
+        "file": "crosstl-out/opengl/Cube_cube.frag.glsl",
+        "length": 22,
+        "line": 2,
+        "offset": 18
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 1185,
+        "file": "Cube_cube.frag",
+        "length": 22,
+        "line": 21,
+        "offset": 1163
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 59,
+        "file": "crosstl-out/opengl/Cube_cube.frag.glsl",
+        "length": 19,
+        "line": 3,
+        "offset": 40
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 1210,
+        "file": "Cube_cube.frag",
+        "length": 24,
+        "line": 23,
+        "offset": 1186
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 119,
+        "file": "crosstl-out/opengl/Cube_cube.frag.glsl",
+        "length": 41,
+        "line": 5,
+        "offset": 78
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 1266,
+        "file": "Cube_cube.frag",
+        "length": 41,
+        "line": 27,
+        "offset": 1225
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 171,
+        "file": "crosstl-out/opengl/Cube_cube.frag.glsl",
+        "length": 38,
+        "line": 7,
+        "offset": 133
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 1266,
+        "file": "Cube_cube.frag",
+        "length": 41,
+        "line": 27,
+        "offset": 1225
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

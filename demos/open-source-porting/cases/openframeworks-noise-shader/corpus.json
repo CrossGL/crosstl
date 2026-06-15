@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "name": "openFrameworks noise shader",
+  "description": "Pinned GLSL noise shader pair used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "openframeworks-noise-vertex",
+      "path": "noise.vert",
+      "sourceBackend": "opengl",
+      "targets": [
+        "cgl",
+        "opengl",
+        "metal",
+        "directx",
+        "vulkan"
+      ],
+      "repository": "https://github.com/openframeworks/openFrameworks",
+      "commit": "63eb03828c40de713b85db7810f1c519d8b9b0cc",
+      "sourceUrl": "https://github.com/openframeworks/openFrameworks/blob/63eb03828c40de713b85db7810f1c519d8b9b0cc/examples/gl/shaderExample/bin/data/shaders_gl3/noise.vert"
+    },
+    {
+      "id": "openframeworks-noise-fragment",
+      "path": "noise.frag",
+      "sourceBackend": "opengl",
+      "targets": [
+        "cgl",
+        "opengl",
+        "metal",
+        "directx",
+        "vulkan"
+      ],
+      "repository": "https://github.com/openframeworks/openFrameworks",
+      "commit": "63eb03828c40de713b85db7810f1c519d8b9b0cc",
+      "sourceUrl": "https://github.com/openframeworks/openFrameworks/blob/63eb03828c40de713b85db7810f1c519d8b9b0cc/examples/gl/shaderExample/bin/data/shaders_gl3/noise.frag"
+    }
+  ]
+}

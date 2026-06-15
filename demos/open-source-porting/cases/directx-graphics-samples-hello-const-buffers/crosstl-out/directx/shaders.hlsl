@@ -1,0 +1,22 @@
+
+struct PSInput {
+    float4 position: SV_POSITION;
+    float4 color: Color;
+};
+// Constant Buffers
+cbuffer SceneConstantBuffer : register(b0) {
+    float4 offset;
+    float4 padding[15];
+};
+// Vertex Shader
+PSInput VSMain(float4 position : Position, float4 color : Color) {
+    PSInput result;
+    result.position = (position + offset);
+    result.color = color;
+    return result;
+}
+
+// Fragment Shader
+float4 PSMain(PSInput input): SV_TARGET {
+    return input.color;
+}

@@ -1,0 +1,204 @@
+{
+  "generatedFile": "crosstl-out/metal/cube.vsh.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 118,
+        "file": "crosstl-out/metal/cube.vsh.metal",
+        "length": 30,
+        "line": 7,
+        "offset": 88
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 50,
+        "file": "cube.vsh",
+        "length": 30,
+        "line": 3,
+        "offset": 20
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 309,
+        "file": "crosstl-out/metal/cube.vsh.metal",
+        "length": 34,
+        "line": 16,
+        "offset": 275
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 842,
+        "file": "cube.vsh",
+        "length": 62,
+        "line": 27,
+        "offset": 780
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 349,
+        "file": "crosstl-out/metal/cube.vsh.metal",
+        "length": 40,
+        "line": 17,
+        "offset": 309
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 396,
+        "file": "cube.vsh",
+        "length": 28,
+        "line": 18,
+        "offset": 368
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 484,
+        "file": "crosstl-out/metal/cube.vsh.metal",
+        "length": 131,
+        "line": 20,
+        "offset": 353
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 514,
+        "file": "cube.vsh",
+        "length": 114,
+        "line": 21,
+        "offset": 400
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 613,
+        "file": "crosstl-out/metal/cube.vsh.metal",
+        "length": 33,
+        "line": 23,
+        "offset": 580
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 842,
+        "file": "cube.vsh",
+        "length": 62,
+        "line": 27,
+        "offset": 780
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 714,
+        "file": "crosstl-out/metal/cube.vsh.metal",
+        "length": 66,
+        "line": 25,
+        "offset": 648
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 842,
+        "file": "cube.vsh",
+        "length": 62,
+        "line": 27,
+        "offset": 780
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 743,
+        "file": "crosstl-out/metal/cube.vsh.metal",
+        "length": 29,
+        "line": 26,
+        "offset": 714
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 871,
+        "file": "cube.vsh",
+        "length": 29,
+        "line": 28,
+        "offset": 842
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 822,
+        "file": "crosstl-out/metal/cube.vsh.metal",
+        "length": 40,
+        "line": 28,
+        "offset": 782
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 842,
+        "file": "cube.vsh",
+        "length": 62,
+        "line": 27,
+        "offset": 780
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 866,
+        "file": "crosstl-out/metal/cube.vsh.metal",
+        "length": 44,
+        "line": 29,
+        "offset": 822
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 871,
+        "file": "cube.vsh",
+        "length": 29,
+        "line": 28,
+        "offset": 842
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

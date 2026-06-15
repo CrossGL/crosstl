@@ -10,7 +10,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 MLX_REPOSITORY = "https://github.com/ml-explore/mlx"
 MLX_COMMIT = "968d264f2903d578e699c4452a4dbf48633921aa"
@@ -24,8 +24,20 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/ternary.metal",
 )
 EXPECTED_METAL_KERNEL_COUNT = 40
+FULL_CORPUS_TARGETS = ("directx", "opengl", "vulkan")
+FULL_CORPUS_EXPECTED_ARTIFACT_COUNT = EXPECTED_METAL_KERNEL_COUNT * len(
+    FULL_CORPUS_TARGETS
+)
+FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS = 4096
+FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK = 131072
+REDUCED_FRONTIER_MODE = "reduced-frontier"
+FULL_CORPUS_MODE = "full-corpus"
 FRONTIER_VALIDATION_TRACKED_ISSUES = ("https://github.com/CrossGL/crosstl/issues/1317",)
-FULL_CORPUS_TRACKED_ISSUES = (*FRONTIER_VALIDATION_TRACKED_ISSUES,)
+FULL_CORPUS_TRANSLATION_TRACKED_ISSUES: tuple[str, ...] = ()
+FULL_CORPUS_TRACKED_ISSUES = (
+    *FRONTIER_VALIDATION_TRACKED_ISSUES,
+    *FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
+)
 RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1300",
     "https://github.com/CrossGL/crosstl/issues/939",
@@ -201,27 +213,35 @@ def _write_project_config(
     include: str | Sequence[str],
     targets: Sequence[str],
     output_dir: str,
+    metal_source_options: Mapping[str, int] | None = None,
+    metal_target_options: Mapping[str, Mapping[str, int]] | None = None,
 ) -> None:
     include_values = [include] if isinstance(include, str) else list(include)
     include_list = ", ".join(json.dumps(value) for value in include_values)
     target_list = ", ".join(json.dumps(target) for target in targets)
-    path.write_text(
-        "\n".join(
-            [
-                "[project]",
-                f'source_roots = ["{MLX_METAL_KERNEL_ROOT}"]',
-                f"include = [{include_list}]",
-                'include_dirs = ["."]',
-                f"targets = [{target_list}]",
-                f'output_dir = "{output_dir}"',
-                "",
-                "[project.sources]",
-                '"**/*.metal" = "metal"',
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    lines = [
+        "[project]",
+        f'source_roots = ["{MLX_METAL_KERNEL_ROOT}"]',
+        f"include = [{include_list}]",
+        'include_dirs = ["."]',
+        f"targets = [{target_list}]",
+        f'output_dir = "{output_dir}"',
+        "",
+        "[project.sources]",
+        '"**/*.metal" = "metal"',
+        "",
+    ]
+    if metal_source_options or metal_target_options:
+        lines.append("[project.source_options.metal]")
+        for key, value in (metal_source_options or {}).items():
+            lines.append(f"{key} = {value}")
+        lines.append("")
+        for target, options in (metal_target_options or {}).items():
+            lines.append(f"[project.source_options.metal.target_options.{target}]")
+            for key, value in options.items():
+                lines.append(f"{key} = {value}")
+            lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def _verify_mlx_checkout(mlx_root: Path, python: str, log_dir: Path) -> dict[str, Any]:
@@ -516,6 +536,138 @@ def _check_arange_opengl(
     }
 
 
+def _translate_full_corpus(
+    mlx_root: Path,
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+) -> dict[str, Any]:
+    config_path = config_dir / "full-corpus.toml"
+    report_path = report_dir / "full-corpus.json"
+    _write_project_config(
+        config_path,
+        include=f"{MLX_METAL_KERNEL_ROOT}/**/*.metal",
+        targets=FULL_CORPUS_TARGETS,
+        output_dir=_relpath(work_dir / "out-full-corpus", mlx_root),
+        metal_source_options={
+            "max_template_specializations": FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS,
+            "max_template_materialization_work": (
+                FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK
+            ),
+        },
+    )
+    _run_command(
+        "translate-full-corpus",
+        [
+            python,
+            "-m",
+            "crosstl",
+            "translate-project",
+            str(mlx_root),
+            "--config",
+            str(config_path),
+            "--report",
+            str(report_path),
+            "--validate",
+        ],
+        log_dir=log_dir,
+    )
+    payload = _load_json(report_path)
+    summary = payload.get("summary", {})
+    _require(isinstance(summary, dict), "full-corpus summary must be an object")
+    diagnostic_counts = summary.get("diagnosticCounts", {})
+    _require(
+        isinstance(diagnostic_counts, dict),
+        "full-corpus diagnostic counts must be an object",
+    )
+    failed_count = summary.get("failedCount")
+    error_count = diagnostic_counts.get("error", 0)
+    if failed_count or error_count:
+        _require(
+            FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
+            "full-corpus translation reported failed artifacts or errors "
+            "without tracked issue references",
+        )
+        raise PortingCheckError(
+            "full-corpus translation still has tracked artifact blockers: "
+            + ", ".join(FULL_CORPUS_TRANSLATION_TRACKED_ISSUES)
+        )
+    _require(
+        summary.get("unitCount") == EXPECTED_METAL_KERNEL_COUNT,
+        "full-corpus translation must scan {} units; found {}".format(
+            EXPECTED_METAL_KERNEL_COUNT,
+            summary.get("unitCount"),
+        ),
+    )
+    _require(
+        summary.get("artifactCount") == FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
+        "full-corpus translation must emit {} artifacts; found {}".format(
+            FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
+            summary.get("artifactCount"),
+        ),
+    )
+    _require(
+        summary.get("translatedCount") == FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
+        "full-corpus translation did not emit every expected artifact",
+    )
+    _require(
+        summary.get("failedCount") == 0,
+        "full-corpus translation reported failed artifacts",
+    )
+    _require(
+        summary.get("diagnosticCounts", {}).get("error", 0) == 0,
+        "full-corpus translation reported errors",
+    )
+    artifacts_by_target = summary.get("artifactsByTarget", {})
+    _require(
+        isinstance(artifacts_by_target, dict),
+        "full-corpus artifactsByTarget must be an object",
+    )
+    target_counts: dict[str, dict[str, int]] = {}
+    for target in FULL_CORPUS_TARGETS:
+        target_summary = artifacts_by_target.get(target, {})
+        _require(
+            isinstance(target_summary, dict),
+            f"full-corpus target summary is missing for {target}",
+        )
+        _require(
+            target_summary.get("translatedCount") == EXPECTED_METAL_KERNEL_COUNT
+            and target_summary.get("failedCount") == 0,
+            f"full-corpus {target} artifacts were not translated cleanly",
+        )
+        target_counts[target] = {
+            "translatedCount": target_summary.get("translatedCount", 0),
+            "failedCount": target_summary.get("failedCount", 0),
+        }
+    validation = payload.get("validation", {})
+    _require(isinstance(validation, dict), "full-corpus validation must be an object")
+    artifact_validation = validation.get("summary", {})
+    _require(
+        isinstance(artifact_validation, dict),
+        "full-corpus validation summary must be an object",
+    )
+    _require(
+        artifact_validation.get("failedCount") == 0,
+        "artifact validation reported failures for full-corpus outputs",
+    )
+    return {
+        "name": "full-corpus",
+        "status": "passed",
+        "report": _relpath(report_path, mlx_root),
+        "unitCount": EXPECTED_METAL_KERNEL_COUNT,
+        "artifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
+        "targets": list(FULL_CORPUS_TARGETS),
+        "targetCounts": target_counts,
+        "shaderArtifactsOnly": True,
+        "runtimeIntegrationIncluded": False,
+        "trackedTranslationIssues": list(FULL_CORPUS_TRANSLATION_TRACKED_ISSUES),
+        "maxTemplateSpecializations": FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS,
+        "maxTemplateMaterializationWork": FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK,
+    }
+
+
 def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     mlx_root = Path(args.mlx_root).resolve()
     work_dir = _resolve_work_dir(mlx_root, args.work_dir)
@@ -527,7 +679,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     for directory in (config_dir, report_dir, log_dir):
         directory.mkdir(parents=True, exist_ok=True)
 
-    checks = [
+    checks: list[dict[str, Any]] = [
         _verify_mlx_checkout(mlx_root, args.python, log_dir),
         _scan_metal_kernels(
             mlx_root,
@@ -537,24 +689,42 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             log_dir,
             args.python,
         ),
-        _translate_directx_vulkan_frontier(
-            mlx_root,
-            work_dir,
-            config_dir,
-            report_dir,
-            log_dir,
-            args.python,
-            require_vulkan_toolchain=args.require_vulkan_toolchain,
-        ),
-        _check_arange_opengl(
-            mlx_root,
-            work_dir,
-            config_dir,
-            report_dir,
-            log_dir,
-            args.python,
-        ),
     ]
+    if args.mode == REDUCED_FRONTIER_MODE:
+        checks.extend(
+            [
+                _translate_directx_vulkan_frontier(
+                    mlx_root,
+                    work_dir,
+                    config_dir,
+                    report_dir,
+                    log_dir,
+                    args.python,
+                    require_vulkan_toolchain=args.require_vulkan_toolchain,
+                ),
+                _check_arange_opengl(
+                    mlx_root,
+                    work_dir,
+                    config_dir,
+                    report_dir,
+                    log_dir,
+                    args.python,
+                ),
+            ]
+        )
+    elif args.mode == FULL_CORPUS_MODE:
+        checks.append(
+            _translate_full_corpus(
+                mlx_root,
+                work_dir,
+                config_dir,
+                report_dir,
+                log_dir,
+                args.python,
+            )
+        )
+    else:
+        raise PortingCheckError(f"unsupported MLX porting mode: {args.mode}")
     return {
         "schema_version": 1,
         "repository": {
@@ -563,8 +733,12 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "commit": MLX_COMMIT,
         },
         "scope": {
+            "mode": args.mode,
             "sourceRoot": MLX_METAL_KERNEL_ROOT,
             "frontierSources": list(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
+            "fullCorpusTargets": list(FULL_CORPUS_TARGETS),
+            "fullCorpusExpectedUnitCount": EXPECTED_METAL_KERNEL_COUNT,
+            "fullCorpusExpectedArtifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
             "shaderArtifactsOnly": True,
             "runtimeIntegrationIncluded": False,
         },
@@ -580,6 +754,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         description="Run pinned MLX project-porting checks through CrossTL."
     )
     parser.add_argument("--mlx-root", required=True, help="Path to the MLX checkout")
+    parser.add_argument(
+        "--mode",
+        choices=(REDUCED_FRONTIER_MODE, FULL_CORPUS_MODE),
+        default=REDUCED_FRONTIER_MODE,
+        help=(
+            "Harness scope to run. The default reduced frontier is the pull "
+            "request gate; full-corpus is intended for scheduled and manual "
+            "artifact-generation scouts."
+        ),
+    )
     parser.add_argument(
         "--work-dir",
         help=(
@@ -633,6 +817,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "name": "ml-explore/mlx",
                         "url": MLX_REPOSITORY,
                         "commit": MLX_COMMIT,
+                    },
+                    "scope": {
+                        "mode": args.mode,
+                        "shaderArtifactsOnly": True,
+                        "runtimeIntegrationIncluded": False,
                     },
                     "status": "failed",
                     "error": str(exc),

@@ -1,0 +1,16 @@
+shader main {
+    struct FragmentInput {
+    vec4 v_color;
+    vec2 v_texCoords;
+    };
+
+    sampler2D u_texture;
+
+    fragment {
+    vec4 main(FragmentInput input) @ gl_FragColor {
+        vec4 gl_FragColor;
+        gl_FragColor = (input.v_color * texture(u_texture, input.v_texCoords));
+        return gl_FragColor;
+    }
+    }
+}

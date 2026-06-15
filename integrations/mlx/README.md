@@ -18,6 +18,16 @@ The current harness verifies:
   active validation blocker is tracked;
 - OpenGL artifact generation for `arange.metal`.
 
+Pull requests run the reduced frontier above. Scheduled and manually triggered
+CI also run the full-corpus artifact scout with finite Metal template
+materialization budgets. The generated full-corpus project config caps
+`max_template_specializations` at 4096 and
+`max_template_materialization_work` at 131072. The full scout translates all 40
+pinned MLX Metal kernel units to DirectX, OpenGL, and Vulkan and requires 120
+clean generated artifacts: 40 DirectX, 40 OpenGL, and 40 Vulkan. It uploads
+generated portability reports, validation summaries embedded in those reports,
+generated logs, generated artifacts, and a concise JSON summary.
+
 The last completed full-corpus scout against the same pinned MLX revision
 translated 120 of 120 target artifacts across DirectX, OpenGL, and Vulkan:
 DirectX translated 40 of 40 artifacts, OpenGL translated 40 of 40 artifacts,
@@ -44,6 +54,15 @@ Run the project-porting harness from the CrossTL repository:
 
 ```bash
 python integrations/mlx/run_mlx_porting.py --mlx-root /tmp/mlx
+```
+
+Run the full-corpus artifact scout:
+
+```bash
+python integrations/mlx/run_mlx_porting.py \
+  --mode full-corpus \
+  --mlx-root /tmp/mlx \
+  --summary /tmp/mlx/.crosstl-mlx-porting/full-corpus-summary.json
 ```
 
 On Linux, install SPIR-V tools and require the Vulkan smoke check:

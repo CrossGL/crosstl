@@ -1,0 +1,138 @@
+{
+  "generatedFile": "crosstl-out/vulkan/CubeFDM_fs.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 184,
+        "file": "crosstl-out/vulkan/CubeFDM_fs.spvasm",
+        "length": 50,
+        "line": 7,
+        "offset": 134
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 74,
+        "file": "CubeFDM_fs.glsl",
+        "length": 56,
+        "line": 2,
+        "offset": 18
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 356,
+        "file": "crosstl-out/vulkan/CubeFDM_fs.spvasm",
+        "length": 25,
+        "line": 12,
+        "offset": 331
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 140,
+        "file": "CubeFDM_fs.glsl",
+        "length": 35,
+        "line": 6,
+        "offset": 105
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 517,
+        "file": "crosstl-out/vulkan/CubeFDM_fs.spvasm",
+        "length": 27,
+        "line": 17,
+        "offset": 490
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 298,
+        "file": "CubeFDM_fs.glsl",
+        "length": 35,
+        "line": 13,
+        "offset": 263
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 734,
+        "file": "crosstl-out/vulkan/CubeFDM_fs.spvasm",
+        "length": 28,
+        "line": 25,
+        "offset": 706
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 468,
+        "file": "CubeFDM_fs.glsl",
+        "length": 98,
+        "line": 18,
+        "offset": 370
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 58,
+        "endOffset": 1603,
+        "file": "crosstl-out/vulkan/CubeFDM_fs.spvasm",
+        "length": 40,
+        "line": 57,
+        "offset": 1563
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 259,
+        "file": "CubeFDM_fs.glsl",
+        "length": 58,
+        "line": 10,
+        "offset": 201
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 147,
+        "endOffset": 4023,
+        "file": "crosstl-out/vulkan/CubeFDM_fs.spvasm",
+        "length": 29,
+        "line": 146,
+        "offset": 3994
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 259,
+        "file": "CubeFDM_fs.glsl",
+        "length": 58,
+        "line": 10,
+        "offset": 201
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

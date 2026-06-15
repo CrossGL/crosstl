@@ -1,0 +1,138 @@
+{
+  "generatedFile": "crosstl-out/vulkan/rectangle.vert.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 269,
+        "file": "crosstl-out/vulkan/rectangle.vert.spvasm",
+        "length": 31,
+        "line": 10,
+        "offset": 238
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 804,
+        "file": "rectangle.vert.glsl",
+        "length": 41,
+        "line": 21,
+        "offset": 763
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 297,
+        "file": "crosstl-out/vulkan/rectangle.vert.spvasm",
+        "length": 28,
+        "line": 11,
+        "offset": 269
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 842,
+        "file": "rectangle.vert.glsl",
+        "length": 38,
+        "line": 22,
+        "offset": 804
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 357,
+        "file": "crosstl-out/vulkan/rectangle.vert.spvasm",
+        "length": 34,
+        "line": 13,
+        "offset": 323
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 887,
+        "file": "rectangle.vert.glsl",
+        "length": 44,
+        "line": 24,
+        "offset": 843
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 390,
+        "file": "crosstl-out/vulkan/rectangle.vert.spvasm",
+        "length": 33,
+        "line": 14,
+        "offset": 357
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 947,
+        "file": "rectangle.vert.glsl",
+        "length": 45,
+        "line": 28,
+        "offset": 902
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 468,
+        "file": "crosstl-out/vulkan/rectangle.vert.spvasm",
+        "length": 25,
+        "line": 16,
+        "offset": 443
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 947,
+        "file": "rectangle.vert.glsl",
+        "length": 45,
+        "line": 28,
+        "offset": 902
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 716,
+        "file": "crosstl-out/vulkan/rectangle.vert.spvasm",
+        "length": 26,
+        "line": 24,
+        "offset": 690
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 842,
+        "file": "rectangle.vert.glsl",
+        "length": 38,
+        "line": 22,
+        "offset": 804
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

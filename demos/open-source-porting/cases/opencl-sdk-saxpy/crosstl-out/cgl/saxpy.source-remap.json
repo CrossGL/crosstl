@@ -1,0 +1,72 @@
+{
+  "generatedFile": "crosstl-out/cgl/saxpy.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 49,
+        "file": "crosstl-out/cgl/saxpy.cgl",
+        "length": 17,
+        "line": 2,
+        "offset": 32
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 29,
+        "file": "saxpy.cl",
+        "length": 29,
+        "line": 1,
+        "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 448,
+        "file": "crosstl-out/cgl/saxpy.cgl",
+        "length": 44,
+        "line": 15,
+        "offset": 404
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 179,
+        "file": "saxpy.cl",
+        "length": 37,
+        "line": 7,
+        "offset": 142
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 485,
+        "file": "crosstl-out/cgl/saxpy.cgl",
+        "length": 37,
+        "line": 16,
+        "offset": 448
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 179,
+        "file": "saxpy.cl",
+        "length": 37,
+        "line": 7,
+        "offset": 142
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

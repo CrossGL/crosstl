@@ -1,0 +1,72 @@
+{
+  "generatedFile": "crosstl-out/directx/AAPLMeshRenderer.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 56,
+        "file": "crosstl-out/directx/AAPLMeshRenderer.hlsl",
+        "length": 39,
+        "line": 3,
+        "offset": 17
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 43,
+        "file": "AAPLMeshRenderer.metal",
+        "length": 43,
+        "line": 1,
+        "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 247,
+        "file": "crosstl-out/directx/AAPLMeshRenderer.hlsl",
+        "length": 27,
+        "line": 13,
+        "offset": 220
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 163,
+        "file": "AAPLMeshRenderer.metal",
+        "length": 49,
+        "line": 5,
+        "offset": 114
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 347,
+        "file": "crosstl-out/directx/AAPLMeshRenderer.hlsl",
+        "length": 83,
+        "line": 15,
+        "offset": 264
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 326,
+        "file": "AAPLMeshRenderer.metal",
+        "length": 80,
+        "line": 8,
+        "offset": 246
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

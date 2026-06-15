@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/metal/alpha_stitch.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 67,
+        "file": "crosstl-out/metal/alpha_stitch.metal",
+        "length": 18,
+        "line": 5,
+        "offset": 49
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 149,
+        "file": "alpha_stitch.glsl",
+        "length": 78,
+        "line": 2,
+        "offset": 71
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 377,
+        "file": "crosstl-out/metal/alpha_stitch.metal",
+        "length": 87,
+        "line": 7,
+        "offset": 290
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 583,
+        "file": "alpha_stitch.glsl",
+        "length": 77,
+        "line": 16,
+        "offset": 506
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 468,
+        "file": "crosstl-out/metal/alpha_stitch.metal",
+        "length": 91,
+        "line": 8,
+        "offset": 377
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 664,
+        "file": "alpha_stitch.glsl",
+        "length": 81,
+        "line": 17,
+        "offset": 583
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 566,
+        "file": "crosstl-out/metal/alpha_stitch.metal",
+        "length": 98,
+        "line": 9,
+        "offset": 468
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 758,
+        "file": "alpha_stitch.glsl",
+        "length": 93,
+        "line": 19,
+        "offset": 665
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

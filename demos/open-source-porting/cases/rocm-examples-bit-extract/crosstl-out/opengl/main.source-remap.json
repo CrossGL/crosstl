@@ -1,0 +1,116 @@
+{
+  "generatedFile": "crosstl-out/opengl/main.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 90,
+        "file": "crosstl-out/opengl/main.glsl",
+        "length": 72,
+        "line": 2,
+        "offset": 18
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 38,
+        "endOffset": 1899,
+        "file": "main.hip",
+        "length": 51,
+        "line": 37,
+        "offset": 1848
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 256,
+        "file": "crosstl-out/opengl/main.glsl",
+        "length": 67,
+        "line": 5,
+        "offset": 189
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 1528,
+        "file": "main.hip",
+        "length": 93,
+        "line": 27,
+        "offset": 1435
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 457,
+        "file": "crosstl-out/opengl/main.glsl",
+        "length": 86,
+        "line": 11,
+        "offset": 371
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 1597,
+        "file": "main.hip",
+        "length": 67,
+        "line": 29,
+        "offset": 1530
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 518,
+        "file": "crosstl-out/opengl/main.glsl",
+        "length": 61,
+        "line": 12,
+        "offset": 457
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 1647,
+        "file": "main.hip",
+        "length": 50,
+        "line": 30,
+        "offset": 1597
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 571,
+        "file": "crosstl-out/opengl/main.glsl",
+        "length": 53,
+        "line": 13,
+        "offset": 518
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 33,
+        "endOffset": 1698,
+        "file": "main.hip",
+        "length": 50,
+        "line": 32,
+        "offset": 1648
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

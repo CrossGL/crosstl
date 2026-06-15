@@ -1,0 +1,26 @@
+shader main {
+    @glsl_interface_block(out)
+    @glsl_interface_block_name(gl_PerVertex)
+    struct gl_PerVertex {
+        float4 gl_Position;
+        float gl_PointSize @mediump;
+        float gl_ClipDistance[8];
+        float gl_CullDistance[8];
+    }
+
+    // Vertex Shader
+    vertex {
+        float4 _ua_position @input @location(0);
+        float4 ANGLEXfbPosition @output @location(0);
+        float4 gl_Position @output @gl_Position;
+        float gl_PointSize @output @gl_PointSize @mediump;
+        float gl_ClipDistance[8] @output @gl_ClipDistance;
+        float gl_CullDistance[8] @output @gl_CullDistance;
+      void main() {
+        gl_Position = _ua_position;
+        return;
+    }
+
+    }
+
+}

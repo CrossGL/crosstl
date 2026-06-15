@@ -1,0 +1,160 @@
+{
+  "generatedFile": "crosstl-out/metal/SimpleTexture2D.vert.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 110,
+        "file": "crosstl-out/metal/SimpleTexture2D.vert.metal",
+        "length": 40,
+        "line": 6,
+        "offset": 70
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 275,
+        "file": "SimpleTexture2D.vert",
+        "length": 27,
+        "line": 9,
+        "offset": 248
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 150,
+        "file": "crosstl-out/metal/SimpleTexture2D.vert.metal",
+        "length": 40,
+        "line": 7,
+        "offset": 110
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 302,
+        "file": "SimpleTexture2D.vert",
+        "length": 27,
+        "line": 10,
+        "offset": 275
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 198,
+        "file": "crosstl-out/metal/SimpleTexture2D.vert.metal",
+        "length": 23,
+        "line": 10,
+        "offset": 175
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 327,
+        "file": "SimpleTexture2D.vert",
+        "length": 25,
+        "line": 11,
+        "offset": 302
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 235,
+        "file": "crosstl-out/metal/SimpleTexture2D.vert.metal",
+        "length": 37,
+        "line": 11,
+        "offset": 198
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 371,
+        "file": "SimpleTexture2D.vert",
+        "length": 30,
+        "line": 14,
+        "offset": 341
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 255,
+        "file": "crosstl-out/metal/SimpleTexture2D.vert.metal",
+        "length": 17,
+        "line": 13,
+        "offset": 238
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 244,
+        "file": "SimpleTexture2D.vert",
+        "length": 68,
+        "line": 6,
+        "offset": 176
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 389,
+        "file": "crosstl-out/metal/SimpleTexture2D.vert.metal",
+        "length": 43,
+        "line": 16,
+        "offset": 346
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 371,
+        "file": "SimpleTexture2D.vert",
+        "length": 30,
+        "line": 14,
+        "offset": 341
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 431,
+        "file": "crosstl-out/metal/SimpleTexture2D.vert.metal",
+        "length": 42,
+        "line": 17,
+        "offset": 389
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 400,
+        "file": "SimpleTexture2D.vert",
+        "length": 29,
+        "line": 15,
+        "offset": 371
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

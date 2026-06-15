@@ -1,0 +1,644 @@
+{
+  "generatedFile": "crosstl-out/directx/noise.vert.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 115,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 37,
+        "line": 6,
+        "offset": 78
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 87,
+        "endOffset": 2164,
+        "file": "noise.vert",
+        "length": 23,
+        "line": 86,
+        "offset": 2141
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 327,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 54,
+        "line": 15,
+        "offset": 273
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 227,
+        "file": "noise.vert",
+        "length": 40,
+        "line": 13,
+        "offset": 187
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 367,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 40,
+        "line": 16,
+        "offset": 327
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 261,
+        "file": "noise.vert",
+        "length": 33,
+        "line": 15,
+        "offset": 228
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 436,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 69,
+        "line": 17,
+        "offset": 367
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 317,
+        "file": "noise.vert",
+        "length": 56,
+        "line": 16,
+        "offset": 261
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 494,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 58,
+        "line": 18,
+        "offset": 436
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 370,
+        "file": "noise.vert",
+        "length": 52,
+        "line": 18,
+        "offset": 318
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 534,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 37,
+        "line": 21,
+        "offset": 497
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 451,
+        "file": "noise.vert",
+        "length": 33,
+        "line": 22,
+        "offset": 418
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 551,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 17,
+        "line": 22,
+        "offset": 534
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 467,
+        "file": "noise.vert",
+        "length": 15,
+        "line": 24,
+        "offset": 452
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 577,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 26,
+        "line": 23,
+        "offset": 551
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 490,
+        "file": "noise.vert",
+        "length": 22,
+        "line": 26,
+        "offset": 468
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 615,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 38,
+        "line": 24,
+        "offset": 577
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 519,
+        "file": "noise.vert",
+        "length": 28,
+        "line": 28,
+        "offset": 491
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 652,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 37,
+        "line": 25,
+        "offset": 615
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 548,
+        "file": "noise.vert",
+        "length": 28,
+        "line": 30,
+        "offset": 520
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 688,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 36,
+        "line": 26,
+        "offset": 652
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 33,
+        "endOffset": 576,
+        "file": "noise.vert",
+        "length": 27,
+        "line": 32,
+        "offset": 549
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 725,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 37,
+        "line": 27,
+        "offset": 688
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 35,
+        "endOffset": 605,
+        "file": "noise.vert",
+        "length": 28,
+        "line": 34,
+        "offset": 577
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 759,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 34,
+        "line": 28,
+        "offset": 725
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 38,
+        "endOffset": 634,
+        "file": "noise.vert",
+        "length": 27,
+        "line": 37,
+        "offset": 607
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 785,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 26,
+        "line": 29,
+        "offset": 759
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 40,
+        "endOffset": 653,
+        "file": "noise.vert",
+        "length": 18,
+        "line": 39,
+        "offset": 635
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 860,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 75,
+        "line": 30,
+        "offset": 785
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 42,
+        "endOffset": 704,
+        "file": "noise.vert",
+        "length": 50,
+        "line": 41,
+        "offset": 654
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 917,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 57,
+        "line": 31,
+        "offset": 860
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 44,
+        "endOffset": 756,
+        "file": "noise.vert",
+        "length": 51,
+        "line": 43,
+        "offset": 705
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 38,
+        "endOffset": 1068,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 65,
+        "line": 37,
+        "offset": 1003
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 51,
+        "endOffset": 885,
+        "file": "noise.vert",
+        "length": 53,
+        "line": 50,
+        "offset": 832
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 39,
+        "endOffset": 1151,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 83,
+        "line": 38,
+        "offset": 1068
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 54,
+        "endOffset": 1073,
+        "file": "noise.vert",
+        "length": 79,
+        "line": 53,
+        "offset": 994
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 40,
+        "endOffset": 1244,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 93,
+        "line": 39,
+        "offset": 1151
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 55,
+        "endOffset": 1160,
+        "file": "noise.vert",
+        "length": 87,
+        "line": 54,
+        "offset": 1073
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 41,
+        "endOffset": 1321,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 77,
+        "line": 40,
+        "offset": 1244
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 58,
+        "endOffset": 1280,
+        "file": "noise.vert",
+        "length": 73,
+        "line": 57,
+        "offset": 1207
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 42,
+        "endOffset": 1368,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 47,
+        "line": 41,
+        "offset": 1321
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 61,
+        "endOffset": 1443,
+        "file": "noise.vert",
+        "length": 41,
+        "line": 60,
+        "offset": 1402
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 43,
+        "endOffset": 1419,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 51,
+        "line": 42,
+        "offset": 1368
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 62,
+        "endOffset": 1485,
+        "file": "noise.vert",
+        "length": 42,
+        "line": 61,
+        "offset": 1443
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 44,
+        "endOffset": 1461,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 42,
+        "line": 43,
+        "offset": 1419
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 63,
+        "endOffset": 1522,
+        "file": "noise.vert",
+        "length": 37,
+        "line": 62,
+        "offset": 1485
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 45,
+        "endOffset": 1496,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 35,
+        "line": 44,
+        "offset": 1461
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 66,
+        "endOffset": 1604,
+        "file": "noise.vert",
+        "length": 33,
+        "line": 65,
+        "offset": 1571
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 47,
+        "endOffset": 1543,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 27,
+        "line": 46,
+        "offset": 1516
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 72,
+        "endOffset": 1782,
+        "file": "noise.vert",
+        "length": 25,
+        "line": 71,
+        "offset": 1757
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 49,
+        "endOffset": 1600,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 39,
+        "line": 48,
+        "offset": 1561
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 78,
+        "endOffset": 1924,
+        "file": "noise.vert",
+        "length": 35,
+        "line": 77,
+        "offset": 1889
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 50,
+        "endOffset": 1639,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 39,
+        "line": 49,
+        "offset": 1600
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 79,
+        "endOffset": 1959,
+        "file": "noise.vert",
+        "length": 35,
+        "line": 78,
+        "offset": 1924
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 53,
+        "endOffset": 1713,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 34,
+        "line": 52,
+        "offset": 1679
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 84,
+        "endOffset": 2078,
+        "file": "noise.vert",
+        "length": 32,
+        "line": 83,
+        "offset": 2046
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 54,
+        "endOffset": 1743,
+        "file": "crosstl-out/directx/noise.vert.hlsl",
+        "length": 30,
+        "line": 53,
+        "offset": 1713
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 87,
+        "endOffset": 2164,
+        "file": "noise.vert",
+        "length": 23,
+        "line": 86,
+        "offset": 2141
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

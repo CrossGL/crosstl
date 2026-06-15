@@ -1,0 +1,204 @@
+{
+  "generatedFile": "crosstl-out/metal/vktext.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 105,
+        "file": "crosstl-out/metal/vktext.metal",
+        "length": 33,
+        "line": 6,
+        "offset": 72
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 1429,
+        "file": "vktext.frag",
+        "length": 34,
+        "line": 29,
+        "offset": 1395
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 142,
+        "file": "crosstl-out/metal/vktext.metal",
+        "length": 37,
+        "line": 7,
+        "offset": 105
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 1467,
+        "file": "vktext.frag",
+        "length": 38,
+        "line": 30,
+        "offset": 1429
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 312,
+        "file": "crosstl-out/metal/vktext.metal",
+        "length": 22,
+        "line": 12,
+        "offset": 290
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 35,
+        "endOffset": 1507,
+        "file": "vktext.frag",
+        "length": 21,
+        "line": 34,
+        "offset": 1486
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 424,
+        "file": "crosstl-out/metal/vktext.metal",
+        "length": 112,
+        "line": 13,
+        "offset": 312
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 37,
+        "endOffset": 1595,
+        "file": "vktext.frag",
+        "length": 87,
+        "line": 36,
+        "offset": 1508
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 443,
+        "file": "crosstl-out/metal/vktext.metal",
+        "length": 19,
+        "line": 14,
+        "offset": 424
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 39,
+        "endOffset": 1612,
+        "file": "vktext.frag",
+        "length": 13,
+        "line": 38,
+        "offset": 1599
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 506,
+        "file": "crosstl-out/metal/vktext.metal",
+        "length": 63,
+        "line": 15,
+        "offset": 443
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 40,
+        "endOffset": 1653,
+        "file": "vktext.frag",
+        "length": 41,
+        "line": 39,
+        "offset": 1612
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 569,
+        "file": "crosstl-out/metal/vktext.metal",
+        "length": 63,
+        "line": 16,
+        "offset": 506
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 41,
+        "endOffset": 1694,
+        "file": "vktext.frag",
+        "length": 41,
+        "line": 40,
+        "offset": 1653
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 655,
+        "file": "crosstl-out/metal/vktext.metal",
+        "length": 86,
+        "line": 17,
+        "offset": 569
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 42,
+        "endOffset": 1729,
+        "file": "vktext.frag",
+        "length": 35,
+        "line": 41,
+        "offset": 1694
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 728,
+        "file": "crosstl-out/metal/vktext.metal",
+        "length": 67,
+        "line": 19,
+        "offset": 661
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 45,
+        "endOffset": 1798,
+        "file": "vktext.frag",
+        "length": 64,
+        "line": 44,
+        "offset": 1734
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

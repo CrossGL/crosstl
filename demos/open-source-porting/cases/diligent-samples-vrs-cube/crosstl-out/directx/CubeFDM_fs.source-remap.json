@@ -1,0 +1,292 @@
+{
+  "generatedFile": "crosstl-out/directx/CubeFDM_fs.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 22,
+        "file": "crosstl-out/directx/CubeFDM_fs.hlsl",
+        "length": 21,
+        "line": 2,
+        "offset": 1
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 140,
+        "file": "CubeFDM_fs.glsl",
+        "length": 35,
+        "line": 6,
+        "offset": 105
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 80,
+        "file": "crosstl-out/directx/CubeFDM_fs.hlsl",
+        "length": 30,
+        "line": 4,
+        "offset": 50
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 201,
+        "file": "CubeFDM_fs.glsl",
+        "length": 33,
+        "line": 9,
+        "offset": 168
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 98,
+        "file": "crosstl-out/directx/CubeFDM_fs.hlsl",
+        "length": 18,
+        "line": 5,
+        "offset": 80
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 259,
+        "file": "CubeFDM_fs.glsl",
+        "length": 58,
+        "line": 10,
+        "offset": 201
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 153,
+        "file": "crosstl-out/directx/CubeFDM_fs.hlsl",
+        "length": 29,
+        "line": 8,
+        "offset": 124
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 298,
+        "file": "CubeFDM_fs.glsl",
+        "length": 35,
+        "line": 13,
+        "offset": 263
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 350,
+        "file": "crosstl-out/directx/CubeFDM_fs.hlsl",
+        "length": 30,
+        "line": 15,
+        "offset": 320
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 201,
+        "file": "CubeFDM_fs.glsl",
+        "length": 33,
+        "line": 9,
+        "offset": 168
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 368,
+        "file": "crosstl-out/directx/CubeFDM_fs.hlsl",
+        "length": 18,
+        "line": 16,
+        "offset": 350
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 259,
+        "file": "CubeFDM_fs.glsl",
+        "length": 58,
+        "line": 10,
+        "offset": 201
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 619,
+        "file": "crosstl-out/directx/CubeFDM_fs.hlsl",
+        "length": 56,
+        "line": 24,
+        "offset": 563
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 368,
+        "file": "CubeFDM_fs.glsl",
+        "length": 30,
+        "line": 16,
+        "offset": 338
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 725,
+        "file": "crosstl-out/directx/CubeFDM_fs.hlsl",
+        "length": 106,
+        "line": 25,
+        "offset": 619
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 468,
+        "file": "CubeFDM_fs.glsl",
+        "length": 98,
+        "line": 18,
+        "offset": 370
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 846,
+        "file": "crosstl-out/directx/CubeFDM_fs.hlsl",
+        "length": 121,
+        "line": 26,
+        "offset": 725
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 568,
+        "file": "CubeFDM_fs.glsl",
+        "length": 100,
+        "line": 19,
+        "offset": 468
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 928,
+        "file": "crosstl-out/directx/CubeFDM_fs.hlsl",
+        "length": 82,
+        "line": 27,
+        "offset": 846
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 624,
+        "file": "CubeFDM_fs.glsl",
+        "length": 56,
+        "line": 20,
+        "offset": 568
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 34,
+        "endOffset": 1150,
+        "file": "crosstl-out/directx/CubeFDM_fs.hlsl",
+        "length": 22,
+        "line": 33,
+        "offset": 1128
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 337,
+        "file": "CubeFDM_fs.glsl",
+        "length": 39,
+        "line": 14,
+        "offset": 298
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 35,
+        "endOffset": 1216,
+        "file": "crosstl-out/directx/CubeFDM_fs.hlsl",
+        "length": 66,
+        "line": 34,
+        "offset": 1150
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 683,
+        "file": "CubeFDM_fs.glsl",
+        "length": 42,
+        "line": 25,
+        "offset": 641
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 42,
+        "endOffset": 1416,
+        "file": "crosstl-out/directx/CubeFDM_fs.hlsl",
+        "length": 82,
+        "line": 41,
+        "offset": 1334
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 826,
+        "file": "CubeFDM_fs.glsl",
+        "length": 75,
+        "line": 29,
+        "offset": 751
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

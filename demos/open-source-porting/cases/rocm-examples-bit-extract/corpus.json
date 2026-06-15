@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "ROCm Examples bit extract kernel",
+  "description": "Pinned HIP kernel slice used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "rocm-examples-bit-extract",
+      "path": "main.hip",
+      "sourceBackend": "hip",
+      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
+      "repository": "https://github.com/ROCm/rocm-examples",
+      "commit": "cf369da68f209c315074204bd0eb61d1a5c015d1",
+      "sourceUrl": "https://github.com/ROCm/rocm-examples/blob/cf369da68f209c315074204bd0eb61d1a5c015d1/HIP-Basic/bit_extract/main.hip"
+    }
+  ]
+}

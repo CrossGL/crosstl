@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/vulkan/mat_mul_simple1.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 14,
+        "endLine": 210,
+        "endOffset": 5339,
+        "file": "crosstl-out/vulkan/mat_mul_simple1.spvasm",
+        "length": 5339,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 41,
+        "endOffset": 1289,
+        "file": "mat_mul_simple1.metal",
+        "length": 1289,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

@@ -1,0 +1,15 @@
+#version 450
+
+shader main {
+    struct FragmentInput {
+    vec3 inFragColor @location(0);
+    };
+
+    fragment {
+    vec4 main(FragmentInput input) @location(0) {
+        vec4 outColor;
+        outColor = vec4(input.inFragColor, 1.0);
+        return outColor;
+    }
+    }
+}
