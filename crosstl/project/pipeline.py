@@ -24924,6 +24924,57 @@ def _runtime_host_integration_execution_scaffold_root(
     return root, str(root), "ready", []
 
 
+def _runtime_host_integration_execution_result_host_root(
+    host_root: str | os.PathLike[str] | None,
+    plan: Mapping[str, Any],
+    *,
+    plan_path: Path,
+) -> tuple[str | None, str, list[ProjectDiagnostic]]:
+    if host_root is None:
+        planned_host_root = plan.get("hostRoot")
+        if not _is_non_empty_string(planned_host_root):
+            planned_status = plan.get("hostRootStatus")
+            return (
+                None,
+                (
+                    str(planned_status)
+                    if _is_non_empty_string(planned_status)
+                    else "not-provided"
+                ),
+                [],
+            )
+        root_arg: str | os.PathLike[str] = str(planned_host_root)
+    else:
+        root_arg = host_root
+
+    root = _filesystem_path_arg(root_arg, field_name="Host root")
+    if not root.exists():
+        return (
+            str(root),
+            "missing",
+            [
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "host-root-missing",
+                    f"Host root does not exist: {root}",
+                )
+            ],
+        )
+    if not root.is_dir():
+        return (
+            str(root),
+            "not-directory",
+            [
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "host-root-not-directory",
+                    f"Host root is not a directory: {root}",
+                )
+            ],
+        )
+    return str(root), "ready", []
+
+
 def _runtime_host_integration_execution_check_payload(
     kind: str,
     status: str,
@@ -25275,6 +25326,7 @@ def _runtime_host_integration_execution_result_target(
 def execute_runtime_host_integration(
     execution_plan_path: str | os.PathLike[str],
     *,
+    host_root: str | os.PathLike[str] | None = None,
     scaffold_root: str | os.PathLike[str] | None = None,
     package_root: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
@@ -25289,6 +25341,11 @@ def execute_runtime_host_integration(
         diagnostics.extend(
             _runtime_host_integration_execution_plan_diagnostics(plan_path, plan)
         )
+    host_root_value, host_root_status, host_root_diagnostics = (
+        _runtime_host_integration_execution_result_host_root(
+            host_root, plan, plan_path=plan_path
+        )
+    )
     package_root_path, package_root_value, package_root_status, package_diagnostics = (
         _runtime_host_integration_execution_package_root(
             package_root, plan_path=plan_path
@@ -25302,6 +25359,7 @@ def execute_runtime_host_integration(
     ) = _runtime_host_integration_execution_scaffold_root(
         scaffold_root, plan_path=plan_path
     )
+    diagnostics.extend(host_root_diagnostics)
     diagnostics.extend(package_diagnostics)
     diagnostics.extend(scaffold_diagnostics)
 
@@ -25372,8 +25430,8 @@ def execute_runtime_host_integration(
         "scope": RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_SCOPE,
         "nonGoals": list(RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_NON_GOALS),
         "handoffRoot": plan.get("handoffRoot") if plan else None,
-        "hostRoot": plan.get("hostRoot") if plan else None,
-        "hostRootStatus": plan.get("hostRootStatus") if plan else None,
+        "hostRoot": host_root_value,
+        "hostRootStatus": host_root_status,
         "scaffoldRoot": scaffold_root_value,
         "scaffoldRootStatus": scaffold_root_status,
         "packageRoot": package_root_value,
