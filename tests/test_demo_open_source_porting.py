@@ -171,6 +171,13 @@ def test_open_source_demo_workflow_runs_platform_toolchain_smokes():
     assert "--emit-directx-compile-jobs" in workflow
     assert "profile=\"${profile%$'\\r'}\"" in workflow
     assert "open-source-porting-demo-reports-${{ matrix.os }}" in workflow
+    assert "write_demo_failure_summary" in workflow
+    assert "--demo-step" in workflow
+    assert "open-source-porting-demo-linux-opengl" in workflow
+    assert "open-source-porting-demo-linux-vulkan" in workflow
+    assert "open-source-porting-demo-macos-metal-compile" in workflow
+    assert "open-source-porting-demo-windows-directx-compile" in workflow
+    assert "support/generated/demo-reports/**/*-failure-summary.json" in workflow
 
 
 def _workflow_step_block(workflow: str, step_name: str) -> str:
@@ -193,6 +200,8 @@ def _assert_workflow_step_uses_case_generator(
 ) -> None:
     block = _workflow_step_block(workflow, step_name)
     assert f"--emit-case-args {target}" in block
+    assert '--case="$case_name"' in block
+    assert "write_demo_failure_summary \\" in block
     assert "--case " not in block
 
 

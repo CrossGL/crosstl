@@ -1604,7 +1604,13 @@ def open_source_porting_demo_failure_summary_report(
             and json_report in upload_step
             and markdown_report in upload_step
         ),
-        "upload_on_pytest_failure": failure_condition in upload_step,
+        # The demo upload step intentionally fires on any step failure
+        # (artifact verification and toolchain smoke checks emit their own
+        # failure summaries), so accept the broader ``if: failure()`` guard in
+        # addition to the run-scoped condition used by the test job.
+        "upload_on_pytest_failure": (
+            failure_condition in upload_step or "if: failure()" in upload_step
+        ),
         "upload_ignores_missing_files": "if-no-files-found: ignore" in upload_step,
         "upload_retention": "retention-days: 30" in upload_step,
         "upload_nonfatal": "continue-on-error: true" in upload_step,
@@ -1625,8 +1631,7 @@ def open_source_porting_demo_report_artifact_report(
     return {
         "uploads_reports": (
             "actions/upload-artifact@v4" in upload_step
-            and "name: open-source-porting-demo-reports-${{ matrix.os }}"
-            in upload_step
+            and "name: open-source-porting-demo-reports-${{ matrix.os }}" in upload_step
             and "path: support/generated/demo-reports" in upload_step
         ),
         "upload_on_always": "if: always()" in upload_step,
@@ -1707,8 +1712,7 @@ def open_source_porting_demo_report(workflow: str) -> dict[str, Any]:
         )
 
     required_path_filters = {
-        f"push:{path}": path in push_path_filters
-        for path in DEMO_REQUIRED_PATH_FILTERS
+        f"push:{path}": path in push_path_filters for path in DEMO_REQUIRED_PATH_FILTERS
     }
     required_path_filters.update(
         {
@@ -1793,9 +1797,7 @@ def build_report() -> dict[str, Any]:
                 full_workflow,
                 full_workflow_action_text,
             ),
-            "open_source_porting_demo": open_source_porting_demo_report(
-                demo_workflow
-            ),
+            "open_source_porting_demo": open_source_porting_demo_report(demo_workflow),
             "support_matrix": support_matrix_report(support_matrix_workflow),
             "support_issue_sync": support_issue_sync_report(support_issue_workflow),
             "pr_issue_links": pr_issue_links_report(pr_issue_links_workflow),
