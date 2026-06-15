@@ -3206,16 +3206,8 @@ class HLSLToCrossGLConverter:
                     func,
                     skip_attribute_names={"shader"},
                     entry_name=entry_name,
-                    stage_entry=(
-                        entry_name is None
-                        and func.name != "main"
-                        and (
-                            stage_name != "fragment"
-                            or (
-                                stage_name == "fragment"
-                                and str(func.name).lower().startswith("ps")
-                            )
-                        )
+                    stage_entry=self.should_emit_stage_entry_attribute(
+                        func, stage_name, entry_name
                     ),
                 )
                 code += "    }\n\n"
@@ -3224,6 +3216,13 @@ class HLSLToCrossGLConverter:
 
         code += "}\n"
         return code
+
+    def should_emit_stage_entry_attribute(self, func, stage_name, entry_name=None):
+        if entry_name is not None or getattr(func, "name", None) == "main":
+            return False
+        if getattr(func, "is_effect_stage_entry", False):
+            return True
+        return stage_name != "fragment" or str(func.name).lower().startswith("ps")
 
     def collect_flattened_stage_struct_names(self, ast):
         flattened = set()

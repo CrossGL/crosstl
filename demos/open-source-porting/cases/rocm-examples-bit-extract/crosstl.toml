@@ -1,0 +1,9 @@
+[project]
+source_roots = ["."]
+include = ["main.hip"]
+targets = ["cgl", "opengl", "metal", "directx", "vulkan"]
+output_dir = "crosstl-out"
+external_corpus_manifest = "corpus.json"
+
+[project.defines]
+__HIP_PLATFORM_AMD__ = "1"

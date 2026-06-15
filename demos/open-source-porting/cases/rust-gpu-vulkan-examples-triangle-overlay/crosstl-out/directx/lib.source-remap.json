@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/directx/lib.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 122,
+        "file": "crosstl-out/directx/lib.hlsl",
+        "length": 49,
+        "line": 4,
+        "offset": 73
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 178,
+        "file": "lib.rs",
+        "length": 53,
+        "line": 8,
+        "offset": 125
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

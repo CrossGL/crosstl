@@ -1,0 +1,160 @@
+{
+  "generatedFile": "crosstl-out/metal/cube.vert.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 134,
+        "file": "crosstl-out/metal/cube.vert.metal",
+        "length": 25,
+        "line": 8,
+        "offset": 109
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 973,
+        "file": "cube.vert",
+        "length": 25,
+        "line": 27,
+        "offset": 948
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 197,
+        "file": "crosstl-out/metal/cube.vert.metal",
+        "length": 38,
+        "line": 11,
+        "offset": 159
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 1023,
+        "file": "cube.vert",
+        "length": 41,
+        "line": 30,
+        "offset": 982
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 235,
+        "file": "crosstl-out/metal/cube.vert.metal",
+        "length": 38,
+        "line": 12,
+        "offset": 197
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 1064,
+        "file": "cube.vert",
+        "length": 41,
+        "line": 31,
+        "offset": 1023
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 347,
+        "file": "crosstl-out/metal/cube.vert.metal",
+        "length": 17,
+        "line": 19,
+        "offset": 330
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 739,
+        "file": "cube.vert",
+        "length": 36,
+        "line": 19,
+        "offset": 703
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 546,
+        "file": "crosstl-out/metal/cube.vert.metal",
+        "length": 60,
+        "line": 22,
+        "offset": 486
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 1120,
+        "file": "cube.vert",
+        "length": 41,
+        "line": 35,
+        "offset": 1079
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 633,
+        "file": "crosstl-out/metal/cube.vert.metal",
+        "length": 87,
+        "line": 23,
+        "offset": 546
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 37,
+        "endOffset": 1179,
+        "file": "cube.vert",
+        "length": 59,
+        "line": 36,
+        "offset": 1120
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 679,
+        "file": "crosstl-out/metal/cube.vert.metal",
+        "length": 46,
+        "line": 24,
+        "offset": 633
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 38,
+        "endOffset": 1210,
+        "file": "cube.vert",
+        "length": 31,
+        "line": 37,
+        "offset": 1179
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

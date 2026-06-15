@@ -1,0 +1,50 @@
+{
+  "generatedFile": "crosstl-out/opengl/cube.vsh.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 264,
+        "file": "crosstl-out/opengl/cube.vsh.glsl",
+        "length": 59,
+        "line": 11,
+        "offset": 205
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 842,
+        "file": "cube.vsh",
+        "length": 62,
+        "line": 27,
+        "offset": 780
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 293,
+        "file": "crosstl-out/opengl/cube.vsh.glsl",
+        "length": 29,
+        "line": 12,
+        "offset": 264
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 871,
+        "file": "cube.vsh",
+        "length": 29,
+        "line": 28,
+        "offset": 842
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

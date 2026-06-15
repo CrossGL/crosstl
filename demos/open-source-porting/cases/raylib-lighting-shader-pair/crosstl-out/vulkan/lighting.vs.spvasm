@@ -1,0 +1,174 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 105
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %16 "main" %19 %21 %23 %24 %25 %27 %30 %32 %35
+OpName %9 "VertexInput"
+OpMemberName %9 0 "vertexPosition"
+OpMemberName %9 1 "vertexTexCoord"
+OpMemberName %9 2 "vertexNormal"
+OpMemberName %9 3 "vertexColor"
+OpName %10 "VertexOutput"
+OpMemberName %10 0 "fragPosition"
+OpMemberName %10 1 "fragTexCoord"
+OpMemberName %10 2 "fragColor"
+OpMemberName %10 3 "fragNormal"
+OpMemberName %10 4 "gl_Position"
+OpName %12 "Uniforms"
+OpMemberName %12 0 "mvp"
+OpMemberName %12 1 "matModel"
+OpMemberName %12 2 "matNormal"
+OpName %14 "Uniforms"
+OpName %19 "CrossGL_vertex_output_main_fragPosition"
+OpName %21 "CrossGL_vertex_output_main_fragTexCoord"
+OpName %23 "CrossGL_vertex_output_main_fragColor"
+OpName %24 "CrossGL_vertex_output_main_fragNormal"
+OpName %25 "gl_Position"
+OpName %27 "CrossGL_vertex_input_input_vertexPosition"
+OpName %30 "CrossGL_vertex_input_input_vertexTexCoord"
+OpName %32 "CrossGL_vertex_input_input_vertexNormal"
+OpName %35 "CrossGL_vertex_input_input_vertexColor"
+OpName %39 "input"
+OpName %41 "output"
+OpDecorate %12 Block
+OpMemberDecorate %12 0 Offset 0
+OpMemberDecorate %12 0 ColMajor
+OpMemberDecorate %12 0 MatrixStride 16
+OpMemberDecorate %12 1 Offset 64
+OpMemberDecorate %12 1 ColMajor
+OpMemberDecorate %12 1 MatrixStride 16
+OpMemberDecorate %12 2 Offset 128
+OpMemberDecorate %12 2 ColMajor
+OpMemberDecorate %12 2 MatrixStride 16
+OpDecorate %14 DescriptorSet 0
+OpDecorate %14 Binding 0
+OpDecorate %19 Location 0
+OpDecorate %21 Location 1
+OpDecorate %23 Location 2
+OpDecorate %24 Location 3
+OpDecorate %25 BuiltIn Position
+OpDecorate %27 Location 0
+OpDecorate %30 Location 1
+OpDecorate %32 Location 2
+OpDecorate %35 Location 3
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypeStruct %7 %6 %7 %8
+%10 = OpTypeStruct %7 %6 %8 %7 %8
+%11 = OpTypeMatrix %8 4
+%12 = OpTypeStruct %11 %11 %11
+%13 = OpTypePointer Uniform %12
+%15 = OpTypeFunction %2
+%18 = OpTypePointer Output %7
+%20 = OpTypePointer Output %6
+%22 = OpTypePointer Output %8
+%26 = OpTypePointer Input %7
+%29 = OpTypePointer Input %6
+%34 = OpTypePointer Input %8
+%38 = OpTypePointer Function %9
+%40 = OpTypePointer Function %10
+%42 = OpConstant %4 1
+%43 = OpTypePointer Uniform %11
+%46 = OpConstant %4 0
+%47 = OpTypePointer Function %7
+%50 = OpConstant %5 1.0
+%62 = OpTypePointer Function %6
+%66 = OpConstant %4 3
+%67 = OpTypePointer Function %8
+%70 = OpConstant %4 2
+%97 = OpConstant %4 4
+%14 = OpVariable %13 Uniform
+%19 = OpVariable %18 Output
+%21 = OpVariable %20 Output
+%23 = OpVariable %22 Output
+%24 = OpVariable %18 Output
+%25 = OpVariable %22 Output
+%27 = OpVariable %26 Input
+%30 = OpVariable %29 Input
+%32 = OpVariable %26 Input
+%35 = OpVariable %34 Input
+%16 = OpFunction %2 None %15
+%17 = OpLabel
+%39 = OpVariable %38 Function
+%41 = OpVariable %40 Function
+%28 = OpLoad %7 %27
+%31 = OpLoad %6 %30
+%33 = OpLoad %7 %32
+%36 = OpLoad %8 %35
+%37 = OpCompositeConstruct %9 %28 %31 %33 %36
+OpStore %39 %37
+%44 = OpAccessChain %43 %14 %42
+%45 = OpLoad %11 %44
+%48 = OpAccessChain %47 %39 %46
+%49 = OpLoad %7 %48
+%51 = OpCompositeExtract %5 %49 0
+%52 = OpCompositeExtract %5 %49 1
+%53 = OpCompositeExtract %5 %49 2
+%54 = OpCompositeConstruct %8 %51 %52 %53 %50
+%55 = OpMatrixTimesVector %8 %45 %54
+%56 = OpCompositeExtract %5 %55 0
+%57 = OpCompositeExtract %5 %55 1
+%58 = OpCompositeExtract %5 %55 2
+%59 = OpCompositeExtract %5 %55 3
+; WARNING: Constructor vec3 expected 3 components but got 4; truncating extra components
+%60 = OpCompositeConstruct %7 %56 %57 %58
+%61 = OpAccessChain %47 %41 %46
+OpStore %61 %60
+%63 = OpAccessChain %62 %39 %42
+%64 = OpLoad %6 %63
+%65 = OpAccessChain %62 %41 %42
+OpStore %65 %64
+%68 = OpAccessChain %67 %39 %66
+%69 = OpLoad %8 %68
+%71 = OpAccessChain %67 %41 %70
+OpStore %71 %69
+%72 = OpAccessChain %43 %14 %70
+%73 = OpLoad %11 %72
+%74 = OpAccessChain %47 %39 %70
+%75 = OpLoad %7 %74
+%76 = OpCompositeExtract %5 %75 0
+%77 = OpCompositeExtract %5 %75 1
+%78 = OpCompositeExtract %5 %75 2
+%79 = OpCompositeConstruct %8 %76 %77 %78 %50
+%80 = OpMatrixTimesVector %8 %73 %79
+%81 = OpCompositeExtract %5 %80 0
+%82 = OpCompositeExtract %5 %80 1
+%83 = OpCompositeExtract %5 %80 2
+%84 = OpCompositeExtract %5 %80 3
+; WARNING: Constructor vec3 expected 3 components but got 4; truncating extra components
+%85 = OpCompositeConstruct %7 %81 %82 %83
+%86 = OpExtInst %7 %1 Normalize %85
+%87 = OpAccessChain %47 %41 %66
+OpStore %87 %86
+%88 = OpAccessChain %43 %14 %46
+%89 = OpLoad %11 %88
+%90 = OpAccessChain %47 %39 %46
+%91 = OpLoad %7 %90
+%92 = OpCompositeExtract %5 %91 0
+%93 = OpCompositeExtract %5 %91 1
+%94 = OpCompositeExtract %5 %91 2
+%95 = OpCompositeConstruct %8 %92 %93 %94 %50
+%96 = OpMatrixTimesVector %8 %89 %95
+%98 = OpAccessChain %67 %41 %97
+OpStore %98 %96
+%99 = OpLoad %10 %41
+%100 = OpCompositeExtract %7 %99 0
+OpStore %19 %100
+%101 = OpCompositeExtract %6 %99 1
+OpStore %21 %101
+%102 = OpCompositeExtract %8 %99 2
+OpStore %23 %102
+%103 = OpCompositeExtract %7 %99 3
+OpStore %24 %103
+%104 = OpCompositeExtract %8 %99 4
+OpStore %25 %104
+OpReturn
+OpFunctionEnd

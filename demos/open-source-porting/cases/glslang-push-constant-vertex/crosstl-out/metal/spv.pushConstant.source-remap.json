@@ -1,0 +1,138 @@
+{
+  "generatedFile": "crosstl-out/metal/spv.pushConstant.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 321,
+        "file": "crosstl-out/metal/spv.pushConstant.metal",
+        "length": 14,
+        "line": 12,
+        "offset": 307
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 69,
+        "file": "spv.pushConstant.vert",
+        "length": 14,
+        "line": 4,
+        "offset": 55
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 338,
+        "file": "crosstl-out/metal/spv.pushConstant.metal",
+        "length": 17,
+        "line": 13,
+        "offset": 321
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 86,
+        "file": "spv.pushConstant.vert",
+        "length": 17,
+        "line": 5,
+        "offset": 69
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 547,
+        "file": "crosstl-out/metal/spv.pushConstant.metal",
+        "length": 40,
+        "line": 20,
+        "offset": 507
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 196,
+        "file": "spv.pushConstant.vert",
+        "length": 39,
+        "line": 13,
+        "offset": 157
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 634,
+        "file": "crosstl-out/metal/spv.pushConstant.metal",
+        "length": 40,
+        "line": 24,
+        "offset": 594
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 235,
+        "file": "spv.pushConstant.vert",
+        "length": 39,
+        "line": 14,
+        "offset": 196
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 722,
+        "file": "crosstl-out/metal/spv.pushConstant.metal",
+        "length": 40,
+        "line": 28,
+        "offset": 682
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 274,
+        "file": "spv.pushConstant.vert",
+        "length": 39,
+        "line": 15,
+        "offset": 235
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 34,
+        "endOffset": 867,
+        "file": "crosstl-out/metal/spv.pushConstant.metal",
+        "length": 68,
+        "line": 33,
+        "offset": 799
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 274,
+        "file": "spv.pushConstant.vert",
+        "length": 39,
+        "line": 15,
+        "offset": 235
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

@@ -1,0 +1,204 @@
+{
+  "generatedFile": "crosstl-out/cgl/triangle.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 13,
+        "file": "crosstl-out/cgl/triangle.cgl",
+        "length": 13,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 13,
+        "file": "triangle.vert",
+        "length": 13,
+        "line": 1,
+        "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 66,
+        "file": "crosstl-out/cgl/triangle.cgl",
+        "length": 21,
+        "line": 5,
+        "offset": 45
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 144,
+        "file": "triangle.vert",
+        "length": 18,
+        "line": 8,
+        "offset": 126
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 82,
+        "file": "crosstl-out/cgl/triangle.cgl",
+        "length": 16,
+        "line": 6,
+        "offset": 66
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 157,
+        "file": "triangle.vert",
+        "length": 13,
+        "line": 9,
+        "offset": 144
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 139,
+        "file": "crosstl-out/cgl/triangle.cgl",
+        "length": 53,
+        "line": 9,
+        "offset": 86
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 224,
+        "file": "triangle.vert",
+        "length": 17,
+        "line": 14,
+        "offset": 207
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 219,
+        "file": "crosstl-out/cgl/triangle.cgl",
+        "length": 29,
+        "line": 14,
+        "offset": 190
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 51,
+        "file": "triangle.vert",
+        "length": 37,
+        "line": 3,
+        "offset": 14
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 250,
+        "file": "crosstl-out/cgl/triangle.cgl",
+        "length": 31,
+        "line": 15,
+        "offset": 219
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 90,
+        "file": "triangle.vert",
+        "length": 39,
+        "line": 4,
+        "offset": 51
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 316,
+        "file": "crosstl-out/cgl/triangle.cgl",
+        "length": 32,
+        "line": 19,
+        "offset": 284
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 206,
+        "file": "triangle.vert",
+        "length": 41,
+        "line": 12,
+        "offset": 165
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 516,
+        "file": "crosstl-out/cgl/triangle.cgl",
+        "length": 41,
+        "line": 30,
+        "offset": 475
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 284,
+        "file": "triangle.vert",
+        "length": 21,
+        "line": 21,
+        "offset": 263
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 602,
+        "file": "crosstl-out/cgl/triangle.cgl",
+        "length": 86,
+        "line": 31,
+        "offset": 516
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 346,
+        "file": "triangle.vert",
+        "length": 62,
+        "line": 22,
+        "offset": 284
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

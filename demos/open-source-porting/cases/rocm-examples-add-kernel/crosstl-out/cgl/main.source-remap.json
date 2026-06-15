@@ -1,0 +1,50 @@
+{
+  "generatedFile": "crosstl-out/cgl/main.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 361,
+        "file": "crosstl-out/cgl/main.cgl",
+        "length": 94,
+        "line": 10,
+        "offset": 267
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 1408,
+        "file": "main.hip",
+        "length": 60,
+        "line": 27,
+        "offset": 1348
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 397,
+        "file": "crosstl-out/cgl/main.cgl",
+        "length": 36,
+        "line": 11,
+        "offset": 361
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 1445,
+        "file": "main.hip",
+        "length": 36,
+        "line": 29,
+        "offset": 1409
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

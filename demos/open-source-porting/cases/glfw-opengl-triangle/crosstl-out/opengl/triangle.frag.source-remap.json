@@ -1,0 +1,72 @@
+{
+  "generatedFile": "crosstl-out/opengl/triangle.frag.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 33,
+        "file": "crosstl-out/opengl/triangle.frag.glsl",
+        "length": 15,
+        "line": 2,
+        "offset": 18
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 34,
+        "file": "triangle.frag",
+        "length": 20,
+        "line": 3,
+        "offset": 14
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 93,
+        "file": "crosstl-out/opengl/triangle.frag.glsl",
+        "length": 41,
+        "line": 4,
+        "offset": 52
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 86,
+        "file": "triangle.frag",
+        "length": 37,
+        "line": 7,
+        "offset": 49
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 141,
+        "file": "crosstl-out/opengl/triangle.frag.glsl",
+        "length": 34,
+        "line": 6,
+        "offset": 107
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 86,
+        "file": "triangle.frag",
+        "length": 37,
+        "line": 7,
+        "offset": 49
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

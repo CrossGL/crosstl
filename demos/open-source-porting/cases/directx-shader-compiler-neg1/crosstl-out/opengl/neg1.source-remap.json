@@ -1,0 +1,50 @@
+{
+  "generatedFile": "crosstl-out/opengl/neg1.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 29,
+        "file": "crosstl-out/opengl/neg1.glsl",
+        "length": 11,
+        "line": 2,
+        "offset": 18
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 104,
+        "file": "neg1.hlsl",
+        "length": 38,
+        "line": 4,
+        "offset": 66
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 130,
+        "file": "crosstl-out/opengl/neg1.glsl",
+        "length": 27,
+        "line": 6,
+        "offset": 103
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 124,
+        "file": "neg1.hlsl",
+        "length": 18,
+        "line": 6,
+        "offset": 106
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

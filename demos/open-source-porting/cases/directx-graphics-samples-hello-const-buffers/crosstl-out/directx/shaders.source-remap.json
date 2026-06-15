@@ -1,0 +1,226 @@
+{
+  "generatedFile": "crosstl-out/directx/shaders.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 52,
+        "file": "crosstl-out/directx/shaders.hlsl",
+        "length": 34,
+        "line": 3,
+        "offset": 18
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 581,
+        "file": "shaders.hlsl",
+        "length": 35,
+        "line": 20,
+        "offset": 546
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 145,
+        "file": "crosstl-out/directx/shaders.hlsl",
+        "length": 45,
+        "line": 7,
+        "offset": 100
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 480,
+        "file": "shaders.hlsl",
+        "length": 43,
+        "line": 12,
+        "offset": 437
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 164,
+        "file": "crosstl-out/directx/shaders.hlsl",
+        "length": 19,
+        "line": 8,
+        "offset": 145
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 501,
+        "file": "shaders.hlsl",
+        "length": 19,
+        "line": 14,
+        "offset": 482
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 188,
+        "file": "crosstl-out/directx/shaders.hlsl",
+        "length": 24,
+        "line": 9,
+        "offset": 164
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 525,
+        "file": "shaders.hlsl",
+        "length": 24,
+        "line": 15,
+        "offset": 501
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 275,
+        "file": "crosstl-out/directx/shaders.hlsl",
+        "length": 67,
+        "line": 12,
+        "offset": 208
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 676,
+        "file": "shaders.hlsl",
+        "length": 65,
+        "line": 24,
+        "offset": 611
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 295,
+        "file": "crosstl-out/directx/shaders.hlsl",
+        "length": 20,
+        "line": 13,
+        "offset": 275
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 698,
+        "file": "shaders.hlsl",
+        "length": 20,
+        "line": 26,
+        "offset": 678
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 338,
+        "file": "crosstl-out/directx/shaders.hlsl",
+        "length": 43,
+        "line": 14,
+        "offset": 295
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 740,
+        "file": "shaders.hlsl",
+        "length": 41,
+        "line": 28,
+        "offset": 699
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 364,
+        "file": "crosstl-out/directx/shaders.hlsl",
+        "length": 26,
+        "line": 15,
+        "offset": 338
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 766,
+        "file": "shaders.hlsl",
+        "length": 26,
+        "line": 29,
+        "offset": 740
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 447,
+        "file": "crosstl-out/directx/shaders.hlsl",
+        "length": 42,
+        "line": 20,
+        "offset": 405
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 35,
+        "endOffset": 830,
+        "file": "shaders.hlsl",
+        "length": 41,
+        "line": 34,
+        "offset": 789
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 471,
+        "file": "crosstl-out/directx/shaders.hlsl",
+        "length": 24,
+        "line": 21,
+        "offset": 447
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 37,
+        "endOffset": 856,
+        "file": "shaders.hlsl",
+        "length": 24,
+        "line": 36,
+        "offset": 832
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

@@ -1,0 +1,50 @@
+{
+  "generatedFile": "crosstl-out/vulkan/triangle.frag.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 334,
+        "file": "crosstl-out/vulkan/triangle.frag.spvasm",
+        "length": 38,
+        "line": 12,
+        "offset": 296
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 86,
+        "file": "triangle.frag",
+        "length": 37,
+        "line": 7,
+        "offset": 49
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 427,
+        "file": "crosstl-out/vulkan/triangle.frag.spvasm",
+        "length": 26,
+        "line": 15,
+        "offset": 401
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 86,
+        "file": "triangle.frag",
+        "length": 37,
+        "line": 7,
+        "offset": 49
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

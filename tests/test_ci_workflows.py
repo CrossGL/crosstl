@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
 ACTIONS_DIR = ROOT / ".github" / "actions"
 CI_COVERAGE_SCRIPT = ROOT / "tools" / "ci_coverage.py"
+DEMO_CI_METADATA_PATH = ROOT / "support" / "demo-ci-metadata.json"
 PYTHON_VERSIONS = {"3.8", "3.9", "3.10", "3.11", "3.12", "3.13"}
 RUNNER_OSES = {"ubuntu-latest", "windows-latest", "macOS-latest"}
 BACKEND_TEST_MATRIX_NAMES = {
@@ -28,6 +29,15 @@ TRANSLATOR_TEST_MATRIX_NAMES = {
     "hip": "hip",
     "webgl": "webgl",
     "wgsl": "wgsl",
+}
+DEMO_GENERATED_OUTPUT_TRIGGER_PATHS = {
+    "crosstl/backend/**",
+    "crosstl/translator/ast.py",
+    "crosstl/translator/codegen/**",
+    "crosstl/translator/lexer.py",
+    "crosstl/translator/parser.py",
+    "crosstl/translator/source_registry.py",
+    "crosstl/translator/validation.py",
 }
 
 
@@ -73,6 +83,41 @@ def _parse_matrix_values(raw):
         for item in raw.split(",")
         if item.strip().strip("\"'")
     }
+
+
+def _workflow_event_paths(workflow_text, event_name):
+    event_header = f"  {event_name}:"
+    lines = workflow_text.splitlines()
+    for index, line in enumerate(lines):
+        if line != event_header:
+            continue
+        section = []
+        for section_line in lines[index + 1 :]:
+            if (
+                section_line.strip()
+                and section_line.startswith("  ")
+                and not section_line.startswith("    ")
+            ):
+                break
+            section.append(section_line)
+        break
+    else:
+        raise AssertionError(f"workflow event not found: {event_name}")
+
+    for index, line in enumerate(section):
+        if line.strip() != "paths:":
+            continue
+        indent = len(line) - len(line.lstrip())
+        paths = []
+        for item_line in section[index + 1 :]:
+            item_indent = len(item_line) - len(item_line.lstrip())
+            if item_line.strip() and item_indent <= indent:
+                break
+            item = re.match(r"^\s*-\s+(.+?)\s*$", item_line)
+            if item:
+                paths.append(item.group(1).strip("\"'"))
+        return paths
+    raise AssertionError(f"workflow event has no paths filter: {event_name}")
 
 
 def _matrix_values(workflow_text, key):
@@ -156,6 +201,11 @@ def test_full_suite_keeps_required_compiler_smoke_coverage():
         assert tool in full_suite
     assert "Jimver/cuda-toolkit@v0.2.35" in full_suite
     assert 'CUDA_VERSION: "13.2.0"' in full_suite
+    assert "id: install_cuda" in full_suite
+    assert "steps.install_cuda.outcome == 'failure'" in full_suite
+    assert "Reset CUDA apt metadata before retry" in full_suite
+    assert "Retry CUDA compiler install after repository sync" in full_suite
+    assert "compiler-smoke-linux-retry.txt" in full_suite
     assert "SLANG_VERSION: v2026.9.1" in full_suite
     assert "test_external_shader_validators.py" in full_suite
 
@@ -202,6 +252,140 @@ def test_full_suite_runs_runtime_parity_only_for_available_adapters():
     assert "Record unavailable runtime parity adapter" in full_suite
     assert "tests/test_translator/test_runtime_verification.py" in full_suite
     assert '-k "runtime_parity"' in full_suite
+
+
+def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
+    workflows = _workflow_texts()
+    demo = workflows.get("demo.yml", "")
+    demo_metadata = json.loads(DEMO_CI_METADATA_PATH.read_text(encoding="utf-8"))
+    demo_selectors = [case["selector"] for case in demo_metadata["pytest"]["cases"]]
+
+    assert demo, "demo.yml must exist"
+    assert "name: Open-Source Porting Demo" in demo
+    assert re.search(r"\bpush\s*:", demo)
+    assert re.search(r"\bpull_request\s*:", demo)
+    assert "workflow_dispatch:" in demo
+    assert "permissions:\n  contents: read" in demo
+    assert "timeout-minutes: 60" in demo
+    assert _matrix_values(demo, "os") == RUNNER_OSES
+    demo_push_paths = set(_workflow_event_paths(demo, "push"))
+    demo_pull_request_paths = set(_workflow_event_paths(demo, "pull_request"))
+    assert demo_push_paths == demo_pull_request_paths
+    assert DEMO_GENERATED_OUTPUT_TRIGGER_PATHS <= demo_push_paths
+    for broad_path in (
+        "crosstl/**",
+        "crosstl/translator/**",
+        ".github/**",
+        "tools/**",
+        "support/**",
+    ):
+        assert broad_path not in demo_push_paths
+    assert '".github/workflows/demo.yml"' in demo
+    assert '"crosstl/backend/**"' in demo
+    assert '"crosstl/translator/ast.py"' in demo
+    assert '"crosstl/translator/codegen/**"' in demo
+    assert '"crosstl/translator/lexer.py"' in demo
+    assert '"crosstl/translator/parser.py"' in demo
+    assert '"crosstl/translator/source_registry.py"' in demo
+    assert '"crosstl/translator/validation.py"' in demo
+    assert '"demos/open-source-porting/**"' in demo
+    assert '"support/demo-ci-metadata.json"' in demo
+    assert '"tests/test_demo_open_source_porting.py"' in demo
+    assert '"tests/test_project_test_runner.py"' in demo
+    assert '"tests/test_translator/test_project_translation.py"' in demo
+    assert '"tools/demo_ci_metadata.py"' in demo
+    assert "id: run_demo_tests" in demo
+    assert "readarray" not in demo
+    assert "demo_test_files=()" in demo
+    assert "while IFS= read -r demo_test_file; do" in demo
+    assert "demo_test_file=\"${demo_test_file%$'\\r'}\"" in demo
+    assert 'demo_test_files+=("$demo_test_file")' in demo
+    assert "done < <(python tools/demo_ci_metadata.py emit-pytest-files)" in demo
+    assert (
+        'demo_selector="$(python tools/demo_ci_metadata.py emit-pytest-selector)"'
+        in demo
+    )
+    assert '"${demo_test_files[@]}"' in demo
+    assert '-k "$demo_selector"' in demo
+    assert "demo_selector=\"${demo_selector%$'\\r'}\"" in demo
+    for selector in demo_selectors:
+        assert selector not in demo
+    assert (
+        "--junitxml support/generated/demo-reports/${{ matrix.os }}/"
+        "open-source-porting-demo-pytest.xml"
+    ) in demo
+    assert "name: Write demo failure summary" in demo
+    assert "python tools/pytest_failure_summary.py" in demo
+    assert (
+        "--json-output support/generated/demo-reports/${{ matrix.os }}/"
+        "open-source-porting-demo-failure-summary.json"
+    ) in demo
+    assert (
+        "--markdown-output support/generated/demo-reports/${{ matrix.os }}/"
+        "open-source-porting-demo-failure-summary.md"
+    ) in demo
+    assert "name: Upload demo reports" in demo
+    assert "name: open-source-porting-demo-reports-${{ matrix.os }}" in demo
+    assert "name: Upload demo failure summary" in demo
+    assert "name: open-source-porting-demo-failure-summary-${{ matrix.os }}" in demo
+    assert (
+        "DEMO_FAILURE_SUMMARY_DIR: support/generated/demo-reports/${{ matrix.os }}"
+        in demo
+    )
+    assert "name: Prepare demo failure summary helper" in demo
+    assert "write_demo_failure_summary()" in demo
+    assert "python tools/pytest_failure_summary.py" in demo
+    assert "--demo-step" in demo
+    assert '--case-name "$case_name"' in demo
+    assert '--target-backend "$target_backend"' in demo
+    assert '--command "$failed_command"' in demo
+    assert "demo_artifact" in demo
+    assert "demo_toolchain" in demo
+    for summary_base in (
+        "open-source-porting-demo-artifacts",
+        "open-source-porting-demo-linux-opengl",
+        "open-source-porting-demo-linux-vulkan",
+        "open-source-porting-demo-macos-metal",
+        "open-source-porting-demo-macos-metal-compile",
+        "open-source-porting-demo-windows-directx",
+        "open-source-porting-demo-windows-directx-compile",
+    ):
+        assert summary_base in demo
+    assert "${summary_base}-failure-summary.json" in demo
+    assert "${summary_base}-failure-summary.md" in demo
+    assert "profile=\"${profile%$'\\r'}\"" in demo
+    assert "if: failure() && steps.run_demo_tests.outcome == 'failure'" in demo
+    assert "support/generated/demo-reports/**/*-failure-summary.json" in demo
+    assert "support/generated/demo-reports/**/*-failure-summary.md" in demo
+    assert "if-no-files-found: ignore" in demo
+    assert "retention-days: 30" in demo
+
+
+def test_ci_coverage_report_tracks_open_source_porting_demo_guarantees():
+    module = _load_ci_coverage_module()
+
+    report = module.build_report()
+    demo = report["workflows"]["open_source_porting_demo"]
+
+    assert demo["workflow"] == "demo.yml"
+    assert set(demo["oses"]["actual"]) == RUNNER_OSES
+    assert demo["oses"]["missing"] == []
+    assert set(demo["target_toolchain_smoke_checks"]) == {
+        "directx",
+        "metal",
+        "opengl",
+        "vulkan",
+    }
+    assert set(demo["compile_reference_steps"]) == {"directx", "metal"}
+    assert all(demo["required_policies"].values())
+    assert all(demo["required_path_filters"].values())
+    assert demo["push_pull_request_path_filters_match"] is True
+    assert all(demo["forbidden_broad_path_filters_absent"].values())
+    assert all(demo["checked_in_artifacts"].values())
+    assert all(demo["target_toolchain_smoke_checks"].values())
+    assert all(demo["compile_reference_steps"].values())
+    assert all(demo["report_artifact"].values())
+    assert all(demo["failure_summary"].values())
 
 
 def test_ci_coverage_report_summarizes_required_workflow_dimensions():
@@ -275,6 +459,45 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
     assert all(report["workflows"]["examples"]["required_policies"].values())
     assert report["workflows"]["examples"]["backend_specific_strict"] is True
     assert report["workflows"]["examples"]["stability_fails_on_regression"] is True
+    assert report["workflows"]["open_source_porting_demo"]["oses"]["missing"] == []
+    assert all(
+        report["workflows"]["open_source_porting_demo"]["required_policies"].values()
+    )
+    assert all(
+        report["workflows"]["open_source_porting_demo"][
+            "required_path_filters"
+        ].values()
+    )
+    assert (
+        report["workflows"]["open_source_porting_demo"][
+            "push_pull_request_path_filters_match"
+        ]
+        is True
+    )
+    assert all(
+        report["workflows"]["open_source_porting_demo"][
+            "forbidden_broad_path_filters_absent"
+        ].values()
+    )
+    assert all(
+        report["workflows"]["open_source_porting_demo"]["checked_in_artifacts"].values()
+    )
+    assert all(
+        report["workflows"]["open_source_porting_demo"][
+            "target_toolchain_smoke_checks"
+        ].values()
+    )
+    assert all(
+        report["workflows"]["open_source_porting_demo"][
+            "compile_reference_steps"
+        ].values()
+    )
+    assert all(
+        report["workflows"]["open_source_porting_demo"]["report_artifact"].values()
+    )
+    assert all(
+        report["workflows"]["open_source_porting_demo"]["failure_summary"].values()
+    )
     assert all(report["workflows"]["full_tests"]["required_tools"].values())
     assert all(
         all(fields.values())
@@ -703,6 +926,12 @@ def test_ci_coverage_summary_command_writes_markdown(tmp_path):
     assert "## Documentation" in text
     assert "## Examples" in text
     assert "Backend-specific failures are fatal" in text
+    assert "## Open-Source Porting Demo" in text
+    assert "Checked-in artifact verification" in text
+    assert "Target toolchain smoke checks" in text
+    assert "Metal and DirectX compile references" in text
+    assert "Demo report artifact" in text
+    assert "Demo failure summary artifact" in text
     assert "## Support Matrix" in text
     assert "Support matrix check artifact" in text
     assert "Support evidence artifact" in text
@@ -818,6 +1047,41 @@ def test_ci_coverage_reports_missing_examples_coverage_and_strictness():
     assert "examples-test.yml backend-specific job must fail on errors" in errors
     assert "examples-test.yml stability job must fail on regression" in errors
     assert "examples-test.yml has too many continue-on-error steps: 2" in errors
+
+
+def test_ci_coverage_reports_missing_open_source_porting_demo_fields():
+    module = _load_ci_coverage_module()
+    report = module.build_report()
+    demo = report["workflows"]["open_source_porting_demo"]
+    demo["required_policies"]["metadata_pytest_selector"] = False
+    demo["oses"]["actual"].remove("macOS-latest")
+    demo["oses"]["missing"] = ["macOS-latest"]
+    demo["fail_fast_false"] = False
+    demo["required_path_filters"]["push:demos/open-source-porting/**"] = False
+    demo["push_pull_request_path_filters_match"] = False
+    demo["forbidden_broad_path_filters_absent"]["crosstl/**"] = False
+    demo["checked_in_artifacts"]["runs_demo_check"] = False
+    demo["target_toolchain_smoke_checks"]["metal"] = False
+    demo["compile_reference_steps"]["directx"] = False
+    demo["report_artifact"]["uploads_reports"] = False
+    demo["failure_summary"]["uploads_failure_summary"] = False
+
+    errors = module.validation_errors(report)
+
+    assert "demo.yml missing policy: metadata_pytest_selector" in errors
+    assert "demo.yml OS matrix mismatch: missing=['macOS-latest'], extra=[]" in errors
+    assert "demo.yml must keep fail-fast: false" in errors
+    assert "demo.yml missing path filter: push:demos/open-source-porting/**" in errors
+    assert "demo.yml push and pull_request path filters must match" in errors
+    assert "demo.yml must not use broad path filter: crosstl/**" in errors
+    assert "demo.yml missing checked artifact verification: runs_demo_check" in errors
+    assert "demo.yml missing target toolchain smoke check: metal" in errors
+    assert "demo.yml missing compile reference step: directx" in errors
+    assert "demo.yml missing report artifact policy: uploads_reports" in errors
+    assert (
+        "demo.yml missing demo failure summary policy: uploads_failure_summary"
+        in errors
+    )
 
 
 def test_ci_coverage_reports_missing_compiler_smoke_tooling():
@@ -952,6 +1216,9 @@ def test_ci_coverage_reports_missing_support_planner_tests():
     ] = False
     report["workflows"]["support_issue_sync"]["workflow_run_full_tests"] = False
     report["workflows"]["support_issue_sync"]["workflow_run_backend_tests"] = False
+    report["workflows"]["support_issue_sync"][
+        "workflow_run_open_source_porting_demo"
+    ] = False
     report["workflows"]["support_issue_sync"]["workflow_run_translator_tests"] = False
     report["workflows"]["support_issue_sync"][
         "downloads_test_failure_summaries"
@@ -1096,6 +1363,9 @@ def test_ci_coverage_reports_missing_support_planner_tests():
     )
     assert "support-issue-sync.yml missing workflow_run_full_tests" in errors
     assert "support-issue-sync.yml missing workflow_run_backend_tests" in errors
+    assert (
+        "support-issue-sync.yml missing workflow_run_open_source_porting_demo" in errors
+    )
     assert "support-issue-sync.yml missing workflow_run_translator_tests" in errors
     assert "support-issue-sync.yml missing downloads_test_failure_summaries" in errors
     assert (
@@ -1630,6 +1900,49 @@ def test_ci_coverage_comparison_reports_examples_backend_shrink():
     } in comparison["shrinks"]
 
 
+def test_ci_coverage_comparison_reports_demo_workflow_shrink():
+    module = _load_ci_coverage_module()
+    baseline = module.build_report()
+    current = copy.deepcopy(baseline)
+    demo = current["workflows"]["open_source_porting_demo"]
+    demo["target_toolchain_smoke_checks"]["vulkan"] = False
+    demo["compile_reference_steps"]["metal"] = False
+    demo["report_artifact"]["uploads_reports"] = False
+    demo["failure_summary"]["uploads_failure_summary"] = False
+
+    comparison = module.build_ci_coverage_comparison(baseline, current)
+
+    assert comparison["summary"] == {
+        "ok": False,
+        "shrink_count": 4,
+        "growth_count": 0,
+    }
+    assert {
+        "scope": "demo.yml",
+        "dimension": "target_toolchain_smoke_checks",
+        "removed": ["vulkan"],
+        "added": [],
+    } in comparison["shrinks"]
+    assert {
+        "scope": "demo.yml",
+        "dimension": "compile_reference_steps",
+        "removed": ["metal"],
+        "added": [],
+    } in comparison["shrinks"]
+    assert {
+        "scope": "demo.yml",
+        "dimension": "report_artifact",
+        "removed": ["uploads_reports"],
+        "added": [],
+    } in comparison["shrinks"]
+    assert {
+        "scope": "demo.yml",
+        "dimension": "failure_summary",
+        "removed": ["uploads_failure_summary"],
+        "added": [],
+    } in comparison["shrinks"]
+
+
 def test_ci_coverage_compare_command_fails_on_shrink(tmp_path):
     module = _load_ci_coverage_module()
     baseline = module.build_report()
@@ -1803,9 +2116,34 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "integrations/mlx/run_mlx_porting.py" in mlx_porting
     assert mlx_commit in mlx_porting
     assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
+    assert re.search(r"\bschedule\s*:", mlx_porting)
+    assert 'cron: "31 4 * * 1"' in mlx_porting
+    assert "github.event_name != 'schedule'" in mlx_porting
+    assert "--mode reduced-frontier" in mlx_porting
+    assert "mlx-full-corpus-scout:" in mlx_porting
+    assert "MLX full-corpus artifact scout" in mlx_porting
+    assert (
+        "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"
+        in mlx_porting
+    )
+    assert "--mode full-corpus" in mlx_porting
+    assert "full-corpus-summary.json" in mlx_porting
+    assert "out-full-corpus" in mlx_porting
+    assert "name: mlx-full-corpus-scout" in mlx_porting
+    assert "retention-days: 30" in mlx_porting
     assert re.search(r"translate-project\b[\s\S]*validation_flag", harness)
     assert '"--run-toolchains"' in harness
     assert '"--validate"' in harness
+    assert "FULL_CORPUS_EXPECTED_ARTIFACT_COUNT" in harness
+    assert "FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS = 4096" in harness
+    assert "FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK = 131072" in harness
+    assert "FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS = 900" in harness
+    assert "blocked-by-tracked-issues" in harness
+    assert "without tracked issue references" in harness
+    for tracked_issue_number in (1312, 1354, 1362, 1376):
+        assert f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}" in (
+            harness
+        )
     for resolved_issue_number in (
         1184,
         1203,
@@ -1827,9 +2165,13 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         1261,
         1274,
         1287,
+        1329,
+        1338,
+        1340,
+        1346,
+        1355,
         1300,
         1317,
-        1362,
     ):
         assert (
             f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
@@ -1973,6 +2315,7 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
     assert re.search(r"\bpull_request\s*:", issue_sync)
     assert "issues: write" in issue_sync
     assert '".github/workflows/backend-tests.yml"' in issue_sync
+    assert '".github/workflows/demo.yml"' in issue_sync
     assert '".github/workflows/docs.yml"' in issue_sync
     assert '".github/workflows/examples-test.yml"' in issue_sync
     assert '".github/workflows/full-tests.yml"' in issue_sync
@@ -1988,11 +2331,15 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
         '"crosstl/translator/lexer.py"',
         '"crosstl/translator/parser.py"',
         '"crosstl/translator/validation.py"',
+        '"demos/open-source-porting/**"',
         '"docs/source/project-porting.rst"',
         '"docs/source/support-matrix.rst"',
         '"examples/test.py"',
+        '"tools/demo_ci_metadata.py"',
         '"tests/test_backend/**"',
+        '"tests/test_demo_open_source_porting.py"',
         '"tests/test_examples_test_script.py"',
+        '"tests/test_project_test_runner.py"',
         '"tests/test_translator/test_ast_ir_contracts.py"',
         '"tests/test_translator/test_backend_contract.py"',
         '"tests/test_translator/test_codegen/**"',
@@ -2064,6 +2411,7 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
     assert "workflow_run:" in issue_sync
     assert "Complete Test Suite" in issue_sync
     assert "Backend Tests" in issue_sync
+    assert "Open-Source Porting Demo" in issue_sync
     assert "Translator Tests" in issue_sync
     assert "name: Download test failure summaries" in issue_sync
     assert "actions/download-artifact@v4" in issue_sync

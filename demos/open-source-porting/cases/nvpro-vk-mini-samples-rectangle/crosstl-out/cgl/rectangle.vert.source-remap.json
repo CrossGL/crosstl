@@ -1,0 +1,160 @@
+{
+  "generatedFile": "crosstl-out/cgl/rectangle.vert.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 13,
+        "file": "crosstl-out/cgl/rectangle.vert.cgl",
+        "length": 13,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 762,
+        "file": "rectangle.vert.glsl",
+        "length": 13,
+        "line": 19,
+        "offset": 749
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 87,
+        "file": "crosstl-out/cgl/rectangle.vert.cgl",
+        "length": 34,
+        "line": 5,
+        "offset": 53
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 804,
+        "file": "rectangle.vert.glsl",
+        "length": 41,
+        "line": 21,
+        "offset": 763
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 118,
+        "file": "crosstl-out/cgl/rectangle.vert.cgl",
+        "length": 31,
+        "line": 6,
+        "offset": 87
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 842,
+        "file": "rectangle.vert.glsl",
+        "length": 38,
+        "line": 22,
+        "offset": 804
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 188,
+        "file": "crosstl-out/cgl/rectangle.vert.cgl",
+        "length": 36,
+        "line": 10,
+        "offset": 152
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 887,
+        "file": "rectangle.vert.glsl",
+        "length": 44,
+        "line": 24,
+        "offset": 843
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 224,
+        "file": "crosstl-out/cgl/rectangle.vert.cgl",
+        "length": 36,
+        "line": 11,
+        "offset": 188
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 947,
+        "file": "rectangle.vert.glsl",
+        "length": 45,
+        "line": 28,
+        "offset": 902
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 380,
+        "file": "crosstl-out/cgl/rectangle.vert.cgl",
+        "length": 63,
+        "line": 17,
+        "offset": 317
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 947,
+        "file": "rectangle.vert.glsl",
+        "length": 45,
+        "line": 28,
+        "offset": 902
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 425,
+        "file": "crosstl-out/cgl/rectangle.vert.cgl",
+        "length": 45,
+        "line": 18,
+        "offset": 380
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 973,
+        "file": "rectangle.vert.glsl",
+        "length": 26,
+        "line": 29,
+        "offset": 947
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

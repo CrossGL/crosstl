@@ -11,6 +11,7 @@ on:
     workflows:
       - Complete Test Suite
       - Backend Tests
+      - Open-Source Porting Demo
       - Translator Tests
     types:
       - completed
@@ -21,6 +22,7 @@ on:
       - main
     paths:
       - ".github/workflows/backend-tests.yml"
+      - ".github/workflows/demo.yml"
       - ".github/workflows/docs.yml"
       - ".github/workflows/examples-test.yml"
       - ".github/workflows/full-tests.yml"
@@ -41,8 +43,10 @@ on:
       - "docs/source/quickstart.rst"
       - "docs/source/support-matrix.rst"
       - "examples/test.py"
+      - "demos/open-source-porting/**"
       - "support/**"
       - "tools/ci_coverage.py"
+      - "tools/demo_ci_metadata.py"
       - "tools/pytest_failure_summary.py"
       - "tools/support_ci_summary.py"
       - "tools/support_matrix.py"
@@ -50,7 +54,9 @@ on:
       - "tools/sync_support_issues.py"
       - "tools/sync_pr_issue_links.py"
       - "tests/test_backend/**"
+      - "tests/test_demo_open_source_porting.py"
       - "tests/test_examples_test_script.py"
+      - "tests/test_project_test_runner.py"
       - "tests/test_translator/test_ast_ir_contracts.py"
       - "tests/test_translator/test_backend_contract.py"
       - "tests/test_translator/test_codegen/**"

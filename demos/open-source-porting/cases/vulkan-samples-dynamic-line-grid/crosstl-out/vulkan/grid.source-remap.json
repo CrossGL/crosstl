@@ -1,0 +1,72 @@
+{
+  "generatedFile": "crosstl-out/vulkan/grid.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 304,
+        "file": "crosstl-out/vulkan/grid.spvasm",
+        "length": 30,
+        "line": 11,
+        "offset": 274
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 54,
+        "file": "grid.frag",
+        "length": 40,
+        "line": 3,
+        "offset": 14
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 333,
+        "file": "crosstl-out/vulkan/grid.spvasm",
+        "length": 29,
+        "line": 12,
+        "offset": 304
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 93,
+        "file": "grid.frag",
+        "length": 39,
+        "line": 4,
+        "offset": 54
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 729,
+        "file": "crosstl-out/vulkan/grid.spvasm",
+        "length": 26,
+        "line": 27,
+        "offset": 703
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 93,
+        "file": "grid.frag",
+        "length": 39,
+        "line": 4,
+        "offset": 54
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

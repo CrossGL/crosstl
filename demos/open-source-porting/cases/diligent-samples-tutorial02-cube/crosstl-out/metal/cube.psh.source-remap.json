@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/metal/cube.psh.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 386,
+        "file": "crosstl-out/metal/cube.psh.metal",
+        "length": 50,
+        "line": 15,
+        "offset": 336
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 546,
+        "file": "cube.psh",
+        "length": 31,
+        "line": 18,
+        "offset": 515
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 453,
+        "file": "crosstl-out/metal/cube.psh.metal",
+        "length": 31,
+        "line": 17,
+        "offset": 422
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 546,
+        "file": "cube.psh",
+        "length": 31,
+        "line": 18,
+        "offset": 515
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 478,
+        "file": "crosstl-out/metal/cube.psh.metal",
+        "length": 25,
+        "line": 18,
+        "offset": 453
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 734,
+        "file": "cube.psh",
+        "length": 25,
+        "line": 23,
+        "offset": 709
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 565,
+        "file": "crosstl-out/metal/cube.psh.metal",
+        "length": 46,
+        "line": 20,
+        "offset": 519
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 734,
+        "file": "cube.psh",
+        "length": 25,
+        "line": 23,
+        "offset": 709
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

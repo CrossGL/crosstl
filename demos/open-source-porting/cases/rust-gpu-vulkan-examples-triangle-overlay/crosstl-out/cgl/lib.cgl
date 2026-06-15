@@ -1,0 +1,11 @@
+shader main {
+    // use spirv_std::glam::Vec4
+    // use spirv_std::spirv
+    // Fragment Shader
+    fragment main_fs {
+        void main(out vec4 out_frag_color @ gl_FragColor) {
+            out_frag_color = vec4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+
+}

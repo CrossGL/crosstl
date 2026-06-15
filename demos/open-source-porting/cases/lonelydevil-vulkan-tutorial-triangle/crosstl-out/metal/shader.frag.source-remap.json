@@ -1,0 +1,50 @@
+{
+  "generatedFile": "crosstl-out/metal/shader.frag.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 111,
+        "file": "crosstl-out/metal/shader.frag.metal",
+        "length": 39,
+        "line": 6,
+        "offset": 72
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 91,
+        "file": "shader.frag",
+        "length": 38,
+        "line": 5,
+        "offset": 53
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 265,
+        "file": "crosstl-out/metal/shader.frag.metal",
+        "length": 45,
+        "line": 11,
+        "offset": 220
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 136,
+        "file": "shader.frag",
+        "length": 31,
+        "line": 8,
+        "offset": 105
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

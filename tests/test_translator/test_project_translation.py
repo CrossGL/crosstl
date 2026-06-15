@@ -33,6 +33,7 @@ from crosstl.project import (
     inspect_runtime_host_loader_scaffolds,
     inspect_runtime_package,
     load_project_config,
+    materialize_runtime_adapters,
     plan_runtime_adapters,
     plan_runtime_host_bindings,
     plan_runtime_host_integration_execution,
@@ -562,6 +563,7 @@ def test_project_package_exposes_public_api_surface():
         "load_runtime_verification_fixtures",
         "load_runtime_test_manifest",
         "load_project_config",
+        "materialize_runtime_adapters",
         "native_runtime_parity_adapter",
         "native_runtime_parity_adapters",
         "parse_runtime_verification_fixtures",
@@ -7504,6 +7506,7 @@ def test_translate_project_glsl_alpha_stitch_storage_image_lowers_to_wgsl(
         run_toolchains=True,
     )
     payload = report.to_json()
+    naga_available = shutil.which("naga") is not None
 
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
@@ -7527,7 +7530,7 @@ def test_translate_project_glsl_alpha_stitch_storage_image_lowers_to_wgsl(
     assert "uimage2D" not in wgsl
     assert "imageStore" not in wgsl
 
-    if shutil.which("naga"):
+    if naga_available:
         assert payload["validation"]["artifacts"][0]["status"] == "ok"
         assert payload["validation"]["toolchainRuns"][0]["status"] == "ok"
 
@@ -12683,10 +12686,8 @@ def test_metal_project_materialization_concretizes_steel_attention_load_helper(
         "Rows": "2",
         "T": "float",
     }
-    assert re.search(
-        r"\bLoadTile\s*<\s*float\s*,\s*2\s*,\s*2\s*>\s+tile;",
-        materialized.text,
-    )
+    assert "LoadTile<float,Rows,Cols>" not in materialized.text
+    assert "LoadTile<float,2,2> tile;" in materialized.text
     assert "load_float_2_2(tile, src[gid]);" in materialized.text
     assert not re.search(r"\bload\s*\(", materialized.text)
 
@@ -13065,6 +13066,173 @@ def test_translate_project_opengl_rejects_post_materialization_template_type_lea
     report.write_json(report_path)
     validation = validate_project_report(report_path)
     assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
+
+
+def test_translate_project_opengl_materializes_mlx_sdpa_block_typedef_alias(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "scaled_dot_product_attention.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            [[kernel]] void sdpa_vector(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+              typedef float U;
+              thread U q[2];
+              U score = U(0);
+              q[0] = score + U(gid);
+              out[gid] = T(q[0]);
+            }
+
+            instantiate_kernel("sdpa_vector_float32", sdpa_vector, float)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["opengl"], output_dir="out").to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["status"] == "materialized"
+    assert artifact["templateMaterialization"]["unsupported"] == []
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "float q[2];" in output
+    assert "float score = float(0);" in output
+    assert re.search(r"\bU\b", output) is None
+
+
+@pytest.mark.parametrize(
+    ("source_name", "kernel_name", "host_name"),
+    [
+        (
+            "steel_gemm_gather.metal",
+            "steel_gemm_gather",
+            "steel_gemm_gather_float16",
+        ),
+        (
+            "steel_gemm_segmented.metal",
+            "steel_gemm_segmented",
+            "steel_gemm_segmented_float16",
+        ),
+    ],
+)
+def test_translate_project_opengl_materializes_mlx_steel_gemm_epilogue_default(
+    tmp_path,
+    source_name,
+    kernel_name,
+    host_name,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / source_name).write_text(
+        textwrap.dedent(f"""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename OutT, typename InT>
+            struct TransformNone {{
+              static OutT apply(InT value) {{
+                return OutT(value);
+              }}
+            }};
+
+            template <
+                typename T,
+                typename U,
+                typename AccumType = float,
+                typename Epilogue = TransformNone<U, AccumType>>
+            struct BlockMMA {{
+              U value;
+            }};
+
+            template <
+                typename T,
+                typename U,
+                typename AccumType = float,
+                typename Epilogue = TransformNone<U, AccumType>>
+            struct GEMMKernel {{
+              using mma_t = BlockMMA<T, U, AccumType, Epilogue>;
+            }};
+
+            template <typename T, typename AccumType = float>
+            [[kernel]] void {kernel_name}(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {{
+              using gemm_kernel = GEMMKernel<T, T, AccumType>;
+              using mma_t = typename gemm_kernel::mma_t;
+              thread mma_t mma_op;
+              mma_op.value = T(1);
+              out[gid] = mma_op.value;
+            }}
+
+            instantiate_kernel("{host_name}", {kernel_name}, half)
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["opengl"], output_dir="out").to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["status"] == "materialized"
+    assert artifact["templateMaterialization"]["unsupported"] == []
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "Epilogue" not in output
+    assert "BlockMMA<" not in output
+
+
+def test_translate_project_opengl_allows_defaulted_template_type_static_member(
+    tmp_path,
+):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "shader.metal"
+    source = textwrap.dedent("""
+            template <typename OutT, typename InT>
+            struct TransformNone {};
+
+            template <
+                typename T,
+                typename U,
+                typename AccumType = float,
+                typename Epilogue = TransformNone<U, AccumType>>
+            struct GEMMKernel {
+              static void run() {}
+            };
+
+            void host() {
+              GEMMKernel<half, half, float>::run();
+            }
+            """).strip() + "\n"
+    source_path.write_text(source, encoding="utf-8")
+    unit = project_pipeline.ProjectTranslationUnit(
+        path=source_path,
+        relative_path="shader.metal",
+        source_backend="metal",
+        extension=".metal",
+        source_hash=project_pipeline._source_hash(source_path),
+        source_size_bytes=source_path.stat().st_size,
+    )
+
+    records = (
+        project_pipeline._post_materialization_unresolved_metal_template_type_records(
+            preprocessor=MetalPreprocessor(),
+            unit=unit,
+            source=source,
+            target="opengl",
+        )
+    )
+
+    assert [record for record in records if record["name"] == "GEMMKernel"] == []
 
 
 def test_translate_project_forwards_metal_template_specialization_limit(tmp_path):
@@ -34846,6 +35014,148 @@ def test_project_cli_plan_runtime_adapters_json_writes_output(tmp_path):
     assert payload["adapters"][0]["adapterKind"] == "crossgl-source-adapter"
 
 
+def test_materialize_runtime_adapters_writes_descriptor_bundle(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("opengl",))
+    package_manifest = package_dir / "runtime-package.json"
+    adapter_dir = package_dir / "runtime-adapters"
+
+    payload = materialize_runtime_adapters(package_manifest, adapter_dir)
+
+    assert set(payload) == project_pipeline.RUNTIME_ADAPTER_PACKAGE_FIELDS
+    assert payload["kind"] == project_pipeline.RUNTIME_ADAPTER_PACKAGE_KIND
+    assert payload["success"] is True
+    assert payload["scope"] == project_pipeline.RUNTIME_ADAPTER_PACKAGE_SCOPE
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_ADAPTER_PACKAGE_NON_GOALS
+    )
+    assert payload["sourcePackage"] == str(package_manifest)
+    assert payload["adapterRoot"] == str(adapter_dir)
+    assert payload["adapterManifest"] == "runtime-adapters.json"
+    assert payload["summary"]["targetCount"] == 1
+    assert payload["summary"]["adapterCount"] == 1
+    assert payload["summary"]["descriptorCount"] == 1
+    assert payload["summary"]["readyDescriptorCount"] == 1
+    assert payload["summary"]["blockedDescriptorCount"] == 0
+
+    assert len(payload["targets"]) == 1
+    target = payload["targets"][0]
+    assert set(target) == project_pipeline.RUNTIME_ADAPTER_PACKAGE_TARGET_FIELDS
+    assert target["target"] == "opengl"
+    assert target["adapterKind"] == "opengl-glsl-adapter"
+    assert target["descriptorCount"] == 1
+    assert target["readyDescriptorCount"] == 1
+    assert target["blockedDescriptorCount"] == 0
+
+    assert len(payload["descriptors"]) == 1
+    descriptor_record = payload["descriptors"][0]
+    assert (
+        set(descriptor_record)
+        == project_pipeline.RUNTIME_ADAPTER_PACKAGE_DESCRIPTOR_FIELDS
+    )
+    assert descriptor_record["target"] == "opengl"
+    assert descriptor_record["adapterKind"] == "opengl-glsl-adapter"
+    assert descriptor_record["hostInterfaceStatus"] == "ready"
+    assert descriptor_record["descriptorPath"].startswith("adapters/opengl/")
+    assert descriptor_record["descriptorPath"].endswith(".adapter.json")
+
+    descriptor_file = adapter_dir / descriptor_record["descriptorPath"]
+    assert descriptor_file.is_file()
+    assert descriptor_record["descriptorSizeBytes"] == descriptor_file.stat().st_size
+    assert descriptor_record["descriptorHash"]["algorithm"] == "sha256"
+    assert descriptor_record["descriptorHash"]["value"]
+
+    descriptor = json.loads(descriptor_file.read_text(encoding="utf-8"))
+    assert set(descriptor) == project_pipeline.RUNTIME_ADAPTER_DESCRIPTOR_FIELDS
+    assert descriptor["kind"] == project_pipeline.RUNTIME_ADAPTER_DESCRIPTOR_KIND
+    assert descriptor["sourcePackage"] == str(package_manifest)
+    assert descriptor["sourcePackageHash"] == payload["sourcePackageHash"]
+    assert descriptor["adapterPlan"]["kind"] == (
+        project_pipeline.RUNTIME_ADAPTER_PLAN_KIND
+    )
+    assert descriptor["adapterPlan"]["success"] is True
+    assert descriptor["adapterKind"] == "opengl-glsl-adapter"
+    assert descriptor["hostInterface"]["status"] == "ready"
+    assert descriptor["sourceRemap"]["packagePath"].startswith("source-remaps/")
+
+    manifest = json.loads(
+        (adapter_dir / "runtime-adapters.json").read_text(encoding="utf-8")
+    )
+    assert manifest["kind"] == project_pipeline.RUNTIME_ADAPTER_PACKAGE_KIND
+    assert manifest["descriptors"][0]["descriptorPath"] == (
+        descriptor_record["descriptorPath"]
+    )
+    readme = (adapter_dir / "ADAPTERS.md").read_text(encoding="utf-8")
+    assert "CrossTL Runtime Adapter Descriptors" in readme
+    assert "execute device code" in readme
+
+
+def test_project_cli_materialize_runtime_adapters_text_outputs_descriptors(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("opengl",))
+    package_manifest = package_dir / "runtime-package.json"
+    adapter_dir = package_dir / "runtime-adapters"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "materialize-runtime-adapters",
+            str(package_manifest),
+            "--adapter-dir",
+            str(adapter_dir),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Runtime adapter descriptors: {package_manifest}" in result.stdout
+    assert "Status: ok" in result.stdout
+    assert "Adapter manifest: runtime-adapters.json" in result.stdout
+    assert "Descriptor scope: runtime-adapter-descriptor-package" in result.stdout
+    assert "Summary: 1 targets, 1 descriptors, 1 ready" in result.stdout
+    assert "- opengl: 1 descriptors, 1 ready" in result.stdout
+    assert "Runtime adapter descriptors:" in result.stdout
+    assert "opengl-glsl-adapter" in result.stdout
+    assert "descriptor: adapters/opengl/" in result.stdout
+    assert (adapter_dir / "runtime-adapters.json").is_file()
+
+
+def test_project_cli_materialize_runtime_adapters_json_writes_output(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
+    adapter_dir = package_dir / "runtime-adapters"
+    output_path = package_dir / "runtime-adapter-package.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "materialize-runtime-adapters",
+            str(package_dir / "runtime-package.json"),
+            "--adapter-dir",
+            str(adapter_dir),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == project_pipeline.RUNTIME_ADAPTER_PACKAGE_KIND
+    assert payload["summary"]["descriptorCount"] == 1
+    assert (adapter_dir / payload["descriptors"][0]["descriptorPath"]).is_file()
+
+
 def test_build_runtime_loader_manifest_from_runtime_package(tmp_path):
     _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
 
@@ -35351,6 +35661,82 @@ def test_build_runtime_host_loader_scaffolds_from_loader_manifest(tmp_path):
     assert "does not rewrite host application code" in guide.read_text(encoding="utf-8")
 
 
+def _loader_manifest_with_unresolved_host_interface(loader_manifest):
+    manifest = copy.deepcopy(loader_manifest)
+    blockers = []
+    for load_unit in manifest.get("loadUnits", []):
+        blocker = {
+            "kind": "resolve-host-interface-metadata",
+            "severity": "warning",
+            "message": "Resolve host interface metadata.",
+            "target": load_unit.get("target"),
+            "adapter": load_unit.get("id"),
+            "binding": None,
+            "packagePath": load_unit.get("packagePath"),
+        }
+        load_unit["hostInterface"] = project_pipeline._runtime_host_interface_empty(
+            "not-inspected",
+            diagnostics=(
+                "project.runtime-package-inspection.host-interface-not-recorded",
+            ),
+        )
+        validation = (
+            load_unit["validation"]
+            if isinstance(load_unit.get("validation"), dict)
+            else {}
+        )
+        validation["hostInterface"] = "not-inspected"
+        validation["loadReady"] = False
+        load_unit["validation"] = validation
+        load_unit["blockers"] = [blocker]
+        load_unit["loadSteps"] = [
+            step
+            for step in load_unit.get("loadSteps", [])
+            if not (
+                isinstance(step, dict) and step.get("kind") == "bind-host-interface"
+            )
+        ]
+        for step in load_unit["loadSteps"]:
+            if isinstance(step, dict) and step.get("hostInterfaceStatus") == "ready":
+                step["hostInterfaceStatus"] = "not-inspected"
+        blockers.append(blocker)
+
+    actions = [
+        action
+        for action in manifest.get("actions", [])
+        if action.get("kind") != "resolve-host-interface-metadata"
+    ]
+    insert_at = sum(
+        1 for action in actions if action.get("kind") == "wire-runtime-adapter"
+    )
+    manifest["actions"] = actions[:insert_at] + blockers + actions[insert_at:]
+
+    for target in manifest.get("targets", []):
+        target_units = [
+            load_unit
+            for load_unit in manifest.get("loadUnits", [])
+            if load_unit.get("target") == target.get("target")
+        ]
+        blocked_count = sum(
+            1
+            for load_unit in target_units
+            if load_unit.get("validation", {}).get("loadReady") is False
+        )
+        target["readyLoadUnitCount"] = len(target_units) - blocked_count
+        target["blockedLoadUnitCount"] = blocked_count
+
+    load_units = manifest.get("loadUnits", [])
+    summary = manifest.get("summary", {})
+    summary["readyLoadUnitCount"] = sum(
+        1
+        for load_unit in load_units
+        if load_unit.get("validation", {}).get("loadReady") is True
+    )
+    summary["blockedLoadUnitCount"] = len(load_units) - summary["readyLoadUnitCount"]
+    summary["actionCount"] = len(manifest["actions"])
+    return manifest
+
+
 def test_runtime_host_loader_scaffolds_preserve_loader_step_metadata(tmp_path):
     repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("wgsl",))
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
@@ -35388,7 +35774,9 @@ def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files(
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
     loader_manifest_path.write_text(
         json.dumps(
-            build_runtime_loader_manifest(package_dir / "runtime-package.json"),
+            _loader_manifest_with_unresolved_host_interface(
+                build_runtime_loader_manifest(package_dir / "runtime-package.json")
+            ),
             indent=2,
         ),
         encoding="utf-8",
@@ -35482,7 +35870,9 @@ def test_project_cli_scaffold_host_loaders_text_outputs_scaffolds(tmp_path):
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
     loader_manifest_path.write_text(
         json.dumps(
-            build_runtime_loader_manifest(package_dir / "runtime-package.json"),
+            _loader_manifest_with_unresolved_host_interface(
+                build_runtime_loader_manifest(package_dir / "runtime-package.json")
+            ),
             indent=2,
         ),
         encoding="utf-8",
@@ -35560,14 +35950,20 @@ def test_project_cli_scaffold_host_loaders_json_writes_output(tmp_path):
     assert (scaffold_dir / "host-loader-scaffolds.json").is_file()
 
 
-def _build_runtime_host_loader_scaffold_fixture(tmp_path, targets=("cgl",)):
+def _build_runtime_host_loader_scaffold_fixture(
+    tmp_path, targets=("cgl",), unresolved_host_interface=False
+):
     repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=targets)
+    loader_manifest = build_runtime_loader_manifest(
+        package_dir / "runtime-package.json"
+    )
+    if unresolved_host_interface:
+        loader_manifest = _loader_manifest_with_unresolved_host_interface(
+            loader_manifest
+        )
     loader_manifest_path = package_dir / "runtime-loader-manifest.json"
     loader_manifest_path.write_text(
-        json.dumps(
-            build_runtime_loader_manifest(package_dir / "runtime-package.json"),
-            indent=2,
-        ),
+        json.dumps(loader_manifest, indent=2),
         encoding="utf-8",
     )
     scaffold_dir = repo / "host-loader-scaffolds"
@@ -35668,7 +36064,7 @@ def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file(
 
 def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units(tmp_path):
     _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=("cuda",)
+        tmp_path, targets=("cuda",), unresolved_host_interface=True
     )
 
     payload = inspect_runtime_host_loader_scaffolds(
@@ -35851,7 +36247,7 @@ def test_plan_runtime_host_loader_consumption_reports_ready_units(tmp_path):
 
 def test_plan_runtime_host_loader_consumption_carries_blocked_units(tmp_path):
     _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=("cuda",)
+        tmp_path, targets=("cuda",), unresolved_host_interface=True
     )
 
     payload = plan_runtime_host_loader_consumption(
@@ -35954,9 +36350,13 @@ def test_project_cli_plan_host_loader_consumption_json_writes_output(tmp_path):
     assert payload["actions"][0]["kind"] == "consume-host-loader-unit"
 
 
-def _write_host_loader_consumption_plan_fixture(tmp_path, targets=("cgl",)):
+def _write_host_loader_consumption_plan_fixture(
+    tmp_path, targets=("cgl",), unresolved_host_interface=False
+):
     repo, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
-        tmp_path, targets=targets
+        tmp_path,
+        targets=targets,
+        unresolved_host_interface=unresolved_host_interface,
     )
     plan_payload = plan_runtime_host_loader_consumption(
         scaffold_dir / "host-loader-scaffolds.json"
@@ -36016,7 +36416,7 @@ def test_build_runtime_host_integration_handoff_writes_ready_bundle(tmp_path):
 
 def test_build_runtime_host_integration_handoff_writes_blocked_bundle(tmp_path):
     repo, plan_path, _ = _write_host_loader_consumption_plan_fixture(
-        tmp_path, targets=("cuda",)
+        tmp_path, targets=("cuda",), unresolved_host_interface=True
     )
     handoff_dir = repo / "host-integration"
 
@@ -36120,9 +36520,13 @@ def test_project_cli_host_integration_handoff_json_writes_output(tmp_path):
     assert (handoff_dir / "HOST_INTEGRATION.md").is_file()
 
 
-def _build_runtime_host_integration_handoff_fixture(tmp_path, targets=("cgl",)):
+def _build_runtime_host_integration_handoff_fixture(
+    tmp_path, targets=("cgl",), unresolved_host_interface=False
+):
     repo, plan_path, _ = _write_host_loader_consumption_plan_fixture(
-        tmp_path, targets=targets
+        tmp_path,
+        targets=targets,
+        unresolved_host_interface=unresolved_host_interface,
     )
     handoff_dir = repo / "host-integration"
     handoff_payload = build_runtime_host_integration_handoff(plan_path, handoff_dir)
@@ -36271,7 +36675,7 @@ def test_inspect_runtime_host_integration_handoff_detects_target_count_mismatch(
 
 def test_inspect_runtime_host_integration_handoff_reports_blocked_bundle(tmp_path):
     _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=("cuda",)
+        tmp_path, targets=("cuda",), unresolved_host_interface=True
     )
 
     payload = inspect_runtime_host_integration_handoff(
@@ -36473,7 +36877,7 @@ def test_plan_runtime_host_integration_execution_reports_ready_steps(tmp_path):
 
 def test_plan_runtime_host_integration_execution_carries_blocked_steps(tmp_path):
     _, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=("cuda",)
+        tmp_path, targets=("cuda",), unresolved_host_interface=True
     )
 
     payload = plan_runtime_host_integration_execution(
@@ -36613,9 +37017,13 @@ def test_project_cli_plan_host_integration_execution_json_writes_output(tmp_path
     assert payload["steps"][0]["kind"] == "consume-host-loader-unit"
 
 
-def _write_runtime_host_integration_execution_plan_fixture(tmp_path, targets=("cgl",)):
+def _write_runtime_host_integration_execution_plan_fixture(
+    tmp_path, targets=("cgl",), unresolved_host_interface=False
+):
     repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(
-        tmp_path, targets=targets
+        tmp_path,
+        targets=targets,
+        unresolved_host_interface=unresolved_host_interface,
     )
     plan_payload = plan_runtime_host_integration_execution(
         handoff_dir / "host-integration.json",
@@ -36724,7 +37132,7 @@ def test_execute_runtime_host_integration_reports_blocked_steps_without_failure(
     tmp_path,
 ):
     _, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
-        tmp_path, targets=("cuda",)
+        tmp_path, targets=("cuda",), unresolved_host_interface=True
     )
 
     payload = execute_runtime_host_integration(plan_path)

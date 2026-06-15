@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "name": "libGDX Batch Shader",
+  "description": "Pinned GLSL ES shader pair used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "libgdx-batch-vertex",
+      "path": "batch.vert",
+      "sourceBackend": "opengl",
+      "targets": [
+        "cgl",
+        "opengl",
+        "metal",
+        "directx",
+        "vulkan"
+      ],
+      "repository": "https://github.com/libgdx/libgdx",
+      "commit": "846d63a746e4604a7699133f803ff844fdc8c9fe",
+      "sourceUrl": "https://github.com/libgdx/libgdx/blob/846d63a746e4604a7699133f803ff844fdc8c9fe/tests/gdx-tests-android/assets/data/shaders/batch.vert"
+    },
+    {
+      "id": "libgdx-batch-fragment",
+      "path": "batch.frag",
+      "sourceBackend": "opengl",
+      "targets": [
+        "cgl",
+        "opengl",
+        "metal",
+        "directx",
+        "vulkan"
+      ],
+      "repository": "https://github.com/libgdx/libgdx",
+      "commit": "846d63a746e4604a7699133f803ff844fdc8c9fe",
+      "sourceUrl": "https://github.com/libgdx/libgdx/blob/846d63a746e4604a7699133f803ff844fdc8c9fe/tests/gdx-tests-android/assets/data/shaders/batch.frag"
+    }
+  ]
+}

@@ -19,7 +19,8 @@ from collections import Counter
 from dataclasses import dataclass, field, replace
 from importlib import metadata as importlib_metadata
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence, Tuple
+from types import SimpleNamespace
+from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
 from crosstl.project.host_reflection import (
@@ -44,6 +45,8 @@ RUNTIME_PACKAGE_KIND = "crosstl-runtime-package"
 RUNTIME_HOST_BINDING_PLAN_KIND = "crosstl-runtime-host-binding-plan"
 RUNTIME_PACKAGE_INSPECTION_KIND = "crosstl-runtime-package-inspection"
 RUNTIME_ADAPTER_PLAN_KIND = "crosstl-runtime-adapter-plan"
+RUNTIME_ADAPTER_PACKAGE_KIND = "crosstl-runtime-adapter-package"
+RUNTIME_ADAPTER_DESCRIPTOR_KIND = "crosstl-runtime-adapter-descriptor"
 RUNTIME_LOADER_MANIFEST_KIND = "crosstl-runtime-loader-manifest"
 RUNTIME_HOST_LOADER_SCAFFOLDS_KIND = "crosstl-runtime-host-loader-scaffolds"
 RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_KIND = (
@@ -73,6 +76,7 @@ RUNTIME_PACKAGE_SCOPE = "runtime-artifact-handoff-package"
 RUNTIME_HOST_BINDING_PLAN_SCOPE = "host-binding-planning"
 RUNTIME_PACKAGE_INSPECTION_SCOPE = "runtime-package-readiness-inspection"
 RUNTIME_ADAPTER_PLAN_SCOPE = "runtime-adapter-integration-planning"
+RUNTIME_ADAPTER_PACKAGE_SCOPE = "runtime-adapter-descriptor-package"
 RUNTIME_LOADER_MANIFEST_SCOPE = "runtime-loader-metadata-contract"
 RUNTIME_HOST_LOADER_SCAFFOLDS_SCOPE = "host-loader-scaffold-generation"
 RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_SCOPE = (
@@ -120,6 +124,12 @@ RUNTIME_PACKAGE_INSPECTION_NON_GOALS = (
     "target-sdk-installation",
 )
 RUNTIME_ADAPTER_PLAN_NON_GOALS = (
+    "host-code-rewriting",
+    "device-execution",
+    "runtime-framework-generation",
+    "target-sdk-installation",
+)
+RUNTIME_ADAPTER_PACKAGE_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
     "runtime-framework-generation",
@@ -675,6 +685,88 @@ RUNTIME_ADAPTER_PLAN_ACTION_FIELDS = frozenset(
         "adapter",
         "binding",
         "packagePath",
+    )
+)
+RUNTIME_ADAPTER_PACKAGE_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourcePackage",
+        "sourcePackageHash",
+        "generatedAt",
+        "success",
+        "scope",
+        "nonGoals",
+        "packageRoot",
+        "adapterRoot",
+        "adapterManifest",
+        "project",
+        "summary",
+        "targets",
+        "descriptors",
+        "actions",
+        "runtimePlan",
+        "adapterPlan",
+        "packageInspection",
+        "diagnosticCounts",
+        "diagnostics",
+    )
+)
+RUNTIME_ADAPTER_PACKAGE_TARGET_FIELDS = frozenset(
+    (
+        "target",
+        "adapterKind",
+        "adapterCount",
+        "descriptorCount",
+        "readyDescriptorCount",
+        "blockedDescriptorCount",
+        "runtimeReferenceCount",
+        "requiredTools",
+        "descriptors",
+        "packagePaths",
+    )
+)
+RUNTIME_ADAPTER_PACKAGE_DESCRIPTOR_FIELDS = frozenset(
+    (
+        "id",
+        "target",
+        "adapterKind",
+        "artifactFormat",
+        "binding",
+        "artifact",
+        "packagePath",
+        "descriptorPath",
+        "descriptorHash",
+        "descriptorSizeBytes",
+        "hostInterfaceStatus",
+        "requiredTools",
+    )
+)
+RUNTIME_ADAPTER_DESCRIPTOR_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourcePackage",
+        "sourcePackageHash",
+        "packageRoot",
+        "adapterPlan",
+        "id",
+        "target",
+        "adapterKind",
+        "artifactFormat",
+        "binding",
+        "artifact",
+        "packagePath",
+        "sourcePath",
+        "sourceBackend",
+        "stage",
+        "variant",
+        "defines",
+        "sourceRemap",
+        "hostInterface",
+        "requiredTools",
+        "hostResponsibilities",
+        "validation",
     )
 )
 RUNTIME_LOADER_MANIFEST_FIELDS = frozenset(
@@ -8389,8 +8481,8 @@ def _webgl_split_stage_artifacts(
             continue
 
         stage_path = _webgl_stage_path(output_path, stage)
-        with stage_path.open("w", encoding="utf-8", newline="") as file:
-            file.write(stage_source)
+        with stage_path.open("w", encoding="utf-8", newline="") as stage_file:
+            stage_file.write(stage_source)
         stage_artifact = dict(artifact)
         stage_artifact["stage"] = stage_label
         stage_artifact["path"] = _artifact_report_path(stage_path, config)
@@ -9132,6 +9224,7 @@ class _InheritedTemplateMaterialization:
 class _MetalTemplateTypeDeclaration:
     name: str
     parameters: tuple[str, ...]
+    parameter_defaults: Mapping[str, str]
     span: tuple[int, int]
     location: SourceLocation
     is_functor: bool = False
@@ -10603,7 +10696,7 @@ def _metal_resolve_type_identifiers(
         )
     alias_values = dict(aliases_key)
     constant_values = dict(constants_key)
-    rewrite_pass_limit = max(1, len(alias_values) + len(constant_values) + 1)
+    rewrite_pass_limit = max(2, len(alias_values) + len(constant_values) + 1)
     seen_texts = {text}
     for rewrite_pass in range(1, rewrite_pass_limit + 1):
         previous = text
@@ -10971,7 +11064,7 @@ class _SpanLookup:
         return None
 
 
-_PlainTemplateHelperCallSite = tuple[str, list[str], tuple[int, int], list[str]]
+_PlainTemplateHelperCallSite = Tuple[str, List[str], Tuple[int, int], List[str]]
 
 
 def _metal_template_reference_names(
@@ -11728,14 +11821,14 @@ def _metal_block_spans(preprocessor: Any, source: str) -> list[tuple[int, int]]:
     return spans
 
 
-def _metal_enclosing_block_end(
+def _metal_enclosing_block_span(
     block_spans: Sequence[tuple[int, int]],
     position: int,
-) -> int | None:
+) -> tuple[int, int] | None:
     enclosing = [span for span in block_spans if span[0] < position < span[1]]
     if not enclosing:
         return None
-    return min(enclosing, key=lambda span: span[1] - span[0])[1]
+    return min(enclosing, key=lambda span: span[1] - span[0])
 
 
 def _metal_statement_semicolon(
@@ -11780,15 +11873,53 @@ def _metal_statement_semicolon(
     return None
 
 
-def _metal_concrete_using_alias_type(alias_type: str) -> str | None:
+def _metal_concrete_block_alias_type(alias_type: str) -> str | None:
     alias_type = str(alias_type or "").strip()
     if alias_type.startswith("typename "):
         alias_type = alias_type[len("typename ") :].strip()
-    if "<" not in alias_type or ">" not in alias_type:
+        if re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*",
+            alias_type,
+        ):
+            return None
+    if not alias_type:
         return None
     if any(character in alias_type for character in "{};="):
         return None
     return alias_type
+
+
+def _metal_typedef_alias_parts(
+    preprocessor: Any,
+    source: str,
+    start: int,
+) -> tuple[str, str, int] | None:
+    semicolon = _metal_statement_semicolon(preprocessor, source, start)
+    if semicolon is None:
+        return None
+    declaration = source[start:semicolon].strip()
+    if declaration.startswith("typedef"):
+        declaration = declaration[len("typedef") :].strip()
+    parsed = _metal_declared_type_and_name(declaration)
+    if parsed is None:
+        return None
+    alias_type, alias_name = parsed
+    return alias_name, alias_type, semicolon
+
+
+def _metal_local_integer_constants_before(
+    source: str,
+    block_start: int,
+    position: int,
+) -> dict[str, str]:
+    constants: dict[str, str] = {}
+    for start, end in _metal_statement_spans(source, block_start + 1, position):
+        constant = _metal_local_constant_declaration(source[start:end], constants)
+        if constant is None:
+            continue
+        name, value = constant
+        constants[name] = value
+    return constants
 
 
 def _metal_template_struct_members(
@@ -11845,6 +11976,9 @@ def _metal_template_struct_members(
         }
         structs[name] = {
             "parameters": parameters,
+            "parameter_defaults": preprocessor._template_parameter_defaults(
+                parameter_text
+            ),
             "aliases": aliases,
             "constants": constants,
         }
@@ -11875,6 +12009,19 @@ def _metal_concrete_template_struct_members(
         for index, parameter in enumerate(parameters)
         if index < len(arguments)
     }
+    defaults = dict(struct.get("parameter_defaults") or {})
+    default_context = SimpleNamespace(
+        template_type_traits={},
+    )
+    for parameter in parameters[len(arguments) :]:
+        default = defaults.get(parameter)
+        if default is None:
+            continue
+        substitutions[parameter] = preprocessor._resolve_template_default_argument(
+            str(default),
+            substitutions,
+            default_context,
+        )
     members: dict[str, str] = {}
     for member, value in dict(struct.get("aliases") or {}).items():
         members[str(member)] = preprocessor._replace_identifiers(
@@ -11942,59 +12089,38 @@ def _inline_metal_concrete_using_template_aliases(
             continue
 
         ident, consumed = preprocessor._read_identifier(source, i)
-        scope_end = _metal_enclosing_block_end(block_spans, i)
-        if scope_end is not None:
-            semicolon = _metal_statement_semicolon(preprocessor, source, i)
-            if semicolon is not None:
-                constant = _metal_local_constant_declaration(
-                    source[i : semicolon + 1],
-                    active_constants(i),
-                )
-                if constant is not None:
-                    name, value = constant
-                    constants.append(
-                        {
-                            "name": name,
-                            "value": value,
-                            "end": semicolon + 1,
-                            "scope_end": scope_end,
-                        }
-                    )
-                    i = semicolon + 1
-                    continue
-
-        if ident != "using":
+        if ident not in {"typedef", "using"}:
             i += consumed
             continue
 
         j = i + consumed
-        while j < len(source) and source[j].isspace():
-            j += 1
-        if j >= len(source) or not (source[j].isalpha() or source[j] == "_"):
-            i += consumed
-            continue
-        alias_name, alias_consumed = preprocessor._read_identifier(source, j)
-        j += alias_consumed
-        while j < len(source) and source[j].isspace():
-            j += 1
-        if j >= len(source) or source[j] != "=":
-            i += consumed
-            continue
-        semicolon = _metal_statement_semicolon(preprocessor, source, j + 1)
-        if semicolon is None:
-            i += consumed
-            continue
-        raw_alias_type = source[j + 1 : semicolon]
-        scoped_constants = active_constants(i)
-        scoped_aliases = active_aliases(i)
-        alias_type = _metal_concrete_using_alias_type(raw_alias_type)
-        if alias_type is not None:
-            alias_type = _metal_resolve_type_identifiers(
-                preprocessor,
-                alias_type,
-                aliases=scoped_aliases,
-                constants=scoped_constants,
-            )
+        raw_alias_type = ""
+        if ident == "typedef":
+            typedef_parts = _metal_typedef_alias_parts(preprocessor, source, i)
+            if typedef_parts is None:
+                i += consumed
+                continue
+            alias_name, raw_alias_type, semicolon = typedef_parts
+            alias_type = _metal_concrete_block_alias_type(raw_alias_type)
+        else:
+            while j < len(source) and source[j].isspace():
+                j += 1
+            if j >= len(source) or not (source[j].isalpha() or source[j] == "_"):
+                i += consumed
+                continue
+            alias_name, alias_consumed = preprocessor._read_identifier(source, j)
+            j += alias_consumed
+            while j < len(source) and source[j].isspace():
+                j += 1
+            if j >= len(source) or source[j] != "=":
+                i += consumed
+                continue
+            semicolon = _metal_statement_semicolon(preprocessor, source, j + 1)
+            if semicolon is None:
+                i += consumed
+                continue
+            raw_alias_type = source[j + 1 : semicolon]
+            alias_type = _metal_concrete_block_alias_type(raw_alias_type)
         if alias_type is None:
             dependent_match = re.fullmatch(
                 r"\s*typename\s+([A-Za-z_][A-Za-z0-9_]*)::"
@@ -12013,16 +12139,27 @@ def _inline_metal_concrete_using_template_aliases(
                         continue
                     alias_type = (candidate.get("members") or {}).get(member)
                     break
-            if alias_type is not None:
-                alias_type = _metal_resolve_type_identifiers(
-                    preprocessor,
-                    alias_type,
-                    aliases=scoped_aliases,
-                    constants=scoped_constants,
-                )
-        if alias_type is None or scope_end is None:
+        scope_span = _metal_enclosing_block_span(block_spans, i)
+        if alias_type is None or scope_span is None:
             i = semicolon + 1
             continue
+        scope_start, scope_end = scope_span
+        scoped_aliases = {
+            str(alias["name"]): str(alias["type"])
+            for alias in aliases
+            if int(alias["end"]) <= i and int(alias["scope_end"]) >= scope_end
+        }
+        scoped_constants = _metal_local_integer_constants_before(
+            source,
+            scope_start,
+            i,
+        )
+        alias_type = _metal_resolve_type_identifiers(
+            preprocessor,
+            alias_type,
+            aliases=scoped_aliases,
+            constants=scoped_constants,
+        )
         members = _metal_concrete_template_struct_members(
             preprocessor,
             template_structs,
@@ -12362,9 +12499,8 @@ def _metal_template_type_declarations(
             pos = start + len("template")
             continue
 
-        parameters = tuple(
-            preprocessor._template_parameter_names(source[angle_start + 1 : angle_end])
-        )
+        parameter_text = source[angle_start + 1 : angle_end]
+        parameters = tuple(preprocessor._template_parameter_names(parameter_text))
         declaration_start = angle_end + 1
         header = source[declaration_start : declaration_start + 512]
         declaration_match = re.match(
@@ -12409,6 +12545,9 @@ def _metal_template_type_declarations(
             _MetalTemplateTypeDeclaration(
                 name=declaration_match.group("name").split("::")[-1],
                 parameters=parameters,
+                parameter_defaults=preprocessor._template_parameter_defaults(
+                    parameter_text
+                ),
                 span=(start, end),
                 location=location,
                 is_functor=re.search(r"\boperator\s*\(\s*\)", body) is not None,
@@ -12422,6 +12561,35 @@ def _source_offset_in_spans(offset: int, spans: Sequence[tuple[int, int]]) -> bo
     return any(start <= offset < end for start, end in spans)
 
 
+def _metal_template_arguments_are_local_constants(
+    preprocessor: Any,
+    source: str,
+    offset: int,
+    names: Sequence[str],
+    template_spans: Sequence[tuple[int, int]],
+) -> bool:
+    if not names:
+        return False
+    for function in preprocessor._find_non_template_function_definitions(
+        source,
+        list(template_spans),
+    ):
+        body_start, body_end = function.body_span
+        if not (body_start <= offset < body_end):
+            continue
+        prefix = source[body_start:offset]
+        return all(
+            re.search(
+                rf"\b(?:static\s+)?(?:constexpr|const)\s+"
+                rf"(?:[A-Za-z_][A-Za-z0-9_:<>]*\s+)+{re.escape(name)}\s*=",
+                prefix,
+            )
+            is not None
+            for name in names
+        )
+    return False
+
+
 def _template_argument_missing_parameters(
     argument: str,
     template_parameter_names: set[str],
@@ -12430,6 +12598,52 @@ def _template_argument_missing_parameters(
     for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", argument):
         if token in template_parameter_names and token not in missing:
             missing.append(token)
+    return missing
+
+
+def _metal_template_type_missing_parameters(
+    preprocessor: Any,
+    declaration: _MetalTemplateTypeDeclaration,
+    arguments: Sequence[str],
+    template_parameter_names: set[str],
+) -> list[str]:
+    missing: list[str] = []
+    substitutions = {
+        parameter: arguments[index]
+        for index, parameter in enumerate(declaration.parameters)
+        if index < len(arguments)
+    }
+    default_context = SimpleNamespace(
+        template_type_traits={},
+    )
+    for argument in arguments:
+        for parameter in _template_argument_missing_parameters(
+            argument,
+            template_parameter_names,
+        ):
+            if parameter not in missing:
+                missing.append(parameter)
+    for parameter in declaration.parameters[len(arguments) :]:
+        default = declaration.parameter_defaults.get(parameter)
+        if default is None:
+            if parameter not in missing:
+                missing.append(parameter)
+            continue
+        resolved_default = preprocessor._resolve_template_default_argument(
+            str(default),
+            substitutions,
+            default_context,
+        )
+        substitutions[parameter] = resolved_default
+        for default_parameter in _template_argument_missing_parameters(
+            resolved_default,
+            template_parameter_names,
+        ):
+            if (
+                default_parameter not in substitutions
+                and default_parameter not in missing
+            ):
+                missing.append(default_parameter)
     return missing
 
 
@@ -12480,18 +12694,20 @@ def _unresolved_metal_template_type_records(
                 source[angle_start + 1 : angle_end]
             )
         ]
-        missing: list[str] = []
-        for argument in arguments:
-            for parameter in _template_argument_missing_parameters(
-                argument,
-                template_parameter_names,
-            ):
-                if parameter not in missing:
-                    missing.append(parameter)
-        if len(arguments) < len(declaration.parameters):
-            for parameter in declaration.parameters[len(arguments) :]:
-                if parameter not in missing:
-                    missing.append(parameter)
+        missing = _metal_template_type_missing_parameters(
+            preprocessor,
+            declaration,
+            arguments,
+            template_parameter_names,
+        )
+        if _metal_template_arguments_are_local_constants(
+            preprocessor,
+            source,
+            match.start(),
+            missing,
+            declaration_spans,
+        ):
+            continue
         if not missing:
             continue
 
@@ -12875,7 +13091,30 @@ def _project_template_materialization_for_artifact(
         for name, value in defines.items()
         if name not in configured_parameters
     }
-    if unsupported_type_records:
+    preprocessor = MetalPreprocessor(
+        **base_preprocessor_kwargs,
+        defines=parser_defines,
+    )
+    try:
+        preprocessed = _metal_preprocess_without_template_materialization(
+            preprocessor,
+            source,
+            file_path=str(unit.path),
+        )
+        templates = preprocessor._find_template_functions(preprocessed)
+    except Exception:  # noqa: BLE001
+        return None
+    source_instantiations = preprocessor._find_project_template_instantiations(
+        preprocessed
+    )
+    source_instantiations_use_decltype = any(
+        "decltype" in preprocessed[instantiation.span[0] : instantiation.span[1]]
+        for instantiation in source_instantiations
+    )
+    if unsupported_type_records and (
+        not source_instantiations
+        or (unmaterialized_functor_records and source_instantiations_use_decltype)
+    ):
         metadata = _template_materialization_metadata(
             specializations=[],
             configured_parameters={},
@@ -12918,20 +13157,6 @@ def _project_template_materialization_for_artifact(
             blocked=True,
             error=message,
         )
-
-    preprocessor = MetalPreprocessor(
-        **base_preprocessor_kwargs,
-        defines=parser_defines,
-    )
-    try:
-        preprocessed = _metal_preprocess_without_template_materialization(
-            preprocessor,
-            source,
-            file_path=str(unit.path),
-        )
-        templates = preprocessor._find_template_functions(preprocessed)
-    except Exception:  # noqa: BLE001
-        return None
     if not templates:
         return None
     preprocessed, stripped_diagnostic_helpers = (
@@ -12948,9 +13173,6 @@ def _project_template_materialization_for_artifact(
     source_instantiation_unsupported: list[dict[str, Any]] = []
     source_instantiation_partial_templates: set[str] = set()
     template_lookup = {template.name: template for template in templates}
-    source_instantiations = preprocessor._find_project_template_instantiations(
-        preprocessed
-    )
     if target == "opengl" and source_instantiations:
         materialization_work_items = len(source_instantiations) * max(
             1,
@@ -20339,6 +20561,307 @@ def plan_runtime_adapters(
     }
 
 
+def _runtime_adapter_descriptor_slug(value: Any, fallback: str) -> str:
+    text = value if isinstance(value, str) else ""
+    text = text.strip().lower()
+    text = re.sub(r"[^a-z0-9._-]+", "-", text)
+    text = re.sub(r"-+", "-", text).strip(".-_")
+    text = re.sub(r"-+\.", ".", text)
+    return text or fallback
+
+
+def _runtime_adapter_descriptor_path(
+    adapter: Mapping[str, Any], used: set[str], index: int
+) -> str:
+    target = _runtime_adapter_descriptor_slug(adapter.get("target"), "target")
+    seed = adapter.get("id") or adapter.get("packagePath") or f"adapter-{index}"
+    slug = _runtime_adapter_descriptor_slug(seed, f"adapter-{index}")
+    candidate = f"adapters/{target}/{slug}.adapter.json"
+    suffix = 2
+    while candidate in used:
+        candidate = f"adapters/{target}/{slug}-{suffix}.adapter.json"
+        suffix += 1
+    used.add(candidate)
+    return candidate
+
+
+def _runtime_adapter_descriptor_payload(
+    adapter_plan: Mapping[str, Any], adapter: Mapping[str, Any]
+) -> dict[str, Any]:
+    source_hash = (
+        dict(adapter_plan.get("sourcePackageHash"))
+        if isinstance(adapter_plan.get("sourcePackageHash"), Mapping)
+        else None
+    )
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_ADAPTER_DESCRIPTOR_KIND,
+        "sourcePackage": adapter_plan.get("sourcePackage"),
+        "sourcePackageHash": source_hash,
+        "packageRoot": adapter_plan.get("packageRoot"),
+        "adapterPlan": {
+            "kind": adapter_plan.get("kind"),
+            "success": adapter_plan.get("success"),
+            "scope": adapter_plan.get("scope"),
+        },
+        "id": adapter.get("id"),
+        "target": adapter.get("target"),
+        "adapterKind": adapter.get("adapterKind"),
+        "artifactFormat": adapter.get("artifactFormat"),
+        "binding": adapter.get("binding"),
+        "artifact": adapter.get("artifact"),
+        "packagePath": adapter.get("packagePath"),
+        "sourcePath": adapter.get("sourcePath"),
+        "sourceBackend": adapter.get("sourceBackend"),
+        "stage": adapter.get("stage"),
+        "variant": adapter.get("variant"),
+        "defines": (
+            dict(adapter.get("defines"))
+            if isinstance(adapter.get("defines"), Mapping)
+            else {}
+        ),
+        "sourceRemap": (
+            dict(adapter.get("sourceRemap"))
+            if isinstance(adapter.get("sourceRemap"), Mapping)
+            else None
+        ),
+        "hostInterface": (
+            dict(adapter.get("hostInterface"))
+            if isinstance(adapter.get("hostInterface"), Mapping)
+            else {}
+        ),
+        "requiredTools": (
+            list(adapter.get("requiredTools"))
+            if isinstance(adapter.get("requiredTools"), list)
+            else []
+        ),
+        "hostResponsibilities": (
+            list(adapter.get("hostResponsibilities"))
+            if isinstance(adapter.get("hostResponsibilities"), list)
+            else []
+        ),
+        "validation": (
+            dict(adapter.get("validation"))
+            if isinstance(adapter.get("validation"), Mapping)
+            else {}
+        ),
+    }
+
+
+def _runtime_adapter_descriptor_record(
+    adapter: Mapping[str, Any], descriptor_path: str, descriptor_file: Path
+) -> dict[str, Any]:
+    host_interface = (
+        adapter.get("hostInterface")
+        if isinstance(adapter.get("hostInterface"), Mapping)
+        else {}
+    )
+    return {
+        "id": adapter.get("id"),
+        "target": adapter.get("target"),
+        "adapterKind": adapter.get("adapterKind"),
+        "artifactFormat": adapter.get("artifactFormat"),
+        "binding": adapter.get("binding"),
+        "artifact": adapter.get("artifact"),
+        "packagePath": adapter.get("packagePath"),
+        "descriptorPath": descriptor_path,
+        "descriptorHash": _source_hash(descriptor_file),
+        "descriptorSizeBytes": descriptor_file.stat().st_size,
+        "hostInterfaceStatus": host_interface.get("status"),
+        "requiredTools": (
+            list(adapter.get("requiredTools"))
+            if isinstance(adapter.get("requiredTools"), list)
+            else []
+        ),
+    }
+
+
+def _runtime_adapter_package_target(
+    target: Mapping[str, Any], descriptors: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    target_name = target.get("target")
+    target_descriptors = [
+        descriptor
+        for descriptor in descriptors
+        if descriptor.get("target") == target_name
+    ]
+    ready_descriptors = [
+        descriptor
+        for descriptor in target_descriptors
+        if descriptor.get("hostInterfaceStatus") == "ready"
+    ]
+    blocked_descriptors = [
+        descriptor
+        for descriptor in target_descriptors
+        if descriptor.get("hostInterfaceStatus") != "ready"
+    ]
+    return {
+        "target": target_name,
+        "adapterKind": target.get("adapterKind"),
+        "adapterCount": target.get("readyBindingCount", len(target_descriptors)),
+        "descriptorCount": len(target_descriptors),
+        "readyDescriptorCount": len(ready_descriptors),
+        "blockedDescriptorCount": len(blocked_descriptors),
+        "runtimeReferenceCount": target.get("runtimeReferenceCount", 0),
+        "requiredTools": (
+            list(target.get("requiredTools"))
+            if isinstance(target.get("requiredTools"), list)
+            else []
+        ),
+        "descriptors": [descriptor.get("id") for descriptor in target_descriptors],
+        "packagePaths": [
+            descriptor.get("packagePath")
+            for descriptor in target_descriptors
+            if _is_non_empty_string(descriptor.get("packagePath"))
+        ],
+    }
+
+
+def _runtime_adapter_package_readme(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# CrossTL Runtime Adapter Descriptors",
+        "",
+        "This bundle contains metadata descriptors for downstream host loader or build-system tooling.",
+        "",
+        f"- Adapter manifest: {payload.get('adapterManifest')}",
+        f"- Source package: {payload.get('sourcePackage')}",
+        f"- Adapter descriptors: {payload.get('summary', {}).get('descriptorCount', 0)}",
+        "",
+        "Scope",
+        "",
+        "The descriptors preserve target adapter identity, packaged artifact paths, source-remap handoff paths, host-interface metadata, required tools, host responsibilities, and validation readiness.",
+        "They do not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def materialize_runtime_adapters(
+    package_manifest_path: str | os.PathLike[str],
+    adapter_dir: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Write deterministic runtime adapter descriptors from a runtime package."""
+
+    package_path = _filesystem_path_arg(
+        package_manifest_path, field_name="Runtime package manifest path"
+    )
+    adapter_root = _filesystem_path_arg(
+        adapter_dir, field_name="Runtime adapter descriptor dir"
+    )
+    adapter_plan = plan_runtime_adapters(package_path)
+    adapters = [
+        adapter
+        for adapter in _record_sequence(adapter_plan.get("adapters"))
+        if isinstance(adapter, Mapping)
+    ]
+    targets = [
+        target
+        for target in _record_sequence(adapter_plan.get("targets"))
+        if isinstance(target, Mapping)
+    ]
+
+    adapter_root.mkdir(parents=True, exist_ok=True)
+    used_paths: set[str] = set()
+    descriptors: list[dict[str, Any]] = []
+    for index, adapter in enumerate(adapters, start=1):
+        descriptor_path = _runtime_adapter_descriptor_path(adapter, used_paths, index)
+        descriptor_file = adapter_root / descriptor_path
+        descriptor_file.parent.mkdir(parents=True, exist_ok=True)
+        descriptor_payload = _runtime_adapter_descriptor_payload(adapter_plan, adapter)
+        descriptor_file.write_text(
+            json.dumps(descriptor_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        descriptors.append(
+            _runtime_adapter_descriptor_record(
+                adapter, descriptor_path, descriptor_file
+            )
+        )
+
+    adapter_summary = (
+        adapter_plan.get("summary")
+        if isinstance(adapter_plan.get("summary"), Mapping)
+        else {}
+    )
+    ready_descriptor_count = sum(
+        1
+        for descriptor in descriptors
+        if descriptor.get("hostInterfaceStatus") == "ready"
+    )
+    blocked_descriptor_count = len(descriptors) - ready_descriptor_count
+    payload = {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_ADAPTER_PACKAGE_KIND,
+        "sourcePackage": str(package_path),
+        "sourcePackageHash": _optional_source_hash(package_path),
+        "generatedAt": int(time.time()),
+        "success": bool(adapter_plan.get("success")),
+        "scope": RUNTIME_ADAPTER_PACKAGE_SCOPE,
+        "nonGoals": list(RUNTIME_ADAPTER_PACKAGE_NON_GOALS),
+        "packageRoot": adapter_plan.get("packageRoot"),
+        "adapterRoot": str(adapter_root),
+        "adapterManifest": "runtime-adapters.json",
+        "project": (
+            dict(adapter_plan.get("project"))
+            if isinstance(adapter_plan.get("project"), Mapping)
+            else {"targets": []}
+        ),
+        "summary": {
+            "targetCount": adapter_summary.get("targetCount", 0),
+            "adapterCount": len(adapters),
+            "descriptorCount": len(descriptors),
+            "readyDescriptorCount": ready_descriptor_count,
+            "blockedDescriptorCount": blocked_descriptor_count,
+            "actionCount": adapter_summary.get("actionCount", 0),
+            "runtimeReferenceCount": adapter_summary.get("runtimeReferenceCount", 0),
+        },
+        "targets": [
+            _runtime_adapter_package_target(target, descriptors) for target in targets
+        ],
+        "descriptors": descriptors,
+        "actions": (
+            [dict(action) for action in adapter_plan.get("actions", [])]
+            if isinstance(adapter_plan.get("actions"), list)
+            else []
+        ),
+        "runtimePlan": (
+            dict(adapter_plan.get("runtimePlan"))
+            if isinstance(adapter_plan.get("runtimePlan"), Mapping)
+            else {}
+        ),
+        "adapterPlan": {
+            "kind": adapter_plan.get("kind"),
+            "success": adapter_plan.get("success"),
+            "adapterCount": adapter_summary.get("adapterCount", len(adapters)),
+            "actionCount": adapter_summary.get("actionCount", 0),
+        },
+        "packageInspection": (
+            dict(adapter_plan.get("packageInspection"))
+            if isinstance(adapter_plan.get("packageInspection"), Mapping)
+            else {}
+        ),
+        "diagnosticCounts": (
+            dict(adapter_plan.get("diagnosticCounts"))
+            if isinstance(adapter_plan.get("diagnosticCounts"), Mapping)
+            else {}
+        ),
+        "diagnostics": (
+            [dict(diagnostic) for diagnostic in adapter_plan.get("diagnostics", [])]
+            if isinstance(adapter_plan.get("diagnostics"), list)
+            else []
+        ),
+    }
+    (adapter_root / "runtime-adapters.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (adapter_root / "ADAPTERS.md").write_text(
+        _runtime_adapter_package_readme(payload),
+        encoding="utf-8",
+    )
+    return payload
+
+
 def _runtime_loader_metadata_source(
     path: Any, field: str = "packagePath"
 ) -> dict[str, Any]:
@@ -20835,6 +21358,12 @@ def _runtime_loader_validation_command(
             adapter, tools, package_root=package_root
         )
         return commands[0] if commands else None
+
+    if normalized_target == "vulkan":
+        command_path = _runtime_loader_package_command_path(package_path)
+        if PurePosixPath(command_path).suffix.lower() == ".spvasm" and len(tools) > 1:
+            return [tools[1], command_path, "-o", os.devnull]
+        return [tools[0], command_path]
 
     smoke_command = _toolchain_smoke_command(
         normalized_target,

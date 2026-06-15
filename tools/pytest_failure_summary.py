@@ -223,6 +223,90 @@ def build_summary(
     }
 
 
+def demo_step_message(
+    *,
+    step_name: str,
+    case_name: str,
+    target_backend: str,
+    command: str,
+    report_path: str,
+    artifact_path: str,
+) -> str:
+    details = [
+        f"Demo step failed: {step_name}",
+        f"case={case_name}",
+        f"target={target_backend}",
+        f"command={command}",
+    ]
+    if report_path:
+        details.append(f"report={report_path}")
+    if artifact_path:
+        details.append(f"artifact={artifact_path}")
+    return "; ".join(details)
+
+
+def build_demo_step_summary(
+    *,
+    step_name: str,
+    case_name: str,
+    target_backend: str,
+    command: str,
+    category: str,
+    report_path: str = "",
+    artifact_path: str = "",
+) -> dict[str, Any]:
+    file_path = report_path or artifact_path or f"demo-step:{step_name}"
+    failure = {
+        "nodeid": f"demo::{step_name}::{case_name}",
+        "file": file_path,
+        "name": case_name,
+        "kind": "failure",
+        "category": category,
+        "backend": target_backend,
+        "message": demo_step_message(
+            step_name=step_name,
+            case_name=case_name,
+            target_backend=target_backend,
+            command=command,
+            report_path=report_path,
+            artifact_path=artifact_path,
+        )[:1000],
+        "case": case_name,
+        "target_backend": target_backend,
+        "command": command,
+    }
+    if report_path:
+        failure["report_path"] = report_path
+    if artifact_path:
+        failure["artifact_path"] = artifact_path
+    report = {
+        "path": file_path,
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0,
+        "failed_testcases": [failure],
+    }
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generator": GENERATOR,
+        "summary": {
+            "report_count": 1,
+            "load_error_count": 0,
+            "testcase_count": 1,
+            "failure_count": 1,
+            "error_count": 0,
+            "skipped_count": 0,
+            "failed_testcase_count": 1,
+            "categories": {category: 1},
+            "backends": {target_backend: 1},
+        },
+        "reports": [report],
+        "clean_workflow_runs": [],
+        "failures": [failure],
+    }
+
+
 def markdown_table(headers: list[str], rows: list[list[Any]]) -> str:
     def cell(value: Any) -> str:
         return str(value).replace("|", "\\|").replace("\n", " ").strip()
@@ -277,13 +361,15 @@ def render_markdown(summary: dict[str, Any], sample_limit: int = 20) -> str:
     if summary["failures"]:
         lines.extend(["", "## Failure Samples", ""])
         for failure in summary["failures"][:sample_limit]:
-            lines.append(
-                "- `{}`: {} / {}".format(
-                    failure["nodeid"],
-                    failure["category"],
-                    failure["backend"],
-                )
+            message = str(failure.get("message", "")).splitlines()[0][:240]
+            sample = "- `{}`: {} / {}".format(
+                failure["nodeid"],
+                failure["category"],
+                failure["backend"],
             )
+            if message:
+                sample += f" - {message}"
+            lines.append(sample)
         omitted = len(summary["failures"]) - sample_limit
         if omitted > 0:
             lines.append(f"- Additional failures omitted: {omitted}")
@@ -302,6 +388,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("junit_xml", nargs="*", type=Path)
     parser.add_argument(
+        "--demo-step",
+        action="store_true",
+        help="Write a synthetic failure summary for a failed demo workflow step.",
+    )
+    parser.add_argument("--demo-step-name", default="")
+    parser.add_argument("--case-name", default="")
+    parser.add_argument("--target-backend", default="")
+    parser.add_argument("--command", default="")
+    parser.add_argument("--category", default="demo_toolchain")
+    parser.add_argument("--report-path", default="")
+    parser.add_argument("--artifact-path", default="")
+    parser.add_argument(
         "--clean-workflow",
         help="Record a completed workflow with no pytest failures.",
     )
@@ -312,7 +410,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--markdown-output", type=Path)
     parser.add_argument("--sample-limit", type=int, default=20)
     args = parser.parse_args(argv)
-    if not args.junit_xml and not args.clean_workflow:
+    if args.demo_step:
+        required = {
+            "--demo-step-name": args.demo_step_name,
+            "--case-name": args.case_name,
+            "--target-backend": args.target_backend,
+            "--command": args.command,
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            parser.error("--demo-step requires " + ", ".join(missing))
+    if not args.junit_xml and not args.clean_workflow and not args.demo_step:
         parser.error("at least one junit_xml path or --clean-workflow is required")
     return args
 
@@ -329,7 +437,18 @@ def main(argv: list[str] | None = None) -> int:
                 "head_sha": args.clean_head_sha,
             }
         )
-    summary = build_summary(args.junit_xml, clean_workflow_runs=clean_workflow_runs)
+    if args.demo_step:
+        summary = build_demo_step_summary(
+            step_name=args.demo_step_name,
+            case_name=args.case_name,
+            target_backend=args.target_backend,
+            command=args.command,
+            category=args.category,
+            report_path=args.report_path,
+            artifact_path=args.artifact_path,
+        )
+    else:
+        summary = build_summary(args.junit_xml, clean_workflow_runs=clean_workflow_runs)
     json_text = stable_json(summary)
     markdown_text = render_markdown(summary, sample_limit=args.sample_limit)
     if args.json_output is None and args.markdown_output is None:

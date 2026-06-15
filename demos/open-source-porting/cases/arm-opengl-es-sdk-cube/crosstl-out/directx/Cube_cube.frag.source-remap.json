@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/directx/Cube_cube.frag.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 57,
+        "file": "crosstl-out/directx/Cube_cube.frag.hlsl",
+        "length": 33,
+        "line": 3,
+        "offset": 24
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 1210,
+        "file": "Cube_cube.frag",
+        "length": 24,
+        "line": 23,
+        "offset": 1186
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 152,
+        "file": "crosstl-out/directx/Cube_cube.frag.hlsl",
+        "length": 25,
+        "line": 7,
+        "offset": 127
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 1266,
+        "file": "Cube_cube.frag",
+        "length": 41,
+        "line": 27,
+        "offset": 1225
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 201,
+        "file": "crosstl-out/directx/Cube_cube.frag.hlsl",
+        "length": 49,
+        "line": 8,
+        "offset": 152
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 1266,
+        "file": "Cube_cube.frag",
+        "length": 41,
+        "line": 27,
+        "offset": 1225
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 226,
+        "file": "crosstl-out/directx/Cube_cube.frag.hlsl",
+        "length": 25,
+        "line": 9,
+        "offset": 201
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 1266,
+        "file": "Cube_cube.frag",
+        "length": 41,
+        "line": 27,
+        "offset": 1225
+      }
+    }
+  ],
+  "schemaVersion": 1
+}
