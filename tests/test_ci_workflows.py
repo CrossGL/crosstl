@@ -328,14 +328,17 @@ def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
     assert "name: open-source-porting-demo-reports-${{ matrix.os }}" in demo
     assert "name: Upload demo failure summary" in demo
     assert "name: open-source-porting-demo-failure-summary-${{ matrix.os }}" in demo
-    assert "DEMO_FAILURE_SUMMARY_DIR: support/generated/demo-reports/${{ matrix.os }}" in demo
+    assert (
+        "DEMO_FAILURE_SUMMARY_DIR: support/generated/demo-reports/${{ matrix.os }}"
+        in demo
+    )
     assert "name: Prepare demo failure summary helper" in demo
     assert "write_demo_failure_summary()" in demo
     assert "python tools/pytest_failure_summary.py" in demo
     assert "--demo-step" in demo
-    assert "--case-name \"$case_name\"" in demo
-    assert "--target-backend \"$target_backend\"" in demo
-    assert "--command \"$failed_command\"" in demo
+    assert '--case-name "$case_name"' in demo
+    assert '--target-backend "$target_backend"' in demo
+    assert '--command "$failed_command"' in demo
     assert "demo_artifact" in demo
     assert "demo_toolchain" in demo
     for summary_base in (
@@ -348,8 +351,8 @@ def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
         "open-source-porting-demo-windows-directx-compile",
     ):
         assert summary_base in demo
-    assert '${summary_base}-failure-summary.json' in demo
-    assert '${summary_base}-failure-summary.md' in demo
+    assert "${summary_base}-failure-summary.json" in demo
+    assert "${summary_base}-failure-summary.md" in demo
     assert "profile=\"${profile%$'\\r'}\"" in demo
     assert "if: failure() && steps.run_demo_tests.outcome == 'failure'" in demo
     assert "support/generated/demo-reports/**/*-failure-summary.json" in demo
@@ -477,9 +480,7 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
         ].values()
     )
     assert all(
-        report["workflows"]["open_source_porting_demo"][
-            "checked_in_artifacts"
-        ].values()
+        report["workflows"]["open_source_porting_demo"]["checked_in_artifacts"].values()
     )
     assert all(
         report["workflows"]["open_source_porting_demo"][
@@ -1070,9 +1071,7 @@ def test_ci_coverage_reports_missing_open_source_porting_demo_fields():
     assert "demo.yml missing policy: metadata_pytest_selector" in errors
     assert "demo.yml OS matrix mismatch: missing=['macOS-latest'], extra=[]" in errors
     assert "demo.yml must keep fail-fast: false" in errors
-    assert (
-        "demo.yml missing path filter: push:demos/open-source-porting/**" in errors
-    )
+    assert "demo.yml missing path filter: push:demos/open-source-porting/**" in errors
     assert "demo.yml push and pull_request path filters must match" in errors
     assert "demo.yml must not use broad path filter: crosstl/**" in errors
     assert "demo.yml missing checked artifact verification: runs_demo_check" in errors

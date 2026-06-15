@@ -206,7 +206,7 @@ jobs:
               python demos/open-source-porting/run_demo.py
               --check
               --case="$case_name"
-              --reports-dir "$reports_dir"
+              --reports-dir support/generated/demo-reports/${{ matrix.os }}/artifacts
             )
             failed_command="$(command_text "${command[@]}")"
             if ! "${command[@]}"; then

@@ -201,7 +201,7 @@ def _assert_workflow_step_uses_case_generator(
     block = _workflow_step_block(workflow, step_name)
     assert f"--emit-case-args {target}" in block
     assert '--case="$case_name"' in block
-    assert 'write_demo_failure_summary \\' in block
+    assert "write_demo_failure_summary \\" in block
     assert "--case " not in block
 
 
