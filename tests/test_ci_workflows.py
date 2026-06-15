@@ -453,9 +453,7 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
         ].values()
     )
     assert all(
-        report["workflows"]["open_source_porting_demo"][
-            "checked_in_artifacts"
-        ].values()
+        report["workflows"]["open_source_porting_demo"]["checked_in_artifacts"].values()
     )
     assert all(
         report["workflows"]["open_source_porting_demo"][
@@ -1046,9 +1044,7 @@ def test_ci_coverage_reports_missing_open_source_porting_demo_fields():
     assert "demo.yml missing policy: metadata_pytest_selector" in errors
     assert "demo.yml OS matrix mismatch: missing=['macOS-latest'], extra=[]" in errors
     assert "demo.yml must keep fail-fast: false" in errors
-    assert (
-        "demo.yml missing path filter: push:demos/open-source-porting/**" in errors
-    )
+    assert "demo.yml missing path filter: push:demos/open-source-porting/**" in errors
     assert "demo.yml push and pull_request path filters must match" in errors
     assert "demo.yml must not use broad path filter: crosstl/**" in errors
     assert "demo.yml missing checked artifact verification: runs_demo_check" in errors
