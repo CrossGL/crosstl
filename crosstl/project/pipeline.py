@@ -20,7 +20,7 @@ from dataclasses import dataclass, field, replace
 from importlib import metadata as importlib_metadata
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
-from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence, Tuple
+from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
 from crosstl.project.host_reflection import (
@@ -10973,7 +10973,7 @@ class _SpanLookup:
         return None
 
 
-_PlainTemplateHelperCallSite = tuple[str, list[str], tuple[int, int], list[str]]
+_PlainTemplateHelperCallSite = Tuple[str, List[str], Tuple[int, int], List[str]]
 
 
 def _metal_template_reference_names(
