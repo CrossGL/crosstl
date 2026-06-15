@@ -10406,7 +10406,12 @@ def _metal_local_variable_declaration(
     type_environment: Mapping[str, str],
     return_types: Mapping[str, str],
 ) -> tuple[str, str] | None:
-    cleaned = _strip_metal_attribute_blocks(statement).strip().rstrip(";").strip()
+    cleaned = (
+        _strip_metal_attribute_blocks(_masked_metal_non_code_text(statement))
+        .strip()
+        .rstrip(";")
+        .strip()
+    )
     if not cleaned or cleaned.startswith("#"):
         return None
     first_word = cleaned.split(None, 1)[0] if cleaned.split(None, 1) else ""
@@ -10512,7 +10517,12 @@ def _metal_local_constant_declaration(
     statement: str,
     constants: Mapping[str, str],
 ) -> tuple[str, str] | None:
-    cleaned = _strip_metal_attribute_blocks(statement).strip().rstrip(";").strip()
+    cleaned = (
+        _strip_metal_attribute_blocks(_masked_metal_non_code_text(statement))
+        .strip()
+        .rstrip(";")
+        .strip()
+    )
     match = re.match(
         r"(?:static\s+)?(?:constexpr\s+)?(?:const\s+)?"
         r"(?:short|ushort|int|uint|long|ulong|size_t|auto)\s+"
@@ -10541,7 +10551,12 @@ def _metal_local_using_alias(
     work_budget: _MetalTemplateMaterializationWorkBudget | None = None,
     offset: int = 0,
 ) -> tuple[str, str] | None:
-    cleaned = _strip_metal_attribute_blocks(statement).strip().rstrip(";").strip()
+    cleaned = (
+        _strip_metal_attribute_blocks(_masked_metal_non_code_text(statement))
+        .strip()
+        .rstrip(";")
+        .strip()
+    )
     match = re.match(
         r"using\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<type>.+)$",
         cleaned,

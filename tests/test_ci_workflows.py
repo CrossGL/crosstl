@@ -2105,6 +2105,11 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     harness = (ROOT / "integrations" / "mlx" / "run_mlx_porting.py").read_text(
         encoding="utf-8"
     )
+    expected_gaps = json.loads(
+        (ROOT / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
     mlx_commit = "968d264f2903d578e699c4452a4dbf48633921aa"
 
     assert mlx_porting, "mlx-project-porting.yml must exist"
@@ -2135,10 +2140,6 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS = 900" in harness
     assert "blocked-by-tracked-issues" in harness
     assert "without tracked issue references" in harness
-    for tracked_issue_number in (1312, 1354, 1362, 1376):
-        assert f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}" in (
-            harness
-        )
     for resolved_issue_number in (
         1184,
         1203,
@@ -2164,7 +2165,9 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         1338,
         1340,
         1346,
+        1354,
         1355,
+        1362,
         1300,
         1317,
     ):
@@ -2176,15 +2179,31 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
             f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
             in harness
         )
-    for tracked_issue_number in (1317,):
+    for resolved_issue_number in (1317, 1354, 1355, 1362):
         assert (
-            f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}"
+            f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
             not in mlx_porting
         )
         assert (
-            f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}"
+            f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
             in harness
         )
+        assert (
+            f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
+            in expected_gaps["resolved_issues"]
+        )
+    assert expected_gaps["tracked_issues"] == []
+    assert expected_gaps["frontier_status"]["status"] == "passing"
+    assert expected_gaps["frontier_status"]["blocked_by"] == []
+    assert expected_gaps["full_corpus_scout"]["status"] == "passing"
+    assert expected_gaps["full_corpus_scout"]["validation_blocked_by"] == []
+    assert expected_gaps["full_corpus_scout"]["runtime_blocked_by"] == []
+    assert expected_gaps["full_corpus_scout"]["translation_blocked_by"] == []
+    assert expected_gaps["full_corpus_scout"]["last_completed"] == {
+        "translated_artifacts": 120,
+        "failed_artifacts": 0,
+        "translated_by_target": {"directx": 40, "opengl": 40, "vulkan": 40},
+    }
     assert "MLX_DIRECTX_VULKAN_FRONTIER_SOURCES" in harness
     assert "mlx/backend/metal/kernels/binary_two.metal" in harness
     assert "mlx/backend/metal/kernels/fence.metal" in harness
@@ -2192,6 +2211,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "mlx/backend/metal/kernels/ternary.metal" in harness
     assert "arange-opengl" in harness
     assert "metalIncludesFiltered" in harness
+    assert "--mode" in mlx_porting
+    assert "full-corpus" in harness
 
 
 def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():

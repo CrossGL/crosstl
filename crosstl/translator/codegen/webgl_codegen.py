@@ -5,11 +5,16 @@ from copy import copy
 from ..ast import (
     AssignmentNode,
     BinaryOpNode,
+    ContinueNode,
     FunctionCallNode,
     StageMap,
     TernaryOpNode,
+    WaveOpNode,
 )
-from .array_utils import format_c_style_array_declaration
+from .array_utils import (
+    format_c_style_array_declaration,
+    split_array_type_suffix,
+)
 from .GLSL_codegen import GLSLCodeGen
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
@@ -33,6 +38,7 @@ class WebGLCodeGen(GLSLCodeGen):
         ("float", "precision highp float;"),
         ("int", "precision highp int;"),
     )
+    UNSUPPORTED_INTERPOLATION_QUALIFIERS = {"noperspective", "sample"}
     SUPPORTED_STAGE_NAMES = {"fragment", "vertex"}
     STORAGE_IMAGE_INTRINSIC_NAMES = {
         "imageLoad",
@@ -54,6 +60,22 @@ class WebGLCodeGen(GLSLCodeGen):
         "atomicCounter",
         "atomicCounterAdd",
     }
+    SYNCHRONIZATION_INTRINSIC_NAMES = {
+        "barrier",
+        "workgroupBarrier",
+        "memoryBarrier",
+        "memoryBarrierAtomicCounter",
+        "memoryBarrierBuffer",
+        "memoryBarrierImage",
+        "memoryBarrierShared",
+        "groupMemoryBarrier",
+        "GroupMemoryBarrier",
+        "GroupMemoryBarrierWithGroupSync",
+        "DeviceMemoryBarrier",
+        "DeviceMemoryBarrierWithGroupSync",
+        "AllMemoryBarrier",
+        "AllMemoryBarrierWithGroupSync",
+    }
     GLSL_ES_310_TEXTURE_INTRINSIC_NAMES = {
         "textureGather",
         "textureGatherOffset",
@@ -61,6 +83,10 @@ class WebGLCodeGen(GLSLCodeGen):
         "textureGatherCompare",
         "textureGatherCompareOffset",
         "textureGatherCompareOffsets",
+    }
+    GLSL_DESKTOP_TEXTURE_QUERY_INTRINSIC_NAMES = {
+        "textureQueryLevels",
+        "textureQueryLod",
     }
     UNSUPPORTED_SAMPLED_RESOURCE_TYPES = {
         "sampler1D",
@@ -104,6 +130,18 @@ class WebGLCodeGen(GLSLCodeGen):
         "dmat4x3",
         "dmat4x4",
     }
+    UNSUPPORTED_OPAQUE_RESOURCE_TYPES = {
+        "atomic_uint": "atomic counter",
+    }
+    BUILTIN_OUTPUT_TYPES = {
+        "gl_Position": ("vec4", "vec4"),
+        "gl_PointSize": ("float", "scalar float"),
+        "gl_ClipDistance": ("float", "scalar float"),
+        "gl_CullDistance": ("float", "scalar float"),
+        "gl_FragDepth": ("float", "scalar float"),
+        "gl_FragStencilRefARB": ("int", "scalar int"),
+        "gl_SampleMask": ("int", "scalar int"),
+    }
 
     def default_glsl_version_line(self, ast, target_stage=None):
         return "#version 300 es"
@@ -135,9 +173,16 @@ class WebGLCodeGen(GLSLCodeGen):
         replacement = getattr(self, "_webgl_expression_replacements", {}).get(id(expr))
         if replacement is not None:
             return replacement
+        if isinstance(expr, WaveOpNode):
+            self.validate_webgl_wave_support(expr.operation)
         if isinstance(expr, FunctionCallNode):
             self.validate_webgl_function_call_support(self.function_call_name(expr))
         return super().generate_expression(expr, is_main=is_main)
+
+    def validate_webgl_wave_support(self, operation):
+        raise ValueError(
+            "WebGL target does not support wave/subgroup intrinsic " f"'{operation}'"
+        )
 
     def validate_webgl_function_call_support(self, func_name):
         if func_name in self.STORAGE_IMAGE_INTRINSIC_NAMES:
@@ -150,9 +195,73 @@ class WebGLCodeGen(GLSLCodeGen):
                 "WebGL target requires GLSL ES 3.00 and does not support "
                 f"texture gather intrinsic '{func_name}'"
             )
+        if func_name in self.GLSL_DESKTOP_TEXTURE_QUERY_INTRINSIC_NAMES:
+            raise ValueError(
+                "WebGL target requires GLSL ES 3.00 and does not support "
+                f"texture query intrinsic '{func_name}'"
+            )
         if func_name in self.ATOMIC_INTRINSIC_NAMES:
             raise ValueError(
                 f"WebGL target does not support atomic operation '{func_name}'"
+            )
+        if self.is_webgl_synchronization_intrinsic(func_name):
+            raise ValueError(
+                "WebGL target does not support synchronization intrinsic "
+                f"'{func_name}'"
+            )
+
+    def is_webgl_synchronization_intrinsic(self, func_name):
+        if func_name in self.function_return_types:
+            return False
+        return func_name in self.SYNCHRONIZATION_INTRINSIC_NAMES
+
+    def validate_function_return_semantic(self, func, stage_name):
+        super().validate_function_return_semantic(func, stage_name)
+        semantic = self.function_return_semantic(func)
+        if semantic is None:
+            return
+        self.validate_webgl_builtin_output_type(
+            stage_name,
+            semantic,
+            self.function_return_type(func),
+            f"function '{getattr(func, 'name', '<anonymous>')}' return",
+        )
+
+    def stage_output_member_map(self, func, shader_type):
+        member_map = super().stage_output_member_map(func, shader_type)
+        if member_map:
+            self.validate_webgl_stage_output_struct_members(func, shader_type)
+        return member_map
+
+    def validate_webgl_stage_output_struct_members(self, func, stage_name):
+        struct_name = self.type_node_name(getattr(func, "return_type", None))
+        struct = self.structs_by_name.get(struct_name)
+        if struct is None:
+            return
+        for member in getattr(struct, "members", []) or []:
+            semantic = self.semantic_from_node(member)
+            if semantic is None:
+                continue
+            self.validate_webgl_builtin_output_type(
+                stage_name,
+                semantic,
+                self.member_type_name(member),
+                f"struct '{struct_name}' member '{member.name}'",
+            )
+
+    def validate_webgl_builtin_output_type(
+        self, stage_name, semantic, mapped_type, source
+    ):
+        mapped_semantic = self.map_semantic(semantic)
+        expected = self.BUILTIN_OUTPUT_TYPES.get(mapped_semantic)
+        if expected is None:
+            return
+        expected_type, expected_description = expected
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        if array_suffix or base_type != expected_type:
+            raise ValueError(
+                f"WebGL {stage_name} stage {source} semantic '{semantic}' "
+                f"must be {expected_description}"
             )
 
     def generate_glsl_interface_block_declaration(self, node):
@@ -183,15 +292,23 @@ class WebGLCodeGen(GLSLCodeGen):
             return None
 
         cases = []
+        direct_texture_call = dynamic_info.get("direct_texture_call", False)
         for index in range(dynamic_info["array_size"]):
             static_args = list(args)
             static_args[dynamic_info["arg_index"]] = (
                 self.glsl_static_array_access_argument(dynamic_info, index)
             )
-            rendered_args = ", ".join(
-                self.generate_function_call_arguments(func_name, static_args)
-            )
-            cases.append((index, f"{func_name}({rendered_args})"))
+            if direct_texture_call:
+                rendered_call = self.webgl_render_static_dynamic_sampler_call(
+                    expr,
+                    static_args,
+                )
+            else:
+                rendered_args = ", ".join(
+                    self.generate_function_call_arguments(func_name, static_args)
+                )
+                rendered_call = f"{func_name}({rendered_args})"
+            cases.append((index, rendered_call))
 
         return {
             "index_expr": dynamic_info["index_expr"],
@@ -228,8 +345,15 @@ class WebGLCodeGen(GLSLCodeGen):
 
         return {
             "arg_index": 0,
+            "direct_texture_call": True,
             **dynamic_info,
         }
+
+    def webgl_render_static_dynamic_sampler_call(self, expr, static_args):
+        static_call = copy(expr)
+        static_call.arguments = list(static_args)
+        static_call.args = static_call.arguments
+        return self.generate_expression(static_call)
 
     def webgl_dynamic_sampler_array_call_info(self, func_name, args):
         callee = self.function_definitions.get(func_name)
@@ -291,6 +415,29 @@ class WebGLCodeGen(GLSLCodeGen):
             return None
         return matches[0]
 
+    def webgl_unliftable_dynamic_sampler_expression_info(self, expr):
+        if self.webgl_dynamic_sampler_expression_can_be_lifted(expr):
+            return None
+        for node in self.walk_ast(expr):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            func_name = self.function_call_name(node)
+            if not func_name:
+                continue
+            args = list(getattr(node, "arguments", getattr(node, "args", [])) or [])
+            dynamic_info = self.webgl_dynamic_sampler_call_info(func_name, args)
+            if dynamic_info is None:
+                continue
+            return {
+                "call": node,
+                "return_type": (
+                    self.expression_result_type(expr)
+                    or self.expression_result_type(node)
+                    or "float"
+                ),
+            }
+        return None
+
     def webgl_dynamic_sampler_expression_can_be_lifted(self, expr):
         for node in self.walk_ast(expr):
             if isinstance(node, TernaryOpNode):
@@ -300,6 +447,14 @@ class WebGLCodeGen(GLSLCodeGen):
                 if op in {"&&", "||"}:
                     return False
         return True
+
+    def webgl_unliftable_dynamic_sampler_value(self, value_type):
+        zero_value = self.zero_value_expression(value_type)
+        return (
+            "/* unsupported WebGL dynamic sampler array expression: "
+            "dynamic sampler arrays cannot be lifted from ternary or "
+            f"short-circuit expressions */ {zero_value}"
+        )
 
     def webgl_unique_dynamic_sampler_temp_name(self):
         used_names = set(self.local_variable_types)
@@ -368,7 +523,14 @@ class WebGLCodeGen(GLSLCodeGen):
 
         nested_info = self.webgl_nested_dynamic_sampler_expression_info(expr)
         if nested_info is None:
-            return None
+            unliftable_info = self.webgl_unliftable_dynamic_sampler_expression_info(
+                expr
+            )
+            if unliftable_info is None:
+                return None
+            indent_str = "    " * indent
+            fallback = self.webgl_unliftable_dynamic_sampler_value(target_type)
+            return f"{indent_str}{target} = {fallback};\n"
 
         temp_name, code = self.webgl_generate_nested_dynamic_sampler_prefix(
             nested_info,
@@ -431,7 +593,16 @@ class WebGLCodeGen(GLSLCodeGen):
 
         nested_info = self.webgl_nested_dynamic_sampler_expression_info(expr)
         if nested_info is None:
-            return None
+            unliftable_info = self.webgl_unliftable_dynamic_sampler_expression_info(
+                expr
+            )
+            if unliftable_info is None:
+                return None
+            indent_str = "    " * indent
+            fallback = self.webgl_unliftable_dynamic_sampler_value(
+                unliftable_info["return_type"]
+            )
+            return f"{indent_str}{fallback};\n"
 
         temp_name, code = self.webgl_generate_nested_dynamic_sampler_prefix(
             nested_info,
@@ -487,6 +658,19 @@ class WebGLCodeGen(GLSLCodeGen):
                 code += f"{indent_str}return;\n"
                 return code
 
+            unliftable_info = self.webgl_unliftable_dynamic_sampler_expression_info(
+                expr
+            )
+            if unliftable_info is not None:
+                indent_str = "    " * indent
+                fallback = self.webgl_unliftable_dynamic_sampler_value(
+                    unliftable_info["return_type"]
+                )
+                return (
+                    f"{indent_str}{self.current_stage_output['name']} = {fallback};\n"
+                    f"{indent_str}return;\n"
+                )
+
         direct_statement = super().generate_glsl_dynamic_resource_call_return_statement(
             expr,
             indent,
@@ -496,7 +680,16 @@ class WebGLCodeGen(GLSLCodeGen):
 
         nested_info = self.webgl_nested_dynamic_sampler_expression_info(expr)
         if nested_info is None:
-            return None
+            unliftable_info = self.webgl_unliftable_dynamic_sampler_expression_info(
+                expr
+            )
+            if unliftable_info is None:
+                return None
+            indent_str = "    " * indent
+            fallback = self.webgl_unliftable_dynamic_sampler_value(
+                unliftable_info["return_type"]
+            )
+            return f"{indent_str}return {fallback};\n"
 
         temp_name, code = self.webgl_generate_nested_dynamic_sampler_prefix(
             nested_info,
@@ -511,6 +704,178 @@ class WebGLCodeGen(GLSLCodeGen):
         indent_str = "    " * indent
         code += f"{indent_str}return {rendered_expr};\n"
         return code
+
+    def generate_if(self, node, indent, is_main=False):
+        indent_str = "    " * indent
+        condition_node = (
+            node.condition if hasattr(node, "condition") else node.if_condition
+        )
+        prefix, condition = self.webgl_dynamic_sampler_condition_expression(
+            condition_node,
+            indent,
+        )
+        prefixes = [prefix]
+
+        else_if_conditions = []
+        if hasattr(node, "else_if_conditions") and node.else_if_conditions:
+            for else_if_condition in node.else_if_conditions:
+                else_if_prefix, else_if_rendered = (
+                    self.webgl_dynamic_sampler_condition_expression(
+                        else_if_condition,
+                        indent,
+                    )
+                )
+                prefixes.append(else_if_prefix)
+                else_if_conditions.append(else_if_rendered)
+
+        code = "".join(prefixes)
+        code += f"{indent_str}if ({condition}) {{\n"
+        if_body = node.if_body
+        code += self.generate_scoped_statement_body(if_body, indent + 1)
+        code += f"{indent_str}}}"
+        if hasattr(node, "else_if_conditions") and node.else_if_conditions:
+            for else_if_condition, else_if_body in zip(
+                else_if_conditions,
+                node.else_if_bodies,
+            ):
+                code += f" else if ({else_if_condition}) {{\n"
+                code += self.generate_scoped_statement_body(else_if_body, indent + 1)
+                code += f"{indent_str}}}"
+
+        if hasattr(node, "else_body") and node.else_body:
+            code += " else {\n"
+            else_body = node.else_body
+            code += self.generate_scoped_statement_body(else_body, indent + 1)
+            code += f"{indent_str}}}"
+
+        code += "\n"
+        return code
+
+    def generate_for(self, node, indent, is_main=False):
+        condition_node = getattr(node, "condition", None)
+        if condition_node is None:
+            return super().generate_for(node, indent, is_main=is_main)
+
+        prefix, condition = self.webgl_dynamic_sampler_condition_expression(
+            condition_node,
+            indent + 1,
+        )
+        if not prefix:
+            return super().generate_for(node, indent, is_main=is_main)
+
+        indent_str = "    " * indent
+        inner_indent = "    " * (indent + 1)
+        previous_local_variable_types = dict(self.local_variable_types)
+
+        try:
+            init = self.generate_for_initializer(getattr(node, "init", None))
+            update = (
+                self.generate_expression(node.update)
+                if getattr(node, "update", None)
+                else ""
+            )
+
+            code = f"{indent_str}for ({init}; ; {update}) {{\n"
+            code += prefix
+            code += f"{inner_indent}if (!({condition})) {{\n"
+            code += f"{inner_indent}    break;\n"
+            code += f"{inner_indent}}}\n"
+            code += self.generate_scoped_statement_body(node.body, indent + 1)
+            code += f"{indent_str}}}\n"
+            return code
+        finally:
+            self.local_variable_types = previous_local_variable_types
+
+    def generate_while(self, node, indent):
+        condition_node = getattr(node, "condition", "")
+        prefix, condition = self.webgl_dynamic_sampler_condition_expression(
+            condition_node,
+            indent + 1,
+        )
+        if not prefix:
+            return super().generate_while(node, indent)
+
+        indent_str = "    " * indent
+        inner_indent = "    " * (indent + 1)
+
+        code = f"{indent_str}while (true) {{\n"
+        code += prefix
+        code += f"{inner_indent}if (!({condition})) {{\n"
+        code += f"{inner_indent}    break;\n"
+        code += f"{inner_indent}}}\n"
+        code += self.generate_scoped_statement_body(
+            getattr(node, "body", []),
+            indent + 1,
+        )
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_do_while(self, node, indent):
+        condition_node = getattr(node, "condition", "")
+        prefix, condition = self.webgl_dynamic_sampler_condition_expression(
+            condition_node,
+            indent + 1,
+        )
+        if not prefix:
+            return super().generate_do_while(node, indent)
+        if self.webgl_statement_body_contains_continue(getattr(node, "body", [])):
+            raise ValueError(
+                "WebGL target cannot lower dynamic sampler array do-while "
+                "condition when the loop body contains continue"
+            )
+
+        indent_str = "    " * indent
+        inner_indent = "    " * (indent + 1)
+
+        code = f"{indent_str}while (true) {{\n"
+        code += self.generate_scoped_statement_body(
+            getattr(node, "body", []),
+            indent + 1,
+        )
+        code += prefix
+        code += f"{inner_indent}if (!({condition})) {{\n"
+        code += f"{inner_indent}    break;\n"
+        code += f"{inner_indent}}}\n"
+        code += f"{indent_str}}}\n"
+        return code
+
+    def webgl_statement_body_contains_continue(self, body):
+        return any(isinstance(node, ContinueNode) for node in self.walk_ast(body))
+
+    def webgl_dynamic_sampler_condition_expression(self, expr, indent):
+        direct_dispatch = self.glsl_dynamic_resource_call_dispatch_info(expr)
+        if direct_dispatch is not None:
+            return_type = direct_dispatch.get(
+                "return_type"
+            ) or self.expression_result_type(expr)
+            temp_name, code = self.webgl_generate_nested_dynamic_sampler_prefix(
+                {
+                    "dispatch": direct_dispatch,
+                    "return_type": return_type or "bool",
+                },
+                indent,
+            )
+            return code, temp_name
+
+        nested_info = self.webgl_nested_dynamic_sampler_expression_info(expr)
+        if nested_info is not None:
+            temp_name, code = self.webgl_generate_nested_dynamic_sampler_prefix(
+                nested_info,
+                indent,
+            )
+            rendered_expr = self.webgl_render_expression_with_replacement(
+                expr,
+                nested_info["call"],
+                temp_name,
+                "bool",
+            )
+            return code, rendered_expr
+
+        unliftable_info = self.webgl_unliftable_dynamic_sampler_expression_info(expr)
+        if unliftable_info is not None:
+            return "", self.webgl_unliftable_dynamic_sampler_value("bool")
+
+        return "", self.generate_expression(expr)
 
     def should_emit_stage_io_layout(self, stage_name, direction):
         normalized_stage = normalize_stage_name(stage_name)
@@ -529,6 +894,7 @@ class WebGLCodeGen(GLSLCodeGen):
         supported_ast = self.webgl_supported_stage_ast(ast, target_stage)
         self.validate_webgl_builtin_support(supported_ast)
         self.validate_webgl_resource_support(supported_ast)
+        self.validate_webgl_interpolation_qualifiers(supported_ast)
         codegen_ast = ast if target_stage is not None else supported_ast
         code = super().generate_program(
             codegen_ast,
@@ -541,8 +907,140 @@ class WebGLCodeGen(GLSLCodeGen):
         return input_name
 
     def validate_webgl_resource_support(self, ast):
+        structs_by_name = self.webgl_structs_by_name(ast)
         for node in self.walk_ast(ast):
             self.validate_webgl_node_resource_support(node)
+            self.validate_webgl_block_resource_members(node, structs_by_name)
+
+    def webgl_structs_by_name(self, ast):
+        structs_by_name = {}
+        for node in self.walk_ast(ast):
+            if not self.is_struct_declaration_node(node):
+                continue
+            node_name = getattr(node, "name", None)
+            if node_name:
+                structs_by_name.setdefault(str(node_name), node)
+        return structs_by_name
+
+    def validate_webgl_block_resource_members(self, node, structs_by_name):
+        if getattr(node, "is_cbuffer", False):
+            self.validate_webgl_container_members(
+                node,
+                "constant buffer",
+                self.resource_node_name(node, "<unnamed>"),
+            )
+            return
+
+        if self.is_glsl_interface_block_struct(node):
+            if self.is_webgl_builtin_interface_block(node):
+                return
+            self.validate_webgl_container_members(
+                node,
+                "interface block",
+                self.glsl_interface_block_name(node),
+            )
+            return
+
+        node_type = self.resource_node_type(node)
+        if self.is_constant_buffer_type(node_type):
+            struct_name = self.constant_buffer_element_type(node_type)
+            struct = structs_by_name.get(str(struct_name))
+            if struct is not None:
+                self.validate_webgl_container_members(
+                    struct,
+                    "constant buffer",
+                    self.resource_node_name(node, "<unnamed>"),
+                )
+            return
+
+        if self.is_webgl_layout_bound_struct_uniform(node, node_type, structs_by_name):
+            struct_name = str(self.resource_base_type(node_type))
+            self.validate_webgl_container_members(
+                structs_by_name[struct_name],
+                "uniform block",
+                self.resource_node_name(node, "<unnamed>"),
+            )
+
+    def is_webgl_layout_bound_struct_uniform(self, node, node_type, structs_by_name):
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        if "uniform" not in qualifiers:
+            return False
+        if self.explicit_resource_binding_index(node) is None:
+            return False
+        return str(self.resource_base_type(node_type)) in structs_by_name
+
+    def validate_webgl_container_members(self, struct, container_kind, container_name):
+        for member in getattr(struct, "members", []) or []:
+            member_type = self.webgl_member_type(member)
+            resource_kind, diagnostic_type = self.webgl_opaque_member_resource(
+                member_type
+            )
+            if resource_kind is None:
+                continue
+            member_name = self.resource_node_name(member, "<unnamed>")
+            raise ValueError(
+                f"WebGL target does not support {resource_kind} resource member "
+                f"'{member_name}' in {container_kind} '{container_name}' "
+                f"({diagnostic_type})"
+            )
+
+    def webgl_member_type(self, member):
+        if hasattr(member, "member_type"):
+            return member.member_type
+        if hasattr(member, "element_type"):
+            return member.element_type
+        return getattr(member, "vtype", "float")
+
+    def webgl_opaque_member_resource(self, member_type):
+        base_type = self.resource_base_type(member_type)
+        if self.is_storage_image_type(base_type):
+            return (
+                "storage image",
+                self.map_type(base_type),
+            )
+
+        sampled_type = self.sampled_image_type(base_type)
+        sampled_base_type = self.map_type(self.resource_base_type(sampled_type))
+        if self.is_webgl_sampled_resource_type(sampled_base_type):
+            return "sampled", sampled_base_type
+
+        mapped_base_type = self.map_type(base_type)
+        if mapped_base_type in self.UNSUPPORTED_OPAQUE_RESOURCE_TYPES:
+            return (
+                self.UNSUPPORTED_OPAQUE_RESOURCE_TYPES[mapped_base_type],
+                mapped_base_type,
+            )
+        if self.is_opaque_resource_type(mapped_base_type):
+            return "opaque", mapped_base_type
+        return None, None
+
+    def validate_webgl_interpolation_qualifiers(self, ast):
+        for node in self.walk_ast(ast):
+            node_name = self.resource_node_name(node, "<unnamed>")
+            for qualifier in self.webgl_node_unsupported_interpolation_qualifiers(node):
+                raise ValueError(
+                    "WebGL target does not support interpolation qualifier "
+                    f"'{qualifier}' on '{node_name}'"
+                )
+
+    def webgl_node_unsupported_interpolation_qualifiers(self, node):
+        qualifiers = [
+            str(qualifier) for qualifier in getattr(node, "qualifiers", []) or []
+        ]
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name:
+                qualifiers.append(str(attr_name))
+
+        unsupported = []
+        for qualifier in qualifiers:
+            normalized = qualifier.lower()
+            if normalized.startswith("glsl_"):
+                normalized = normalized[len("glsl_") :]
+            normalized = normalized.replace("-", "_")
+            if normalized in self.UNSUPPORTED_INTERPOLATION_QUALIFIERS:
+                unsupported.append(normalized)
+        return unsupported
 
     def validate_webgl_builtin_support(self, ast):
         builtin_names = self.webgl_unsupported_builtin_output_names(ast)
@@ -621,6 +1119,14 @@ class WebGLCodeGen(GLSLCodeGen):
                 f"'{self.resource_node_name(node, '<unnamed>')}' "
                 f"({self.type_name_string(self.resource_base_type(node_type))})"
             )
+        mapped_base_type = self.map_type(self.resource_base_type(node_type))
+        if mapped_base_type in self.UNSUPPORTED_OPAQUE_RESOURCE_TYPES:
+            resource_kind = self.UNSUPPORTED_OPAQUE_RESOURCE_TYPES[mapped_base_type]
+            raise ValueError(
+                f"WebGL target does not support {resource_kind} resource "
+                f"'{self.resource_node_name(node, '<unnamed>')}' "
+                f"({mapped_base_type})"
+            )
         sampled_type = self.sampled_image_type(node_type)
         sampled_base_type = self.map_type(self.resource_base_type(sampled_type))
         if sampled_base_type in self.UNSUPPORTED_SAMPLED_RESOURCE_TYPES:
@@ -629,6 +1135,16 @@ class WebGLCodeGen(GLSLCodeGen):
                 f"'{self.resource_node_name(node, '<unnamed>')}' "
                 f"({sampled_base_type})"
             )
+        memory_qualifiers = self.resource_memory_qualifiers(node)
+        if memory_qualifiers and self.is_webgl_sampled_resource_type(sampled_base_type):
+            raise ValueError(
+                "WebGL target does not support resource memory qualifier(s) "
+                f"'{memory_qualifiers}' on sampled resource "
+                f"'{self.resource_node_name(node, '<unnamed>')}'"
+            )
+
+    def is_webgl_sampled_resource_type(self, type_name):
+        return str(type_name).startswith(("sampler", "isampler", "usampler"))
 
     def is_webgl_glsl_buffer_block_node(self, node):
         qualifiers = {

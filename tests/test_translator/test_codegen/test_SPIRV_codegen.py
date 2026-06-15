@@ -153,21 +153,42 @@ def assert_matrix_constructs_have_exact_column_operands(spv_code):
 def assert_spirv_stores_use_matching_value_types(spv_code):
     result_types = {
         result_id: result_type
-        for result_id, result_type in re.findall(r"(%\d+) = Op\w+ (%\d+)\b", spv_code)
+        for result_id, result_type in re.findall(r"(%\w+) = Op\w+ (%\w+)\b", spv_code)
     }
     pointer_pointees = {
         pointer_type: pointee_type
         for pointer_type, pointee_type in re.findall(
-            r"(%\d+) = OpTypePointer \w+ (%\d+)\b", spv_code
+            r"(%\w+) = OpTypePointer \w+ (%\w+)\b", spv_code
         )
     }
 
-    for pointer_id, value_id in re.findall(r"OpStore (%\d+) (%\d+)", spv_code):
+    for pointer_id, value_id in re.findall(r"OpStore (%\w+) (%\w+)", spv_code):
         pointer_type = result_types.get(pointer_id)
         expected_type = pointer_pointees.get(pointer_type)
         actual_type = result_types.get(value_id)
         if expected_type is not None and actual_type is not None:
             assert actual_type == expected_type
+
+
+def assert_spirv_loads_use_matching_pointer_types(spv_code):
+    result_types = {
+        result_id: result_type
+        for result_id, result_type in re.findall(r"(%\w+) = Op\w+ (%\w+)\b", spv_code)
+    }
+    pointer_pointees = {
+        pointer_type: pointee_type
+        for pointer_type, pointee_type in re.findall(
+            r"(%\w+) = OpTypePointer \w+ (%\w+)\b", spv_code
+        )
+    }
+
+    for _result_id, result_type, pointer_id in re.findall(
+        r"(%\w+) = OpLoad (%\w+) (%\w+)", spv_code
+    ):
+        pointer_type = result_types.get(pointer_id)
+        expected_type = pointer_pointees.get(pointer_type)
+        if expected_type is not None:
+            assert result_type == expected_type
 
 
 def assert_spirv_function_calls_use_declared_parameter_types(spv_code):
@@ -1105,6 +1126,7 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_loads_use_matching_pointer_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_bool_vector_constructors_flatten_bool_vectors_and_comparisons(self):
@@ -1718,6 +1740,7 @@ class TestVulkanSPIRVCodeGen:
         assert "OpConvertFToS" not in spv_code
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_loads_use_matching_pointer_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_mixed_vector_binary_and_comparison_promote_component_types(self, tmp_path):
@@ -1761,6 +1784,7 @@ class TestVulkanSPIRVCodeGen:
         assert "OpSLessThan" not in spv_code
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_loads_use_matching_pointer_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_precise_variable_decorates_float_arithmetic_results_no_contraction(self):
@@ -2188,6 +2212,36 @@ class TestVulkanSPIRVCodeGen:
         assert "OpFunctionCall" in spv_code
         assert "SPIR-V codegen does not support generic functions" not in spv_code
         assert "WARNING" not in spv_code
+
+    def test_generic_numeric_trait_calls_specialize_to_spirv_arithmetic(self, tmp_path):
+        source_code = """
+        shader GenericNumericTraitLowering {
+            generic<T> fn add_one(value: T) -> T {
+                let one = T::one();
+                let zero = T::zero();
+                return value.add(one).sub(zero);
+            }
+
+            compute {
+                void main() {
+                    float f = add_one(2.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpFAdd" in spv_code
+        assert "OpFSub" in spv_code
+        assert "T::one" not in spv_code
+        assert "T::zero" not in spv_code
+        assert "Unknown type T" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_unspecialized_generic_function_reports_helper_context(self):
         source_code = """
@@ -8412,6 +8466,7 @@ class TestVulkanSPIRVCodeGen:
         assert "OpSetMeshOutputsEXT" in spv_code
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_loads_use_matching_pointer_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_mesh_stage_output_parameter_component_assignments(self, tmp_path):
@@ -24608,6 +24663,7 @@ class TestVulkanSPIRVCodeGen:
         assert f"OpDecorate {u64_runtime_array.group(1)} ArrayStride 8" in spv_code
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_loads_use_matching_pointer_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_mlx_arange_metal_u64_constant_refs_access_chains_validate(self, tmp_path):
@@ -24642,6 +24698,35 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_loads_use_matching_pointer_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mlx_arange_metal_mixed_width_store_validates(self, tmp_path):
+        source_path = tmp_path / "arange_uint32.metal"
+        source_path.write_text(
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void arange_uint32(
+                constant const uint64_t& start [[buffer(0)]],
+                constant const uint64_t& step [[buffer(1)]],
+                device uint* out [[buffer(2)]],
+                uint index [[thread_position_in_grid]]
+            ) {
+                out[index] = start + index * step;
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        spv_code = crosstl.translate(
+            str(source_path), backend="vulkan", format_output=False
+        )
+
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_loads_use_matching_pointer_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_mlx_binary_two_u64_storage_buffer_access_chain_validates(self, tmp_path):
@@ -24681,6 +24766,7 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_loads_use_matching_pointer_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_mlx_binary_two_metal_u64_vector_result_index_validates(self, tmp_path):
@@ -24730,6 +24816,46 @@ class TestVulkanSPIRVCodeGen:
         assert "Unknown type ulong2" not in spv_code
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_loads_use_matching_pointer_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mlx_binary_two_metal_scalar_auto_result_index_is_not_indexed(
+        self, tmp_path
+    ):
+        source_path = tmp_path / "binary_two_uint32_scalar.metal"
+        source_path.write_text(
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            inline uint scalar_pair(uint a, uint b) {
+                return a + b;
+            }
+
+            kernel void binary_two_uint32_scalar(
+                device const uint* a [[buffer(0)]],
+                device const uint* b [[buffer(1)]],
+                device uint* c [[buffer(2)]],
+                device uint* d [[buffer(3)]],
+                uint index [[thread_position_in_grid]]
+            ) {
+                auto out = scalar_pair(a[0], b[0]);
+                c[index] = out[0];
+                d[index] = out[1];
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        spv_code = crosstl.translate(
+            str(source_path), backend="vulkan", format_output=False
+        )
+
+        assert "WARNING" not in spv_code
+        out_var = spirv_named_variable(spv_code, "out_", storage_class="Function")
+        assert not re.search(rf"OpAccessChain %\w+ {re.escape(out_var)} %\w+", spv_code)
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_loads_use_matching_pointer_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_mlx_ternary_mixed_u64_uint_storage_buffer_access_validates(self, tmp_path):
@@ -24770,6 +24896,37 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_loads_use_matching_pointer_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mlx_ternary_metal_mixed_width_loads_validate(self, tmp_path):
+        source_path = tmp_path / "ternary_uint32_to_u64.metal"
+        source_path.write_text(
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void ternary_uint32_to_u64(
+                device const bool* a [[buffer(0)]],
+                device const uint* b [[buffer(1)]],
+                device const uint* c [[buffer(2)]],
+                device uint* d [[buffer(3)]],
+                uint index [[thread_position_in_grid]]
+            ) {
+                ulong value = a[index] ? b[index] : c[index];
+                d[index] = value;
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        spv_code = crosstl.translate(
+            str(source_path), backend="vulkan", format_output=False
+        )
+
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_loads_use_matching_pointer_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_mlx_ternary_metal_u64_derived_indices_validate(self, tmp_path):
@@ -24809,6 +24966,7 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_loads_use_matching_pointer_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
     @pytest.mark.parametrize(

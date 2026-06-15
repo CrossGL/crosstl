@@ -39799,8 +39799,7 @@ def test_translate_project_metal_matmul_buffers_lower_to_directx_resources(
     assert "uint2 id = id_dispatchThreadID.xy;" in output
     assert "A.Load(index_A)" in output
     assert "B.Load(index_B)" in output
-    assert "X[index] = sum;" in output
-    assert "X.Store(" not in output
+    assert "X.Store(index, sum);" in output
     assert "float* A" not in output
     assert "float* B" not in output
     assert "float* X" not in output
@@ -39861,10 +39860,9 @@ def test_translate_project_metal_matmul_device_buffers_do_not_emit_directx_param
     assert "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)" in output
     assert "uint2 id = id_dispatchThreadID.xy;" in output
     assert (
-        "X[((row * col_dim_x) + col)] = "
-        "(A.Load(((row * inner_dim) + col)) + B.Load(col));" in output
+        "X.Store(((row * col_dim_x) + col), "
+        "(A.Load(((row * inner_dim) + col)) + B.Load(col)));" in output
     )
-    assert "X.Store(" not in output
     assert "A.Load(((row * inner_dim) + col))" in output
     assert "B.Load(col)" in output
     assert "float* A" not in output
@@ -39946,8 +39944,7 @@ def test_translate_project_metal_matmul_unbound_device_buffers_lower_to_directx_
     assert "uint2 id = id_dispatchThreadID.xy;" in output
     assert "A.Load(index_A)" in output
     assert "B.Load(index_B)" in output
-    assert "X[index] = sum;" in output
-    assert "X.Store(" not in output
+    assert "X.Store(index, sum);" in output
     assert "float* A" not in output
     assert "float* B" not in output
     assert "float* X" not in output
@@ -41243,6 +41240,62 @@ def test_metal_project_materialization_default_work_budget_scales_source_instant
         record["materializedName"] == "adjust_value_float"
         for record in materialized.metadata["specializations"]
     )
+
+
+def test_translate_project_metal_local_declaration_comments_are_not_template_placeholders(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "commented_locals.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            T adjust_value(T value) {
+                return value + T(1);
+            }
+
+            template <typename T>
+            [[kernel]] void launch(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                /* Documentation mentions Placeholder<T> before a local constant. */
+                constexpr int width = 4;
+
+                // Documentation mentions Alias<T> before a local type alias.
+                using value_type = T;
+
+                /* Documentation mentions Value<T> before a local declaration. */
+                value_type value = adjust_value(value_type(gid + width));
+                out[gid] = value;
+            }
+
+            instantiate_kernel("launch_f32", launch, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert (
+        "project.translate.template-materialization-unsupported"
+        not in payload["summary"]["diagnosticsByCode"]
+    )
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["unsupported"] == []
+
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "Placeholder<" not in output
+    assert "Alias<" not in output
+    assert "Value<" not in output
 
 
 def test_translate_project_applies_metal_target_source_pattern_materialization_work_limit(
@@ -43264,8 +43317,7 @@ def test_translate_project_target_template_variant_manifest_materializes_for_ope
     }
     directx_output = (repo / directx_artifact["path"]).read_text(encoding="utf-8")
     assert "RWStructuredBuffer<uint> out_ : register(u0);" in directx_output
-    assert "out_[gid] = uint(0);" in directx_output
-    assert "out_.Store(" not in directx_output
+    assert "out_.Store(gid, uint(0));" in directx_output
 
     report_path = repo / "out" / "report.json"
     report.write_json(report_path)

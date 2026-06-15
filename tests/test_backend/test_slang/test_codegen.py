@@ -4208,9 +4208,36 @@ def test_pointer_declarator_codegen_from_mlp_training_samples():
     generated_code = generate_code(ast)
 
     assert "NFloat* weights;" in generated_code
-    assert "MyNetwork* network" in generated_code
-    assert "Atomic<uint32_t>* lossBuffer" in generated_code
-    assert "vec2* inputs" in generated_code
+    assert (
+        "void learnGradient("
+        "uniform MyNetwork* network, "
+        "uniform Atomic<uint32_t>* lossBuffer, "
+        "uniform vec2* inputs)"
+    ) in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_readonly_pointer_qualifier_codegen_diagnoses_unsupported_spelling():
+    code = """
+    void visit(const float* values)
+    {
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "void visit(const float* values)" in generated_code
+    cgl_translator.parse(generated_code)
+
+    ast.functions[0].params[0].qualifiers = ["readonly"]
+
+    with pytest.raises(
+        ValueError,
+        match="Cannot preserve Slang read-only pointer qualifier",
+    ):
+        generate_code(ast)
 
 
 def test_official_pointer_address_of_and_arrow_member_codegen():

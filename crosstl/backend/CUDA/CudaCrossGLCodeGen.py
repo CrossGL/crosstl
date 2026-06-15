@@ -4204,8 +4204,13 @@ class CudaToCrossGLConverter:
                         f"array<{element_type}>"
                     )
                     binding = self.global_resource_binding_count + len(params)
+                    access = (
+                        "read"
+                        if self.is_readonly_pointer_type(param.vtype)
+                        else "read_write"
+                    )
                     params.append(
-                        f"@group(0) @binding({binding}) var<storage, read_write> {param_name}: {storage_type}"
+                        f"@group(0) @binding({binding}) var<storage, {access}> {param_name}: {storage_type}"
                     )
                 else:
                     param_type = self.convert_cuda_variable_type_to_crossgl(
@@ -6886,6 +6891,14 @@ class CudaToCrossGLConverter:
             mapped_type = self.wrap_crossgl_pointer_type(mapped_type)
 
         return mapped_type
+
+    def is_readonly_pointer_type(self, cuda_type):
+        pointer_depth = str(cuda_type).count("*")
+        if pointer_depth <= 0:
+            return False
+        base_type = str(cuda_type).replace("*", " ")
+        qualifiers = set(re.findall(r"\b(?:const|readonly)\b", base_type))
+        return bool(qualifiers)
 
     def strip_function_pointer_parameter_list(self, type_name):
         """Keep imported C++ function-pointer types reparsable in CrossGL."""

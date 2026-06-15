@@ -5148,8 +5148,7 @@ def test_codegen_resource_array_receivers_use_canonical_calls():
 
     hlsl = TranslatorHLSLCodeGen().generate(shader_ast)
     assert "RWStructuredBuffer<int> buffers[2] : register(u2);" in hlsl
-    assert "buffers[index][0] = 7;" in hlsl
-    assert "buffers[index].Store(" not in hlsl
+    assert "buffers[index].Store(0, 7);" in hlsl
     assert "buffers[index].Load(0)" in hlsl
     assert "buffer_store(" not in hlsl
     assert "buffer_load(" not in hlsl
@@ -5201,8 +5200,7 @@ def test_codegen_resource_array_spaces_roundtrip_for_srv_uav_and_typed_buffers()
     assert "RWBuffer<uint> counters[2] : register(u8, space4);" in hlsl
     assert "textures[index].Sample(samplers[index], uv)" in hlsl
     assert "images[index][uint2(1, 2)] = c;" in hlsl
-    assert "buffers[index][0] = 7;" in hlsl
-    assert "buffers[index].Store(" not in hlsl
+    assert "buffers[index].Store(0, 7);" in hlsl
     assert "buffers[index].Load(0)" in hlsl
     assert "InterlockedAdd(counters[index][0], 1u, oldValue);" in hlsl
     assert "buffer_store(" not in hlsl

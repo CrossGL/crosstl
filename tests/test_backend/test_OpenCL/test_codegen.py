@@ -250,6 +250,24 @@ def test_opencl_vector_constructor_cast_codegen_reparse():
 
     assert "var coord: vec2<i32> = vec2<i32>(" in crossgl
     assert "var color: vec4<f32> = vec4<f32>(" in crossgl
+    assert "image2D srcImg @binding(0) @readonly" in crossgl
+    assert "image2D dstImg @binding(1) @writeonly" in crossgl
+
+
+def test_opencl_image_and_sampler_kernel_params_keep_resource_metadata():
+    crossgl = generate_crossgl("""
+        __kernel void sample_and_store(__read_only image2d_t srcImg,
+                                       sampler_t smp,
+                                       __write_only image2d_t dstImg) {
+            int2 coord = (int2)(get_global_id(0), get_global_id(1));
+            float4 color = read_imagef(srcImg, smp, coord);
+            write_imagef(dstImg, coord, color);
+        }
+        """)
+
+    assert "image2D srcImg @binding(0) @readonly" in crossgl
+    assert "sampler smp @binding(1)" in crossgl
+    assert "image2D dstImg @binding(2) @writeonly" in crossgl
 
 
 def test_opencl_signed_char_pointer_lowers_to_crossgl_i8_array():

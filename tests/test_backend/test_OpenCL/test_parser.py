@@ -164,6 +164,24 @@ def test_underscored_image_access_qualifiers_parse():
     assert kernel.params[1]["type"] == "write_only image2d_t"
 
 
+def test_parameter_attribute_between_pointer_and_name_parses():
+    ast = parse_code("""
+        void aligned_copy(global uchar * __attribute__((align_value(16))) dst,
+                          const global uchar * __attribute__((align_value(16))) src,
+                          uint n) {
+            for (uint i = 0; i < n; i++) {
+                dst[i] = src[i];
+            }
+        }
+        """)
+
+    helper = ast.statements[0]
+    assert helper.name == "aligned_copy"
+    assert helper.params[0] == {"type": "__global__ uchar *", "name": "dst"}
+    assert helper.params[1] == {"type": "const __global__ uchar *", "name": "src"}
+    assert helper.params[2] == {"type": "uint", "name": "n"}
+
+
 def test_volatile_global_unsigned_pointer_cast_parses():
     ast = parse_code("""
         void atomicAdd(volatile __global T *ptr, T val) {

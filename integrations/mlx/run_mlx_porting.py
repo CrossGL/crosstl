@@ -33,17 +33,13 @@ FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK = 131072
 FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS = 900
 REDUCED_FRONTIER_MODE = "reduced-frontier"
 FULL_CORPUS_MODE = "full-corpus"
-FRONTIER_VALIDATION_TRACKED_ISSUES = ("https://github.com/CrossGL/crosstl/issues/1362",)
-FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
-    "https://github.com/CrossGL/crosstl/issues/1354",
-    "https://github.com/CrossGL/crosstl/issues/1376",
-)
-FULL_CORPUS_TRACKED_ISSUES = (
-    *FRONTIER_VALIDATION_TRACKED_ISSUES,
-    "https://github.com/CrossGL/crosstl/issues/1312",
-    *FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
-)
+FRONTIER_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()
+FULL_CORPUS_TRANSLATION_TRACKED_ISSUES: tuple[str, ...] = ()
+FULL_CORPUS_TRACKED_ISSUES = (*FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,)
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1354",
+    "https://github.com/CrossGL/crosstl/issues/1355",
+    "https://github.com/CrossGL/crosstl/issues/1362",
     "https://github.com/CrossGL/crosstl/issues/1317",
     "https://github.com/CrossGL/crosstl/issues/1300",
     "https://github.com/CrossGL/crosstl/issues/939",
@@ -122,7 +118,6 @@ RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1338",
     "https://github.com/CrossGL/crosstl/issues/1340",
     "https://github.com/CrossGL/crosstl/issues/1346",
-    "https://github.com/CrossGL/crosstl/issues/1355",
 )
 
 

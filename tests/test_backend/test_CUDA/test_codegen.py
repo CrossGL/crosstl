@@ -306,9 +306,7 @@ class TestCudaCodeGen:
         assert (
             "@group(0) @binding(3) var<storage, read_write> out: array<f32>" in result
         )
-        assert (
-            "@group(0) @binding(4) var<storage, read_write> input: array<f32>" in result
-        )
+        assert "@group(0) @binding(4) var<storage, read> input: array<f32>" in result
         assert result.count("@group(0) @binding(0)") == 1
         assert "__constant__" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
@@ -335,10 +333,7 @@ class TestCudaCodeGen:
             "@group(0) @binding(0) var<storage, read_write> d_output: array<u32>"
             in result
         )
-        assert (
-            "@group(0) @binding(1) var<storage, read_write> d_input: array<u32>"
-            in result
-        )
+        assert "@group(0) @binding(1) var<storage, read> d_input: array<u32>" in result
         assert "var d_local: ptr<u32>;" in result
         assert "var d_shadow: ptr<u32>;" in result
         assert "d_output[0] = ((d_input[0] & 0xf00) >> 8);" in result
@@ -364,7 +359,7 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "var<storage, read_write> kernel_: array<T>" in result
+        assert "var<storage, read> kernel_: array<T>" in result
         assert "output[idx] = (input[idx] + kernel_[idx]);" in result
         assert "var<storage, read_write> kernel: array<T>" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
@@ -9828,8 +9823,10 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "data: array<f32>" in result
-        assert "indices: array<i32>" in result
+        assert (
+            "@group(0) @binding(0) var<storage, read_write> data: array<f32>" in result
+        )
+        assert "@group(0) @binding(1) var<storage, read> indices: array<i32>" in result
         assert "array<ptr" not in result
 
     def test_kernel_pointer_parameters_roundtrip_to_rust(self, tmp_path):

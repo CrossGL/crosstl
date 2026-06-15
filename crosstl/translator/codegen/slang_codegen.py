@@ -94,6 +94,15 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
 )
+from .generic_struct_utils import (
+    collect_generic_struct_definitions,
+    collect_generic_struct_specialization_member_types,
+    collect_generic_struct_specializations,
+    generate_generic_structs,
+    generate_struct_constructor_expression,
+    generic_struct_specialized_fields,
+    generic_struct_specialized_type_name,
+)
 from .glsl_buffer_layout import (
     align_to,
     byte_offset_add,
@@ -241,6 +250,8 @@ class SlangCodeGen:
         self.struct_payload_enums = []
         self.generic_enum_struct_definitions = {}
         self.generic_enum_specializations = {}
+        self.generic_struct_definitions = {}
+        self.generic_struct_specializations = {}
         self.enum_type_names = set()
         self.enum_struct_type_names = set()
         self.enum_struct_variant_fields = {}
@@ -400,10 +411,21 @@ class SlangCodeGen:
             self.generic_enum_struct_definitions = (
                 collect_generic_enum_struct_definitions(user_structs)
             )
+            self.generic_struct_definitions = collect_generic_struct_definitions(
+                user_structs,
+                excluded_names=set(self.generic_enum_struct_definitions),
+            )
             self.generic_enum_specializations = collect_generic_enum_specializations(
                 ast,
                 self.generic_enum_struct_definitions,
                 self.type_name_string,
+            )
+            self.generic_struct_specializations = (
+                collect_generic_struct_specializations(
+                    ast,
+                    self.generic_struct_definitions,
+                    self.type_name_string,
+                )
             )
             self.plain_enums = collect_plain_enums(self.user_enum_nodes)
             self.struct_payload_enums = collect_struct_payload_enums(
@@ -449,6 +471,11 @@ class SlangCodeGen:
                     self, self.generic_enum_specializations
                 )
             )
+            self.struct_member_types.update(
+                collect_generic_struct_specialization_member_types(
+                    self, self.generic_struct_specializations
+                )
+            )
             generic_function_specializations = prepare_generic_function_specializations(
                 self,
                 list(iter_function_nodes(ast)),
@@ -483,6 +510,27 @@ class SlangCodeGen:
                         if getattr(func, "name", None)
                     }
                 )
+                additional_generic_struct_specializations = (
+                    collect_generic_struct_specializations(
+                        specialized_functions,
+                        self.generic_struct_definitions,
+                        self.type_name_string,
+                    )
+                )
+                if additional_generic_struct_specializations:
+                    self.generic_struct_specializations.update(
+                        additional_generic_struct_specializations
+                    )
+                    self.struct_member_types.update(
+                        collect_generic_struct_specialization_member_types(
+                            self,
+                            additional_generic_struct_specializations,
+                        )
+                    )
+            self.user_struct_names.update(
+                specialization["struct_name"]
+                for specialization in self.generic_struct_specializations.values()
+            )
             self.reject_unsupported_generic_functions(ast)
             self.literal_int_constants = collect_literal_int_constants(
                 getattr(ast, "constants", [])
@@ -543,6 +591,9 @@ class SlangCodeGen:
                 struct_code = self.generate_struct(struct)
                 if struct_code:
                     result += struct_code + "\n\n"
+            result += generate_generic_structs(
+                self, self.ordered_generic_struct_specializations()
+            )
             result += self.generate_constants(ast, struct_dependent_constants)
             result += self.slang_struct_dependent_helper_marker()
 
@@ -658,6 +709,53 @@ class SlangCodeGen:
         helpers = self.generate_slang_glsl_buffer_aggregate_load_helpers()
         helpers += self.generate_slang_byteaddress_atomic_helpers()
         return helpers
+
+    def ordered_generic_struct_specializations(self):
+        specializations = self.generic_struct_specializations or {}
+        if not specializations:
+            return {}
+
+        type_text_by_struct_name = {
+            specialization["struct_name"]: type_text
+            for type_text, specialization in specializations.items()
+        }
+        dependencies = {type_text: set() for type_text in specializations}
+        for type_text, specialization in specializations.items():
+            for _field_name, field_type in generic_struct_specialized_fields(
+                self.type_name_string,
+                specialization,
+            ):
+                dependency_name = generic_struct_specialized_type_name(
+                    self,
+                    field_type,
+                )
+                dependency_type = type_text_by_struct_name.get(dependency_name)
+                if dependency_type and dependency_type != type_text:
+                    dependencies[type_text].add(dependency_type)
+
+        ordered = {}
+        visiting = set()
+        visited = set()
+        type_order = {
+            type_text: index for index, type_text in enumerate(specializations)
+        }
+
+        def visit(type_text):
+            if type_text in visited or type_text in visiting:
+                return
+            visiting.add(type_text)
+            for dependency_type in sorted(
+                dependencies[type_text],
+                key=lambda item: type_order[item],
+            ):
+                visit(dependency_type)
+            visiting.remove(type_text)
+            visited.add(type_text)
+            ordered[type_text] = specializations[type_text]
+
+        for type_text in specializations:
+            visit(type_text)
+        return ordered
 
     def collect_user_function_names(self, node):
         names = set()
@@ -1773,6 +1871,9 @@ class SlangCodeGen:
             struct_code = self.generate_struct(struct)
             if struct_code:
                 result += struct_code + "\n\n"
+        result += generate_generic_structs(
+            self, self.ordered_generic_struct_specializations()
+        )
         result += self.generate_constants(node, struct_dependent_constants)
         result += self.slang_struct_dependent_helper_marker()
 
@@ -5692,6 +5793,8 @@ class SlangCodeGen:
             return ""
         if getattr(node, "name", None) in self.generic_enum_struct_definitions:
             return ""
+        if getattr(node, "name", None) in self.generic_struct_definitions:
+            return ""
         if getattr(node, "name", None) in self.glsl_buffer_block_struct_names:
             return ""
         result = f"struct {node.name}\n{{\n"
@@ -9266,6 +9369,9 @@ class SlangCodeGen:
             enum_constructor = generate_enum_constructor_expression(self, node)
             if enum_constructor is not None:
                 return enum_constructor
+            struct_constructor = generate_struct_constructor_expression(self, node)
+            if struct_constructor is not None:
+                return struct_constructor
             callee = self.convert_type(self.type_name_string(node.constructor_type))
             args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
             return f"{callee}({args})"
@@ -10501,6 +10607,10 @@ class SlangCodeGen:
         if generic_enum_type is not None:
             return generic_enum_type
 
+        generic_struct_type = generic_struct_specialized_type_name(self, type_name)
+        if generic_struct_type is not None:
+            return generic_struct_type
+
         if type_name in self.enum_type_names:
             return "int"
 
@@ -10598,6 +10708,8 @@ class SlangCodeGen:
             "int": "int",
             "uint": "uint",
             "bool": "bool",
+            "str": "string",
+            "string": "string",
             "void": "void",
             "sampler": "SamplerState",
             "sampler1D": "Sampler1D<float4>",

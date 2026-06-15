@@ -10570,7 +10570,7 @@ def test_generic_struct_member_enum_match_lowers_for_slang():
 
     assert "struct RenderState" in generated_code
     assert "Option_int material_id;" in generated_code
-    assert "bool validate(RenderState<float> state)" in generated_code
+    assert "bool validate(RenderState_float state)" in generated_code
     assert "if ((state.material_id.variant == Option_Some))" in generated_code
     assert "int id = state.material_id.Some_0;" in generated_code
     assert "return id >= 0;" in generated_code

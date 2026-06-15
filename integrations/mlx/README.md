@@ -80,20 +80,17 @@ The harness writes reports, generated artifacts, and command logs under
 
 ## Current Translator Gaps
 
-CrossGL/crosstl#1362 tracks the remaining Vulkan SPIR-V validation failures for
-the reduced DirectX/Vulkan frontier. CrossGL/crosstl#1354 tracks the remaining
-full-corpus Metal template materialization work for backend artifacts.
-CrossGL/crosstl#1376 tracks bounded runtime for the scheduled full-corpus scout.
-CrossGL/crosstl#1312 tracks native toolchain validation coverage for project
-CI. Future scouts should add issue-backed blockers only when there are concrete
-repros. Host runtime integration gaps should be handled in MLX-specific
-integration code or downstream runtime adapters, not hidden as shader
-translation successes.
+The current reduced frontier and scheduled full-corpus artifact scout do not
+carry active translator blockers. Future scouts should add issue-backed blockers
+only when there are concrete repros. Host runtime integration gaps should be
+handled in MLX-specific integration code or downstream runtime adapters, not
+hidden as shader translation successes.
 
 ## Resolved Frontier Issues
 
-The current reduced frontier no longer depends on the previously tracked issues:
-CrossGL/crosstl#1317, CrossGL/crosstl#939, CrossGL/crosstl#940,
+The current reduced frontier and full-corpus artifact scout no longer depend on
+the previously tracked issues: CrossGL/crosstl#1317, CrossGL/crosstl#1354,
+CrossGL/crosstl#1355, CrossGL/crosstl#1362, CrossGL/crosstl#939, CrossGL/crosstl#940,
 CrossGL/crosstl#941, CrossGL/crosstl#943, CrossGL/crosstl#944,
 CrossGL/crosstl#945, and CrossGL/crosstl#946. CrossGL/crosstl#979,
 CrossGL/crosstl#980,

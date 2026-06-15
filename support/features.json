@@ -73,7 +73,7 @@
           "status": "supported",
           "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_emits_glsl_es_header_and_default_precision"
           ]
         },
         "wgsl": {
@@ -149,7 +149,7 @@
           "status": "validated_rejection",
           "notes": "WebGL is registered as a target-only backend; native WebGL source parsing is intentionally not registered as a separate frontend.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_backend_is_target_only"
           ]
         },
         "wgsl": {
@@ -225,7 +225,7 @@
           "status": "validated_rejection",
           "notes": "WebGL is registered as a target-only backend; native WebGL source parsing is intentionally not registered as a separate frontend.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_backend_is_target_only"
           ]
         },
         "wgsl": {
@@ -344,7 +344,7 @@
           "status": "validated_rejection",
           "notes": "WebGL is registered as a target-only backend; native WebGL source parsing is intentionally not registered as a separate frontend.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_backend_is_target_only"
           ]
         },
         "wgsl": {
@@ -444,7 +444,7 @@
           "status": "supported",
           "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_omits_vertex_output_location_layouts"
           ]
         },
         "wgsl": {
@@ -542,7 +542,7 @@
           "status": "supported",
           "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_omits_fragment_input_location_layouts"
           ]
         },
         "wgsl": {
@@ -620,7 +620,9 @@
           "status": "validated_rejection",
           "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_non_webgl_stages",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_non_webgl_stage_targets",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_filters_unsupported_stages_when_graphics_stages_exist"
           ]
         },
         "wgsl": {
@@ -718,7 +720,7 @@
           "status": "validated_rejection",
           "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_non_webgl_stage_targets"
           ]
         },
         "wgsl": {
@@ -820,7 +822,7 @@
           "status": "validated_rejection",
           "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_non_webgl_stage_targets"
           ]
         },
         "wgsl": {
@@ -981,7 +983,7 @@
           "status": "validated_rejection",
           "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_non_webgl_stage_targets"
           ]
         },
         "wgsl": {
@@ -1163,7 +1165,7 @@
           "status": "validated_rejection",
           "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_non_webgl_stage_targets"
           ]
         },
         "wgsl": {
@@ -1264,9 +1266,12 @@
         },
         "webgl": {
           "status": "supported",
-          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "notes": "WebGL2 lowers supported stage parameter semantics to GLSL ES in/out declarations or built-in aliases without unsupported location layout qualifiers, and validates built-in parameter types.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_omits_fragment_input_location_layouts",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_aligns_split_stage_varying_names_without_locations",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_stage_builtin_parameter_aliases_to_glsl_builtin",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_stage_builtin_parameter_semantics_validate_type"
           ]
         },
         "wgsl": {
@@ -1366,9 +1371,12 @@
         },
         "webgl": {
           "status": "supported",
-          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "notes": "WebGL2 lowers direct vertex and fragment return semantics to gl_Position and fragment output assignments while validating built-in output result types before emitting GLSL ES.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_emits_glsl_es_header_and_default_precision",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_lowers_direct_dynamic_sampler_array_texture_return",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_vector_and_matrix_expressions_emit_glsl_es_arithmetic",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_return_semantics_validate_builtin_types"
           ]
         },
         "wgsl": {
@@ -1469,9 +1477,11 @@
         },
         "webgl": {
           "status": "supported",
-          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "notes": "WebGL2 lowers struct-based stage inputs and outputs to GLSL ES varyings, preserves built-in position handling, aligns linked varying names without location layout qualifiers, and validates built-in struct output member types.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_omits_vertex_output_location_layouts",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_aligns_split_stage_varying_names_without_locations",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_struct_semantics_validate_builtin_types"
           ]
         },
         "wgsl": {
@@ -1564,9 +1574,9 @@
         },
         "webgl": {
           "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "notes": "WebGL2 accepts CrossGL resource binding metadata but omits GLSL ES binding layout qualifiers because they are not available in GLSL ES 3.00; resource declarations remain deterministic and covered by WebGL codegen tests.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_omits_es300_binding_layouts_for_resources"
           ]
         },
         "wgsl": {
@@ -1672,9 +1682,10 @@
         },
         "webgl": {
           "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "notes": "WebGL2 lowers CrossGL cbuffers to GLSL ES std140 uniform blocks, omits unsupported binding layout qualifiers, and supports stage-local cbuffers in focused WebGL codegen coverage.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_omits_es300_binding_layouts_for_resources",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_emits_stage_local_cbuffers"
           ]
         },
         "wgsl": {
@@ -1851,23 +1862,27 @@
           ]
         },
         "webgl": {
-          "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "validated_rejection",
+          "notes": "WebGL2 rejects StructuredBuffer and RWStructuredBuffer resources with deterministic diagnostics instead of emitting unsupported GLSL ES storage-buffer declarations.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_storage_buffer_resources"
           ]
         },
         "wgsl": {
           "status": "supported",
-          "notes": "StructuredBuffer and RWStructuredBuffer globals lower to WGSL storage-buffer arrays with read/read_write access modes, explicit and automatic binding allocation, direct indexed access, buffer_load/buffer_store helper lowering, and HLSL Load/Store member helper lowering. Append/consume buffers, byte-address buffers, dimensions/counter helpers, read-only stores, parameters, and user-struct storage-resource fields produce deterministic diagnostics.",
+          "notes": "StructuredBuffer and RWStructuredBuffer globals lower to WGSL storage-buffer arrays with read/read_write access modes, explicit and automatic binding allocation, direct indexed access, buffer_load/buffer_store helper lowering, HLSL Load/Store member helper lowering, and buffer_dimensions/GetDimensions lowering to WGSL arrayLength. Helper parameters lower to storage pointers with read/read_write access, reference parameters preserve resource metadata, call sites pass storage resources by address, and overload signatures preserve buffer access. Append/consume buffers, byte-address buffers, counter helpers, read-only stores, and user-struct storage-resource fields produce deterministic diagnostics.",
           "evidence": [
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_structured_buffers_to_storage_bindings",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_structured_buffer_access_helpers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_structured_buffer_dimensions_to_array_length",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_readonly_structured_buffer_stores",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsupported_storage_buffer_resource_forms",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsupported_structured_buffer_helpers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_invalid_structured_buffer_dimensions",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_structured_buffers_inside_user_structs",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_structured_buffer_parameters"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_structured_buffer_parameters_to_storage_pointers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_reference_structured_buffer_parameters",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_readonly_structured_buffer_parameter_stores",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_resolves_structured_buffer_parameter_overloads_by_access"
           ]
         }
       }
@@ -2013,20 +2028,28 @@
         },
         "webgl": {
           "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "notes": "WebGL2 supports fixed sampler/resource-array sampling through static dispatch for dynamic sampler indexes where GLSL ES requires constant sampler-array indexes, while unsupported offset forms and non-liftable dynamic sampler expressions emit deterministic diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_lowers_dynamic_sampler_array_helper_call",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_lowers_direct_dynamic_sampler_array_texture_return",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_lowers_direct_dynamic_shadow_compare_sampler_array",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_dynamic_sampler_array_ternary_return_keeps_diagnostic",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_dynamic_sampler_array_texture_offset_keeps_diagnostic"
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "Core WebGPU/WGSL does not expose descriptor/resource binding arrays. The WGSL backend now rejects fixed and unsized texture, sampler, image, and StructuredBuffer resource arrays, including resource-array function parameters, with deterministic diagnostics that direct callers to individual module-scope bindings. Ordinary sampled texture resources, texture_2d_array resource types, struct-held texture handles lowered to module bindings, and storage buffers remain covered by their separate rows.",
+          "status": "partial",
+        "notes": "WGSL partially supports resource arrays by expanding fixed sampled texture arrays into individual module-scope texture/sampler bindings, including dynamic-index switch helpers for plain and explicit-LOD sampling plus selected function-call dispatch. Other resource-array forms remain diagnostic: sampler-only arrays, storage-image arrays, StructuredBuffer/RWStructuredBuffer arrays, arrays of resource-bearing structs, unsized sampled texture arrays, multisampled array texture resources, and resource-array parameters.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_sampled_texture_resources_and_calls",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_explicit_sampler_texture_calls",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls",
+          "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_sampled_texture_arrays_to_element_bindings",
+          "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_dynamic_sampled_texture_array_sampling",
+          "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_dynamic_sampled_texture_array_lod_sampling",
+          "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_dispatches_dynamic_sampled_texture_array_function_arguments",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_covers_universal_pbr_fragment_shadow_map_array",
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_resource_array_declarations",
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_resource_array_parameters"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_resource_array_parameters",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_resource_bearing_struct_arrays",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_multisampled_array_texture_resources"
           ]
         }
       }
@@ -2134,9 +2157,12 @@
         },
         "webgl": {
           "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "notes": "WebGL2 maps separate CrossGL texture resources to combined GLSL ES sampler uniforms, lowers supported sampled forms, and rejects sampled resource families or texture intrinsics outside GLSL ES 3.00 with deterministic diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_maps_separate_texture_resources_to_samplers",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_sampled_resource_types_outside_glsl_es300",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_glsl_es_310_texture_gather_intrinsics",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_desktop_texture_query_intrinsics"
           ]
         },
         "wgsl": {
@@ -2322,10 +2348,10 @@
           ]
         },
         "webgl": {
-          "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "validated_rejection",
+          "notes": "WebGL2 rejects GLSL buffer block resources with deterministic diagnostics because GLSL ES 3.00 does not expose SSBO/buffer-block support.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_glsl_buffer_blocks"
           ]
         },
         "wgsl": {
@@ -2451,16 +2477,22 @@
         },
         "webgl": {
           "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "notes": "WebGL2 rejects GLSL memory qualifiers on sampled resources with deterministic diagnostics so unsupported coherent/volatile/restrict qualifiers do not leak into GLSL ES output.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_sampler_memory_qualifiers"
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "supported",
+          "notes": "readonly/writeonly/readwrite-style access metadata drives WGSL storage texture and storage-buffer access modes, including inferred storage-image access from imageLoad/imageStore, explicit writeonly storage texture lowering, read-only GLSL buffer-block write diagnostics, and read-only StructuredBuffer/RWStructuredBuffer store diagnostics. Target-unsupported coherent/globallycoherent/volatile/restrict qualifiers do not leak into WGSL output.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_writeonly_uimage2d_to_storage_texture_store",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_infers_image2d_write_access_from_image_store",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_infers_image2d_read_access_from_image_load",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_storage_image_without_access_metadata",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_writes_to_readonly_glsl_buffer_blocks",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_readonly_structured_buffer_stores",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_readonly_structured_buffer_parameter_stores"
           ]
         }
       }
@@ -2554,16 +2586,24 @@
         },
         "webgl": {
           "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "notes": "WebGL2 lowers supported GLSL ES sampler declarations and texture sampling through combined sampler uniforms, while sampled resource families outside GLSL ES 3.00 are rejected with deterministic diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_omits_es300_binding_layouts_for_resources",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_maps_separate_texture_resources_to_samplers",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_sampled_resource_types_outside_glsl_es300"
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "supported",
+          "notes": "Sampled texture globals lower to split WGSL texture/sampler bindings; implicit and explicit sampler texture() calls lower to textureSample; compute-stage implicit sampling lowers to textureSampleLevel with zero LOD; sampled texture arrays expand to per-element bindings with static and dynamic dispatch helpers; resource-member texture aliases lower to module-scope bindings with deterministic sampler forwarding.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_aliases_nested_resource_member_paths_from_initializer",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_sampled_texture_resources_and_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_explicit_sampler_texture_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_sampled_texture_arrays_to_element_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_dynamic_sampled_texture_array_sampling",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_dispatches_dynamic_sampled_texture_array_function_arguments",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls"
           ]
         }
       }
@@ -2672,16 +2712,20 @@
         },
         "webgl": {
           "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "notes": "WebGL2 keeps supported GLSL ES texture offset paths guarded by existing GLSL diagnostics; dynamic sampler-array offset forms lower to static dispatch with deterministic diagnostics for non-constant offsets.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_dynamic_sampler_array_texture_offset_keeps_diagnostic"
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "supported",
+          "notes": "Covers explicit LOD, gradient, bias, and offset sampling with implicit and explicit sampler threading, helper-parameter forwarding, and deterministic diagnostics for non-const or out-of-range texture offset operands required by WebGPU/WGSL.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_texture_query_lod",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_split_sampler_lod_grad_and_offset_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_non_const_texture_offsets",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_out_of_range_texture_offsets"
           ]
         }
       }
@@ -2788,16 +2832,16 @@
         },
         "webgl": {
           "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "notes": "WebGL2 lowers supported projected texture sampling forms to GLSL ES textureProj calls while broader projected offset, gather, and invalid resource shapes remain covered by diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_lowers_projected_texture_sampling"
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "validated_rejection",
+          "notes": "WGSL has no projected texture sampling builtin; projected texture functions emit deterministic diagnostics instructing callers to divide projected coordinates explicitly before sampling.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_projected_texture_functions"
           ]
         }
       }
@@ -2893,17 +2937,26 @@
           ]
         },
         "webgl": {
-          "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "validated_rejection",
+          "notes": "WebGL2 rejects textureGather and related GLSL ES 3.10 gather intrinsics with deterministic diagnostics because the target emits GLSL ES 3.00.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_glsl_es_310_texture_gather_intrinsics"
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "supported",
+          "notes": "Covers regular gather, explicit-sampler gather, component selection, depth gather-compare, const single-offset gather, and const gather-compare offset lowering with implicit and explicit sampler threading, plus deterministic diagnostics for textureGatherOffsets, non-const or out-of-range offsets, and invalid compare sampler/arity forms.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_implicit_sampler_texture_gather_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_explicit_sampler_texture_gather_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_gather_component_argument",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_gather_compare_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_gather_offset_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_gather_compare_offset_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_plain_sampler_for_texture_gather_compare_offset",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_texture_gather_offsets",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_plain_sampler_for_texture_gather_compare",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_invalid_texture_gather_compare_arity"
           ]
         }
       }
@@ -3000,16 +3053,20 @@
         },
         "webgl": {
           "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "notes": "WebGL2 lowers supported shadow-comparison sampler-array calls to GLSL ES texture calls with vec3 comparison coordinates and static dispatch for dynamic sampler indexes.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_lowers_direct_dynamic_shadow_compare_sampler_array"
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "supported",
+          "notes": "Covers depth textures, comparison samplers, implicit and explicit sampler threading, compare offsets, literal-zero compare LOD forms, gather-compare, helper parameters, and deterministic diagnostics for non-depth textures, regular explicit samplers, and target-invalid LOD operands.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_shadow_texture_compare_helper_parameters",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_gather_compare_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_shadow_textures_and_comparison_samplers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_plain_sampler_for_texture_gather_compare",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_nonzero_shadow_compare_lod"
           ]
         }
       }
@@ -3116,16 +3173,22 @@
         },
         "webgl": {
           "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "notes": "WebGL2 lowers GLSL ES textureSize usage with expression-shape fixes and rejects desktop-only texture query intrinsics that are unavailable in GLSL ES 3.00.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_casts_texture_size_for_float_vector_arithmetic",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_desktop_texture_query_intrinsics"
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "supported",
+          "notes": "Covers textureSize lowering to textureDimensions, textureQueryLevels lowering to textureNumLevels, textureSamples lowering to textureNumSamples for multisampled textures, multisampled texture size/sample query validation, non-multisampled sample-count diagnostics, and deterministic textureQueryLod diagnostics because WebGPU/WGSL does not expose sampler LOD query builtins.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_helper_parameters_and_lod_size_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texture_query_helpers",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_multisample_texture_fetch_and_samples",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_non_multisample_texture_samples_query",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_invalid_multisample_texture_queries",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_texture_query_lod"
           ]
         }
       }
@@ -3234,16 +3297,21 @@
         },
         "webgl": {
           "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "notes": "WebGL2 lowers supported integer-coordinate texelFetch calls to GLSL ES 3.00 and rejects sampled resource families outside GLSL ES 3.00 with deterministic diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_lowers_texel_fetch",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_sampled_resource_types_outside_glsl_es300"
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "supported",
+          "notes": "Covers regular and multisampled texelFetch lowering to textureLoad, multisampled resource-member aliases, integer mip/sample-index validation, and deterministic texelFetchOffset diagnostics because WebGPU/WGSL textureLoad has no offset operand.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_texel_fetch_to_texture_load",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_multisample_texture_fetch_and_samples",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_multisample_texture_resource_members",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_texel_fetch_offset",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_multisample_texel_fetch_float_sample_index"
           ]
         }
       }
@@ -3339,17 +3407,24 @@
           ]
         },
         "webgl": {
-          "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "validated_rejection",
+          "notes": "WebGL2 rejects multisample sampled resource types such as sampler2DMS/Texture2DMS with deterministic diagnostics because GLSL ES 3.00 does not expose these sampler families.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_sampled_resource_types_outside_glsl_es300"
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "supported",
+          "notes": "Covers sampler2DMS, Texture2DMS, isampler2DMS, usampler2DMS, and multisampled texture resource members lowering to texture_multisampled_2d without companion samplers, texelFetch lowering to textureLoad with explicit sample indices, textureSamples lowering to textureNumSamples, textureSize lowering to textureDimensions, and deterministic diagnostics for multisampled array textures, sampler-based operations, invalid sample-index operands, non-multisampled sample-count queries, and mip-level queries on multisampled textures.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_multisample_texture_resource_members",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_multisample_texture_fetch_and_samples",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_integer_multisample_texture_resources",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_multisampled_array_texture_resources",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_sampler_operations_on_multisample_textures",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_multisample_texel_fetch_float_sample_index",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_non_multisample_texture_samples_query",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_invalid_multisample_texture_queries"
           ]
         }
       }
@@ -3465,16 +3540,21 @@
         },
         "webgl": {
           "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "notes": "WebGL2 rejects GLSL ES 3.10 gather and desktop query intrinsics, while unsupported offset/resource-array forms continue to emit deterministic diagnostics under focused WebGL tests.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_dynamic_sampler_array_texture_offset_keeps_diagnostic",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_glsl_es_310_texture_gather_intrinsics",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_desktop_texture_query_intrinsics"
           ]
         },
         "wgsl": {
           "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "notes": "WGSL lowers supported LOD, gradient, bias, offset, gather, query, and multisample texture forms while projected and WebGPU-unsupported variants emit deterministic diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_split_sampler_lod_grad_and_offset_calls",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_projected_texture_functions",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_texture_gather_offsets",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_texture_query_lod"
           ]
         }
       }
@@ -3578,17 +3658,24 @@
           ]
         },
         "webgl": {
-          "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "validated_rejection",
+          "notes": "WebGL2 rejects storage image resources and storage image intrinsics with deterministic diagnostics because GLSL ES 3.00 does not expose image load/store resources.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_storage_image_resources",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_storage_image_intrinsics"
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "supported",
+          "notes": "Covers storage image load/store lowering to textureLoad/textureStore, write-only and inferred read/write access modes, storage cube images as array storage textures, complex shader storage-image contracts, and deterministic diagnostics for unsupported formats or missing access metadata.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_writeonly_uimage2d_to_storage_texture_store",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_infers_image2d_write_access_from_image_store",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_infers_image2d_read_access_from_image_load",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_imagecube_to_storage_texture_array",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_storage_image_without_representable_format",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_storage_image_without_access_metadata",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_translates_complex_shader_storage_image_contract"
           ]
         }
       }
@@ -3684,17 +3771,18 @@
           ]
         },
         "webgl": {
-          "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "validated_rejection",
+          "notes": "WebGL2 rejects storage image atomic intrinsics and generic atomic operations with deterministic diagnostics instead of emitting unsupported GLSL ES code.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_storage_image_intrinsics",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_atomics"
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "validated_rejection",
+          "notes": "WGSL storage textures do not expose image atomic operations, so imageAtomic* calls emit deterministic diagnostics instead of leaking invalid WGSL.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_storage_image_atomics"
           ]
         }
       }
@@ -3787,17 +3875,18 @@
           ]
         },
         "webgl": {
-          "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "validated_rejection",
+          "notes": "WebGL2 rejects storage image resources and multisample sampled resource families with deterministic diagnostics because GLSL ES 3.00 has no storage-image or multisample image contract.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_storage_image_resources",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_sampled_resource_types_outside_glsl_es300"
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "validated_rejection",
+          "notes": "WGSL/WebGPU exposes sampled multisample textures separately from storage textures; multisample storage image declarations are rejected with deterministic diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsupported_resource_texture_constructs"
           ]
         }
       }
@@ -3868,9 +3957,9 @@
         },
         "webgl": {
           "status": "supported",
-          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "notes": "WebGL2 emits GLSL ES struct declarations, local struct variables, member assignments, and member access expressions through the target-only GLSL ES backend path.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_struct_declarations_and_construction_emit_glsl_es_members"
           ]
         },
         "wgsl": {
@@ -3948,16 +4037,23 @@
         },
         "webgl": {
           "status": "supported",
-          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "notes": "WebGL2 emits GLSL ES fixed local array declarations, indexed writes, and indexed reads for supported value arrays.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_array_declarations_and_access_emit_glsl_es_syntax"
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "supported",
+          "notes": "WGSL lowers fixed local arrays, non-mutating value-array parameters and returns, fixed arrays in storage/workgroup resources, uniform/cbuffer structs with scalar-array padding, stage-interface array members via scalarized locations, and runtime-sized arrays in storage-buffer blocks. Assignment through by-value array parameters, uniform runtime arrays, and unsupported buffer-block array shapes emit deterministic diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_stage_interface_array_members",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_value_array_parameters_and_returns",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_mutating_value_array_parameters",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_emits_resource_address_spaces_and_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_pads_uniform_struct_scalar_arrays",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_glsl_buffer_blocks_to_storage_struct_bindings",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_unsized_array_members_in_uniform_buffers"
           ]
         }
       }
@@ -4001,11 +4097,12 @@
           ]
         },
         "cuda": {
-          "status": "diagnostic",
-          "notes": "CUDA lowers non-generic helper functions, entry functions, calls, parameters, and returns. Generic functions emit deterministic diagnostics until CUDA monomorphization support is implemented.",
+          "status": "supported",
+          "notes": "CUDA lowers helper functions, entry functions, calls, parameters, returns, concrete generic helper specializations, generic enum payload specializations, and generic data-struct specializations without leaking unresolved template placeholders.",
           "evidence": [
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_function_conversion",
-            "tests/test_examples_contract.py::def test_generic_function_examples_report_backend_diagnostics"
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_match_generic_enum_constructor_pattern_binds_payload_for_cuda",
+            "tests/test_examples_contract.py::def test_primary_graphics_examples_with_stage_local_resources_translate"
           ]
         },
         "hip": {
@@ -4032,18 +4129,18 @@
           ]
         },
         "slang": {
-          "status": "diagnostic",
-          "notes": "Slang lowers non-generic helper functions, entry functions, calls, parameters, and returns. Generic functions emit deterministic diagnostics until Slang monomorphization support is implemented.",
+          "status": "supported",
+          "notes": "Slang lowers helper functions, entry functions, calls, parameters, returns, concrete generic helper specializations, generic enum payload specializations, and generic data-struct specializations without leaking unresolved template placeholders.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_local_functions_and_initialized_variables_emit",
-            "tests/test_examples_contract.py::def test_generic_function_examples_report_backend_diagnostics"
+            "tests/test_examples_contract.py::def test_primary_graphics_examples_with_stage_local_resources_translate"
           ]
         },
         "webgl": {
           "status": "supported",
-          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "notes": "WebGL2 emits GLSL ES helper function declarations, return statements, and calls from supported stage entries.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_function_declarations_and_calls_emit_glsl_es_helpers"
           ]
         },
         "wgsl": {
@@ -4121,9 +4218,10 @@
         },
         "webgl": {
           "status": "supported",
-          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "notes": "WebGL2 emits GLSL ES if, for, while, continue, switch, case, default, and return control flow across focused WebGL codegen coverage.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_control_flow_emits_if_for_while_and_continue",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_match_literal_and_wildcard_lowers_to_switch"
           ]
         },
         "wgsl": {
@@ -4237,17 +4335,24 @@
           ]
         },
         "webgl": {
-          "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "validated_rejection",
+          "notes": "WebGL2 rejects CrossGL synchronization intrinsics such as workgroupBarrier, memoryBarrier, and HLSL group-memory barriers with deterministic diagnostics because the target has no compute/workgroup synchronization contract.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_synchronization_intrinsics"
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "supported",
+          "notes": "barrier/workgroupBarrier, groupMemoryBarrierWithGroupSync, groupMemoryBarrier, and memoryBarrierShared lower to workgroupBarrier; memoryBarrierBuffer lowers to storageBarrier; memoryBarrierImage lowers to textureBarrier; wider device/global/all-address-space aliases emit deterministic diagnostics because WGSL synchronization is workgroup-scoped and address-space-specific; synchronization aliases reject arguments, value contexts, non-compute stages, and helper placement; user-defined functions with synchronization names are preserved.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_compute_barrier_to_workgroup_barrier",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_compute_synchronization_aliases",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_reports_diagnostics_for_inexact_synchronization_aliases",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_preserves_user_defined_synchronization_names",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_barrier_outside_compute_stages",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_synchronization_builtin_arguments",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_synchronization_builtin_value_contexts",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_barriers_in_helpers_with_specific_diagnostic"
           ]
         }
       }
@@ -4366,14 +4471,14 @@
           "status": "validated_rejection",
           "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_wave_intrinsics"
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "validated_rejection",
+          "notes": "WGSL wave/subgroup intrinsic lowering is not part of the current target contract; Wave* calls emit deterministic diagnostics instead of falling through to invalid expressions.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_wave_intrinsics"
           ]
         }
       }
@@ -4423,12 +4528,14 @@
         },
         "cuda": {
           "status": "supported",
-          "notes": "CUDA lowers literal/wildcard arms, guarded arms, identifier bindings, scoped fallthrough bodies, struct field patterns, match expressions, typed temporaries, return match expressions, switch-style literal cases, wildcard defaults, complex bodies, and return arms.",
+          "notes": "CUDA lowers literal/wildcard arms, guarded arms, identifier bindings, scoped fallthrough bodies, struct field patterns, enum path and payload patterns, generic enum matches, match expressions, typed temporaries, return match expressions, switch-style literal cases, wildcard defaults, complex bodies, and return arms.",
           "evidence": [
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_match_literal_and_wildcard_arms_lower_to_switch",
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_match_guarded_arm_lowers_to_cuda_if_chain",
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_match_identifier_binding_arm_lowers_to_cuda_scoped_else_body",
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_match_plain_struct_pattern_binds_fields_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_match_expression_and_payload_pattern_lower_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_match_generic_enum_constructor_pattern_binds_payload_for_cuda",
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_return_match_expression_in_cuda_kernel_discards_return_value"
           ]
         },
@@ -4478,17 +4585,19 @@
           ]
         },
         "webgl": {
-          "status": "diagnostic",
-          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "supported",
+          "notes": "WebGL2 inherits GLSL match lowering for supported literal and wildcard arms, emitting GLSL ES switch/case/default control flow without leaking MatchNode artifacts.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_match_literal_and_wildcard_lowers_to_switch"
           ]
         },
         "wgsl": {
           "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "notes": "WGSL lowers statement-position literal/wildcard matches to switch control flow and bool literal matches to ordered conditionals, while expression-position matches and richer pattern destructuring remain deterministic diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_literal_match_statements_to_switch",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_lowers_bool_match_statements_to_conditionals",
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_rejects_match_identifier_patterns"
           ]
         }
       }
@@ -4577,9 +4686,9 @@
         },
         "webgl": {
           "status": "supported",
-          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "notes": "WebGL2 emits GLSL ES vector and matrix constructors plus matrix-vector multiplication and vector arithmetic in supported stage entries.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_vector_and_matrix_expressions_emit_glsl_es_arithmetic"
           ]
         },
         "wgsl": {
@@ -4660,16 +4769,16 @@
         },
         "webgl": {
           "status": "supported",
-          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "notes": "WebGL2 emits GLSL ES integer bitwise and shift operators for supported integer expressions.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_bitwise_operations_emit_glsl_es_integer_operators"
           ]
         },
         "wgsl": {
-          "status": "diagnostic",
-          "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "supported",
+          "notes": "WGSL codegen preserves integer bitwise &, |, ^, shifts, unary bitwise not, and bitwise compound assignments in WGSL syntax with focused codegen coverage.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_wgsl_codegen_emits_integer_bitwise_operations"
           ]
         }
       }
@@ -4822,9 +4931,27 @@
         },
         "webgl": {
           "status": "supported",
-          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "notes": "WebGL2 validates unsupported stages, resource shapes, sampled-resource families, 64-bit float types, unsupported texture/image/atomic/wave/synchronization intrinsics, sampler memory qualifiers, invalid built-in stage I/O types, and clip/cull distance outputs with deterministic errors or compile-safe diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_sampler_memory_qualifiers",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_stage_builtin_parameter_semantics_validate_type",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_return_semantics_validate_builtin_types",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_struct_semantics_validate_builtin_types",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_non_webgl_stages",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_storage_buffer_resources",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_glsl_buffer_blocks",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_storage_image_resources",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_sampled_resource_types_outside_glsl_es300",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_64_bit_float_types",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_storage_image_intrinsics",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_glsl_es_310_texture_gather_intrinsics",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_desktop_texture_query_intrinsics",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_atomics",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_wave_intrinsics",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_synchronization_intrinsics",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_clip_and_cull_distance_writes",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_non_webgl_stage_targets",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_dynamic_sampler_array_texture_offset_keeps_diagnostic"
           ]
         },
         "wgsl": {

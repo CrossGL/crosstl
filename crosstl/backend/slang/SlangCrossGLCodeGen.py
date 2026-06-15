@@ -49,6 +49,13 @@ class SlangToCrossGLConverter:
     ASSOCIATED_DIFFERENTIAL_TYPE = re.compile(
         r"^(?P<base>[A-Za-z_][A-Za-z0-9_]*(?:[234](?:x[234])?)?)\.Differential$"
     )
+    READONLY_POINTER_QUALIFIERS = {"const", "uniform"}
+    DIAGNOSTIC_READONLY_POINTER_QUALIFIERS = {
+        "__read_only",
+        "__readonly",
+        "read_only",
+        "readonly",
+    }
     HLSL_NAMESPACE_PREFIX = "hlsl::"
     HLSL_NAMESPACE_SPECIAL_BUILTINS = {"mad", "mul", "rcp", "saturate", "sincos"}
     HLSL_NAMESPACE_BITCAST_BUILTINS = {"asfloat", "asint", "asuint"}
@@ -1153,15 +1160,41 @@ class SlangToCrossGLConverter:
         )
 
     def format_parameter_qualifier_prefix(self, param, preserve_qualifiers=False):
-        if not preserve_qualifiers:
+        self.raise_for_diagnostic_readonly_pointer_qualifier(param)
+        if not preserve_qualifiers and not self.is_pointer_type(param.vtype):
             return ""
         allowed_qualifiers = {"in", "out", "inout"} | self.interpolation_qualifiers
+        if self.is_pointer_type(param.vtype):
+            allowed_qualifiers |= self.READONLY_POINTER_QUALIFIERS
         qualifiers = [
             str(qualifier)
             for qualifier in getattr(param, "qualifiers", []) or []
             if str(qualifier).lower() in allowed_qualifiers
+            and (
+                preserve_qualifiers
+                or str(qualifier).lower() in self.READONLY_POINTER_QUALIFIERS
+            )
         ]
         return f"{' '.join(qualifiers)} " if qualifiers else ""
+
+    def is_pointer_type(self, type_name):
+        return "*" in str(type_name or "")
+
+    def raise_for_diagnostic_readonly_pointer_qualifier(self, param):
+        if not self.is_pointer_type(getattr(param, "vtype", None)):
+            return
+        diagnostic_qualifiers = [
+            str(qualifier)
+            for qualifier in getattr(param, "qualifiers", []) or []
+            if str(qualifier).lower() in self.DIAGNOSTIC_READONLY_POINTER_QUALIFIERS
+        ]
+        if not diagnostic_qualifiers:
+            return
+        parameter_name = getattr(param, "name", None) or "_param"
+        raise ValueError(
+            "Cannot preserve Slang read-only pointer qualifier(s) on parameter "
+            f"'{parameter_name}': {', '.join(diagnostic_qualifiers)}"
+        )
 
     def format_array_suffixes(self, node, is_main=False):
         sizes = getattr(node, "array_sizes", None)
