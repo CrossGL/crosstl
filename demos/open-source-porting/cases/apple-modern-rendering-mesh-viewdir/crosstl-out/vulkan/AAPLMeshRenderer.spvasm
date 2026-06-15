@@ -1,0 +1,96 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 59
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %14 "main_vertex" %17 %19
+OpName %10 "Camera"
+OpMemberName %10 0 "invViewMatrix"
+OpName %11 "Input"
+OpMemberName %11 0 "position"
+OpName %12 "Output"
+OpMemberName %12 0 "viewDir"
+OpName %17 "CrossGL_vertex_output_main_vertex_viewDir"
+OpName %19 "CrossGL_vertex_input_in_position"
+OpName %23 "in_"
+OpName %24 "Camera_std140_10"
+OpMemberName %24 0 "invViewMatrix"
+OpName %25 "main_vertex_cameraUniformBlock"
+OpMemberName %25 0 "camera"
+OpName %27 "cameraUniform"
+OpName %35 "camera"
+OpName %37 "out_"
+OpDecorate %17 Location 0
+OpDecorate %19 Location 0
+OpDecorate %25 Block
+OpMemberDecorate %25 0 Offset 0
+OpMemberDecorate %24 0 Offset 0
+OpMemberDecorate %24 0 ColMajor
+OpMemberDecorate %24 0 MatrixStride 16
+OpDecorate %27 DescriptorSet 0
+OpDecorate %27 Binding 0
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypeMatrix %8 4
+%10 = OpTypeStruct %9
+%11 = OpTypeStruct %7
+%12 = OpTypeStruct %7
+%13 = OpTypeFunction %2
+%16 = OpTypePointer Output %7
+%18 = OpTypePointer Input %7
+%22 = OpTypePointer Function %11
+%24 = OpTypeStruct %9
+%25 = OpTypeStruct %24
+%26 = OpTypePointer Uniform %25
+%28 = OpConstant %4 0
+%29 = OpTypePointer Uniform %24
+%34 = OpTypePointer Function %10
+%36 = OpTypePointer Function %12
+%38 = OpConstant %4 3
+%39 = OpTypePointer Function %9
+%41 = OpTypePointer Function %8
+%47 = OpTypePointer Function %7
+%17 = OpVariable %16 Output
+%19 = OpVariable %18 Input
+%27 = OpVariable %26 Uniform
+%14 = OpFunction %2 None %13
+%15 = OpLabel
+%23 = OpVariable %22 Function
+%35 = OpVariable %34 Function
+%37 = OpVariable %36 Function
+%20 = OpLoad %7 %19
+%21 = OpCompositeConstruct %11 %20
+OpStore %23 %21
+%30 = OpAccessChain %29 %27 %28
+%31 = OpLoad %24 %30
+%32 = OpCompositeExtract %9 %31 0
+%33 = OpCompositeConstruct %10 %32
+OpStore %35 %33
+%40 = OpAccessChain %39 %35 %28
+%42 = OpAccessChain %41 %40 %38
+%43 = OpAccessChain %39 %35 %28
+%44 = OpAccessChain %41 %43 %38
+%45 = OpLoad %8 %44
+%46 = OpVectorShuffle %7 %45 %45 0 1 2
+%48 = OpAccessChain %47 %23 %28
+%49 = OpLoad %7 %48
+%50 = OpFSub %7 %46 %49
+%51 = OpExtInst %7 %1 Normalize %50
+%52 = OpCompositeExtract %5 %51 0
+%53 = OpCompositeExtract %5 %51 1
+%54 = OpCompositeExtract %5 %51 2
+%55 = OpCompositeConstruct %7 %52 %53 %54
+%56 = OpAccessChain %47 %37 %28
+OpStore %56 %55
+%57 = OpLoad %12 %37
+%58 = OpCompositeExtract %7 %57 0
+OpStore %17 %58
+OpReturn
+OpFunctionEnd

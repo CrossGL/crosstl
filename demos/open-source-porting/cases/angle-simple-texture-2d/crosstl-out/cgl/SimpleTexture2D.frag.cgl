@@ -1,0 +1,17 @@
+precision mediump float;
+
+shader main {
+    struct FragmentInput {
+    vec2 v_texCoord;
+    };
+
+    sampler2D s_texture;
+
+    fragment {
+    vec4 main(FragmentInput input) @ gl_FragColor {
+        vec4 gl_FragColor;
+        gl_FragColor = texture(s_texture, input.v_texCoord);
+        return gl_FragColor;
+    }
+    }
+}

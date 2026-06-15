@@ -1,0 +1,10 @@
+shader main {
+    // fragment Shader
+    fragment {
+    vec4 main(vec4 a @ A) @ gl_FragColor {
+        return -a.yxxx;
+    }
+
+    }
+
+}

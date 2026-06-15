@@ -1,0 +1,204 @@
+{
+  "generatedFile": "crosstl-out/metal/batch.vert.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 110,
+        "file": "crosstl-out/metal/batch.vert.metal",
+        "length": 40,
+        "line": 6,
+        "offset": 70
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 27,
+        "file": "batch.vert",
+        "length": 27,
+        "line": 1,
+        "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 147,
+        "file": "crosstl-out/metal/batch.vert.metal",
+        "length": 37,
+        "line": 7,
+        "offset": 110
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 51,
+        "file": "batch.vert",
+        "length": 24,
+        "line": 2,
+        "offset": 27
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 188,
+        "file": "crosstl-out/metal/batch.vert.metal",
+        "length": 41,
+        "line": 8,
+        "offset": 147
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 79,
+        "file": "batch.vert",
+        "length": 28,
+        "line": 3,
+        "offset": 51
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 233,
+        "file": "crosstl-out/metal/batch.vert.metal",
+        "length": 20,
+        "line": 11,
+        "offset": 213
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 129,
+        "file": "batch.vert",
+        "length": 22,
+        "line": 7,
+        "offset": 107
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 257,
+        "file": "crosstl-out/metal/batch.vert.metal",
+        "length": 24,
+        "line": 12,
+        "offset": 233
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 155,
+        "file": "batch.vert",
+        "length": 26,
+        "line": 8,
+        "offset": 129
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 294,
+        "file": "crosstl-out/metal/batch.vert.metal",
+        "length": 37,
+        "line": 13,
+        "offset": 257
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 260,
+        "file": "batch.vert",
+        "length": 42,
+        "line": 13,
+        "offset": 218
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 551,
+        "file": "crosstl-out/metal/batch.vert.metal",
+        "length": 36,
+        "line": 22,
+        "offset": 515
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 190,
+        "file": "batch.vert",
+        "length": 20,
+        "line": 11,
+        "offset": 170
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 595,
+        "file": "crosstl-out/metal/batch.vert.metal",
+        "length": 44,
+        "line": 23,
+        "offset": 551
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 218,
+        "file": "batch.vert",
+        "length": 28,
+        "line": 12,
+        "offset": 190
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 661,
+        "file": "crosstl-out/metal/batch.vert.metal",
+        "length": 66,
+        "line": 24,
+        "offset": 595
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 260,
+        "file": "batch.vert",
+        "length": 42,
+        "line": 13,
+        "offset": 218
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

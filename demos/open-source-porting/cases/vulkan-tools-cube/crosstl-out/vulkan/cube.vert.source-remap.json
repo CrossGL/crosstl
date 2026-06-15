@@ -1,0 +1,138 @@
+{
+  "generatedFile": "crosstl-out/vulkan/cube.vert.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 312,
+        "file": "crosstl-out/vulkan/cube.vert.spvasm",
+        "length": 26,
+        "line": 12,
+        "offset": 286
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 973,
+        "file": "cube.vert",
+        "length": 25,
+        "line": 27,
+        "offset": 948
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 368,
+        "file": "crosstl-out/vulkan/cube.vert.spvasm",
+        "length": 30,
+        "line": 14,
+        "offset": 338
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 1023,
+        "file": "cube.vert",
+        "length": 41,
+        "line": 30,
+        "offset": 982
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 398,
+        "file": "crosstl-out/vulkan/cube.vert.spvasm",
+        "length": 30,
+        "line": 15,
+        "offset": 368
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 1064,
+        "file": "cube.vert",
+        "length": 41,
+        "line": 31,
+        "offset": 1023
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 35,
+        "endOffset": 981,
+        "file": "crosstl-out/vulkan/cube.vert.spvasm",
+        "length": 25,
+        "line": 34,
+        "offset": 956
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 901,
+        "file": "cube.vert",
+        "length": 42,
+        "line": 24,
+        "offset": 859
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 1007,
+        "file": "crosstl-out/vulkan/cube.vert.spvasm",
+        "length": 26,
+        "line": 35,
+        "offset": 981
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 1023,
+        "file": "cube.vert",
+        "length": 41,
+        "line": 30,
+        "offset": 982
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 37,
+        "endOffset": 1033,
+        "file": "crosstl-out/vulkan/cube.vert.spvasm",
+        "length": 26,
+        "line": 36,
+        "offset": 1007
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 1064,
+        "file": "cube.vert",
+        "length": 41,
+        "line": 31,
+        "offset": 1023
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

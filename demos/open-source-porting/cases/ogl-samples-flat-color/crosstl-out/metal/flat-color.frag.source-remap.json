@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/metal/flat-color.frag.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 107,
+        "file": "crosstl-out/metal/flat-color.frag.metal",
+        "length": 20,
+        "line": 7,
+        "offset": 87
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 146,
+        "file": "flat-color.frag",
+        "length": 22,
+        "line": 8,
+        "offset": 124
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 204,
+        "file": "crosstl-out/metal/flat-color.frag.metal",
+        "length": 75,
+        "line": 10,
+        "offset": 129
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 204,
+        "file": "flat-color.frag",
+        "length": 57,
+        "line": 10,
+        "offset": 147
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 222,
+        "file": "crosstl-out/metal/flat-color.frag.metal",
+        "length": 18,
+        "line": 11,
+        "offset": 204
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 204,
+        "file": "flat-color.frag",
+        "length": 57,
+        "line": 10,
+        "offset": 147
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 252,
+        "file": "crosstl-out/metal/flat-color.frag.metal",
+        "length": 30,
+        "line": 12,
+        "offset": 222
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 237,
+        "file": "flat-color.frag",
+        "length": 18,
+        "line": 14,
+        "offset": 219
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

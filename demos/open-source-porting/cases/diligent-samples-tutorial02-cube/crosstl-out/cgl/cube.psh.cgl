@@ -1,0 +1,11 @@
+shader main {
+    // fragment Shader
+    fragment {
+    void main(in vec4 PSIn_Pos @ gl_FragCoord, in vec4 PSIn_Color @ Color0, out vec4 PSOut_Color @ gl_FragColor) {
+        vec4 Color = PSIn_Color;
+        PSOut_Color = Color;
+    }
+
+    }
+
+}

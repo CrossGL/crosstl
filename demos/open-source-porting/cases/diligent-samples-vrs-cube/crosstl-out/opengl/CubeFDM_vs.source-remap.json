@@ -1,0 +1,248 @@
+{
+  "generatedFile": "crosstl-out/opengl/CubeFDM_vs.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 18,
+        "file": "crosstl-out/opengl/CubeFDM_vs.glsl",
+        "length": 18,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 18,
+        "file": "CubeFDM_vs.glsl",
+        "length": 18,
+        "line": 1,
+        "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 55,
+        "file": "crosstl-out/opengl/CubeFDM_vs.glsl",
+        "length": 37,
+        "line": 2,
+        "offset": 18
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 212,
+        "file": "CubeFDM_vs.glsl",
+        "length": 35,
+        "line": 10,
+        "offset": 177
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 91,
+        "file": "crosstl-out/opengl/CubeFDM_vs.glsl",
+        "length": 36,
+        "line": 3,
+        "offset": 55
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 246,
+        "file": "CubeFDM_vs.glsl",
+        "length": 34,
+        "line": 11,
+        "offset": 212
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 129,
+        "file": "crosstl-out/opengl/CubeFDM_vs.glsl",
+        "length": 38,
+        "line": 4,
+        "offset": 91
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 283,
+        "file": "CubeFDM_vs.glsl",
+        "length": 36,
+        "line": 13,
+        "offset": 247
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 150,
+        "file": "crosstl-out/opengl/CubeFDM_vs.glsl",
+        "length": 21,
+        "line": 5,
+        "offset": 129
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 54,
+        "file": "CubeFDM_vs.glsl",
+        "length": 35,
+        "line": 3,
+        "offset": 19
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 204,
+        "file": "crosstl-out/opengl/CubeFDM_vs.glsl",
+        "length": 30,
+        "line": 7,
+        "offset": 174
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 115,
+        "file": "CubeFDM_vs.glsl",
+        "length": 33,
+        "line": 6,
+        "offset": 82
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 222,
+        "file": "crosstl-out/opengl/CubeFDM_vs.glsl",
+        "length": 18,
+        "line": 8,
+        "offset": 204
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 173,
+        "file": "CubeFDM_vs.glsl",
+        "length": 58,
+        "line": 7,
+        "offset": 115
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 347,
+        "file": "crosstl-out/opengl/CubeFDM_vs.glsl",
+        "length": 30,
+        "line": 14,
+        "offset": 317
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 115,
+        "file": "CubeFDM_vs.glsl",
+        "length": 33,
+        "line": 6,
+        "offset": 82
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 365,
+        "file": "crosstl-out/opengl/CubeFDM_vs.glsl",
+        "length": 18,
+        "line": 15,
+        "offset": 347
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 173,
+        "file": "CubeFDM_vs.glsl",
+        "length": 58,
+        "line": 7,
+        "offset": 115
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 454,
+        "file": "crosstl-out/opengl/CubeFDM_vs.glsl",
+        "length": 55,
+        "line": 19,
+        "offset": 399
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 348,
+        "file": "CubeFDM_vs.glsl",
+        "length": 50,
+        "line": 17,
+        "offset": 298
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 474,
+        "file": "crosstl-out/opengl/CubeFDM_vs.glsl",
+        "length": 20,
+        "line": 20,
+        "offset": 454
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 373,
+        "file": "CubeFDM_vs.glsl",
+        "length": 25,
+        "line": 18,
+        "offset": 348
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

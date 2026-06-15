@@ -1,0 +1,226 @@
+{
+  "generatedFile": "crosstl-out/cgl/vktext.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 68,
+        "file": "crosstl-out/cgl/vktext.cgl",
+        "length": 27,
+        "line": 3,
+        "offset": 41
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 1429,
+        "file": "vktext.frag",
+        "length": 34,
+        "line": 29,
+        "offset": 1395
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 99,
+        "file": "crosstl-out/cgl/vktext.cgl",
+        "length": 31,
+        "line": 4,
+        "offset": 68
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 1467,
+        "file": "vktext.frag",
+        "length": 38,
+        "line": 30,
+        "offset": 1429
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 139,
+        "file": "crosstl-out/cgl/vktext.cgl",
+        "length": 32,
+        "line": 7,
+        "offset": 107
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 1352,
+        "file": "vktext.frag",
+        "length": 44,
+        "line": 25,
+        "offset": 1308
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 256,
+        "file": "crosstl-out/cgl/vktext.cgl",
+        "length": 27,
+        "line": 12,
+        "offset": 229
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 35,
+        "endOffset": 1507,
+        "file": "vktext.frag",
+        "length": 21,
+        "line": 34,
+        "offset": 1486
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 390,
+        "file": "crosstl-out/cgl/vktext.cgl",
+        "length": 134,
+        "line": 13,
+        "offset": 256
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 37,
+        "endOffset": 1595,
+        "file": "vktext.frag",
+        "length": 87,
+        "line": 36,
+        "offset": 1508
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 411,
+        "file": "crosstl-out/cgl/vktext.cgl",
+        "length": 21,
+        "line": 14,
+        "offset": 390
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 39,
+        "endOffset": 1612,
+        "file": "vktext.frag",
+        "length": 13,
+        "line": 38,
+        "offset": 1599
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 478,
+        "file": "crosstl-out/cgl/vktext.cgl",
+        "length": 67,
+        "line": 15,
+        "offset": 411
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 40,
+        "endOffset": 1653,
+        "file": "vktext.frag",
+        "length": 41,
+        "line": 39,
+        "offset": 1612
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 545,
+        "file": "crosstl-out/cgl/vktext.cgl",
+        "length": 67,
+        "line": 16,
+        "offset": 478
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 41,
+        "endOffset": 1694,
+        "file": "vktext.frag",
+        "length": 41,
+        "line": 40,
+        "offset": 1653
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 588,
+        "file": "crosstl-out/cgl/vktext.cgl",
+        "length": 43,
+        "line": 17,
+        "offset": 545
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 42,
+        "endOffset": 1729,
+        "file": "vktext.frag",
+        "length": 35,
+        "line": 41,
+        "offset": 1694
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 670,
+        "file": "crosstl-out/cgl/vktext.cgl",
+        "length": 72,
+        "line": 19,
+        "offset": 598
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 45,
+        "endOffset": 1798,
+        "file": "vktext.frag",
+        "length": 64,
+        "line": 44,
+        "offset": 1734
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

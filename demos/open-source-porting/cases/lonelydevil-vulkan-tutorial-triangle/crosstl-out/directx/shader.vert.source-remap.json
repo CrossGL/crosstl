@@ -1,0 +1,138 @@
+{
+  "generatedFile": "crosstl-out/directx/shader.vert.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 56,
+        "file": "crosstl-out/directx/shader.vert.hlsl",
+        "length": 33,
+        "line": 3,
+        "offset": 23
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 53,
+        "file": "shader.vert",
+        "length": 39,
+        "line": 3,
+        "offset": 14
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 93,
+        "file": "crosstl-out/directx/shader.vert.hlsl",
+        "length": 37,
+        "line": 4,
+        "offset": 56
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 286,
+        "file": "shader.vert",
+        "length": 54,
+        "line": 18,
+        "offset": 232
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 117,
+        "file": "crosstl-out/directx/shader.vert.hlsl",
+        "length": 21,
+        "line": 6,
+        "offset": 96
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 80,
+        "file": "shader.vert",
+        "length": 26,
+        "line": 5,
+        "offset": 54
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 135,
+        "file": "crosstl-out/directx/shader.vert.hlsl",
+        "length": 18,
+        "line": 7,
+        "offset": 117
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 156,
+        "file": "shader.vert",
+        "length": 23,
+        "line": 11,
+        "offset": 133
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 304,
+        "file": "crosstl-out/directx/shader.vert.hlsl",
+        "length": 70,
+        "line": 11,
+        "offset": 234
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 286,
+        "file": "shader.vert",
+        "length": 54,
+        "line": 18,
+        "offset": 232
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 351,
+        "file": "crosstl-out/directx/shader.vert.hlsl",
+        "length": 47,
+        "line": 12,
+        "offset": 304
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 321,
+        "file": "shader.vert",
+        "length": 35,
+        "line": 19,
+        "offset": 286
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/vulkan/spv.specConstant.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 481,
+        "file": "crosstl-out/vulkan/spv.specConstant.spvasm",
+        "length": 22,
+        "line": 19,
+        "offset": 459
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 278,
+        "file": "spv.specConstant.vert",
+        "length": 84,
+        "line": 8,
+        "offset": 194
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/opengl/shader.frag.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 13,
+        "file": "crosstl-out/opengl/shader.frag.glsl",
+        "length": 13,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 13,
+        "file": "shader.frag",
+        "length": 13,
+        "line": 1,
+        "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 53,
+        "file": "crosstl-out/opengl/shader.frag.glsl",
+        "length": 40,
+        "line": 2,
+        "offset": 13
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 91,
+        "file": "shader.frag",
+        "length": 38,
+        "line": 5,
+        "offset": 53
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 187,
+        "file": "crosstl-out/opengl/shader.frag.glsl",
+        "length": 37,
+        "line": 7,
+        "offset": 150
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 136,
+        "file": "shader.frag",
+        "length": 31,
+        "line": 8,
+        "offset": 105
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 217,
+        "file": "crosstl-out/opengl/shader.frag.glsl",
+        "length": 30,
+        "line": 8,
+        "offset": 187
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 136,
+        "file": "shader.frag",
+        "length": 31,
+        "line": 8,
+        "offset": 105
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

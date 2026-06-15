@@ -1,0 +1,29 @@
+shader main {
+
+    // Structs
+    struct Camera {
+        mat4 invViewMatrix;
+    }
+
+    // Structs
+    struct Input {
+        vec3 position;
+    }
+
+    // Structs
+    struct Output {
+        f16vec3 viewDir;
+    }
+
+    // Vertex Shader
+    vertex {
+        @ stage_entry
+        Output main_vertex(Input in_, constant Camera& camera @buffer(0)) {
+            Output out_;
+            out_.viewDir = f16vec3(normalize(camera.invViewMatrix[3].xyz - in_.position));
+            return out_;
+    }
+
+    }
+
+}

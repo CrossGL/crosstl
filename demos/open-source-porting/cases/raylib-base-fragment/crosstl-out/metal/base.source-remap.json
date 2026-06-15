@@ -1,0 +1,182 @@
+{
+  "generatedFile": "crosstl-out/metal/base.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 97,
+        "file": "crosstl-out/metal/base.metal",
+        "length": 25,
+        "line": 6,
+        "offset": 72
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 84,
+        "file": "base.fs",
+        "length": 22,
+        "line": 4,
+        "offset": 62
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 119,
+        "file": "crosstl-out/metal/base.metal",
+        "length": 22,
+        "line": 7,
+        "offset": 97
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 103,
+        "file": "base.fs",
+        "length": 19,
+        "line": 5,
+        "offset": 84
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 183,
+        "file": "crosstl-out/metal/base.metal",
+        "length": 23,
+        "line": 11,
+        "offset": 160
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 181,
+        "file": "base.fs",
+        "length": 25,
+        "line": 9,
+        "offset": 156
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 205,
+        "file": "crosstl-out/metal/base.metal",
+        "length": 19,
+        "line": 13,
+        "offset": 186
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 443,
+        "file": "base.fs",
+        "length": 54,
+        "line": 21,
+        "offset": 389
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 356,
+        "file": "crosstl-out/metal/base.metal",
+        "length": 151,
+        "line": 14,
+        "offset": 205
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 388,
+        "file": "base.fs",
+        "length": 55,
+        "line": 19,
+        "offset": 333
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 379,
+        "file": "crosstl-out/metal/base.metal",
+        "length": 23,
+        "line": 15,
+        "offset": 356
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 228,
+        "file": "base.fs",
+        "length": 21,
+        "line": 12,
+        "offset": 207
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 489,
+        "file": "crosstl-out/metal/base.metal",
+        "length": 110,
+        "line": 16,
+        "offset": 379
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 388,
+        "file": "base.fs",
+        "length": 55,
+        "line": 19,
+        "offset": 333
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 558,
+        "file": "crosstl-out/metal/base.metal",
+        "length": 69,
+        "line": 17,
+        "offset": 489
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 650,
+        "file": "base.fs",
+        "length": 50,
+        "line": 26,
+        "offset": 600
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

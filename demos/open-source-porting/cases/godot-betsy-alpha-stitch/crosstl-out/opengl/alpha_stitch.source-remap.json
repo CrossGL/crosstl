@@ -1,0 +1,182 @@
+{
+  "generatedFile": "crosstl-out/opengl/alpha_stitch.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 13,
+        "file": "crosstl-out/opengl/alpha_stitch.glsl",
+        "length": 13,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 240,
+        "file": "alpha_stitch.glsl",
+        "length": 13,
+        "line": 5,
+        "offset": 227
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 60,
+        "file": "crosstl-out/opengl/alpha_stitch.glsl",
+        "length": 47,
+        "line": 2,
+        "offset": 13
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 364,
+        "file": "alpha_stitch.glsl",
+        "length": 47,
+        "line": 11,
+        "offset": 317
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 109,
+        "file": "crosstl-out/opengl/alpha_stitch.glsl",
+        "length": 49,
+        "line": 3,
+        "offset": 60
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 413,
+        "file": "alpha_stitch.glsl",
+        "length": 49,
+        "line": 12,
+        "offset": 364
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 187,
+        "file": "crosstl-out/opengl/alpha_stitch.glsl",
+        "length": 78,
+        "line": 4,
+        "offset": 109
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 491,
+        "file": "alpha_stitch.glsl",
+        "length": 78,
+        "line": 13,
+        "offset": 413
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 205,
+        "file": "crosstl-out/opengl/alpha_stitch.glsl",
+        "length": 18,
+        "line": 5,
+        "offset": 187
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 149,
+        "file": "alpha_stitch.glsl",
+        "length": 78,
+        "line": 2,
+        "offset": 71
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 364,
+        "file": "crosstl-out/opengl/alpha_stitch.glsl",
+        "length": 80,
+        "line": 8,
+        "offset": 284
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 583,
+        "file": "alpha_stitch.glsl",
+        "length": 77,
+        "line": 16,
+        "offset": 506
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 448,
+        "file": "crosstl-out/opengl/alpha_stitch.glsl",
+        "length": 84,
+        "line": 9,
+        "offset": 364
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 664,
+        "file": "alpha_stitch.glsl",
+        "length": 81,
+        "line": 17,
+        "offset": 583
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 544,
+        "file": "crosstl-out/opengl/alpha_stitch.glsl",
+        "length": 96,
+        "line": 10,
+        "offset": 448
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 758,
+        "file": "alpha_stitch.glsl",
+        "length": 93,
+        "line": 19,
+        "offset": 665
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

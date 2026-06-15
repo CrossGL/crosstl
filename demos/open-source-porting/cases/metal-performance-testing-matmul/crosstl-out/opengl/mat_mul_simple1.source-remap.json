@@ -1,0 +1,314 @@
+{
+  "generatedFile": "crosstl-out/opengl/mat_mul_simple1.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 154,
+        "file": "crosstl-out/opengl/mat_mul_simple1.glsl",
+        "length": 68,
+        "line": 3,
+        "offset": 86
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 284,
+        "file": "mat_mul_simple1.metal",
+        "length": 51,
+        "line": 13,
+        "offset": 233
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 213,
+        "file": "crosstl-out/opengl/mat_mul_simple1.glsl",
+        "length": 59,
+        "line": 4,
+        "offset": 154
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 329,
+        "file": "mat_mul_simple1.metal",
+        "length": 45,
+        "line": 14,
+        "offset": 284
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 284,
+        "file": "crosstl-out/opengl/mat_mul_simple1.glsl",
+        "length": 20,
+        "line": 6,
+        "offset": 264
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 580,
+        "file": "mat_mul_simple1.metal",
+        "length": 45,
+        "line": 19,
+        "offset": 535
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 524,
+        "file": "crosstl-out/opengl/mat_mul_simple1.glsl",
+        "length": 45,
+        "line": 14,
+        "offset": 479
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 580,
+        "file": "mat_mul_simple1.metal",
+        "length": 45,
+        "line": 19,
+        "offset": 535
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 569,
+        "file": "crosstl-out/opengl/mat_mul_simple1.glsl",
+        "length": 45,
+        "line": 15,
+        "offset": 524
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 625,
+        "file": "mat_mul_simple1.metal",
+        "length": 45,
+        "line": 20,
+        "offset": 580
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 614,
+        "file": "crosstl-out/opengl/mat_mul_simple1.glsl",
+        "length": 45,
+        "line": 16,
+        "offset": 569
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 670,
+        "file": "mat_mul_simple1.metal",
+        "length": 45,
+        "line": 21,
+        "offset": 625
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 668,
+        "file": "crosstl-out/opengl/mat_mul_simple1.glsl",
+        "length": 54,
+        "line": 17,
+        "offset": 614
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 764,
+        "file": "mat_mul_simple1.metal",
+        "length": 52,
+        "line": 24,
+        "offset": 712
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 724,
+        "file": "crosstl-out/opengl/mat_mul_simple1.glsl",
+        "length": 56,
+        "line": 18,
+        "offset": 668
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 927,
+        "file": "mat_mul_simple1.metal",
+        "length": 50,
+        "line": 27,
+        "offset": 877
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 747,
+        "file": "crosstl-out/opengl/mat_mul_simple1.glsl",
+        "length": 23,
+        "line": 19,
+        "offset": 724
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 950,
+        "file": "mat_mul_simple1.metal",
+        "length": 23,
+        "line": 28,
+        "offset": 927
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 798,
+        "file": "crosstl-out/opengl/mat_mul_simple1.glsl",
+        "length": 51,
+        "line": 20,
+        "offset": 747
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 997,
+        "file": "mat_mul_simple1.metal",
+        "length": 47,
+        "line": 29,
+        "offset": 950
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 857,
+        "file": "crosstl-out/opengl/mat_mul_simple1.glsl",
+        "length": 59,
+        "line": 21,
+        "offset": 798
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 1099,
+        "file": "mat_mul_simple1.metal",
+        "length": 53,
+        "line": 31,
+        "offset": 1046
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 916,
+        "file": "crosstl-out/opengl/mat_mul_simple1.glsl",
+        "length": 59,
+        "line": 22,
+        "offset": 857
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 35,
+        "endOffset": 1202,
+        "file": "mat_mul_simple1.metal",
+        "length": 53,
+        "line": 34,
+        "offset": 1149
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 962,
+        "file": "crosstl-out/opengl/mat_mul_simple1.glsl",
+        "length": 46,
+        "line": 23,
+        "offset": 916
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 37,
+        "endOffset": 1247,
+        "file": "mat_mul_simple1.metal",
+        "length": 44,
+        "line": 36,
+        "offset": 1203
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 996,
+        "file": "crosstl-out/opengl/mat_mul_simple1.glsl",
+        "length": 24,
+        "line": 25,
+        "offset": 972
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 39,
+        "endOffset": 1281,
+        "file": "mat_mul_simple1.metal",
+        "length": 24,
+        "line": 38,
+        "offset": 1257
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

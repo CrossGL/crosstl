@@ -1,0 +1,314 @@
+{
+  "generatedFile": "crosstl-out/opengl/grid.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 13,
+        "file": "crosstl-out/opengl/grid.glsl",
+        "length": 13,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 13,
+        "file": "grid.frag",
+        "length": 13,
+        "line": 1,
+        "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 53,
+        "file": "crosstl-out/opengl/grid.glsl",
+        "length": 40,
+        "line": 2,
+        "offset": 13
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 54,
+        "file": "grid.frag",
+        "length": 40,
+        "line": 3,
+        "offset": 14
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 92,
+        "file": "crosstl-out/opengl/grid.glsl",
+        "length": 39,
+        "line": 3,
+        "offset": 53
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 93,
+        "file": "grid.frag",
+        "length": 39,
+        "line": 4,
+        "offset": 54
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 133,
+        "file": "crosstl-out/opengl/grid.glsl",
+        "length": 22,
+        "line": 5,
+        "offset": 111
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 156,
+        "file": "grid.frag",
+        "length": 22,
+        "line": 7,
+        "offset": 134
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 158,
+        "file": "crosstl-out/opengl/grid.glsl",
+        "length": 25,
+        "line": 6,
+        "offset": 133
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 181,
+        "file": "grid.frag",
+        "length": 25,
+        "line": 8,
+        "offset": 156
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 195,
+        "file": "crosstl-out/opengl/grid.glsl",
+        "length": 37,
+        "line": 7,
+        "offset": 158
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 218,
+        "file": "grid.frag",
+        "length": 37,
+        "line": 9,
+        "offset": 181
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 265,
+        "file": "crosstl-out/opengl/grid.glsl",
+        "length": 70,
+        "line": 8,
+        "offset": 195
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 282,
+        "file": "grid.frag",
+        "length": 64,
+        "line": 10,
+        "offset": 218
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 311,
+        "file": "crosstl-out/opengl/grid.glsl",
+        "length": 46,
+        "line": 9,
+        "offset": 265
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 328,
+        "file": "grid.frag",
+        "length": 46,
+        "line": 11,
+        "offset": 282
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 367,
+        "file": "crosstl-out/opengl/grid.glsl",
+        "length": 56,
+        "line": 10,
+        "offset": 311
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 382,
+        "file": "grid.frag",
+        "length": 54,
+        "line": 12,
+        "offset": 328
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 411,
+        "file": "crosstl-out/opengl/grid.glsl",
+        "length": 41,
+        "line": 13,
+        "offset": 370
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 133,
+        "file": "grid.frag",
+        "length": 40,
+        "line": 5,
+        "offset": 93
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 444,
+        "file": "crosstl-out/opengl/grid.glsl",
+        "length": 19,
+        "line": 15,
+        "offset": 425
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 133,
+        "file": "grid.frag",
+        "length": 40,
+        "line": 5,
+        "offset": 93
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 505,
+        "file": "crosstl-out/opengl/grid.glsl",
+        "length": 61,
+        "line": 16,
+        "offset": 444
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 456,
+        "file": "grid.frag",
+        "length": 57,
+        "line": 16,
+        "offset": 399
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 564,
+        "file": "crosstl-out/opengl/grid.glsl",
+        "length": 59,
+        "line": 17,
+        "offset": 505
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 511,
+        "file": "grid.frag",
+        "length": 55,
+        "line": 17,
+        "offset": 456
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 590,
+        "file": "crosstl-out/opengl/grid.glsl",
+        "length": 26,
+        "line": 18,
+        "offset": 564
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 537,
+        "file": "grid.frag",
+        "length": 26,
+        "line": 18,
+        "offset": 511
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

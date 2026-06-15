@@ -1,0 +1,72 @@
+{
+  "generatedFile": "crosstl-out/metal/saxpy.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 102,
+        "file": "crosstl-out/metal/saxpy.metal",
+        "length": 13,
+        "line": 7,
+        "offset": 89
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 29,
+        "file": "saxpy.cl",
+        "length": 29,
+        "line": 1,
+        "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 318,
+        "file": "crosstl-out/metal/saxpy.metal",
+        "length": 195,
+        "line": 10,
+        "offset": 123
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 29,
+        "file": "saxpy.cl",
+        "length": 29,
+        "line": 1,
+        "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 407,
+        "file": "crosstl-out/metal/saxpy.metal",
+        "length": 48,
+        "line": 12,
+        "offset": 359
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 179,
+        "file": "saxpy.cl",
+        "length": 37,
+        "line": 7,
+        "offset": 142
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

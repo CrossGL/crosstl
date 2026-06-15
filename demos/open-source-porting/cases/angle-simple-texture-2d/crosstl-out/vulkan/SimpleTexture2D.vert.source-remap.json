@@ -1,0 +1,50 @@
+{
+  "generatedFile": "crosstl-out/vulkan/SimpleTexture2D.vert.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 391,
+        "file": "crosstl-out/vulkan/SimpleTexture2D.vert.spvasm",
+        "length": 33,
+        "line": 14,
+        "offset": 358
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 371,
+        "file": "SimpleTexture2D.vert",
+        "length": 30,
+        "line": 14,
+        "offset": 341
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 467,
+        "file": "crosstl-out/vulkan/SimpleTexture2D.vert.spvasm",
+        "length": 25,
+        "line": 16,
+        "offset": 442
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 371,
+        "file": "SimpleTexture2D.vert",
+        "length": 30,
+        "line": 14,
+        "offset": 341
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

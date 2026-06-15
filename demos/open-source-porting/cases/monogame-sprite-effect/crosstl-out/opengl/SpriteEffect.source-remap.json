@@ -1,0 +1,50 @@
+{
+  "generatedFile": "crosstl-out/opengl/SpriteEffect.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 447,
+        "file": "crosstl-out/opengl/SpriteEffect.glsl",
+        "length": 47,
+        "line": 19,
+        "offset": 400
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 338,
+        "file": "SpriteEffect.fx",
+        "length": 29,
+        "line": 11,
+        "offset": 309
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 822,
+        "file": "crosstl-out/opengl/SpriteEffect.glsl",
+        "length": 68,
+        "line": 35,
+        "offset": 754
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 44,
+        "endOffset": 1032,
+        "file": "SpriteEffect.fx",
+        "length": 66,
+        "line": 43,
+        "offset": 966
+      }
+    }
+  ],
+  "schemaVersion": 1
+}
