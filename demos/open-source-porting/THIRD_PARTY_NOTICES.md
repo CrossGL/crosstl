@@ -62,6 +62,7 @@ should be treated with the same upstream license context when redistributed.
   - `Tutorials/Tutorial02_Cube/assets/cube.vsh`
   - `Tutorials/Tutorial02_Cube/assets/cube.psh`
   - `Tutorials/Tutorial24_VRS/assets/CubeFDM_vs.glsl`
+  - `Tutorials/Tutorial24_VRS/assets/CubeFDM_fs.glsl`
 - License: Apache-2.0
 - License URL:
   https://github.com/DiligentGraphics/DiligentSamples/blob/30b94f26e7d10cde0be48c75a2c252185f564b69/LICENSE
@@ -298,6 +299,7 @@ should be treated with the same upstream license context when redistributed.
 - Repository: https://github.com/Rust-GPU/rust-gpu
 - Commit: `36e3348cdc2f824afec64b3b5af5d369d98a4c0d`
 - Source paths:
+  - `examples/shaders/compute-shader/src/lib.rs`
   - `examples/shaders/sky-shader/src/lib.rs`
   - `examples/shaders/mouse-shader/src/lib.rs`
 - License: Apache-2.0 OR MIT
