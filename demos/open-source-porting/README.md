@@ -301,6 +301,41 @@ store operand typing.
 The `SaschaWillems/Vulkan` headless compute shader was retested after issue
 #780 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan output.
 
+## Corpus manifests
+
+Each case directory contains a `corpus.json` manifest describing the pinned
+upstream sources. Every entry records a `role`:
+
+- `translation_unit` (the default when `role` is omitted) marks a file that the
+  case `crosstl.toml` translates, so it produces per-target artifacts under
+  `crosstl-out/`.
+- `support_file` marks a header or include that only provides context for a
+  translation unit, such as `ShaderParams.h` for
+  `metal-performance-testing-matmul` and `Macros.fxh` for
+  `monogame-sprite-effect`. Support files are intentionally not translated and
+  do not imply per-target output.
+
+`run_demo.py` validates every manifest before translating a case:
+`translation_unit` entries must match a `crosstl.toml` translation unit and
+`support_file` entries must not. This keeps the recorded corpus coverage aligned
+with the artifacts the demo actually generates and validates.
+
+Cases that are reduced or otherwise adjusted from their upstream form record the
+change next to the manifest with structured `adjustments` (each carrying a
+`kind` and a `summary`) and an optional `outOfScope` list. For example,
+`godot-betsy-alpha-stitch` records the removed Godot shader-section marker, and
+the `rocm-examples-*` cases record the kernel slicing and the
+`__HIP_PLATFORM_AMD__` define selection. The runner validates that any declared
+adjustments are non-empty so the rationale stays visible alongside the fixture.
+
+### Source-map offsets
+
+Artifact comparison preserves source-map offset fields (`offset`, `endOffset`,
+and `length`) in `*.source-remap.json`, so generated offset drift fails
+verification instead of passing silently. Demo sources and artifacts are pinned
+to LF through `demos/open-source-porting/.gitattributes` so these byte offsets
+stay identical across Linux, macOS, and Windows.
+
 ## Generated artifacts
 
 Each case stores reference artifacts under `crosstl-out/`. Portability reports

@@ -19,6 +19,10 @@ DEMO_ROOT = Path(__file__).resolve().parent
 CASE_ROOT = DEMO_ROOT / "cases"
 OUTPUT_DIR_NAME = "crosstl-out"
 REPORT_NAME = "portability-report.json"
+CORPUS_MANIFEST_NAME = "corpus.json"
+CORPUS_SCHEMA_VERSION = 1
+CORPUS_ENTRY_ROLES = ("translation_unit", "support_file")
+DEFAULT_CORPUS_ENTRY_ROLE = "translation_unit"
 DIRECTX_DEFAULT_ENTRY_PROFILES = (
     ("VSMain", "vs_6_0"),
     ("PSMain", "ps_6_0"),
@@ -41,6 +45,113 @@ def _case_targets(case_dir: Path) -> list[str]:
     if not targets:
         raise ValueError(f"{case_dir}/crosstl.toml does not declare project targets")
     return targets
+
+
+def _translation_unit_paths(case_dir: Path) -> set[str]:
+    patterns = load_project_config(case_dir).include_patterns
+    if isinstance(patterns, str):
+        patterns = [patterns]
+    return {str(pattern).replace("\\", "/") for pattern in patterns}
+
+
+def _load_corpus_manifest(case_dir: Path) -> dict:
+    manifest = json.loads((case_dir / CORPUS_MANIFEST_NAME).read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        raise ValueError(f"{CORPUS_MANIFEST_NAME} must be a JSON object")
+    return manifest
+
+
+def _corpus_entry_role(entry: dict) -> object:
+    return entry.get("role", DEFAULT_CORPUS_ENTRY_ROLE)
+
+
+def _corpus_adjustment_problems(manifest: dict) -> list[str]:
+    problems: list[str] = []
+    adjustments = manifest.get("adjustments")
+    if adjustments is not None:
+        if not isinstance(adjustments, list) or not adjustments:
+            problems.append("adjustments must be a non-empty list when present")
+        else:
+            for index, adjustment in enumerate(adjustments):
+                label = f"adjustments[{index}]"
+                if not isinstance(adjustment, dict):
+                    problems.append(f"{label} must be an object")
+                    continue
+                for field_name in ("kind", "summary"):
+                    value = adjustment.get(field_name)
+                    if not isinstance(value, str) or not value.strip():
+                        problems.append(
+                            f"{label} {field_name} must be a non-empty string"
+                        )
+                detail = adjustment.get("detail")
+                if detail is not None and (
+                    not isinstance(detail, str) or not detail.strip()
+                ):
+                    problems.append(
+                        f"{label} detail must be a non-empty string when present"
+                    )
+    out_of_scope = manifest.get("outOfScope")
+    if out_of_scope is not None:
+        if not isinstance(out_of_scope, list) or not out_of_scope:
+            problems.append("outOfScope must be a non-empty list when present")
+        elif not all(isinstance(item, str) and item.strip() for item in out_of_scope):
+            problems.append("outOfScope entries must be non-empty strings")
+    return problems
+
+
+def _corpus_manifest_problems(case_dir: Path) -> list[str]:
+    try:
+        manifest = _load_corpus_manifest(case_dir)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return [f"could not read {CORPUS_MANIFEST_NAME}: {exc}"]
+
+    problems: list[str] = []
+    if manifest.get("schemaVersion") != CORPUS_SCHEMA_VERSION:
+        problems.append(f"schemaVersion must be {CORPUS_SCHEMA_VERSION}")
+
+    entries = manifest.get("entries")
+    if not isinstance(entries, list) or not entries:
+        problems.append("entries must be a non-empty list")
+        entries = []
+
+    translation_units = _translation_unit_paths(case_dir)
+    for index, entry in enumerate(entries):
+        label = f"entries[{index}]"
+        if not isinstance(entry, dict):
+            problems.append(f"{label} must be an object")
+            continue
+        role = _corpus_entry_role(entry)
+        if role not in CORPUS_ENTRY_ROLES:
+            problems.append(
+                f"{label} role must be one of {', '.join(CORPUS_ENTRY_ROLES)}"
+            )
+            continue
+        path = entry.get("path")
+        if not isinstance(path, str) or not path:
+            problems.append(f"{label} path must be a non-empty string")
+            continue
+        translated = path.replace("\\", "/") in translation_units
+        if role == "translation_unit" and not translated:
+            problems.append(
+                f"{label} role=translation_unit but '{path}' is not a crosstl.toml "
+                f"translation unit (include={sorted(translation_units)})"
+            )
+        elif role == "support_file" and translated:
+            problems.append(
+                f"{label} role=support_file but '{path}' is a crosstl.toml "
+                f"translation unit; support files must not produce target output"
+            )
+
+    problems.extend(_corpus_adjustment_problems(manifest))
+    return problems
+
+
+def _validate_corpus_manifest(case_dir: Path) -> None:
+    problems = _corpus_manifest_problems(case_dir)
+    if problems:
+        raise SystemExit(
+            f"{case_dir.name}: invalid {CORPUS_MANIFEST_NAME}: " + "; ".join(problems)
+        )
 
 
 def _repo_relative(path: Path) -> str:
@@ -151,6 +262,41 @@ def _translate_case(
     return report_path
 
 
+def _artifact_toolchain_failures(
+    payload: dict, selected_targets: list[str]
+) -> list[str]:
+    """Return "target: artifact" records lacking a successful toolchain run.
+
+    Per-artifact granularity: an available target with several translated
+    artifacts must have a successful toolchain run for every artifact, not
+    merely one. Artifacts that only have failed/skipped runs are reported.
+    """
+    validation = payload.get("validation")
+    runs = validation.get("toolchainRuns") if isinstance(validation, dict) else None
+    if not isinstance(runs, list):
+        return []
+    selected = set(selected_targets)
+    ok_by_artifact: dict[tuple[str, str], bool] = {}
+    for run in runs:
+        if not isinstance(run, dict) or run.get("checkKind") != "artifact":
+            continue
+        target = run.get("target")
+        path = run.get("path")
+        if not isinstance(target, str) or target not in selected:
+            continue
+        if not isinstance(path, str) or not path:
+            continue
+        key = (target, path)
+        ok_by_artifact.setdefault(key, False)
+        if run.get("status") == "ok":
+            ok_by_artifact[key] = True
+    return sorted(
+        f"{target}: {path}"
+        for (target, path), is_ok in ok_by_artifact.items()
+        if not is_ok
+    )
+
+
 def _validate_report(
     report_path: Path,
     *,
@@ -213,12 +359,13 @@ def _validate_report(
                 target_failures.append(
                     f"{target}: ok={target_ok_count}, failed={target_failed_count}"
                 )
-        if ok_count <= 0 or failed_count or target_failures:
+        artifact_failures = _artifact_toolchain_failures(payload, selected_targets)
+        if ok_count <= 0 or failed_count or target_failures or artifact_failures:
             raise SystemExit(
-                f"{case_name}: expected at least one successful toolchain run "
-                f"for each selected target and no failed runs, "
+                f"{case_name}: expected every selected translated artifact to "
+                f"have a successful toolchain run and no failed runs, "
                 f"got ok={ok_count}, failed={failed_count}, "
-                f"targets={target_failures}"
+                f"targets={target_failures}, artifacts={artifact_failures}"
             )
     if reports_dir is not None:
         reports_dir.mkdir(parents=True, exist_ok=True)
@@ -275,8 +422,10 @@ def _comparison_bytes(path: Path) -> bytes:
             payload = json.loads(data.rstrip(b"\n").decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError):
             return data
-        if path.name.endswith(".source-remap.json"):
-            payload = _drop_source_map_offsets(payload)
+        # Source-map offsets (offset/endOffset/length) are compared by
+        # default so generated offset drift fails demo verification. Demo
+        # sources and artifacts are pinned to LF via .gitattributes so the
+        # byte offsets stay identical across Linux, macOS, and Windows.
         return json.dumps(
             _normalize_json_paths(payload),
             separators=(",", ":"),
@@ -294,18 +443,6 @@ def _normalize_json_paths(value: object) -> object:
         return [_normalize_json_paths(item) for item in value]
     if isinstance(value, dict):
         return {key: _normalize_json_paths(item) for key, item in value.items()}
-    return value
-
-
-def _drop_source_map_offsets(value: object) -> object:
-    if isinstance(value, list):
-        return [_drop_source_map_offsets(item) for item in value]
-    if isinstance(value, dict):
-        return {
-            key: _drop_source_map_offsets(item)
-            for key, item in value.items()
-            if key not in {"endOffset", "length", "offset"}
-        }
     return value
 
 
@@ -381,6 +518,7 @@ def _run_case(
     require_toolchain_runs: bool,
     reports_dir: Path | None,
 ) -> None:
+    _validate_corpus_manifest(case_dir)
     configured_targets = _case_targets(case_dir)
     selected_targets = targets or configured_targets
     unsupported = sorted(set(selected_targets) - set(configured_targets))

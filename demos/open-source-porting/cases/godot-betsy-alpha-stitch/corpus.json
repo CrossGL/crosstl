@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "name": "Godot Betsy Alpha Stitch",
   "description": "Pinned GLSL compute shader used by the open-source project porting demo.",
+  "adjustments": [
+    {
+      "kind": "fixture-reduction",
+      "summary": "Removed the Godot shader-section marker so the compute shader is standalone GLSL.",
+      "detail": "Godot stores compute shaders behind an engine-specific section marker. The marker is stripped so the slice is plain GLSL that the project pipeline can parse directly."
+    }
+  ],
+  "outOfScope": [
+    "Godot shader-section markers and engine-side shader preprocessing"
+  ],
   "entries": [
     {
       "id": "godot-betsy-alpha-stitch",

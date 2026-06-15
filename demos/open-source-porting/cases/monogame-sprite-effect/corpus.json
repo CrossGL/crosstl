@@ -20,6 +20,7 @@
     },
     {
       "id": "monogame-effect-macros",
+      "role": "support_file",
       "path": "Macros.fxh",
       "sourceBackend": "directx",
       "targets": [

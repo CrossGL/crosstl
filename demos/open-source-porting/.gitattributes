@@ -1,0 +1,5 @@
+# Pin demo corpus sources and generated artifacts to LF on every platform.
+# The open-source porting demo compares byte-based source-map offsets
+# (offset/endOffset/length in *.source-remap.json), so CRLF checkouts on
+# Windows would otherwise shift those offsets and break artifact comparison.
+* text=auto eol=lf
