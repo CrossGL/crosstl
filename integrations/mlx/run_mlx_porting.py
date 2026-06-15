@@ -8,9 +8,15 @@ import json
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+from crosstl.project.runtime_verification import (
+    build_runtime_test_manifest,
+    plan_runtime_test_manifest,
+)
 
 MLX_REPOSITORY = "https://github.com/ml-explore/mlx"
 MLX_COMMIT = "968d264f2903d578e699c4452a4dbf48633921aa"
@@ -38,10 +44,19 @@ FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1354",
     "https://github.com/CrossGL/crosstl/issues/1376",
 )
+RUNTIME_READINESS_TRACKED_ISSUES = ("https://github.com/CrossGL/crosstl/issues/1388",)
+RUNTIME_READINESS_DIAGNOSTIC_CODES = frozenset(
+    (
+        "project.runtime-test-manifest.entry-points-unavailable",
+        "project.runtime-test-manifest.resource-bindings-unavailable",
+        "project.runtime-test-manifest.dispatch-unavailable",
+    )
+)
 FULL_CORPUS_TRACKED_ISSUES = (
     *FRONTIER_VALIDATION_TRACKED_ISSUES,
     "https://github.com/CrossGL/crosstl/issues/1312",
     *FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
+    *RUNTIME_READINESS_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1317",
@@ -159,6 +174,14 @@ def _load_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise PortingCheckError(f"{path} must contain a JSON object")
     return payload
+
+
+def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _require(condition: bool, message: str) -> None:
@@ -562,6 +585,189 @@ def _check_arange_opengl(
     }
 
 
+def _runtime_readiness_fixture(target: str) -> dict[str, Any]:
+    return {
+        "id": f"mlx-arange-{target}-runtime-readiness",
+        "selector": {
+            "source": MLX_ARANGE_SOURCE,
+            "target": target,
+        },
+        "inputs": [
+            {
+                "name": "start",
+                "kind": "scalar",
+                "dtype": "uint32",
+                "value": 0,
+            },
+            {
+                "name": "step",
+                "kind": "scalar",
+                "dtype": "uint32",
+                "value": 1,
+            },
+        ],
+        "expectedOutputs": [
+            {
+                "name": "out",
+                "kind": "buffer",
+                "dtype": "uint32",
+                "shape": [4],
+                "values": [0, 1, 2, 3],
+            }
+        ],
+        "metadata": {
+            "repository": "mlx",
+            "source": MLX_ARANGE_SOURCE,
+            "purpose": "runtime-readiness-metadata-probe",
+        },
+    }
+
+
+def _runtime_readiness_fixture_metadata(targets: Sequence[str]) -> dict[str, Any]:
+    return {
+        "kind": "crosstl-project-runtime-fixture-metadata",
+        "metadata": {
+            "repository": "mlx",
+            "fixtureSet": "reduced-arange-runtime-readiness",
+            "scope": "artifact-execution-metadata-readiness",
+            "shaderArtifactsOnly": True,
+            "runtimeIntegrationIncluded": False,
+            "trackedIssues": list(RUNTIME_READINESS_TRACKED_ISSUES),
+        },
+        "fixtures": [_runtime_readiness_fixture(target) for target in targets],
+    }
+
+
+def _diagnostics_by_code(diagnostics: Sequence[Any]) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for diagnostic in diagnostics:
+        if not isinstance(diagnostic, Mapping):
+            continue
+        code = diagnostic.get("code")
+        if isinstance(code, str) and code:
+            counts[code] += 1
+    return dict(sorted(counts.items()))
+
+
+def _plan_runtime_readiness_for_report(
+    *,
+    mlx_root: Path,
+    report_dir: Path,
+    name: str,
+    artifact_report: Path,
+    targets: Sequence[str],
+) -> dict[str, Any]:
+    _require(
+        artifact_report.is_file(),
+        f"runtime readiness artifact report is missing: {artifact_report}",
+    )
+    metadata_path = report_dir / f"{name}.fixture-metadata.json"
+    manifest_path = report_dir / f"{name}.runtime-test-manifest.json"
+    plan_path = report_dir / f"{name}.runtime-test-plan.json"
+    metadata = _runtime_readiness_fixture_metadata(targets)
+    _write_json(metadata_path, metadata)
+    manifest = build_runtime_test_manifest(
+        artifact_report,
+        metadata_path,
+        project_root=mlx_root,
+    )
+    _write_json(manifest_path, manifest)
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        project_root=mlx_root,
+    )
+    _write_json(plan_path, plan)
+
+    diagnostic_counts = manifest.get("diagnosticCounts", {})
+    _require(
+        isinstance(diagnostic_counts, dict),
+        "runtime readiness diagnostic counts must be an object",
+    )
+    _require(
+        diagnostic_counts.get("error", 0) == 0,
+        "runtime readiness manifest reported fixture or artifact selection errors",
+    )
+    diagnostics_by_code = _diagnostics_by_code(manifest.get("diagnostics", []))
+    metadata_gap_codes = sorted(
+        code
+        for code in diagnostics_by_code
+        if code in RUNTIME_READINESS_DIAGNOSTIC_CODES
+    )
+    if metadata_gap_codes:
+        _require(
+            RUNTIME_READINESS_TRACKED_ISSUES,
+            "runtime readiness manifest reported artifact execution metadata gaps "
+            "without tracked issue references",
+        )
+    status = "blocked-by-tracked-issues" if metadata_gap_codes else "planned"
+    plan_summary = plan.get("summary", {})
+    _require(isinstance(plan_summary, dict), "runtime readiness plan summary missing")
+    manifest_summary = manifest.get("summary", {})
+    _require(
+        isinstance(manifest_summary, dict),
+        "runtime readiness manifest summary missing",
+    )
+    return {
+        "name": name,
+        "status": status,
+        "artifactReport": _relpath(artifact_report, mlx_root),
+        "fixtureMetadata": _relpath(metadata_path, mlx_root),
+        "runtimeTestManifest": _relpath(manifest_path, mlx_root),
+        "runtimeTestPlan": _relpath(plan_path, mlx_root),
+        "targets": list(targets),
+        "testCount": manifest_summary.get("testCount", 0),
+        "diagnosticCounts": diagnostic_counts,
+        "diagnosticsByCode": diagnostics_by_code,
+        "runtimePlanSummary": plan_summary,
+        "metadataGapCodes": metadata_gap_codes,
+        "shaderArtifactsOnly": True,
+        "runtimeIntegrationIncluded": False,
+        "trackedRuntimeIssues": list(RUNTIME_READINESS_TRACKED_ISSUES),
+    }
+
+
+def _plan_reduced_runtime_readiness(
+    mlx_root: Path,
+    report_dir: Path,
+) -> dict[str, Any]:
+    reports = [
+        _plan_runtime_readiness_for_report(
+            mlx_root=mlx_root,
+            report_dir=report_dir,
+            name="directx-vulkan-runtime-readiness",
+            artifact_report=report_dir / "directx-vulkan-frontier.json",
+            targets=("directx", "vulkan"),
+        ),
+        _plan_runtime_readiness_for_report(
+            mlx_root=mlx_root,
+            report_dir=report_dir,
+            name="opengl-runtime-readiness",
+            artifact_report=report_dir / "arange-opengl.json",
+            targets=("opengl",),
+        ),
+    ]
+    status = (
+        "blocked-by-tracked-issues"
+        if any(report["status"] == "blocked-by-tracked-issues" for report in reports)
+        else "planned"
+    )
+    diagnostics_by_code: Counter[str] = Counter()
+    for report in reports:
+        diagnostics_by_code.update(report.get("diagnosticsByCode", {}))
+    return {
+        "name": "runtime-readiness",
+        "status": status,
+        "reports": reports,
+        "targets": ["directx", "opengl", "vulkan"],
+        "testCount": sum(int(report.get("testCount", 0)) for report in reports),
+        "diagnosticsByCode": dict(sorted(diagnostics_by_code.items())),
+        "shaderArtifactsOnly": True,
+        "runtimeIntegrationIncluded": False,
+        "trackedRuntimeIssues": list(RUNTIME_READINESS_TRACKED_ISSUES),
+    }
+
+
 def _translate_full_corpus(
     mlx_root: Path,
     work_dir: Path,
@@ -758,26 +964,32 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
         ),
     ]
     if args.mode == REDUCED_FRONTIER_MODE:
-        checks.extend(
-            [
-                _translate_directx_vulkan_frontier(
-                    mlx_root,
-                    work_dir,
-                    config_dir,
-                    report_dir,
-                    log_dir,
-                    args.python,
-                    require_vulkan_toolchain=args.require_vulkan_toolchain,
-                ),
-                _check_arange_opengl(
-                    mlx_root,
-                    work_dir,
-                    config_dir,
-                    report_dir,
-                    log_dir,
-                    args.python,
-                ),
-            ]
+        checks.append(
+            _translate_directx_vulkan_frontier(
+                mlx_root,
+                work_dir,
+                config_dir,
+                report_dir,
+                log_dir,
+                args.python,
+                require_vulkan_toolchain=args.require_vulkan_toolchain,
+            )
+        )
+        checks.append(
+            _check_arange_opengl(
+                mlx_root,
+                work_dir,
+                config_dir,
+                report_dir,
+                log_dir,
+                args.python,
+            )
+        )
+        checks.append(
+            _plan_reduced_runtime_readiness(
+                mlx_root,
+                report_dir,
+            )
         )
     elif args.mode == FULL_CORPUS_MODE:
         checks.append(
@@ -808,6 +1020,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "fullCorpusExpectedArtifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
             "shaderArtifactsOnly": True,
             "runtimeIntegrationIncluded": False,
+            "runtimeReadinessIncluded": args.mode == REDUCED_FRONTIER_MODE,
         },
         "trackedIssues": list(FULL_CORPUS_TRACKED_ISSUES),
         "resolvedFrontierIssues": list(RESOLVED_FRONTIER_ISSUES),

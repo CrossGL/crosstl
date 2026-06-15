@@ -39,6 +39,64 @@ def _full_corpus_report(module, **summary_overrides):
     return {"summary": summary, "validation": {"summary": {"failedCount": 0}}}
 
 
+def _translated_arange_report(module, target):
+    return {
+        "kind": "crosstl-project-portability-report",
+        "project": {"targets": [target]},
+        "artifacts": [
+            {
+                "source": module.MLX_ARANGE_SOURCE,
+                "path": f"out/{target}/arange",
+                "target": target,
+                "sourceBackend": "metal",
+                "status": "translated",
+            }
+        ],
+    }
+
+
+def test_runtime_readiness_reports_tracked_artifact_metadata_gaps(tmp_path):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    report_dir = mlx_root / ".crosstl-mlx-porting" / "reports"
+    report_dir.mkdir(parents=True)
+    artifact_report = report_dir / "directx-readiness-artifacts.json"
+    artifact_report.write_text(
+        json.dumps(_translated_arange_report(module, "directx")),
+        encoding="utf-8",
+    )
+
+    result = module._plan_runtime_readiness_for_report(
+        mlx_root=mlx_root,
+        report_dir=report_dir,
+        name="directx-runtime-readiness",
+        artifact_report=artifact_report,
+        targets=("directx",),
+    )
+
+    assert result["status"] == "blocked-by-tracked-issues"
+    assert result["trackedRuntimeIssues"] == [
+        "https://github.com/CrossGL/crosstl/issues/1388"
+    ]
+    assert result["testCount"] == 1
+    assert result["diagnosticCounts"] == {"error": 0, "note": 0, "warning": 3}
+    assert result["metadataGapCodes"] == [
+        "project.runtime-test-manifest.dispatch-unavailable",
+        "project.runtime-test-manifest.entry-points-unavailable",
+        "project.runtime-test-manifest.resource-bindings-unavailable",
+    ]
+    assert (mlx_root / result["fixtureMetadata"]).is_file()
+    assert (mlx_root / result["runtimeTestManifest"]).is_file()
+    assert (mlx_root / result["runtimeTestPlan"]).is_file()
+
+    manifest = json.loads((mlx_root / result["runtimeTestManifest"]).read_text())
+    assert manifest["success"] is True
+    assert manifest["summary"]["testsByTarget"] == {"directx": 1}
+    assert manifest["metadata"]["trackedIssues"] == [
+        "https://github.com/CrossGL/crosstl/issues/1388"
+    ]
+
+
 def test_full_corpus_mode_writes_bounded_config_and_checks_counts(
     tmp_path, monkeypatch
 ):
@@ -266,3 +324,66 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     assert result["scope"]["mode"] == module.FULL_CORPUS_MODE
     assert result["scope"]["fullCorpusExpectedUnitCount"] == 40
     assert result["scope"]["fullCorpusExpectedArtifactCount"] == 120
+
+
+def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkeypatch):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    mlx_root.mkdir()
+
+    monkeypatch.setattr(
+        module,
+        "_verify_mlx_checkout",
+        lambda *args: {"name": "mlx-checkout", "status": "passed"},
+    )
+    monkeypatch.setattr(
+        module,
+        "_scan_metal_kernels",
+        lambda *args: {"name": "metal-kernel-scan", "status": "passed"},
+    )
+    monkeypatch.setattr(
+        module,
+        "_translate_directx_vulkan_frontier",
+        lambda *args, **kwargs: {
+            "name": "directx-vulkan-frontier",
+            "status": "passed",
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "_check_arange_opengl",
+        lambda *args: {"name": "arange-opengl", "status": "passed"},
+    )
+    monkeypatch.setattr(
+        module,
+        "_plan_reduced_runtime_readiness",
+        lambda *args: {
+            "name": "runtime-readiness",
+            "status": "blocked-by-tracked-issues",
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "_translate_full_corpus",
+        lambda *args: pytest.fail("full-corpus check should not run"),
+    )
+
+    result = module.run_checks(
+        SimpleNamespace(
+            mlx_root=str(mlx_root),
+            work_dir=None,
+            no_clean=False,
+            python="python",
+            require_vulkan_toolchain=False,
+            mode=module.REDUCED_FRONTIER_MODE,
+        )
+    )
+
+    assert [check["name"] for check in result["checks"]] == [
+        "mlx-checkout",
+        "metal-kernel-scan",
+        "directx-vulkan-frontier",
+        "arange-opengl",
+        "runtime-readiness",
+    ]
+    assert result["scope"]["runtimeReadinessIncluded"] is True

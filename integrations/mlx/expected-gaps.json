@@ -20,6 +20,23 @@
     "target": "opengl",
     "artifacts": 1
   },
+  "runtime_readiness_status": {
+    "status": "blocked-by-tracked-issues",
+    "source": "mlx/backend/metal/kernels/arange.metal",
+    "targets": [
+      "directx",
+      "opengl",
+      "vulkan"
+    ],
+    "blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1388"
+    ],
+    "diagnostics_by_code": {
+      "project.runtime-test-manifest.dispatch-unavailable": 3,
+      "project.runtime-test-manifest.entry-points-unavailable": 3,
+      "project.runtime-test-manifest.resource-bindings-unavailable": 3
+    }
+  },
   "full_corpus_scout": {
     "status": "blocked-by-tracked-issues",
     "sources": 40,
@@ -63,7 +80,8 @@
     "https://github.com/CrossGL/crosstl/issues/1362",
     "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1354",
-    "https://github.com/CrossGL/crosstl/issues/1376"
+    "https://github.com/CrossGL/crosstl/issues/1376",
+    "https://github.com/CrossGL/crosstl/issues/1388"
   ],
   "resolved_issues": [
     "https://github.com/CrossGL/crosstl/issues/1300",
