@@ -1,0 +1,226 @@
+{
+  "generatedFile": "crosstl-out/opengl/reduce.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 146,
+        "file": "crosstl-out/opengl/reduce.glsl",
+        "length": 63,
+        "line": 3,
+        "offset": 83
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 34,
+        "endOffset": 949,
+        "file": "reduce.cl",
+        "length": 22,
+        "line": 33,
+        "offset": 927
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 308,
+        "file": "crosstl-out/opengl/reduce.glsl",
+        "length": 27,
+        "line": 10,
+        "offset": 281
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 637,
+        "file": "reduce.cl",
+        "length": 26,
+        "line": 17,
+        "offset": 611
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 334,
+        "file": "crosstl-out/opengl/reduce.glsl",
+        "length": 26,
+        "line": 11,
+        "offset": 308
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 637,
+        "file": "reduce.cl",
+        "length": 26,
+        "line": 17,
+        "offset": 611
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 403,
+        "file": "crosstl-out/opengl/reduce.glsl",
+        "length": 66,
+        "line": 14,
+        "offset": 337
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 775,
+        "file": "reduce.cl",
+        "length": 68,
+        "line": 21,
+        "offset": 707
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 480,
+        "file": "crosstl-out/opengl/reduce.glsl",
+        "length": 28,
+        "line": 18,
+        "offset": 452
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 853,
+        "file": "reduce.cl",
+        "length": 32,
+        "line": 26,
+        "offset": 821
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 784,
+        "file": "crosstl-out/opengl/reduce.glsl",
+        "length": 32,
+        "line": 29,
+        "offset": 752
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 45,
+        "endOffset": 1223,
+        "file": "reduce.cl",
+        "length": 38,
+        "line": 44,
+        "offset": 1185
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 860,
+        "file": "crosstl-out/opengl/reduce.glsl",
+        "length": 76,
+        "line": 30,
+        "offset": 784
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 46,
+        "endOffset": 1307,
+        "file": "reduce.cl",
+        "length": 84,
+        "line": 45,
+        "offset": 1223
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 33,
+        "endOffset": 948,
+        "file": "crosstl-out/opengl/reduce.glsl",
+        "length": 57,
+        "line": 32,
+        "offset": 891
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 52,
+        "endOffset": 1433,
+        "file": "reduce.cl",
+        "length": 33,
+        "line": 51,
+        "offset": 1400
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 1012,
+        "file": "crosstl-out/opengl/reduce.glsl",
+        "length": 43,
+        "line": 35,
+        "offset": 969
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 90,
+        "endOffset": 2635,
+        "file": "reduce.cl",
+        "length": 38,
+        "line": 89,
+        "offset": 2597
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 38,
+        "endOffset": 1174,
+        "file": "crosstl-out/opengl/reduce.glsl",
+        "length": 137,
+        "line": 37,
+        "offset": 1037
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 96,
+        "endOffset": 2849,
+        "file": "reduce.cl",
+        "length": 72,
+        "line": 95,
+        "offset": 2777
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "name": "Apple Modern Rendering mesh view direction",
+  "description": "Reduced Metal source used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "apple-modern-rendering-mesh-viewdir",
+      "path": "AAPLMeshRenderer.metal",
+      "sourceBackend": "metal",
+      "targets": [
+        "cgl",
+        "opengl",
+        "metal",
+        "directx",
+        "vulkan"
+      ],
+      "repository": "https://github.com/donaldwuid/apple_metal_sample_code",
+      "commit": "0bc50e5b3670b3169855ab260e8da5ff07b53749",
+      "sourceUrl": "https://github.com/donaldwuid/apple_metal_sample_code/blob/0bc50e5b3670b3169855ab260e8da5ff07b53749/MetalSampleCodeLibrary/MultipleTechniques/ModernRenderingWithMetal/Renderer/Shaders/AAPLMeshRenderer.metal"
+    }
+  ]
+}

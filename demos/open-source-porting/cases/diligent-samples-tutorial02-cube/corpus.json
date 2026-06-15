@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "name": "DiligentSamples Tutorial02 cube shaders",
+  "description": "Pinned HLSL vertex and pixel shaders used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "diligent-samples-tutorial02-cube-vertex",
+      "path": "cube.vsh",
+      "sourceBackend": "directx",
+      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
+      "repository": "https://github.com/DiligentGraphics/DiligentSamples",
+      "commit": "30b94f26e7d10cde0be48c75a2c252185f564b69",
+      "sourceUrl": "https://github.com/DiligentGraphics/DiligentSamples/blob/30b94f26e7d10cde0be48c75a2c252185f564b69/Tutorials/Tutorial02_Cube/assets/cube.vsh"
+    },
+    {
+      "id": "diligent-samples-tutorial02-cube-pixel",
+      "path": "cube.psh",
+      "sourceBackend": "directx",
+      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
+      "repository": "https://github.com/DiligentGraphics/DiligentSamples",
+      "commit": "30b94f26e7d10cde0be48c75a2c252185f564b69",
+      "sourceUrl": "https://github.com/DiligentGraphics/DiligentSamples/blob/30b94f26e7d10cde0be48c75a2c252185f564b69/Tutorials/Tutorial02_Cube/assets/cube.psh"
+    }
+  ]
+}

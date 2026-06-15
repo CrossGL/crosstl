@@ -1,0 +1,36 @@
+#version 330
+
+shader main {
+    struct VertexInput {
+    vec3 vertexPosition;
+    vec2 vertexTexCoord;
+    vec3 vertexNormal;
+    vec4 vertexColor;
+    };
+
+    struct VertexOutput {
+    vec3 fragPosition;
+    vec2 fragTexCoord;
+    vec4 fragColor;
+    vec3 fragNormal;
+    vec4 gl_Position @ gl_Position;
+    };
+
+    cbuffer Uniforms {
+    mat4 mvp;
+    mat4 matModel;
+    mat4 matNormal;
+    };
+
+    vertex {
+    VertexOutput main(VertexInput input) {
+        VertexOutput output;
+        output.fragPosition = vec3((matModel * vec4(input.vertexPosition, 1.0)));
+        output.fragTexCoord = input.vertexTexCoord;
+        output.fragColor = input.vertexColor;
+        output.fragNormal = normalize(vec3((matNormal * vec4(input.vertexNormal, 1.0))));
+        output.gl_Position = (mvp * vec4(input.vertexPosition, 1.0));
+        return output;
+    }
+    }
+}

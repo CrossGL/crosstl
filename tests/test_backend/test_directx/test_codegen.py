@@ -11,6 +11,7 @@ from crosstl.translator.codegen.directx_codegen import (
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -587,6 +588,74 @@ def test_monogame_style_vertex_semantics_generate_valid_glsl_helpers():
     assert "vec4 SpritePixelShader(VSOutput input_)" in generated
     assert "return input_.Color;" in generated
     assert "VSOutput input)" not in generated
+
+
+def monogame_sprite_effect_hlsl():
+    return textwrap.dedent("""
+        Texture2D Texture : register(t0);
+        SamplerState TextureSampler : register(s0);
+
+        float4 SpritePixelShader(
+            float4 color : COLOR0,
+            float2 texCoord : TEXCOORD0
+        ) : SV_Target0 {
+            float4 tex = Texture.Sample(TextureSampler, texCoord);
+            return tex * color;
+        }
+
+        technique SpriteEffect {
+            pass P0 {
+                PixelShader = compile ps_4_0_level_9_1 SpritePixelShader();
+            }
+        }
+    """).strip()
+
+
+def test_effect_compile_pixel_shader_marks_named_function_as_stage_entry():
+    crossgl = generate_crossgl(monogame_sprite_effect_hlsl())
+
+    assert (
+        "vec4 SpritePixelShader(vec4 color @ Color0, vec2 texCoord @ TexCoord0) "
+        "@ gl_FragData[0] @ stage_entry"
+    ) in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    fragment_stage = shader_ast.stages[ShaderStage.FRAGMENT]
+
+    assert fragment_stage.entry_point.name == "SpritePixelShader"
+    assert fragment_stage.entry_point.body.statements
+
+
+def test_effect_compile_pixel_shader_wires_opengl_fragment_entry_body():
+    generated = GLSLCodeGen().generate(
+        parse_crossgl(generate_crossgl(monogame_sprite_effect_hlsl()))
+    )
+
+    assert "void main()" in generated
+    assert "vec4 tex = texture(Texture, texCoord);" in generated
+    assert "fragColor = (tex * color);" in generated
+
+
+def test_effect_compile_pixel_shader_wires_metal_fragment_entry_body():
+    generated = MetalCodeGen().generate(
+        parse_crossgl(generate_crossgl(monogame_sprite_effect_hlsl()))
+    )
+
+    assert "fragment float4 SpritePixelShader(" in generated
+    assert "float4 tex = Texture.sample(TextureSampler, texCoord);" in generated
+    assert "return tex * color;" in generated
+
+
+def test_effect_compile_pixel_shader_wires_vulkan_fragment_entry_body():
+    generated = VulkanSPIRVCodeGen().generate(
+        parse_crossgl(generate_crossgl(monogame_sprite_effect_hlsl()))
+    )
+
+    assert "OpEntryPoint Fragment" in generated
+    assert '"SpritePixelShader"' in generated
+    assert "OpImageSampleImplicitLod" in generated
+    assert "OpFMul" in generated
+    assert "OpReturn\nOpFunctionEnd" in generated
 
 
 def test_uint_vertex_id_import_uses_glsl_builtin_cast_alias():

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "name": "OpenGL Samples Flat Color",
+  "description": "Pinned GLSL source pair used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "ogl-samples-flat-color-vertex",
+      "path": "flat-color.vert",
+      "sourceBackend": "opengl",
+      "targets": ["cgl", "metal", "opengl", "directx", "vulkan"],
+      "repository": "https://github.com/g-truc/ogl-samples",
+      "commit": "38cada7a9458864265e25415ae61586d500ff5fc",
+      "sourceUrl": "https://github.com/g-truc/ogl-samples/blob/38cada7a9458864265e25415ae61586d500ff5fc/data/gl-330/flat-color.vert"
+    },
+    {
+      "id": "ogl-samples-flat-color-fragment",
+      "path": "flat-color.frag",
+      "sourceBackend": "opengl",
+      "targets": ["cgl", "metal", "opengl", "directx", "vulkan"],
+      "repository": "https://github.com/g-truc/ogl-samples",
+      "commit": "38cada7a9458864265e25415ae61586d500ff5fc",
+      "sourceUrl": "https://github.com/g-truc/ogl-samples/blob/38cada7a9458864265e25415ae61586d500ff5fc/data/gl-330/flat-color.frag"
+    }
+  ]
+}

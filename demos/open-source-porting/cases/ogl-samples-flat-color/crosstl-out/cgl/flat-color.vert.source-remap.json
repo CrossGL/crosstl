@@ -1,0 +1,182 @@
+{
+  "generatedFile": "crosstl-out/cgl/flat-color.vert.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 18,
+        "file": "crosstl-out/cgl/flat-color.vert.cgl",
+        "length": 18,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 18,
+        "file": "flat-color.vert",
+        "length": 18,
+        "line": 1,
+        "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 41,
+        "file": "crosstl-out/cgl/flat-color.vert.cgl",
+        "length": 23,
+        "line": 2,
+        "offset": 18
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 61,
+        "file": "flat-color.vert",
+        "length": 23,
+        "line": 4,
+        "offset": 38
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 62,
+        "file": "crosstl-out/cgl/flat-color.vert.cgl",
+        "length": 21,
+        "line": 3,
+        "offset": 41
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 82,
+        "file": "flat-color.vert",
+        "length": 21,
+        "line": 5,
+        "offset": 61
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 134,
+        "file": "crosstl-out/cgl/flat-color.vert.cgl",
+        "length": 32,
+        "line": 7,
+        "offset": 102
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 186,
+        "file": "flat-color.vert",
+        "length": 46,
+        "line": 10,
+        "offset": 140
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 204,
+        "file": "crosstl-out/cgl/flat-color.vert.cgl",
+        "length": 36,
+        "line": 11,
+        "offset": 168
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 232,
+        "file": "flat-color.vert",
+        "length": 31,
+        "line": 14,
+        "offset": 201
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 249,
+        "file": "crosstl-out/cgl/flat-color.vert.cgl",
+        "length": 14,
+        "line": 15,
+        "offset": 235
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 139,
+        "file": "flat-color.vert",
+        "length": 18,
+        "line": 8,
+        "offset": 121
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 312,
+        "file": "crosstl-out/cgl/flat-color.vert.cgl",
+        "length": 42,
+        "line": 19,
+        "offset": 270
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 120,
+        "file": "flat-color.vert",
+        "length": 38,
+        "line": 6,
+        "offset": 82
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 438,
+        "file": "crosstl-out/cgl/flat-color.vert.cgl",
+        "length": 53,
+        "line": 23,
+        "offset": 385
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 232,
+        "file": "flat-color.vert",
+        "length": 31,
+        "line": 14,
+        "offset": 201
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

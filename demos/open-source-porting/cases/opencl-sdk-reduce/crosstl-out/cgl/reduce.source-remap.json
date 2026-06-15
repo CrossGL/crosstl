@@ -1,0 +1,270 @@
+{
+  "generatedFile": "crosstl-out/cgl/reduce.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 75,
+        "file": "crosstl-out/cgl/reduce.cgl",
+        "length": 27,
+        "line": 3,
+        "offset": 48
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 637,
+        "file": "reduce.cl",
+        "length": 26,
+        "line": 17,
+        "offset": 611
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 101,
+        "file": "crosstl-out/cgl/reduce.cgl",
+        "length": 26,
+        "line": 4,
+        "offset": 75
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 637,
+        "file": "reduce.cl",
+        "length": 26,
+        "line": 17,
+        "offset": 611
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 174,
+        "file": "crosstl-out/cgl/reduce.cgl",
+        "length": 36,
+        "line": 8,
+        "offset": 138
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 672,
+        "file": "reduce.cl",
+        "length": 35,
+        "line": 18,
+        "offset": 637
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 245,
+        "file": "crosstl-out/cgl/reduce.cgl",
+        "length": 35,
+        "line": 12,
+        "offset": 210
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 706,
+        "file": "reduce.cl",
+        "length": 34,
+        "line": 19,
+        "offset": 672
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 435,
+        "file": "crosstl-out/cgl/reduce.cgl",
+        "length": 25,
+        "line": 21,
+        "offset": 410
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 853,
+        "file": "reduce.cl",
+        "length": 32,
+        "line": 26,
+        "offset": 821
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 486,
+        "file": "crosstl-out/cgl/reduce.cgl",
+        "length": 18,
+        "line": 25,
+        "offset": 468
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 904,
+        "file": "reduce.cl",
+        "length": 20,
+        "line": 31,
+        "offset": 884
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 670,
+        "file": "crosstl-out/cgl/reduce.cgl",
+        "length": 69,
+        "line": 30,
+        "offset": 601
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 55,
+        "endOffset": 1502,
+        "file": "reduce.cl",
+        "length": 33,
+        "line": 54,
+        "offset": 1469
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 45,
+        "endOffset": 1107,
+        "file": "crosstl-out/cgl/reduce.cgl",
+        "length": 36,
+        "line": 44,
+        "offset": 1071
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 45,
+        "endOffset": 1223,
+        "file": "reduce.cl",
+        "length": 38,
+        "line": 44,
+        "offset": 1185
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 46,
+        "endOffset": 1186,
+        "file": "crosstl-out/cgl/reduce.cgl",
+        "length": 79,
+        "line": 45,
+        "offset": 1107
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 46,
+        "endOffset": 1307,
+        "file": "reduce.cl",
+        "length": 84,
+        "line": 45,
+        "offset": 1223
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 48,
+        "endOffset": 1274,
+        "file": "crosstl-out/cgl/reduce.cgl",
+        "length": 57,
+        "line": 47,
+        "offset": 1217
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 52,
+        "endOffset": 1433,
+        "file": "reduce.cl",
+        "length": 33,
+        "line": 51,
+        "offset": 1400
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 51,
+        "endOffset": 1351,
+        "file": "crosstl-out/cgl/reduce.cgl",
+        "length": 47,
+        "line": 50,
+        "offset": 1304
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 90,
+        "endOffset": 2635,
+        "file": "reduce.cl",
+        "length": 38,
+        "line": 89,
+        "offset": 2597
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 53,
+        "endOffset": 1513,
+        "file": "crosstl-out/cgl/reduce.cgl",
+        "length": 137,
+        "line": 52,
+        "offset": 1376
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 96,
+        "endOffset": 2849,
+        "file": "reduce.cl",
+        "length": 72,
+        "line": 95,
+        "offset": 2777
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

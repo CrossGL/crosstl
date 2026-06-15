@@ -1,0 +1,138 @@
+{
+  "generatedFile": "crosstl-out/opengl/Cube_cube.vert.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 39,
+        "file": "crosstl-out/opengl/Cube_cube.vert.glsl",
+        "length": 21,
+        "line": 2,
+        "offset": 18
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 1191,
+        "file": "Cube_cube.vert",
+        "length": 28,
+        "line": 21,
+        "offset": 1163
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 58,
+        "file": "crosstl-out/opengl/Cube_cube.vert.glsl",
+        "length": 19,
+        "line": 3,
+        "offset": 39
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 1217,
+        "file": "Cube_cube.vert",
+        "length": 26,
+        "line": 22,
+        "offset": 1191
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 78,
+        "file": "crosstl-out/opengl/Cube_cube.vert.glsl",
+        "length": 20,
+        "line": 4,
+        "offset": 58
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 1261,
+        "file": "Cube_cube.vert",
+        "length": 24,
+        "line": 26,
+        "offset": 1237
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 159,
+        "file": "crosstl-out/opengl/Cube_cube.vert.glsl",
+        "length": 14,
+        "line": 7,
+        "offset": 145
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 1236,
+        "file": "Cube_cube.vert",
+        "length": 18,
+        "line": 24,
+        "offset": 1218
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 220,
+        "file": "crosstl-out/opengl/Cube_cube.vert.glsl",
+        "length": 27,
+        "line": 11,
+        "offset": 193
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 1303,
+        "file": "Cube_cube.vert",
+        "length": 27,
+        "line": 30,
+        "offset": 1276
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 259,
+        "file": "crosstl-out/opengl/Cube_cube.vert.glsl",
+        "length": 39,
+        "line": 12,
+        "offset": 220
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 1340,
+        "file": "Cube_cube.vert",
+        "length": 37,
+        "line": 31,
+        "offset": 1303
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

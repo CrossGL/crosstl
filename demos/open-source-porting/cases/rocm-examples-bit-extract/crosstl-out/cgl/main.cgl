@@ -1,0 +1,16 @@
+// HIP to CrossGL conversion
+// Kernel: bit_extract_kernel
+@compute
+@stage_entry
+@workgroup_size(1, 1, 1)  // Default workgroup size
+fn bit_extract_kernel(
+    @group(0) @binding(0) var<storage, read_write> d_output: array<u32>,
+    @group(0) @binding(1) var<storage, read> d_input: array<u32>,
+    @group(0) @binding(2) var<uniform> size: u32
+) {
+    var offset: u32 = ((gl_WorkGroupID.x * gl_WorkGroupSize.x) + gl_LocalInvocationID.x);
+    var stride: u32 = (gl_WorkGroupSize.x * gl_NumWorkGroups.x);
+    for (var i: u32 = offset; (i < size); i += stride) {
+        d_output[i] = ((d_input[i] >> 8) & 0xfu);
+    }
+}

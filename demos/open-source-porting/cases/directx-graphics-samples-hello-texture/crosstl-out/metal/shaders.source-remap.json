@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/metal/shaders.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 456,
+        "file": "crosstl-out/metal/shaders.metal",
+        "length": 20,
+        "line": 18,
+        "offset": 436
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 682,
+        "file": "shaders.hlsl",
+        "length": 20,
+        "line": 23,
+        "offset": 662
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 508,
+        "file": "crosstl-out/metal/shaders.metal",
+        "length": 20,
+        "line": 20,
+        "offset": 488
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 735,
+        "file": "shaders.hlsl",
+        "length": 20,
+        "line": 26,
+        "offset": 715
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 679,
+        "file": "crosstl-out/metal/shaders.metal",
+        "length": 130,
+        "line": 25,
+        "offset": 549
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 34,
+        "endOffset": 851,
+        "file": "shaders.hlsl",
+        "length": 50,
+        "line": 33,
+        "offset": 801
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 729,
+        "file": "crosstl-out/metal/shaders.metal",
+        "length": 50,
+        "line": 26,
+        "offset": 679
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 34,
+        "endOffset": 851,
+        "file": "shaders.hlsl",
+        "length": 50,
+        "line": 33,
+        "offset": 801
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

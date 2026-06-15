@@ -1,0 +1,74 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 42
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %16 "main" %19
+OpName %9 "VertexOutput"
+OpMemberName %9 0 "color"
+OpName %12 "Material"
+OpMemberName %12 0 "kind"
+OpMemberName %12 1 "fa"
+OpName %14 "Material"
+OpName %19 "CrossGL_vertex_output_main_color"
+OpName %21 "output"
+OpDecorate %12 Block
+OpMemberDecorate %12 0 Offset 0
+OpMemberDecorate %12 1 Offset 16
+OpDecorate %10 ArrayStride 16
+OpDecorate %14 DescriptorSet 0
+OpDecorate %14 Binding 0
+OpDecorate %19 Location 0
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypeStruct %8
+%11 = OpConstant %4 3
+%10 = OpTypeArray %5 %11
+%12 = OpTypeStruct %4 %10
+%13 = OpTypePointer Uniform %12
+%15 = OpTypeFunction %2
+%18 = OpTypePointer Output %8
+%20 = OpTypePointer Function %9
+%22 = OpConstant %4 0
+%23 = OpTypePointer Uniform %4
+%30 = OpConstant %5 0.2
+%32 = OpTypePointer Function %8
+%34 = OpConstant %5 0.5
+%37 = OpConstant %5 0.0
+%14 = OpVariable %13 Uniform
+%19 = OpVariable %18 Output
+%16 = OpFunction %2 None %15
+%17 = OpLabel
+%21 = OpVariable %20 Function
+%24 = OpAccessChain %23 %14 %22
+%25 = OpLoad %4 %24
+OpSelectionMerge %26 None
+OpSwitch %25 %29 1 %27 2 %28
+%27 = OpLabel
+%31 = OpCompositeConstruct %8 %30 %30 %30 %30
+%33 = OpAccessChain %32 %21 %22
+OpStore %33 %31
+OpBranch %26
+%28 = OpLabel
+%35 = OpCompositeConstruct %8 %34 %34 %34 %34
+%36 = OpAccessChain %32 %21 %22
+OpStore %36 %35
+OpBranch %26
+%29 = OpLabel
+%38 = OpCompositeConstruct %8 %37 %37 %37 %37
+%39 = OpAccessChain %32 %21 %22
+OpStore %39 %38
+OpBranch %26
+%26 = OpLabel
+%40 = OpLoad %9 %21
+%41 = OpCompositeExtract %8 %40 0
+OpStore %19 %41
+OpReturn
+OpFunctionEnd

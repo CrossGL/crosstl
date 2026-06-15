@@ -1,0 +1,116 @@
+{
+  "generatedFile": "crosstl-out/vulkan/AAPLMeshRenderer.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 213,
+        "file": "crosstl-out/vulkan/AAPLMeshRenderer.spvasm",
+        "length": 46,
+        "line": 8,
+        "offset": 167
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 163,
+        "file": "AAPLMeshRenderer.metal",
+        "length": 49,
+        "line": 5,
+        "offset": 114
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 421,
+        "file": "crosstl-out/vulkan/AAPLMeshRenderer.spvasm",
+        "length": 55,
+        "line": 15,
+        "offset": 366
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 163,
+        "file": "AAPLMeshRenderer.metal",
+        "length": 49,
+        "line": 5,
+        "offset": 114
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 467,
+        "file": "crosstl-out/vulkan/AAPLMeshRenderer.spvasm",
+        "length": 46,
+        "line": 16,
+        "offset": 421
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 163,
+        "file": "AAPLMeshRenderer.metal",
+        "length": 49,
+        "line": 5,
+        "offset": 114
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 593,
+        "file": "crosstl-out/vulkan/AAPLMeshRenderer.spvasm",
+        "length": 44,
+        "line": 20,
+        "offset": 549
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 163,
+        "file": "AAPLMeshRenderer.metal",
+        "length": 49,
+        "line": 5,
+        "offset": 114
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 621,
+        "file": "crosstl-out/vulkan/AAPLMeshRenderer.spvasm",
+        "length": 28,
+        "line": 21,
+        "offset": 593
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 230,
+        "file": "AAPLMeshRenderer.metal",
+        "length": 67,
+        "line": 6,
+        "offset": 163
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

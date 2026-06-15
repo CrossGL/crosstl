@@ -1,0 +1,270 @@
+{
+  "generatedFile": "crosstl-out/directx/lib.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 92,
+        "file": "crosstl-out/directx/lib.hlsl",
+        "length": 20,
+        "line": 5,
+        "offset": 72
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 682,
+        "file": "lib.rs",
+        "length": 44,
+        "line": 21,
+        "offset": 638
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 179,
+        "file": "crosstl-out/directx/lib.hlsl",
+        "length": 49,
+        "line": 10,
+        "offset": 130
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 682,
+        "file": "lib.rs",
+        "length": 44,
+        "line": 21,
+        "offset": 638
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 202,
+        "file": "crosstl-out/directx/lib.hlsl",
+        "length": 23,
+        "line": 11,
+        "offset": 179
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 682,
+        "file": "lib.rs",
+        "length": 44,
+        "line": 21,
+        "offset": 638
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 326,
+        "file": "crosstl-out/directx/lib.hlsl",
+        "length": 38,
+        "line": 17,
+        "offset": 288
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 682,
+        "file": "lib.rs",
+        "length": 44,
+        "line": 21,
+        "offset": 638
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 349,
+        "file": "crosstl-out/directx/lib.hlsl",
+        "length": 23,
+        "line": 18,
+        "offset": 326
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 682,
+        "file": "lib.rs",
+        "length": 44,
+        "line": 21,
+        "offset": 638
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 26,
+        "endOffset": 520,
+        "file": "crosstl-out/directx/lib.hlsl",
+        "length": 29,
+        "line": 25,
+        "offset": 491
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 682,
+        "file": "lib.rs",
+        "length": 44,
+        "line": 21,
+        "offset": 638
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 596,
+        "file": "crosstl-out/directx/lib.hlsl",
+        "length": 41,
+        "line": 28,
+        "offset": 555
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 682,
+        "file": "lib.rs",
+        "length": 44,
+        "line": 21,
+        "offset": 638
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 783,
+        "file": "crosstl-out/directx/lib.hlsl",
+        "length": 49,
+        "line": 35,
+        "offset": 734
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 682,
+        "file": "lib.rs",
+        "length": 44,
+        "line": 21,
+        "offset": 638
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 64,
+        "endOffset": 1329,
+        "file": "crosstl-out/directx/lib.hlsl",
+        "length": 18,
+        "line": 63,
+        "offset": 1311
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 593,
+        "file": "lib.rs",
+        "length": 35,
+        "line": 18,
+        "offset": 558
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 65,
+        "endOffset": 1352,
+        "file": "crosstl-out/directx/lib.hlsl",
+        "length": 23,
+        "line": 64,
+        "offset": 1329
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 44,
+        "endOffset": 1207,
+        "file": "lib.rs",
+        "length": 50,
+        "line": 43,
+        "offset": 1157
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 67,
+        "endOffset": 1427,
+        "file": "crosstl-out/directx/lib.hlsl",
+        "length": 29,
+        "line": 66,
+        "offset": 1398
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 50,
+        "endOffset": 1424,
+        "file": "lib.rs",
+        "length": 31,
+        "line": 49,
+        "offset": 1393
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 68,
+        "endOffset": 1508,
+        "file": "crosstl-out/directx/lib.hlsl",
+        "length": 81,
+        "line": 67,
+        "offset": 1427
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 51,
+        "endOffset": 1502,
+        "file": "lib.rs",
+        "length": 78,
+        "line": 50,
+        "offset": 1424
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

@@ -1,0 +1,163 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 106
+OpCapability Shader
+OpCapability FragmentDensityEXT
+OpExtension "SPV_EXT_fragment_invocation_density"
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %72 "main" %75 %77 %28
+OpExecutionMode %72 OriginUpperLeft
+OpName %10 "g_Constants"
+OpMemberName %10 0 "WorldViewProj"
+OpMemberName %10 1 "PrimitiveShadingRate"
+OpMemberName %10 2 "DrawMode"
+OpName %11 "FragmentInput"
+OpMemberName %11 0 "in_UV"
+OpName %12 "Uniforms"
+OpMemberName %12 0 "WorldViewProj"
+OpMemberName %12 1 "PrimitiveShadingRate"
+OpMemberName %12 2 "DrawMode"
+OpName %14 "Uniforms"
+OpName %18 "g_Texture"
+OpName %23 "h"
+OpName %28 "gl_FragSizeEXT"
+OpName %42 "col"
+OpName %75 "CrossGL_fragment_output_main"
+OpName %77 "CrossGL_fragment_input_input_in_UV"
+OpName %81 "input"
+OpName %83 "out_Color"
+OpName %84 "Col"
+OpDecorate %12 Block
+OpMemberDecorate %12 0 Offset 0
+OpMemberDecorate %12 0 ColMajor
+OpMemberDecorate %12 0 MatrixStride 16
+OpMemberDecorate %12 1 Offset 64
+OpMemberDecorate %12 2 Offset 68
+OpDecorate %14 DescriptorSet 0
+OpDecorate %14 Binding 0
+OpDecorate %18 DescriptorSet 0
+OpDecorate %18 Binding 1
+OpDecorate %28 BuiltIn FragSizeEXT
+OpDecorate %75 Location 0
+OpDecorate %77 Location 0
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypeMatrix %8 4
+%10 = OpTypeStruct %9 %4 %4
+%11 = OpTypeStruct %6
+%12 = OpTypeStruct %9 %4 %4
+%13 = OpTypePointer Uniform %12
+%15 = OpTypeImage %5 2D 0 0 0 1 Unknown
+%16 = OpTypeSampledImage %15
+%17 = OpTypePointer UniformConstant %16
+%19 = OpTypeFunction %8
+%22 = OpTypePointer Function %5
+%24 = OpConstant %5 1.0
+%25 = OpTypeInt 32 0
+%26 = OpTypeVector %25 2
+%27 = OpTypePointer Input %26
+%37 = OpConstant %5 0.0
+%39 = OpConstant %5 1.35
+%41 = OpTypePointer Function %7
+%44 = OpConstant %5 6.0
+%46 = OpConstant %5 3.0
+%50 = OpConstant %5 2.0
+%58 = OpConstant %5 4.0
+%71 = OpTypeFunction %2
+%74 = OpTypePointer Output %8
+%76 = OpTypePointer Input %6
+%80 = OpTypePointer Function %11
+%82 = OpTypePointer Function %8
+%86 = OpConstant %4 0
+%87 = OpTypePointer Function %6
+%91 = OpConstant %4 2
+%92 = OpTypePointer Uniform %4
+%102 = OpConstant %5 0.5
+%14 = OpVariable %13 Uniform
+%18 = OpVariable %17 UniformConstant
+%28 = OpVariable %27 Input
+%75 = OpVariable %74 Output
+%77 = OpVariable %76 Input
+%20 = OpFunction %8 None %19
+%21 = OpLabel
+%23 = OpVariable %22 Function
+%42 = OpVariable %41 Function
+%29 = OpLoad %26 %28
+%30 = OpCompositeExtract %25 %29 0
+%31 = OpLoad %26 %28
+%32 = OpCompositeExtract %25 %31 1
+%33 = OpIMul %25 %30 %32
+%34 = OpConvertUToF %5 %33
+%35 = OpFDiv %5 %24 %34
+%36 = OpFSub %5 %24 %35
+%38 = OpExtInst %5 %1 FClamp %36 %37 %24
+%40 = OpFDiv %5 %38 %39
+OpStore %23 %40
+%43 = OpLoad %5 %23
+%45 = OpFMul %5 %43 %44
+%47 = OpFSub %5 %45 %46
+%48 = OpExtInst %5 %1 FAbs %47
+%49 = OpFSub %5 %48 %24
+%51 = OpLoad %5 %23
+%52 = OpFMul %5 %51 %44
+%53 = OpFSub %5 %52 %50
+%54 = OpExtInst %5 %1 FAbs %53
+%55 = OpFSub %5 %50 %54
+%56 = OpLoad %5 %23
+%57 = OpFMul %5 %56 %44
+%59 = OpFSub %5 %57 %58
+%60 = OpExtInst %5 %1 FAbs %59
+%61 = OpFSub %5 %50 %60
+%62 = OpCompositeConstruct %7 %49 %55 %61
+OpStore %42 %62
+%63 = OpLoad %7 %42
+%64 = OpCompositeConstruct %7 %37 %37 %37
+%65 = OpCompositeConstruct %7 %24 %24 %24
+%66 = OpExtInst %7 %1 FClamp %63 %64 %65
+%67 = OpCompositeExtract %5 %66 0
+%68 = OpCompositeExtract %5 %66 1
+%69 = OpCompositeExtract %5 %66 2
+%70 = OpCompositeConstruct %8 %67 %68 %69 %24
+OpReturnValue %70
+OpFunctionEnd
+%72 = OpFunction %2 None %71
+%73 = OpLabel
+%81 = OpVariable %80 Function
+%83 = OpVariable %82 Function
+%84 = OpVariable %82 Function
+%78 = OpLoad %6 %77
+%79 = OpCompositeConstruct %11 %78
+OpStore %81 %79
+%85 = OpLoad %16 %18
+%88 = OpAccessChain %87 %81 %86
+%89 = OpLoad %6 %88
+%90 = OpImageSampleImplicitLod %8 %85 %89
+OpStore %84 %90
+%93 = OpAccessChain %92 %14 %91
+%94 = OpLoad %4 %93
+OpSelectionMerge %95 None
+OpSwitch %94 %95 0 %96 1 %97
+%96 = OpLabel
+%98 = OpLoad %8 %84
+OpStore %83 %98
+OpBranch %95
+%97 = OpLabel
+%99 = OpLoad %8 %84
+%100 = OpFunctionCall %8 %20
+%101 = OpFAdd %8 %99 %100
+%103 = OpCompositeConstruct %8 %102 %102 %102 %102
+%104 = OpFMul %8 %101 %103
+OpStore %83 %104
+OpBranch %95
+%95 = OpLabel
+%105 = OpLoad %8 %83
+OpStore %75 %105
+OpReturn
+OpFunctionEnd

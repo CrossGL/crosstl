@@ -1,0 +1,138 @@
+{
+  "generatedFile": "crosstl-out/opengl/spv.pushConstant.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 13,
+        "file": "crosstl-out/opengl/spv.pushConstant.glsl",
+        "length": 13,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 13,
+        "file": "spv.pushConstant.vert",
+        "length": 13,
+        "line": 1,
+        "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 97,
+        "file": "crosstl-out/opengl/spv.pushConstant.glsl",
+        "length": 14,
+        "line": 5,
+        "offset": 83
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 69,
+        "file": "spv.pushConstant.vert",
+        "length": 14,
+        "line": 4,
+        "offset": 55
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 114,
+        "file": "crosstl-out/opengl/spv.pushConstant.glsl",
+        "length": 17,
+        "line": 6,
+        "offset": 97
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 86,
+        "file": "spv.pushConstant.vert",
+        "length": 17,
+        "line": 5,
+        "offset": 69
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 217,
+        "file": "crosstl-out/opengl/spv.pushConstant.glsl",
+        "length": 31,
+        "line": 12,
+        "offset": 186
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 196,
+        "file": "spv.pushConstant.vert",
+        "length": 39,
+        "line": 13,
+        "offset": 157
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 295,
+        "file": "crosstl-out/opengl/spv.pushConstant.glsl",
+        "length": 31,
+        "line": 16,
+        "offset": 264
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 235,
+        "file": "spv.pushConstant.vert",
+        "length": 39,
+        "line": 14,
+        "offset": 196
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 374,
+        "file": "crosstl-out/opengl/spv.pushConstant.glsl",
+        "length": 31,
+        "line": 20,
+        "offset": 343
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 274,
+        "file": "spv.pushConstant.vert",
+        "length": 39,
+        "line": 15,
+        "offset": 235
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

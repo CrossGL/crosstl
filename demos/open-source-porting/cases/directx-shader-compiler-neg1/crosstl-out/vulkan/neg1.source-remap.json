@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/vulkan/neg1.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 14,
+        "endLine": 38,
+        "endOffset": 927,
+        "file": "crosstl-out/vulkan/neg1.spvasm",
+        "length": 927,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 126,
+        "file": "neg1.hlsl",
+        "length": 126,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

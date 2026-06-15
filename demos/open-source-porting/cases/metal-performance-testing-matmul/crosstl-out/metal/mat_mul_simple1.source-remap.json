@@ -1,0 +1,314 @@
+{
+  "generatedFile": "crosstl-out/metal/mat_mul_simple1.metal",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 25,
+        "file": "crosstl-out/metal/mat_mul_simple1.metal",
+        "length": 24,
+        "line": 2,
+        "offset": 1
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 132,
+        "file": "mat_mul_simple1.metal",
+        "length": 24,
+        "line": 8,
+        "offset": 108
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 91,
+        "file": "crosstl-out/metal/mat_mul_simple1.metal",
+        "length": 20,
+        "line": 6,
+        "offset": 71
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 580,
+        "file": "mat_mul_simple1.metal",
+        "length": 45,
+        "line": 19,
+        "offset": 535
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 370,
+        "file": "crosstl-out/metal/mat_mul_simple1.metal",
+        "length": 218,
+        "line": 11,
+        "offset": 152
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 233,
+        "file": "mat_mul_simple1.metal",
+        "length": 51,
+        "line": 12,
+        "offset": 182
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 415,
+        "file": "crosstl-out/metal/mat_mul_simple1.metal",
+        "length": 45,
+        "line": 12,
+        "offset": 370
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 580,
+        "file": "mat_mul_simple1.metal",
+        "length": 45,
+        "line": 19,
+        "offset": 535
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 460,
+        "file": "crosstl-out/metal/mat_mul_simple1.metal",
+        "length": 45,
+        "line": 13,
+        "offset": 415
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 625,
+        "file": "mat_mul_simple1.metal",
+        "length": 45,
+        "line": 20,
+        "offset": 580
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 505,
+        "file": "crosstl-out/metal/mat_mul_simple1.metal",
+        "length": 45,
+        "line": 14,
+        "offset": 460
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 670,
+        "file": "mat_mul_simple1.metal",
+        "length": 45,
+        "line": 21,
+        "offset": 625
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 553,
+        "file": "crosstl-out/metal/mat_mul_simple1.metal",
+        "length": 48,
+        "line": 15,
+        "offset": 505
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 25,
+        "endOffset": 764,
+        "file": "mat_mul_simple1.metal",
+        "length": 52,
+        "line": 24,
+        "offset": 712
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 605,
+        "file": "crosstl-out/metal/mat_mul_simple1.metal",
+        "length": 52,
+        "line": 16,
+        "offset": 553
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 927,
+        "file": "mat_mul_simple1.metal",
+        "length": 50,
+        "line": 27,
+        "offset": 877
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 628,
+        "file": "crosstl-out/metal/mat_mul_simple1.metal",
+        "length": 23,
+        "line": 17,
+        "offset": 605
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 950,
+        "file": "mat_mul_simple1.metal",
+        "length": 23,
+        "line": 28,
+        "offset": 927
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 675,
+        "file": "crosstl-out/metal/mat_mul_simple1.metal",
+        "length": 47,
+        "line": 18,
+        "offset": 628
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 997,
+        "file": "mat_mul_simple1.metal",
+        "length": 47,
+        "line": 29,
+        "offset": 950
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 730,
+        "file": "crosstl-out/metal/mat_mul_simple1.metal",
+        "length": 55,
+        "line": 19,
+        "offset": 675
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 1099,
+        "file": "mat_mul_simple1.metal",
+        "length": 53,
+        "line": 31,
+        "offset": 1046
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 21,
+        "endOffset": 785,
+        "file": "crosstl-out/metal/mat_mul_simple1.metal",
+        "length": 55,
+        "line": 20,
+        "offset": 730
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 35,
+        "endOffset": 1202,
+        "file": "mat_mul_simple1.metal",
+        "length": 53,
+        "line": 34,
+        "offset": 1149
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 829,
+        "file": "crosstl-out/metal/mat_mul_simple1.metal",
+        "length": 44,
+        "line": 21,
+        "offset": 785
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 37,
+        "endOffset": 1247,
+        "file": "mat_mul_simple1.metal",
+        "length": 44,
+        "line": 36,
+        "offset": 1203
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 863,
+        "file": "crosstl-out/metal/mat_mul_simple1.metal",
+        "length": 24,
+        "line": 23,
+        "offset": 839
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 39,
+        "endOffset": 1281,
+        "file": "mat_mul_simple1.metal",
+        "length": 24,
+        "line": 38,
+        "offset": 1257
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

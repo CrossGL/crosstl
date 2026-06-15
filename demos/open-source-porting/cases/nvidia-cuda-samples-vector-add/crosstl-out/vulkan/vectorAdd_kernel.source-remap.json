@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/vulkan/vectorAdd_kernel.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 14,
+        "endLine": 112,
+        "endOffset": 2858,
+        "file": "crosstl-out/vulkan/vectorAdd_kernel.spvasm",
+        "length": 2858,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 43,
+        "endOffset": 1929,
+        "file": "vectorAdd_kernel.cu",
+        "length": 1929,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

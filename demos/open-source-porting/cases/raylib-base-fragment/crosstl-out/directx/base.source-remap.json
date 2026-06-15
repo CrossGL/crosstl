@@ -1,0 +1,160 @@
+{
+  "generatedFile": "crosstl-out/directx/base.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 60,
+        "file": "crosstl-out/directx/base.hlsl",
+        "length": 36,
+        "line": 3,
+        "offset": 24
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 84,
+        "file": "base.fs",
+        "length": 22,
+        "line": 4,
+        "offset": 62
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 93,
+        "file": "crosstl-out/directx/base.hlsl",
+        "length": 33,
+        "line": 4,
+        "offset": 60
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 103,
+        "file": "base.fs",
+        "length": 19,
+        "line": 5,
+        "offset": 84
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 253,
+        "file": "crosstl-out/directx/base.hlsl",
+        "length": 23,
+        "line": 10,
+        "offset": 230
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 181,
+        "file": "base.fs",
+        "length": 25,
+        "line": 9,
+        "offset": 156
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 275,
+        "file": "crosstl-out/directx/base.hlsl",
+        "length": 19,
+        "line": 12,
+        "offset": 256
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 443,
+        "file": "base.fs",
+        "length": 54,
+        "line": 21,
+        "offset": 389
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 347,
+        "file": "crosstl-out/directx/base.hlsl",
+        "length": 23,
+        "line": 14,
+        "offset": 324
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 228,
+        "file": "base.fs",
+        "length": 21,
+        "line": 12,
+        "offset": 207
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 425,
+        "file": "crosstl-out/directx/base.hlsl",
+        "length": 78,
+        "line": 15,
+        "offset": 347
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 388,
+        "file": "base.fs",
+        "length": 55,
+        "line": 19,
+        "offset": 333
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 489,
+        "file": "crosstl-out/directx/base.hlsl",
+        "length": 64,
+        "line": 16,
+        "offset": 425
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 650,
+        "file": "base.fs",
+        "length": 50,
+        "line": 26,
+        "offset": 600
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

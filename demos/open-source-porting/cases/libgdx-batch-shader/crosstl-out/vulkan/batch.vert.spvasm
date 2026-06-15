@@ -1,0 +1,104 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 58
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %16 "main" %19 %21 %22 %24 %26 %29
+OpName %9 "VertexInput"
+OpMemberName %9 0 "a_position"
+OpMemberName %9 1 "a_color"
+OpMemberName %9 2 "a_texCoord0"
+OpName %10 "VertexOutput"
+OpMemberName %10 0 "v_color"
+OpMemberName %10 1 "v_texCoords"
+OpMemberName %10 2 "gl_Position"
+OpName %12 "Uniforms"
+OpMemberName %12 0 "u_projTrans"
+OpName %14 "Uniforms"
+OpName %19 "CrossGL_vertex_output_main_v_color"
+OpName %21 "CrossGL_vertex_output_main_v_texCoords"
+OpName %22 "gl_Position"
+OpName %24 "CrossGL_vertex_input_input_a_position"
+OpName %26 "CrossGL_vertex_input_input_a_color"
+OpName %29 "CrossGL_vertex_input_input_a_texCoord0"
+OpName %33 "input"
+OpName %35 "output"
+OpDecorate %12 Block
+OpMemberDecorate %12 0 Offset 0
+OpMemberDecorate %12 0 ColMajor
+OpMemberDecorate %12 0 MatrixStride 16
+OpDecorate %14 DescriptorSet 0
+OpDecorate %14 Binding 0
+OpDecorate %19 Location 0
+OpDecorate %21 Location 1
+OpDecorate %22 BuiltIn Position
+OpDecorate %24 Location 0
+OpDecorate %26 Location 1
+OpDecorate %29 Location 2
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypeStruct %8 %8 %6
+%10 = OpTypeStruct %8 %6 %8
+%11 = OpTypeMatrix %8 4
+%12 = OpTypeStruct %11
+%13 = OpTypePointer Uniform %12
+%15 = OpTypeFunction %2
+%18 = OpTypePointer Output %8
+%20 = OpTypePointer Output %6
+%23 = OpTypePointer Input %8
+%28 = OpTypePointer Input %6
+%32 = OpTypePointer Function %9
+%34 = OpTypePointer Function %10
+%36 = OpConstant %4 1
+%37 = OpTypePointer Function %8
+%40 = OpConstant %4 0
+%42 = OpConstant %4 2
+%43 = OpTypePointer Function %6
+%47 = OpTypePointer Uniform %11
+%14 = OpVariable %13 Uniform
+%19 = OpVariable %18 Output
+%21 = OpVariable %20 Output
+%22 = OpVariable %18 Output
+%24 = OpVariable %23 Input
+%26 = OpVariable %23 Input
+%29 = OpVariable %28 Input
+%16 = OpFunction %2 None %15
+%17 = OpLabel
+%33 = OpVariable %32 Function
+%35 = OpVariable %34 Function
+%25 = OpLoad %8 %24
+%27 = OpLoad %8 %26
+%30 = OpLoad %6 %29
+%31 = OpCompositeConstruct %9 %25 %27 %30
+OpStore %33 %31
+%38 = OpAccessChain %37 %33 %36
+%39 = OpLoad %8 %38
+%41 = OpAccessChain %37 %35 %40
+OpStore %41 %39
+%44 = OpAccessChain %43 %33 %42
+%45 = OpLoad %6 %44
+%46 = OpAccessChain %43 %35 %36
+OpStore %46 %45
+%48 = OpAccessChain %47 %14 %40
+%49 = OpLoad %11 %48
+%50 = OpAccessChain %37 %33 %40
+%51 = OpLoad %8 %50
+%52 = OpMatrixTimesVector %8 %49 %51
+%53 = OpAccessChain %37 %35 %42
+OpStore %53 %52
+%54 = OpLoad %10 %35
+%55 = OpCompositeExtract %8 %54 0
+OpStore %19 %55
+%56 = OpCompositeExtract %6 %54 1
+OpStore %21 %56
+%57 = OpCompositeExtract %8 %54 2
+OpStore %22 %57
+OpReturn
+OpFunctionEnd

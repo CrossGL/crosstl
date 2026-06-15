@@ -1,0 +1,12 @@
+// HIP to CrossGL conversion
+// Kernel: AddKernel
+@compute
+@stage_entry
+@workgroup_size(1, 1, 1)  // Default workgroup size
+fn AddKernel(
+    @group(0) @binding(0) var<storage, read_write> a: array<f32>,
+    @group(0) @binding(1) var<storage, read> b: array<f32>
+) {
+    var global_idx: i32 = (gl_LocalInvocationID.x + (gl_WorkGroupID.x * gl_WorkGroupSize.x));
+    a[global_idx] += b[global_idx];
+}

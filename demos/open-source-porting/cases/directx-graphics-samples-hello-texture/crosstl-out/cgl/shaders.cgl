@@ -1,0 +1,29 @@
+shader main {
+    struct PSInput {
+        vec4 position @ gl_Position;
+        vec2 uv @ TexCoord;
+    }
+    @ register(t0)
+    sampler2D g_texture;
+    @ register(s0)
+    sampler g_sampler;
+    // vertex Shader
+    vertex {
+    PSInput VSMain(vec4 position @ Position, vec2 uv @ TexCoord) @ stage_entry {
+        PSInput result;
+        result.position = position;
+        result.uv = uv;
+        return result;
+    }
+
+    }
+
+    // fragment Shader
+    fragment {
+    vec4 PSMain(PSInput input) @ gl_FragColor @ stage_entry {
+        return texture(g_texture, g_sampler, input.uv);
+    }
+
+    }
+
+}

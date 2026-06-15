@@ -1,0 +1,138 @@
+{
+  "generatedFile": "crosstl-out/opengl/flat-color.vert.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 18,
+        "file": "crosstl-out/opengl/flat-color.vert.glsl",
+        "length": 18,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 18,
+        "file": "flat-color.vert",
+        "length": 18,
+        "line": 1,
+        "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 41,
+        "file": "crosstl-out/opengl/flat-color.vert.glsl",
+        "length": 23,
+        "line": 2,
+        "offset": 18
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 61,
+        "file": "flat-color.vert",
+        "length": 23,
+        "line": 4,
+        "offset": 38
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 62,
+        "file": "crosstl-out/opengl/flat-color.vert.glsl",
+        "length": 21,
+        "line": 3,
+        "offset": 41
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 82,
+        "file": "flat-color.vert",
+        "length": 21,
+        "line": 5,
+        "offset": 61
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 101,
+        "file": "crosstl-out/opengl/flat-color.vert.glsl",
+        "length": 39,
+        "line": 4,
+        "offset": 62
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 186,
+        "file": "flat-color.vert",
+        "length": 46,
+        "line": 10,
+        "offset": 140
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 169,
+        "file": "crosstl-out/opengl/flat-color.vert.glsl",
+        "length": 14,
+        "line": 7,
+        "offset": 155
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 139,
+        "file": "flat-color.vert",
+        "length": 18,
+        "line": 8,
+        "offset": 121
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 239,
+        "file": "crosstl-out/opengl/flat-color.vert.glsl",
+        "length": 36,
+        "line": 11,
+        "offset": 203
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 232,
+        "file": "flat-color.vert",
+        "length": 31,
+        "line": 14,
+        "offset": 201
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

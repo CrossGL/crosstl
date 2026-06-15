@@ -1,0 +1,160 @@
+{
+  "generatedFile": "crosstl-out/opengl/flat-color.frag.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 18,
+        "file": "crosstl-out/opengl/flat-color.frag.glsl",
+        "length": 18,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 18,
+        "file": "flat-color.frag",
+        "length": 18,
+        "line": 1,
+        "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 41,
+        "file": "crosstl-out/opengl/flat-color.frag.glsl",
+        "length": 23,
+        "line": 2,
+        "offset": 18
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 64,
+        "file": "flat-color.frag",
+        "length": 23,
+        "line": 4,
+        "offset": 41
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 62,
+        "file": "crosstl-out/opengl/flat-color.frag.glsl",
+        "length": 21,
+        "line": 3,
+        "offset": 41
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 85,
+        "file": "flat-color.frag",
+        "length": 21,
+        "line": 5,
+        "offset": 64
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 134,
+        "file": "crosstl-out/opengl/flat-color.frag.glsl",
+        "length": 18,
+        "line": 6,
+        "offset": 116
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 146,
+        "file": "flat-color.frag",
+        "length": 22,
+        "line": 8,
+        "offset": 124
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 208,
+        "file": "crosstl-out/opengl/flat-color.frag.glsl",
+        "length": 52,
+        "line": 9,
+        "offset": 156
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 204,
+        "file": "flat-color.frag",
+        "length": 57,
+        "line": 10,
+        "offset": 147
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 238,
+        "file": "crosstl-out/opengl/flat-color.frag.glsl",
+        "length": 16,
+        "line": 11,
+        "offset": 222
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 204,
+        "file": "flat-color.frag",
+        "length": 57,
+        "line": 10,
+        "offset": 147
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 259,
+        "file": "crosstl-out/opengl/flat-color.frag.glsl",
+        "length": 21,
+        "line": 12,
+        "offset": 238
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 237,
+        "file": "flat-color.frag",
+        "length": 18,
+        "line": 14,
+        "offset": 219
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

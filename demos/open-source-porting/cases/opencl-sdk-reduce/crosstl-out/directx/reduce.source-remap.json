@@ -1,0 +1,270 @@
+{
+  "generatedFile": "crosstl-out/directx/reduce.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 47,
+        "file": "crosstl-out/directx/reduce.hlsl",
+        "length": 46,
+        "line": 2,
+        "offset": 1
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 33,
+        "endOffset": 927,
+        "file": "reduce.cl",
+        "length": 23,
+        "line": 32,
+        "offset": 904
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 92,
+        "file": "crosstl-out/directx/reduce.hlsl",
+        "length": 45,
+        "line": 3,
+        "offset": 47
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 34,
+        "endOffset": 949,
+        "file": "reduce.cl",
+        "length": 22,
+        "line": 33,
+        "offset": 927
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 201,
+        "file": "crosstl-out/directx/reduce.hlsl",
+        "length": 21,
+        "line": 7,
+        "offset": 180
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 46,
+        "endOffset": 1307,
+        "file": "reduce.cl",
+        "length": 84,
+        "line": 45,
+        "offset": 1223
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 330,
+        "file": "crosstl-out/directx/reduce.hlsl",
+        "length": 27,
+        "line": 13,
+        "offset": 303
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 637,
+        "file": "reduce.cl",
+        "length": 26,
+        "line": 17,
+        "offset": 611
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 356,
+        "file": "crosstl-out/directx/reduce.hlsl",
+        "length": 26,
+        "line": 14,
+        "offset": 330
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 637,
+        "file": "reduce.cl",
+        "length": 26,
+        "line": 17,
+        "offset": 611
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 425,
+        "file": "crosstl-out/directx/reduce.hlsl",
+        "length": 66,
+        "line": 17,
+        "offset": 359
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 775,
+        "file": "reduce.cl",
+        "length": 68,
+        "line": 21,
+        "offset": 707
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 502,
+        "file": "crosstl-out/directx/reduce.hlsl",
+        "length": 28,
+        "line": 21,
+        "offset": 474
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 853,
+        "file": "reduce.cl",
+        "length": 32,
+        "line": 26,
+        "offset": 821
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 33,
+        "endOffset": 819,
+        "file": "crosstl-out/directx/reduce.hlsl",
+        "length": 32,
+        "line": 32,
+        "offset": 787
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 45,
+        "endOffset": 1223,
+        "file": "reduce.cl",
+        "length": 38,
+        "line": 44,
+        "offset": 1185
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 34,
+        "endOffset": 895,
+        "file": "crosstl-out/directx/reduce.hlsl",
+        "length": 76,
+        "line": 33,
+        "offset": 819
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 46,
+        "endOffset": 1307,
+        "file": "reduce.cl",
+        "length": 84,
+        "line": 45,
+        "offset": 1223
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 983,
+        "file": "crosstl-out/directx/reduce.hlsl",
+        "length": 57,
+        "line": 35,
+        "offset": 926
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 52,
+        "endOffset": 1433,
+        "file": "reduce.cl",
+        "length": 33,
+        "line": 51,
+        "offset": 1400
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 39,
+        "endOffset": 1071,
+        "file": "crosstl-out/directx/reduce.hlsl",
+        "length": 43,
+        "line": 38,
+        "offset": 1028
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 90,
+        "endOffset": 2635,
+        "file": "reduce.cl",
+        "length": 38,
+        "line": 89,
+        "offset": 2597
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 41,
+        "endOffset": 1233,
+        "file": "crosstl-out/directx/reduce.hlsl",
+        "length": 137,
+        "line": 40,
+        "offset": 1096
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 96,
+        "endOffset": 2849,
+        "file": "reduce.cl",
+        "length": 72,
+        "line": 95,
+        "offset": 2777
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

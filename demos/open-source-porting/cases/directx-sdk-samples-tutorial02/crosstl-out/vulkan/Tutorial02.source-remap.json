@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/vulkan/Tutorial02.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 14,
+        "endLine": 55,
+        "endOffset": 1327,
+        "file": "crosstl-out/vulkan/Tutorial02.spvasm",
+        "length": 1327,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 874,
+        "file": "Tutorial02.fxh",
+        "length": 874,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

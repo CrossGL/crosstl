@@ -1,0 +1,204 @@
+{
+  "generatedFile": "crosstl-out/opengl/batch.vert.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 38,
+        "file": "crosstl-out/opengl/batch.vert.glsl",
+        "length": 20,
+        "line": 2,
+        "offset": 18
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 2,
+        "endOffset": 27,
+        "file": "batch.vert",
+        "length": 27,
+        "line": 1,
+        "offset": 0
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 55,
+        "file": "crosstl-out/opengl/batch.vert.glsl",
+        "length": 17,
+        "line": 3,
+        "offset": 38
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 3,
+        "endOffset": 51,
+        "file": "batch.vert",
+        "length": 24,
+        "line": 2,
+        "offset": 27
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 76,
+        "file": "crosstl-out/opengl/batch.vert.glsl",
+        "length": 21,
+        "line": 4,
+        "offset": 55
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 79,
+        "file": "batch.vert",
+        "length": 28,
+        "line": 3,
+        "offset": 51
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 94,
+        "file": "crosstl-out/opengl/batch.vert.glsl",
+        "length": 18,
+        "line": 5,
+        "offset": 76
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 129,
+        "file": "batch.vert",
+        "length": 22,
+        "line": 7,
+        "offset": 107
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 7,
+        "endOffset": 116,
+        "file": "crosstl-out/opengl/batch.vert.glsl",
+        "length": 22,
+        "line": 6,
+        "offset": 94
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 155,
+        "file": "batch.vert",
+        "length": 26,
+        "line": 8,
+        "offset": 129
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 205,
+        "file": "crosstl-out/opengl/batch.vert.glsl",
+        "length": 22,
+        "line": 9,
+        "offset": 183
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 106,
+        "file": "batch.vert",
+        "length": 26,
+        "line": 5,
+        "offset": 80
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 262,
+        "file": "crosstl-out/opengl/batch.vert.glsl",
+        "length": 23,
+        "line": 13,
+        "offset": 239
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 190,
+        "file": "batch.vert",
+        "length": 20,
+        "line": 11,
+        "offset": 170
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 293,
+        "file": "crosstl-out/opengl/batch.vert.glsl",
+        "length": 31,
+        "line": 14,
+        "offset": 262
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 218,
+        "file": "batch.vert",
+        "length": 28,
+        "line": 12,
+        "offset": 190
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 339,
+        "file": "crosstl-out/opengl/batch.vert.glsl",
+        "length": 46,
+        "line": 15,
+        "offset": 293
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 260,
+        "file": "batch.vert",
+        "length": 42,
+        "line": 13,
+        "offset": 218
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

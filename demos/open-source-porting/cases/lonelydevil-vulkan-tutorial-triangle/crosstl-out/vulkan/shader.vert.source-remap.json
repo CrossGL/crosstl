@@ -1,0 +1,94 @@
+{
+  "generatedFile": "crosstl-out/vulkan/shader.vert.spvasm",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 265,
+        "file": "crosstl-out/vulkan/shader.vert.spvasm",
+        "length": 30,
+        "line": 10,
+        "offset": 235
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 53,
+        "file": "shader.vert",
+        "length": 39,
+        "line": 3,
+        "offset": 14
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 297,
+        "file": "crosstl-out/vulkan/shader.vert.spvasm",
+        "length": 32,
+        "line": 11,
+        "offset": 265
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 286,
+        "file": "shader.vert",
+        "length": 54,
+        "line": 18,
+        "offset": 232
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 415,
+        "file": "crosstl-out/vulkan/shader.vert.spvasm",
+        "length": 25,
+        "line": 15,
+        "offset": 390
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 286,
+        "file": "shader.vert",
+        "length": 54,
+        "line": 18,
+        "offset": 232
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 489,
+        "file": "crosstl-out/vulkan/shader.vert.spvasm",
+        "length": 26,
+        "line": 18,
+        "offset": 463
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 53,
+        "file": "shader.vert",
+        "length": 39,
+        "line": 3,
+        "offset": 14
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

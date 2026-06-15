@@ -1,0 +1,116 @@
+{
+  "generatedFile": "crosstl-out/directx/spv.pushConstant.hlsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 123,
+        "file": "crosstl-out/directx/spv.pushConstant.hlsl",
+        "length": 14,
+        "line": 7,
+        "offset": 109
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 69,
+        "file": "spv.pushConstant.vert",
+        "length": 14,
+        "line": 4,
+        "offset": 55
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 140,
+        "file": "crosstl-out/directx/spv.pushConstant.hlsl",
+        "length": 17,
+        "line": 8,
+        "offset": 123
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 6,
+        "endOffset": 86,
+        "file": "spv.pushConstant.vert",
+        "length": 17,
+        "line": 5,
+        "offset": 69
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 302,
+        "file": "crosstl-out/directx/spv.pushConstant.hlsl",
+        "length": 55,
+        "line": 15,
+        "offset": 247
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 196,
+        "file": "spv.pushConstant.vert",
+        "length": 39,
+        "line": 13,
+        "offset": 157
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 404,
+        "file": "crosstl-out/directx/spv.pushConstant.hlsl",
+        "length": 55,
+        "line": 19,
+        "offset": 349
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 235,
+        "file": "spv.pushConstant.vert",
+        "length": 39,
+        "line": 14,
+        "offset": 196
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 507,
+        "file": "crosstl-out/directx/spv.pushConstant.hlsl",
+        "length": 55,
+        "line": 23,
+        "offset": 452
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 274,
+        "file": "spv.pushConstant.vert",
+        "length": 39,
+        "line": 15,
+        "offset": 235
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

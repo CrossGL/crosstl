@@ -1,0 +1,72 @@
+{
+  "generatedFile": "crosstl-out/cgl/cube.vsh.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 269,
+        "file": "crosstl-out/cgl/cube.vsh.cgl",
+        "length": 137,
+        "line": 8,
+        "offset": 132
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 842,
+        "file": "cube.vsh",
+        "length": 62,
+        "line": 27,
+        "offset": 780
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 329,
+        "file": "crosstl-out/cgl/cube.vsh.cgl",
+        "length": 60,
+        "line": 9,
+        "offset": 269
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 842,
+        "file": "cube.vsh",
+        "length": 62,
+        "line": 27,
+        "offset": 780
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 362,
+        "file": "crosstl-out/cgl/cube.vsh.cgl",
+        "length": 33,
+        "line": 10,
+        "offset": 329
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 871,
+        "file": "cube.vsh",
+        "length": 29,
+        "line": 28,
+        "offset": 842
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

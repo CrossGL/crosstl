@@ -120,6 +120,7 @@ SUPPORT_ISSUE_SYNC_REQUIRED_TESTS = [
 ]
 SUPPORT_ISSUE_SYNC_REQUIRED_PATH_FILTERS = [
     ".github/workflows/backend-tests.yml",
+    ".github/workflows/demo.yml",
     ".github/workflows/docs.yml",
     ".github/workflows/examples-test.yml",
     ".github/workflows/full-tests.yml",
@@ -136,11 +137,13 @@ SUPPORT_ISSUE_SYNC_REQUIRED_PATH_FILTERS = [
     "crosstl/translator/lexer.py",
     "crosstl/translator/parser.py",
     "crosstl/translator/validation.py",
+    "demos/open-source-porting/**",
     "docs/source/project-porting.rst",
     "docs/source/support-matrix.rst",
     "examples/test.py",
     "support/**",
     "tools/ci_coverage.py",
+    "tools/demo_ci_metadata.py",
     "tools/pytest_failure_summary.py",
     "tools/support_ci_summary.py",
     "tools/support_matrix.py",
@@ -148,7 +151,9 @@ SUPPORT_ISSUE_SYNC_REQUIRED_PATH_FILTERS = [
     "tools/sync_support_issues.py",
     "tools/sync_pr_issue_links.py",
     "tests/test_backend/**",
+    "tests/test_demo_open_source_porting.py",
     "tests/test_examples_test_script.py",
+    "tests/test_project_test_runner.py",
     "tests/test_translator/test_ast_ir_contracts.py",
     "tests/test_translator/test_backend_contract.py",
     "tests/test_translator/test_codegen/**",
@@ -1020,6 +1025,9 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
             and "main" in workflow
         ),
         "workflow_run_backend_tests": "Backend Tests" in workflow_run_names,
+        "workflow_run_open_source_porting_demo": (
+            "Open-Source Porting Demo" in workflow_run_names
+        ),
         "workflow_run_translator_tests": "Translator Tests" in workflow_run_names,
         "dry_run_on_pull_request": (
             "if: github.event_name == 'pull_request'" in dry_run_step
@@ -1741,6 +1749,7 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
         "hourly_schedule",
         "workflow_run_full_tests",
         "workflow_run_backend_tests",
+        "workflow_run_open_source_porting_demo",
         "workflow_run_translator_tests",
         "dry_run_on_pull_request",
         "mutates_outside_pull_request",
@@ -2238,6 +2247,7 @@ def build_ci_coverage_comparison(
         "hourly_schedule",
         "workflow_run_full_tests",
         "workflow_run_backend_tests",
+        "workflow_run_open_source_porting_demo",
         "workflow_run_translator_tests",
         "dry_run_on_pull_request",
         "mutates_outside_pull_request",
@@ -2934,6 +2944,10 @@ def render_markdown(report: dict[str, Any]) -> str:
                 [
                     "Backend-test workflow_run trigger",
                     ok_text(support_sync["workflow_run_backend_tests"]),
+                ],
+                [
+                    "Open-source demo workflow_run trigger",
+                    ok_text(support_sync["workflow_run_open_source_porting_demo"]),
                 ],
                 [
                     "Translator-test workflow_run trigger",

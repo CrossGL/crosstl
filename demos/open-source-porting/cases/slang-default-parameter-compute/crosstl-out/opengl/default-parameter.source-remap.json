@@ -1,0 +1,138 @@
+{
+  "generatedFile": "crosstl-out/opengl/default-parameter.glsl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 4,
+        "endOffset": 126,
+        "file": "crosstl-out/opengl/default-parameter.glsl",
+        "length": 29,
+        "line": 3,
+        "offset": 97
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 338,
+        "file": "default-parameter.slang",
+        "length": 32,
+        "line": 8,
+        "offset": 306
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 171,
+        "file": "crosstl-out/opengl/default-parameter.glsl",
+        "length": 20,
+        "line": 7,
+        "offset": 151
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 381,
+        "file": "default-parameter.slang",
+        "length": 18,
+        "line": 13,
+        "offset": 363
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 306,
+        "file": "crosstl-out/opengl/default-parameter.glsl",
+        "length": 65,
+        "line": 12,
+        "offset": 241
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 19,
+        "endOffset": 451,
+        "file": "default-parameter.slang",
+        "length": 22,
+        "line": 18,
+        "offset": 429
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 15,
+        "endOffset": 366,
+        "file": "crosstl-out/opengl/default-parameter.glsl",
+        "length": 46,
+        "line": 14,
+        "offset": 320
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 558,
+        "file": "default-parameter.slang",
+        "length": 42,
+        "line": 21,
+        "offset": 516
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 16,
+        "endOffset": 396,
+        "file": "crosstl-out/opengl/default-parameter.glsl",
+        "length": 30,
+        "line": 15,
+        "offset": 366
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 588,
+        "file": "default-parameter.slang",
+        "length": 30,
+        "line": 22,
+        "offset": 558
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 448,
+        "file": "crosstl-out/opengl/default-parameter.glsl",
+        "length": 52,
+        "line": 16,
+        "offset": 396
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 635,
+        "file": "default-parameter.slang",
+        "length": 47,
+        "line": 23,
+        "offset": 588
+      }
+    }
+  ],
+  "schemaVersion": 1
+}
