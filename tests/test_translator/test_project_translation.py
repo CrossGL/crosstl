@@ -37100,6 +37100,57 @@ def test_execute_runtime_host_integration_reports_checked_and_skipped_steps(
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
 
 
+def test_execute_runtime_host_integration_revalidates_planned_host_root(
+    tmp_path,
+):
+    repo, handoff_dir, _ = _build_runtime_host_integration_handoff_fixture(tmp_path)
+    host_root = repo / "host-app"
+    host_root.mkdir()
+    plan_payload = plan_runtime_host_integration_execution(
+        handoff_dir / "host-integration.json",
+        host_root=host_root,
+    )
+    plan_path = repo / "host-integration-execution-plan.json"
+    plan_path.write_text(json.dumps(plan_payload, indent=2), encoding="utf-8")
+    host_root.rmdir()
+
+    payload = execute_runtime_host_integration(
+        plan_path,
+        scaffold_root=repo / "host-loader-scaffolds",
+        package_root=repo / "runtime-package",
+    )
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["hostRoot"] == str(host_root)
+    assert payload["hostRootStatus"] == "missing"
+    assert payload["summary"]["stepCount"] == 0
+    assert payload["diagnostics"][0]["code"] == (
+        "project.runtime-host-integration-execution.host-root-missing"
+    )
+
+
+def test_execute_runtime_host_integration_accepts_host_root_override(tmp_path):
+    repo, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
+        tmp_path
+    )
+    host_root = repo / "host-override"
+    host_root.mkdir()
+
+    payload = execute_runtime_host_integration(
+        plan_path,
+        host_root=host_root,
+        scaffold_root=repo / "host-loader-scaffolds",
+        package_root=repo / "runtime-package",
+    )
+
+    assert payload["success"] is True
+    assert payload["status"] == "partial"
+    assert payload["hostRoot"] == str(host_root)
+    assert payload["hostRootStatus"] == "ready"
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+
+
 def test_execute_runtime_host_integration_reports_missing_package_artifact(
     tmp_path,
 ):
@@ -37205,6 +37256,8 @@ def test_project_cli_execute_host_integration_text_outputs_results(tmp_path):
             "crosstl._crosstl",
             "execute-host-integration",
             str(plan_path),
+            "--host-root",
+            str(repo),
             "--scaffold-root",
             str(repo / "host-loader-scaffolds"),
             "--package-root",

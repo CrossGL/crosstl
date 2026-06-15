@@ -2879,6 +2879,7 @@ def _run_execute_host_integration(args):
 
     payload = execute_runtime_host_integration(
         args.execution_plan,
+        host_root=args.host_root,
         scaffold_root=args.scaffold_root,
         package_root=args.package_root,
     )
@@ -6863,6 +6864,10 @@ def _build_parser():
     )
     execute_host_integration_parser.add_argument(
         "execution_plan", help="Host integration execution plan JSON"
+    )
+    execute_host_integration_parser.add_argument(
+        "--host-root",
+        help="Optional host repository root for host integration readiness checks",
     )
     execute_host_integration_parser.add_argument(
         "--scaffold-root",
