@@ -11,7 +11,7 @@
     ],
     "artifacts": 10,
     "blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1317"
+      "https://github.com/CrossGL/crosstl/issues/1362"
     ]
   },
   "opengl_smoke_status": {
@@ -21,7 +21,7 @@
     "artifacts": 1
   },
   "full_corpus_scout": {
-    "status": "passing",
+    "status": "blocked-by-tracked-issues",
     "sources": 40,
     "targets": [
       "directx",
@@ -30,23 +30,44 @@
     ],
     "artifacts": 120,
     "validation_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1317"
+      "https://github.com/CrossGL/crosstl/issues/1312"
+    ],
+    "runtime_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1376"
+    ],
+    "translation_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1354"
     ],
     "last_completed": {
-      "translated_artifacts": 120,
-      "failed_artifacts": 0,
+      "translated_artifacts": 24,
+      "failed_artifacts": 96,
       "translated_by_target": {
-        "directx": 40,
-        "opengl": 40,
-        "vulkan": 40
+        "directx": 8,
+        "opengl": 8,
+        "vulkan": 8
+      },
+      "failed_by_target": {
+        "directx": 32,
+        "opengl": 32,
+        "vulkan": 32
+      },
+      "diagnostics_by_code": {
+        "project.translate.metal-template-specialization": 19,
+        "project.translate.template-materialization-unsupported": 77,
+        "project.validate.failed-artifact": 96,
+        "project.validate.toolchain-unavailable": 1
       }
     }
   },
   "tracked_issues": [
-    "https://github.com/CrossGL/crosstl/issues/1317"
+    "https://github.com/CrossGL/crosstl/issues/1362",
+    "https://github.com/CrossGL/crosstl/issues/1312",
+    "https://github.com/CrossGL/crosstl/issues/1354",
+    "https://github.com/CrossGL/crosstl/issues/1376"
   ],
   "resolved_issues": [
     "https://github.com/CrossGL/crosstl/issues/1300",
+    "https://github.com/CrossGL/crosstl/issues/1317",
     "https://github.com/CrossGL/crosstl/issues/939",
     "https://github.com/CrossGL/crosstl/issues/940",
     "https://github.com/CrossGL/crosstl/issues/941",
@@ -118,6 +139,11 @@
     "https://github.com/CrossGL/crosstl/issues/1260",
     "https://github.com/CrossGL/crosstl/issues/1261",
     "https://github.com/CrossGL/crosstl/issues/1274",
-    "https://github.com/CrossGL/crosstl/issues/1287"
+    "https://github.com/CrossGL/crosstl/issues/1287",
+    "https://github.com/CrossGL/crosstl/issues/1329",
+    "https://github.com/CrossGL/crosstl/issues/1338",
+    "https://github.com/CrossGL/crosstl/issues/1340",
+    "https://github.com/CrossGL/crosstl/issues/1346",
+    "https://github.com/CrossGL/crosstl/issues/1355"
   ]
 }

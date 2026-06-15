@@ -52,7 +52,7 @@ def test_full_corpus_mode_writes_bounded_config_and_checks_counts(
         directory.mkdir(parents=True)
     commands = []
 
-    def fake_run_command(name, command, *, log_dir, check=True):
+    def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
         commands.append(list(command))
         (report_dir / "full-corpus.json").write_text(
             json.dumps(_full_corpus_report(module)), encoding="utf-8"
@@ -102,6 +102,7 @@ def test_full_corpus_mode_writes_bounded_config_and_checks_counts(
 
 def test_full_corpus_mode_rejects_untracked_translation_errors(tmp_path, monkeypatch):
     module = _load_harness()
+    monkeypatch.setattr(module, "FULL_CORPUS_TRANSLATION_TRACKED_ISSUES", ())
     mlx_root = tmp_path / "mlx"
     work_dir = mlx_root / ".crosstl-mlx-porting"
     config_dir = work_dir / "configs"
@@ -110,7 +111,7 @@ def test_full_corpus_mode_rejects_untracked_translation_errors(tmp_path, monkeyp
     for directory in (config_dir, report_dir, log_dir):
         directory.mkdir(parents=True)
 
-    def fake_run_command(name, command, *, log_dir, check=True):
+    def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
         report = _full_corpus_report(
             module,
             translatedCount=119,
@@ -132,6 +133,87 @@ def test_full_corpus_mode_rejects_untracked_translation_errors(tmp_path, monkeyp
         module._translate_full_corpus(
             mlx_root, work_dir, config_dir, report_dir, log_dir, "python"
         )
+
+
+def test_full_corpus_mode_reports_tracked_translation_errors(tmp_path, monkeypatch):
+    module = _load_harness()
+    monkeypatch.setattr(
+        module,
+        "FULL_CORPUS_TRANSLATION_TRACKED_ISSUES",
+        ("https://github.com/CrossGL/crosstl/issues/1354",),
+    )
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / ".crosstl-mlx-porting"
+    config_dir = work_dir / "configs"
+    report_dir = work_dir / "reports"
+    log_dir = work_dir / "logs"
+    for directory in (config_dir, report_dir, log_dir):
+        directory.mkdir(parents=True)
+
+    def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
+        report = _full_corpus_report(
+            module,
+            translatedCount=119,
+            failedCount=1,
+            diagnosticCounts={"error": 1},
+        )
+        (report_dir / "full-corpus.json").write_text(
+            json.dumps(report), encoding="utf-8"
+        )
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return module.CommandResult(name, list(command), 1, stdout_path, stderr_path)
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    result = module._translate_full_corpus(
+        mlx_root, work_dir, config_dir, report_dir, log_dir, "python"
+    )
+
+    assert result["status"] == "blocked-by-tracked-issues"
+    assert result["translatedCount"] == 119
+    assert result["failedCount"] == 1
+    assert result["trackedTranslationIssues"] == [
+        "https://github.com/CrossGL/crosstl/issues/1354"
+    ]
+
+
+def test_full_corpus_mode_reports_tracked_timeout_without_report(tmp_path, monkeypatch):
+    module = _load_harness()
+    monkeypatch.setattr(
+        module,
+        "FULL_CORPUS_TRANSLATION_TRACKED_ISSUES",
+        ("https://github.com/CrossGL/crosstl/issues/1376",),
+    )
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / ".crosstl-mlx-porting"
+    config_dir = work_dir / "configs"
+    report_dir = work_dir / "reports"
+    log_dir = work_dir / "logs"
+    for directory in (config_dir, report_dir, log_dir):
+        directory.mkdir(parents=True)
+
+    def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("timed out", encoding="utf-8")
+        return module.CommandResult(name, list(command), 124, stdout_path, stderr_path)
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    result = module._translate_full_corpus(
+        mlx_root, work_dir, config_dir, report_dir, log_dir, "python"
+    )
+
+    assert result["status"] == "blocked-by-tracked-issues"
+    assert result["reportProduced"] is False
+    assert result["returncode"] == 124
+    assert result["trackedTranslationIssues"] == [
+        "https://github.com/CrossGL/crosstl/issues/1376"
+    ]
 
 
 def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatch):

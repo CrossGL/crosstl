@@ -2132,7 +2132,13 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "FULL_CORPUS_EXPECTED_ARTIFACT_COUNT" in harness
     assert "FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS = 4096" in harness
     assert "FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK = 131072" in harness
+    assert "FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS = 900" in harness
+    assert "blocked-by-tracked-issues" in harness
     assert "without tracked issue references" in harness
+    for tracked_issue_number in (1312, 1354, 1362, 1376):
+        assert f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}" in (
+            harness
+        )
     for resolved_issue_number in (
         1184,
         1203,
@@ -2154,7 +2160,13 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         1261,
         1274,
         1287,
+        1329,
+        1338,
+        1340,
+        1346,
+        1355,
         1300,
+        1317,
     ):
         assert (
             f"https://github.com/CrossGL/crosstl/issues/{resolved_issue_number}"
