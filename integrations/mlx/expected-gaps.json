@@ -28,13 +28,17 @@
       "opengl",
       "vulkan"
     ],
+    "artifact_manifest_included": true,
+    "metadata_manifest_status": "passing",
     "blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1388"
+      "https://github.com/CrossGL/crosstl/issues/1392"
     ],
-    "diagnostics_by_code": {
-      "project.runtime-test-manifest.dispatch-unavailable": 3,
-      "project.runtime-test-manifest.entry-points-unavailable": 3,
-      "project.runtime-test-manifest.resource-bindings-unavailable": 3
+    "metadata_diagnostics_by_code": {},
+    "runtime_artifact_diagnostics_by_code": {
+      "project.runtime-manifest.resource-binding-layout-incomplete": 1
+    },
+    "runtime_plan_diagnostics_by_code": {
+      "project.runtime-verification.resource-unbound": 84
     }
   },
   "full_corpus_scout": {
@@ -81,7 +85,8 @@
     "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1354",
     "https://github.com/CrossGL/crosstl/issues/1376",
-    "https://github.com/CrossGL/crosstl/issues/1388"
+    "https://github.com/CrossGL/crosstl/issues/1388",
+    "https://github.com/CrossGL/crosstl/issues/1392"
   ],
   "resolved_issues": [
     "https://github.com/CrossGL/crosstl/issues/1300",
