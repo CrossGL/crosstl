@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from crosstl.project import build_runtime_artifact_manifest
 from crosstl.project.runtime_verification import (
     build_runtime_test_manifest,
     plan_runtime_test_manifest,
@@ -44,13 +45,19 @@ FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1354",
     "https://github.com/CrossGL/crosstl/issues/1376",
 )
-RUNTIME_READINESS_TRACKED_ISSUES = ("https://github.com/CrossGL/crosstl/issues/1388",)
+RUNTIME_READINESS_TRACKED_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1388",
+    "https://github.com/CrossGL/crosstl/issues/1392",
+)
 RUNTIME_READINESS_DIAGNOSTIC_CODES = frozenset(
     (
         "project.runtime-test-manifest.entry-points-unavailable",
         "project.runtime-test-manifest.resource-bindings-unavailable",
         "project.runtime-test-manifest.dispatch-unavailable",
     )
+)
+RUNTIME_READINESS_PLAN_DIAGNOSTIC_CODES = frozenset(
+    ("project.runtime-verification.resource-unbound",)
 )
 FULL_CORPUS_TRACKED_ISSUES = (
     *FRONTIER_VALIDATION_TRACKED_ISSUES,
@@ -649,6 +656,17 @@ def _diagnostics_by_code(diagnostics: Sequence[Any]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def _runtime_plan_diagnostics(plan: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    diagnostics: list[Mapping[str, Any]] = []
+    for test_case in plan.get("testCases", []):
+        if not isinstance(test_case, Mapping):
+            continue
+        for diagnostic in test_case.get("diagnostics", []):
+            if isinstance(diagnostic, Mapping):
+                diagnostics.append(diagnostic)
+    return diagnostics
+
+
 def _plan_runtime_readiness_for_report(
     *,
     mlx_root: Path,
@@ -662,23 +680,31 @@ def _plan_runtime_readiness_for_report(
         f"runtime readiness artifact report is missing: {artifact_report}",
     )
     metadata_path = report_dir / f"{name}.fixture-metadata.json"
+    runtime_artifact_manifest_path = (
+        report_dir / f"{name}.runtime-artifact-manifest.json"
+    )
     manifest_path = report_dir / f"{name}.runtime-test-manifest.json"
     plan_path = report_dir / f"{name}.runtime-test-plan.json"
     metadata = _runtime_readiness_fixture_metadata(targets)
     _write_json(metadata_path, metadata)
+    runtime_artifact_manifest = build_runtime_artifact_manifest(artifact_report)
+    _write_json(runtime_artifact_manifest_path, runtime_artifact_manifest)
     manifest = build_runtime_test_manifest(
-        artifact_report,
+        runtime_artifact_manifest_path,
         metadata_path,
         project_root=mlx_root,
     )
     _write_json(manifest_path, manifest)
     plan = plan_runtime_test_manifest(
-        artifact_report,
+        runtime_artifact_manifest_path,
         manifest,
         project_root=mlx_root,
     )
     _write_json(plan_path, plan)
 
+    runtime_artifact_diagnostics_by_code = _diagnostics_by_code(
+        runtime_artifact_manifest.get("runtimeDiagnostics", [])
+    )
     diagnostic_counts = manifest.get("diagnosticCounts", {})
     _require(
         isinstance(diagnostic_counts, dict),
@@ -694,13 +720,29 @@ def _plan_runtime_readiness_for_report(
         for code in diagnostics_by_code
         if code in RUNTIME_READINESS_DIAGNOSTIC_CODES
     )
+    plan_diagnostics_by_code = _diagnostics_by_code(_runtime_plan_diagnostics(plan))
+    plan_blocker_codes = sorted(
+        code
+        for code in plan_diagnostics_by_code
+        if code in RUNTIME_READINESS_PLAN_DIAGNOSTIC_CODES
+    )
     if metadata_gap_codes:
         _require(
             RUNTIME_READINESS_TRACKED_ISSUES,
             "runtime readiness manifest reported artifact execution metadata gaps "
             "without tracked issue references",
         )
-    status = "blocked-by-tracked-issues" if metadata_gap_codes else "planned"
+    if plan_blocker_codes:
+        _require(
+            RUNTIME_READINESS_TRACKED_ISSUES,
+            "runtime readiness plan reported adapter setup blockers without "
+            "tracked issue references",
+        )
+    status = (
+        "blocked-by-tracked-issues"
+        if metadata_gap_codes or plan_blocker_codes
+        else "planned"
+    )
     plan_summary = plan.get("summary", {})
     _require(isinstance(plan_summary, dict), "runtime readiness plan summary missing")
     manifest_summary = manifest.get("summary", {})
@@ -713,14 +755,22 @@ def _plan_runtime_readiness_for_report(
         "status": status,
         "artifactReport": _relpath(artifact_report, mlx_root),
         "fixtureMetadata": _relpath(metadata_path, mlx_root),
+        "runtimeArtifactManifest": _relpath(runtime_artifact_manifest_path, mlx_root),
         "runtimeTestManifest": _relpath(manifest_path, mlx_root),
         "runtimeTestPlan": _relpath(plan_path, mlx_root),
         "targets": list(targets),
         "testCount": manifest_summary.get("testCount", 0),
+        "runtimeArtifactSummary": runtime_artifact_manifest.get("summary", {}),
+        "runtimeArtifactDiagnosticCounts": runtime_artifact_manifest.get(
+            "runtimeDiagnosticCounts", {}
+        ),
+        "runtimeArtifactDiagnosticsByCode": runtime_artifact_diagnostics_by_code,
         "diagnosticCounts": diagnostic_counts,
         "diagnosticsByCode": diagnostics_by_code,
+        "runtimePlanDiagnosticsByCode": plan_diagnostics_by_code,
         "runtimePlanSummary": plan_summary,
         "metadataGapCodes": metadata_gap_codes,
+        "planBlockerCodes": plan_blocker_codes,
         "shaderArtifactsOnly": True,
         "runtimeIntegrationIncluded": False,
         "trackedRuntimeIssues": list(RUNTIME_READINESS_TRACKED_ISSUES),
@@ -753,8 +803,16 @@ def _plan_reduced_runtime_readiness(
         else "planned"
     )
     diagnostics_by_code: Counter[str] = Counter()
+    runtime_artifact_diagnostics_by_code: Counter[str] = Counter()
+    runtime_plan_diagnostics_by_code: Counter[str] = Counter()
     for report in reports:
         diagnostics_by_code.update(report.get("diagnosticsByCode", {}))
+        runtime_artifact_diagnostics_by_code.update(
+            report.get("runtimeArtifactDiagnosticsByCode", {})
+        )
+        runtime_plan_diagnostics_by_code.update(
+            report.get("runtimePlanDiagnosticsByCode", {})
+        )
     return {
         "name": "runtime-readiness",
         "status": status,
@@ -762,6 +820,12 @@ def _plan_reduced_runtime_readiness(
         "targets": ["directx", "opengl", "vulkan"],
         "testCount": sum(int(report.get("testCount", 0)) for report in reports),
         "diagnosticsByCode": dict(sorted(diagnostics_by_code.items())),
+        "runtimeArtifactDiagnosticsByCode": dict(
+            sorted(runtime_artifact_diagnostics_by_code.items())
+        ),
+        "runtimePlanDiagnosticsByCode": dict(
+            sorted(runtime_plan_diagnostics_by_code.items())
+        ),
         "shaderArtifactsOnly": True,
         "runtimeIntegrationIncluded": False,
         "trackedRuntimeIssues": list(RUNTIME_READINESS_TRACKED_ISSUES),
