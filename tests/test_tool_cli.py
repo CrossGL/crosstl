@@ -280,6 +280,7 @@ TOOLS = [
                 "usage:",
                 "--scaffold-root",
                 "--package-root",
+                "--adapter-root",
                 "--format",
                 "--output",
             ),
