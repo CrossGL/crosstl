@@ -84,12 +84,12 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "Linux" ]; then
-            python integrations/mlx/run_mlx_porting.py \
+            python demos/integrations/mlx/run_mlx_porting.py \
               --mode reduced-frontier \
               --mlx-root mlx-upstream \
               --require-vulkan-toolchain
           else
-            python integrations/mlx/run_mlx_porting.py \
+            python demos/integrations/mlx/run_mlx_porting.py \
               --mode reduced-frontier \
               --mlx-root mlx-upstream
           fi
