@@ -62,13 +62,13 @@ git -C /tmp/mlx checkout 968d264f2903d578e699c4452a4dbf48633921aa
 Run the project-porting harness from the CrossTL repository:
 
 ```bash
-python integrations/mlx/run_mlx_porting.py --mlx-root /tmp/mlx
+python demos/integrations/mlx/run_mlx_porting.py --mlx-root /tmp/mlx
 ```
 
 Run the full-corpus artifact scout:
 
 ```bash
-python integrations/mlx/run_mlx_porting.py \
+python demos/integrations/mlx/run_mlx_porting.py \
   --mode full-corpus \
   --mlx-root /tmp/mlx \
   --summary /tmp/mlx/.crosstl-mlx-porting/full-corpus-summary.json
@@ -79,7 +79,7 @@ On Linux, install SPIR-V tools and require the Vulkan smoke check:
 ```bash
 sudo apt-get update
 sudo apt-get install -y spirv-tools
-python integrations/mlx/run_mlx_porting.py \
+python demos/integrations/mlx/run_mlx_porting.py \
   --mlx-root /tmp/mlx \
   --require-vulkan-toolchain
 ```

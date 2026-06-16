@@ -2108,7 +2108,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     mlx_commit = "968d264f2903d578e699c4452a4dbf48633921aa"
 
     assert mlx_porting, "mlx-project-porting.yml must exist"
-    assert "integrations/mlx/run_mlx_porting.py" in mlx_porting
+    assert "demos/integrations/mlx/run_mlx_porting.py" in mlx_porting
     assert mlx_commit in mlx_porting
     assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
     assert re.search(r"\bschedule\s*:", mlx_porting)
