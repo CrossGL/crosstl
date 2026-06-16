@@ -37151,6 +37151,87 @@ def test_execute_runtime_host_integration_accepts_host_root_override(tmp_path):
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
 
 
+def test_execute_runtime_host_integration_checks_adapter_descriptors(tmp_path):
+    repo, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
+        tmp_path
+    )
+    adapter_dir = repo / "runtime-package" / "runtime-adapters"
+    materialize_runtime_adapters(
+        repo / "runtime-package" / "runtime-package.json",
+        adapter_dir,
+    )
+
+    payload = execute_runtime_host_integration(
+        plan_path,
+        scaffold_root=repo / "host-loader-scaffolds",
+        package_root=repo / "runtime-package",
+        adapter_root=adapter_dir,
+    )
+
+    assert payload["success"] is True
+    assert payload["status"] == "partial"
+    assert payload["adapterRoot"] == str(adapter_dir)
+    assert payload["adapterRootStatus"] == "ready"
+    assert payload["adapterPackage"]["status"] == "ready"
+    assert payload["adapterPackage"]["adapterManifest"] == str(
+        adapter_dir / "runtime-adapters.json"
+    )
+    assert payload["adapterPackage"]["descriptorCount"] == 1
+    assert payload["adapterPackage"]["verifiedDescriptorCount"] == 1
+    assert payload["adapterPackage"]["failedDescriptorCount"] == 0
+    descriptor = payload["adapterPackage"]["descriptors"][0]
+    assert descriptor["status"] == "ready"
+    assert {check["status"] for check in descriptor["checks"]} == {"passed"}
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+
+
+def test_execute_runtime_host_integration_rejects_stale_adapter_descriptor(
+    tmp_path,
+):
+    repo, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
+        tmp_path
+    )
+    adapter_dir = repo / "runtime-package" / "runtime-adapters"
+    adapter_payload = materialize_runtime_adapters(
+        repo / "runtime-package" / "runtime-package.json",
+        adapter_dir,
+    )
+    descriptor_path = adapter_payload["descriptors"][0]["descriptorPath"]
+    (adapter_dir / descriptor_path).write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": project_pipeline.RUNTIME_ADAPTER_DESCRIPTOR_KIND,
+                "id": adapter_payload["descriptors"][0]["id"],
+                "target": adapter_payload["descriptors"][0]["target"],
+                "packagePath": adapter_payload["descriptors"][0]["packagePath"],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = execute_runtime_host_integration(
+        plan_path,
+        scaffold_root=repo / "host-loader-scaffolds",
+        package_root=repo / "runtime-package",
+        adapter_root=adapter_dir,
+    )
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["adapterRootStatus"] == "ready"
+    assert payload["adapterPackage"]["status"] == "failed"
+    assert payload["adapterPackage"]["verifiedDescriptorCount"] == 0
+    assert payload["adapterPackage"]["failedDescriptorCount"] == 1
+    assert payload["summary"]["stepCount"] == 0
+    assert any(
+        diagnostic["code"]
+        == "project.runtime-host-integration-execution.adapter-descriptor-hash-mismatch"
+        for diagnostic in payload["diagnostics"]
+    )
+
+
 def test_execute_runtime_host_integration_reports_missing_package_artifact(
     tmp_path,
 ):
@@ -37248,6 +37329,11 @@ def test_project_cli_execute_host_integration_text_outputs_results(tmp_path):
     repo, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
         tmp_path
     )
+    adapter_dir = repo / "runtime-package" / "runtime-adapters"
+    materialize_runtime_adapters(
+        repo / "runtime-package" / "runtime-package.json",
+        adapter_dir,
+    )
 
     result = subprocess.run(
         [
@@ -37262,6 +37348,8 @@ def test_project_cli_execute_host_integration_text_outputs_results(tmp_path):
             str(repo / "host-loader-scaffolds"),
             "--package-root",
             str(repo / "runtime-package"),
+            "--adapter-root",
+            str(adapter_dir),
             "--format",
             "text",
         ],
@@ -37276,6 +37364,8 @@ def test_project_cli_execute_host_integration_text_outputs_results(tmp_path):
     assert "Status: partial" in result.stdout
     assert "Host loader scaffold root:" in result.stdout
     assert "Runtime package root:" in result.stdout
+    assert "Runtime adapter descriptor root:" in result.stdout
+    assert "Runtime adapter descriptors: ready, 1 verified, 0 failed" in result.stdout
     assert "Summary: 1 targets, 6 steps, 4 passed, 2 skipped, 0 blocked, 0 failed" in (
         result.stdout
     )

@@ -2811,6 +2811,20 @@ def _format_runtime_host_integration_execution_result(payload):
     package_root_status = payload.get("packageRootStatus")
     if isinstance(package_root, str) and package_root:
         lines.append(f"Runtime package root: {package_root} [{package_root_status}]")
+    adapter_root = payload.get("adapterRoot")
+    adapter_root_status = payload.get("adapterRootStatus")
+    if isinstance(adapter_root, str) and adapter_root:
+        lines.append(
+            f"Runtime adapter descriptor root: {adapter_root} [{adapter_root_status}]"
+        )
+    adapter_package = payload.get("adapterPackage")
+    if isinstance(adapter_package, Mapping) and adapter_package.get("adapterManifest"):
+        lines.append(
+            "Runtime adapter descriptors: "
+            f"{adapter_package.get('status', 'unknown')}, "
+            f"{adapter_package.get('verifiedDescriptorCount', 0)} verified, "
+            f"{adapter_package.get('failedDescriptorCount', 0)} failed"
+        )
     scope = payload.get("scope")
     if isinstance(scope, str) and scope:
         lines.append(f"Execution scope: {scope}")
@@ -2882,6 +2896,7 @@ def _run_execute_host_integration(args):
         host_root=args.host_root,
         scaffold_root=args.scaffold_root,
         package_root=args.package_root,
+        adapter_root=args.adapter_root,
     )
     if args.format == "sarif":
         _write_json_payload(
@@ -6876,6 +6891,10 @@ def _build_parser():
     execute_host_integration_parser.add_argument(
         "--package-root",
         help="Optional runtime package root for package artifact checks",
+    )
+    execute_host_integration_parser.add_argument(
+        "--adapter-root",
+        help="Optional runtime adapter descriptor root for descriptor checks",
     )
     execute_host_integration_parser.add_argument(
         "--format",
