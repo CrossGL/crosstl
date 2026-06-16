@@ -750,20 +750,25 @@ Execute deterministic host integration checks from a saved execution plan:
 
    python -m crosstl execute-host-integration \
      crosstl-host-integration-execution-plan.json \
+     --host-root . \
      --scaffold-root crosstl-host-loader-scaffolds \
      --package-root crosstl-runtime-package \
+     --adapter-root crosstl-runtime-package/runtime-adapters \
      --format text
 
 Host integration execution results emit a
 ``crosstl-runtime-host-integration-execution-result`` JSON document. Execution
-validates the plan, records scaffold-root and package-root readiness, verifies
-generated loader scaffold files when ``--scaffold-root`` is provided, checks
-package artifact and source-remap paths when ``--package-root`` is provided,
-checks required host tools on ``PATH``, and reports project-specific host
-responsibilities as skipped actionable steps. Blocked plan steps remain blocked
-in the result, and missing files or invalid paths are emitted as structured
-diagnostics. This command still does not rewrite host application code, execute
-device code, generate runtime framework code, or install target SDKs.
+validates the plan, revalidates the planned host root or an explicit
+``--host-root`` override, records scaffold-root and package-root readiness,
+verifies generated loader scaffold files when ``--scaffold-root`` is provided,
+checks package artifact and source-remap paths when ``--package-root`` is
+provided, verifies runtime adapter descriptor manifests and descriptor files
+when ``--adapter-root`` is provided, checks required host tools on ``PATH``, and
+reports project-specific host responsibilities as skipped actionable steps.
+Blocked plan steps remain blocked in the result, and missing files, stale
+descriptor hashes, or invalid paths are emitted as structured diagnostics.
+This command still does not rewrite host application code, execute device code,
+generate runtime framework code, or install target SDKs.
 
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a

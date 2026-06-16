@@ -1187,6 +1187,9 @@ RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_FIELDS = frozenset(
         "scaffoldRootStatus",
         "packageRoot",
         "packageRootStatus",
+        "adapterRoot",
+        "adapterRootStatus",
+        "adapterPackage",
         "project",
         "summary",
         "targets",
@@ -24924,6 +24927,530 @@ def _runtime_host_integration_execution_scaffold_root(
     return root, str(root), "ready", []
 
 
+def _runtime_host_integration_execution_adapter_root(
+    adapter_root: str | os.PathLike[str] | None,
+    *,
+    plan_path: Path,
+) -> tuple[Path | None, str | None, str, list[ProjectDiagnostic]]:
+    if adapter_root is None:
+        return None, None, "not-provided", []
+    root = _filesystem_path_arg(
+        adapter_root, field_name="Runtime adapter descriptor root"
+    )
+    if not root.exists():
+        return (
+            None,
+            str(root),
+            "missing",
+            [
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "adapter-root-missing",
+                    f"Runtime adapter descriptor root does not exist: {root}",
+                )
+            ],
+        )
+    if not root.is_dir():
+        return (
+            None,
+            str(root),
+            "not-directory",
+            [
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "adapter-root-not-directory",
+                    f"Runtime adapter descriptor root is not a directory: {root}",
+                )
+            ],
+        )
+    return root, str(root), "ready", []
+
+
+def _runtime_host_integration_execution_result_host_root(
+    host_root: str | os.PathLike[str] | None,
+    plan: Mapping[str, Any],
+    *,
+    plan_path: Path,
+) -> tuple[str | None, str, list[ProjectDiagnostic]]:
+    if host_root is None:
+        planned_host_root = plan.get("hostRoot")
+        if not _is_non_empty_string(planned_host_root):
+            planned_status = plan.get("hostRootStatus")
+            return (
+                None,
+                (
+                    str(planned_status)
+                    if _is_non_empty_string(planned_status)
+                    else "not-provided"
+                ),
+                [],
+            )
+        root_arg: str | os.PathLike[str] = str(planned_host_root)
+    else:
+        root_arg = host_root
+
+    root = _filesystem_path_arg(root_arg, field_name="Host root")
+    if not root.exists():
+        return (
+            str(root),
+            "missing",
+            [
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "host-root-missing",
+                    f"Host root does not exist: {root}",
+                )
+            ],
+        )
+    if not root.is_dir():
+        return (
+            str(root),
+            "not-directory",
+            [
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "host-root-not-directory",
+                    f"Host root is not a directory: {root}",
+                )
+            ],
+        )
+    return str(root), "ready", []
+
+
+def _runtime_host_integration_execution_adapter_package_empty(
+    status: str, manifest_status: str | None = None
+) -> dict[str, Any]:
+    return {
+        "kind": None,
+        "success": status not in {"failed", "missing", "invalid"},
+        "status": status,
+        "adapterManifest": None,
+        "adapterManifestStatus": manifest_status or status,
+        "descriptorCount": 0,
+        "verifiedDescriptorCount": 0,
+        "failedDescriptorCount": 0,
+        "readyDescriptorCount": 0,
+        "blockedDescriptorCount": 0,
+        "descriptors": [],
+    }
+
+
+def _runtime_host_integration_execution_adapter_manifest(
+    adapter_root: Path | None,
+    *,
+    plan_path: Path,
+) -> tuple[dict[str, Any], list[ProjectDiagnostic]]:
+    if adapter_root is None:
+        return (
+            _runtime_host_integration_execution_adapter_package_empty("not-provided"),
+            [],
+        )
+
+    manifest_path = adapter_root / "runtime-adapters.json"
+    if not manifest_path.is_file():
+        return _runtime_host_integration_execution_adapter_package_empty(
+            "failed", "missing"
+        ), [
+            _runtime_host_integration_execution_result_diagnostic(
+                plan_path,
+                "adapter-manifest-missing",
+                f"Runtime adapter descriptor manifest does not exist: {manifest_path}",
+            )
+        ]
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return _runtime_host_integration_execution_adapter_package_empty(
+            "failed", "unreadable"
+        ), [
+            _runtime_host_integration_execution_result_diagnostic(
+                plan_path,
+                "adapter-manifest-read-failed",
+                f"Runtime adapter descriptor manifest could not be read: {exc}",
+            )
+        ]
+    except json.JSONDecodeError as exc:
+        return _runtime_host_integration_execution_adapter_package_empty(
+            "failed", "invalid-json"
+        ), [
+            _runtime_host_integration_execution_result_diagnostic(
+                plan_path,
+                "adapter-manifest-json-invalid",
+                f"Runtime adapter descriptor manifest is not valid JSON: {exc}",
+            )
+        ]
+
+    diagnostics: list[ProjectDiagnostic] = []
+    if not isinstance(manifest, Mapping):
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                plan_path,
+                "adapter-manifest-invalid",
+                "Runtime adapter descriptor manifest must be a JSON object.",
+            )
+        )
+        return (
+            _runtime_host_integration_execution_adapter_package_empty(
+                "failed", "invalid"
+            ),
+            diagnostics,
+        )
+
+    if manifest.get("schemaVersion") != REPORT_SCHEMA_VERSION:
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                plan_path,
+                "adapter-manifest-schema-invalid",
+                f"Runtime adapter descriptor manifest schemaVersion must be {REPORT_SCHEMA_VERSION}.",
+            )
+        )
+    if manifest.get("kind") != RUNTIME_ADAPTER_PACKAGE_KIND:
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                plan_path,
+                "adapter-manifest-kind-invalid",
+                "Runtime adapter descriptor manifest must be a "
+                f"{RUNTIME_ADAPTER_PACKAGE_KIND} document.",
+            )
+        )
+    if manifest.get("success") is not True:
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                plan_path,
+                "adapter-package-failed",
+                "Runtime adapter descriptor package must be successful before "
+                "host integration execution can use it.",
+            )
+        )
+
+    raw_descriptors = manifest.get("descriptors")
+    if not isinstance(raw_descriptors, list):
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                plan_path,
+                "adapter-descriptors-invalid",
+                "Runtime adapter descriptor manifest descriptors must be a list.",
+            )
+        )
+        raw_descriptors = []
+
+    descriptor_results: list[dict[str, Any]] = []
+    for index, descriptor in enumerate(raw_descriptors, start=1):
+        descriptor_diagnostics: list[ProjectDiagnostic] = []
+        if not isinstance(descriptor, Mapping):
+            descriptor_diagnostics.append(
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "adapter-descriptor-invalid",
+                    f"Runtime adapter descriptor entry {index} must be an object.",
+                )
+            )
+            descriptor_results.append(
+                {
+                    "id": None,
+                    "target": None,
+                    "descriptorPath": None,
+                    "status": "failed",
+                    "checks": [
+                        _runtime_host_integration_execution_check_payload(
+                            "adapter-descriptor-entry", "failed"
+                        )
+                    ],
+                }
+            )
+            diagnostics.extend(descriptor_diagnostics)
+            continue
+
+        descriptor_path = descriptor.get("descriptorPath")
+        checks: list[dict[str, Any]] = []
+        descriptor_target = descriptor.get("target")
+        if not _is_non_empty_string(descriptor_path):
+            descriptor_diagnostics.append(
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "adapter-descriptor-path-missing",
+                    "Runtime adapter descriptor path must be a non-empty relative path.",
+                    target=descriptor_target,
+                )
+            )
+            checks.append(
+                _runtime_host_integration_execution_check_payload(
+                    "adapter-descriptor-file", "failed", field="descriptorPath"
+                )
+            )
+            descriptor_file = None
+        else:
+            path_text = str(descriptor_path)
+            descriptor_file = adapter_root / Path(path_text)
+            if _is_absolute_or_windows_drive_path(path_text):
+                descriptor_diagnostics.append(
+                    _runtime_host_integration_execution_result_diagnostic(
+                        plan_path,
+                        "adapter-descriptor-path-absolute",
+                        "Runtime adapter descriptor path must be relative to "
+                        "the adapter descriptor root.",
+                        target=descriptor_target,
+                    )
+                )
+                checks.append(
+                    _runtime_host_integration_execution_check_payload(
+                        "adapter-descriptor-file",
+                        "failed",
+                        field="descriptorPath",
+                        path=path_text,
+                    )
+                )
+                descriptor_file = None
+            elif not _is_relative_to(descriptor_file, adapter_root):
+                descriptor_diagnostics.append(
+                    _runtime_host_integration_execution_result_diagnostic(
+                        plan_path,
+                        "adapter-descriptor-path-outside-root",
+                        "Runtime adapter descriptor path resolves outside "
+                        f"the adapter descriptor root: {path_text}.",
+                        target=descriptor_target,
+                    )
+                )
+                checks.append(
+                    _runtime_host_integration_execution_check_payload(
+                        "adapter-descriptor-file",
+                        "failed",
+                        field="descriptorPath",
+                        path=path_text,
+                    )
+                )
+                descriptor_file = None
+            elif not descriptor_file.is_file():
+                descriptor_diagnostics.append(
+                    _runtime_host_integration_execution_result_diagnostic(
+                        plan_path,
+                        "adapter-descriptor-missing",
+                        f"Runtime adapter descriptor does not exist: {descriptor_file}",
+                        target=descriptor_target,
+                    )
+                )
+                checks.append(
+                    _runtime_host_integration_execution_check_payload(
+                        "adapter-descriptor-file",
+                        "failed",
+                        field="descriptorPath",
+                        path=str(descriptor_file),
+                    )
+                )
+                descriptor_file = None
+            else:
+                checks.append(
+                    _runtime_host_integration_execution_check_payload(
+                        "adapter-descriptor-file",
+                        "passed",
+                        field="descriptorPath",
+                        path=str(descriptor_file),
+                    )
+                )
+
+        descriptor_payload: Mapping[str, Any] | None = None
+        if descriptor_file is not None:
+            try:
+                loaded_descriptor = json.loads(
+                    descriptor_file.read_text(encoding="utf-8")
+                )
+            except OSError as exc:
+                descriptor_diagnostics.append(
+                    _runtime_host_integration_execution_result_diagnostic(
+                        plan_path,
+                        "adapter-descriptor-read-failed",
+                        f"Runtime adapter descriptor could not be read: {exc}",
+                        target=descriptor_target,
+                    )
+                )
+                checks.append(
+                    _runtime_host_integration_execution_check_payload(
+                        "adapter-descriptor-json",
+                        "failed",
+                        field="descriptorPath",
+                        path=str(descriptor_file),
+                    )
+                )
+            except json.JSONDecodeError as exc:
+                descriptor_diagnostics.append(
+                    _runtime_host_integration_execution_result_diagnostic(
+                        plan_path,
+                        "adapter-descriptor-json-invalid",
+                        f"Runtime adapter descriptor is not valid JSON: {exc}",
+                        target=descriptor_target,
+                    )
+                )
+                checks.append(
+                    _runtime_host_integration_execution_check_payload(
+                        "adapter-descriptor-json",
+                        "failed",
+                        field="descriptorPath",
+                        path=str(descriptor_file),
+                    )
+                )
+            else:
+                if isinstance(loaded_descriptor, Mapping):
+                    descriptor_payload = loaded_descriptor
+                    checks.append(
+                        _runtime_host_integration_execution_check_payload(
+                            "adapter-descriptor-json",
+                            "passed",
+                            field="descriptorPath",
+                            path=str(descriptor_file),
+                        )
+                    )
+                else:
+                    descriptor_diagnostics.append(
+                        _runtime_host_integration_execution_result_diagnostic(
+                            plan_path,
+                            "adapter-descriptor-invalid",
+                            "Runtime adapter descriptor must be a JSON object.",
+                            target=descriptor_target,
+                        )
+                    )
+                    checks.append(
+                        _runtime_host_integration_execution_check_payload(
+                            "adapter-descriptor-json",
+                            "failed",
+                            field="descriptorPath",
+                            path=str(descriptor_file),
+                        )
+                    )
+
+        descriptor_hash = descriptor.get("descriptorHash")
+        if descriptor_file is not None and isinstance(descriptor_hash, Mapping):
+            current_hash = _source_hash(descriptor_file)
+            if current_hash == dict(descriptor_hash):
+                checks.append(
+                    _runtime_host_integration_execution_check_payload(
+                        "adapter-descriptor-hash",
+                        "passed",
+                        field="descriptorHash",
+                        path=str(descriptor_file),
+                    )
+                )
+            else:
+                descriptor_diagnostics.append(
+                    _runtime_host_integration_execution_result_diagnostic(
+                        plan_path,
+                        "adapter-descriptor-hash-mismatch",
+                        f"Runtime adapter descriptor hash does not match manifest: {descriptor_file}",
+                        target=descriptor_target,
+                    )
+                )
+                checks.append(
+                    _runtime_host_integration_execution_check_payload(
+                        "adapter-descriptor-hash",
+                        "failed",
+                        field="descriptorHash",
+                        path=str(descriptor_file),
+                    )
+                )
+
+        if descriptor_payload is not None:
+            if descriptor_payload.get("kind") != RUNTIME_ADAPTER_DESCRIPTOR_KIND:
+                descriptor_diagnostics.append(
+                    _runtime_host_integration_execution_result_diagnostic(
+                        plan_path,
+                        "adapter-descriptor-kind-invalid",
+                        "Runtime adapter descriptor file must be a "
+                        f"{RUNTIME_ADAPTER_DESCRIPTOR_KIND} document.",
+                        target=descriptor_target,
+                    )
+                )
+                checks.append(
+                    _runtime_host_integration_execution_check_payload(
+                        "adapter-descriptor-kind", "failed"
+                    )
+                )
+            else:
+                checks.append(
+                    _runtime_host_integration_execution_check_payload(
+                        "adapter-descriptor-kind", "passed"
+                    )
+                )
+            for field_name in ("id", "target", "packagePath"):
+                expected = descriptor.get(field_name)
+                observed = descriptor_payload.get(field_name)
+                if not _is_non_empty_string(expected) or not _is_non_empty_string(
+                    observed
+                ):
+                    continue
+                if expected == observed:
+                    continue
+                descriptor_diagnostics.append(
+                    _runtime_host_integration_execution_result_diagnostic(
+                        plan_path,
+                        f"adapter-descriptor-{field_name}-mismatch",
+                        f"Runtime adapter descriptor {field_name} does not match manifest for {descriptor_path}.",
+                        target=descriptor_target,
+                    )
+                )
+                checks.append(
+                    _runtime_host_integration_execution_check_payload(
+                        "adapter-descriptor-field",
+                        "failed",
+                        field=field_name,
+                    )
+                )
+
+        status = (
+            "failed"
+            if any(
+                diagnostic.severity == "error" for diagnostic in descriptor_diagnostics
+            )
+            or any(check.get("status") == "failed" for check in checks)
+            else "ready"
+        )
+        descriptor_results.append(
+            {
+                "id": descriptor.get("id"),
+                "target": descriptor_target,
+                "descriptorPath": descriptor_path,
+                "status": status,
+                "checks": checks,
+            }
+        )
+        diagnostics.extend(descriptor_diagnostics)
+
+    summary = (
+        manifest.get("summary") if isinstance(manifest.get("summary"), Mapping) else {}
+    )
+    failed_descriptor_count = sum(
+        1 for descriptor in descriptor_results if descriptor.get("status") == "failed"
+    )
+    verified_descriptor_count = sum(
+        1 for descriptor in descriptor_results if descriptor.get("status") == "ready"
+    )
+    status = (
+        "failed"
+        if any(diagnostic.severity == "error" for diagnostic in diagnostics)
+        else "ready"
+    )
+    return {
+        "kind": manifest.get("kind"),
+        "success": status != "failed",
+        "status": status,
+        "adapterManifest": str(manifest_path),
+        "adapterManifestStatus": "ready" if status != "failed" else "failed",
+        "descriptorCount": len(descriptor_results),
+        "verifiedDescriptorCount": verified_descriptor_count,
+        "failedDescriptorCount": failed_descriptor_count,
+        "readyDescriptorCount": (
+            summary.get("readyDescriptorCount", 0)
+            if _is_non_negative_int(summary.get("readyDescriptorCount"))
+            else 0
+        ),
+        "blockedDescriptorCount": (
+            summary.get("blockedDescriptorCount", 0)
+            if _is_non_negative_int(summary.get("blockedDescriptorCount"))
+            else 0
+        ),
+        "descriptors": descriptor_results,
+    }, diagnostics
+
+
 def _runtime_host_integration_execution_check_payload(
     kind: str,
     status: str,
@@ -25275,8 +25802,10 @@ def _runtime_host_integration_execution_result_target(
 def execute_runtime_host_integration(
     execution_plan_path: str | os.PathLike[str],
     *,
+    host_root: str | os.PathLike[str] | None = None,
     scaffold_root: str | os.PathLike[str] | None = None,
     package_root: str | os.PathLike[str] | None = None,
+    adapter_root: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
     """Execute deterministic host integration checks from an execution plan."""
 
@@ -25289,6 +25818,11 @@ def execute_runtime_host_integration(
         diagnostics.extend(
             _runtime_host_integration_execution_plan_diagnostics(plan_path, plan)
         )
+    host_root_value, host_root_status, host_root_diagnostics = (
+        _runtime_host_integration_execution_result_host_root(
+            host_root, plan, plan_path=plan_path
+        )
+    )
     package_root_path, package_root_value, package_root_status, package_diagnostics = (
         _runtime_host_integration_execution_package_root(
             package_root, plan_path=plan_path
@@ -25302,8 +25836,22 @@ def execute_runtime_host_integration(
     ) = _runtime_host_integration_execution_scaffold_root(
         scaffold_root, plan_path=plan_path
     )
+    adapter_root_path, adapter_root_value, adapter_root_status, adapter_diagnostics = (
+        _runtime_host_integration_execution_adapter_root(
+            adapter_root, plan_path=plan_path
+        )
+    )
+    adapter_package, adapter_package_diagnostics = (
+        _runtime_host_integration_execution_adapter_manifest(
+            adapter_root_path,
+            plan_path=plan_path,
+        )
+    )
+    diagnostics.extend(host_root_diagnostics)
     diagnostics.extend(package_diagnostics)
     diagnostics.extend(scaffold_diagnostics)
+    diagnostics.extend(adapter_diagnostics)
+    diagnostics.extend(adapter_package_diagnostics)
 
     diagnostics_payload = [diagnostic.to_json() for diagnostic in diagnostics]
     plan_ready = bool(plan) and not any(
@@ -25372,12 +25920,15 @@ def execute_runtime_host_integration(
         "scope": RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_SCOPE,
         "nonGoals": list(RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_NON_GOALS),
         "handoffRoot": plan.get("handoffRoot") if plan else None,
-        "hostRoot": plan.get("hostRoot") if plan else None,
-        "hostRootStatus": plan.get("hostRootStatus") if plan else None,
+        "hostRoot": host_root_value,
+        "hostRootStatus": host_root_status,
         "scaffoldRoot": scaffold_root_value,
         "scaffoldRootStatus": scaffold_root_status,
         "packageRoot": package_root_value,
         "packageRootStatus": package_root_status,
+        "adapterRoot": adapter_root_value,
+        "adapterRootStatus": adapter_root_status,
+        "adapterPackage": adapter_package,
         "project": (
             dict(plan.get("project"))
             if isinstance(plan.get("project"), Mapping)
