@@ -758,12 +758,22 @@ def test_plan_runtime_test_manifest_warns_for_unbound_incomplete_layout_resource
     manifest = build_runtime_test_manifest(
         artifact_report,
         {
+            "adapters": [
+                {
+                    "id": "metadata-runtime-probe",
+                    "executor": "metadata",
+                    "adapterKind": "metadata-runtime-probe",
+                }
+            ],
             "fixtures": [
-                _runtime_fixture(
-                    inputs=[],
-                    expectedOutputs=[{"name": "out", "values": []}],
-                )
-            ]
+                {
+                    "adapter": "metadata-runtime-probe",
+                    "fixture": _runtime_fixture(
+                        inputs=[],
+                        expectedOutputs=[{"name": "out", "values": []}],
+                    ),
+                }
+            ],
         },
         project_root=tmp_path,
     )
