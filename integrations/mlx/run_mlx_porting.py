@@ -48,6 +48,8 @@ FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
 RUNTIME_READINESS_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1388",
     "https://github.com/CrossGL/crosstl/issues/1392",
+    "https://github.com/CrossGL/crosstl/issues/1394",
+    "https://github.com/CrossGL/crosstl/issues/1396",
 )
 RUNTIME_READINESS_DIAGNOSTIC_CODES = frozenset(
     (
@@ -667,6 +669,16 @@ def _runtime_plan_diagnostics(plan: Mapping[str, Any]) -> list[Mapping[str, Any]
     return diagnostics
 
 
+def _error_diagnostics(
+    diagnostics: Sequence[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    return [
+        diagnostic
+        for diagnostic in diagnostics
+        if diagnostic.get("severity") == "error"
+    ]
+
+
 def _plan_runtime_readiness_for_report(
     *,
     mlx_root: Path,
@@ -720,10 +732,11 @@ def _plan_runtime_readiness_for_report(
         for code in diagnostics_by_code
         if code in RUNTIME_READINESS_DIAGNOSTIC_CODES
     )
-    plan_diagnostics_by_code = _diagnostics_by_code(_runtime_plan_diagnostics(plan))
+    plan_diagnostics = _runtime_plan_diagnostics(plan)
+    plan_diagnostics_by_code = _diagnostics_by_code(plan_diagnostics)
     plan_blocker_codes = sorted(
         code
-        for code in plan_diagnostics_by_code
+        for code in _diagnostics_by_code(_error_diagnostics(plan_diagnostics))
         if code in RUNTIME_READINESS_PLAN_DIAGNOSTIC_CODES
     )
     if metadata_gap_codes:

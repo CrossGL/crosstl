@@ -149,6 +149,8 @@ def test_runtime_readiness_uses_runtime_artifact_manifest_metadata(
     assert result["trackedRuntimeIssues"] == [
         "https://github.com/CrossGL/crosstl/issues/1388",
         "https://github.com/CrossGL/crosstl/issues/1392",
+        "https://github.com/CrossGL/crosstl/issues/1394",
+        "https://github.com/CrossGL/crosstl/issues/1396",
     ]
     assert result["testCount"] == 1
     assert result["diagnosticCounts"] == {"error": 0, "note": 0, "warning": 0}
@@ -166,6 +168,8 @@ def test_runtime_readiness_uses_runtime_artifact_manifest_metadata(
     assert manifest["metadata"]["trackedIssues"] == [
         "https://github.com/CrossGL/crosstl/issues/1388",
         "https://github.com/CrossGL/crosstl/issues/1392",
+        "https://github.com/CrossGL/crosstl/issues/1394",
+        "https://github.com/CrossGL/crosstl/issues/1396",
     ]
 
 
@@ -186,7 +190,7 @@ def test_runtime_readiness_reports_tracked_plan_resource_blockers(
         module,
         "build_runtime_artifact_manifest",
         lambda report_path: _runtime_arange_artifact_manifest(
-            module, "opengl", output_name="out_Buffer"
+            module, "opengl", output_name="unrelatedResource"
         ),
     )
 

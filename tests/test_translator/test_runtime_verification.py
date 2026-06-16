@@ -595,6 +595,190 @@ def test_verify_runtime_fixtures_runs_execution_adapter_pipeline(tmp_path):
     ]
 
 
+def test_verify_runtime_fixtures_resolves_generated_resource_names(tmp_path):
+    class AliasAdapter(RuntimeExecutionAdapter):
+        name = "alias-adapter"
+
+        def dispatch_fixture(self, state):
+            assert state.resource_values["lhs_Buffer"] == [1.0, 2.0]
+            assert state.resource_values["rhsUniform"] == [10.0, 20.0]
+            assert state.resource_values["arangeuint8_outBuffer"] is None
+            state.record_step("dispatch", "alias-aware-dispatch")
+            return {
+                "out": {
+                    "dtype": "float32",
+                    "shape": [2],
+                    "values": [11.0, 22.0],
+                }
+            }
+
+    report = verify_runtime_fixtures(
+        _artifact_report(
+            tmp_path,
+            [
+                _translated_artifact(
+                    entryPoints=[{"name": "main", "stage": "compute"}],
+                    resourceBindings=[
+                        {"name": "lhs_Buffer", "kind": "buffer", "binding": 0},
+                        {"name": "rhsUniform", "kind": "buffer", "binding": 1},
+                        {
+                            "name": "arangeuint8_outBuffer",
+                            "kind": "buffer",
+                            "binding": 2,
+                        },
+                    ],
+                    dispatch={"entryPoint": "main", "workgroupCount": [1, 1, 1]},
+                )
+            ],
+        ),
+        {
+            "fixtures": [
+                _runtime_fixture(
+                    inputs=[
+                        {
+                            "name": "lhs",
+                            "kind": "buffer",
+                            "dtype": "float32",
+                            "shape": [2],
+                            "values": [1.0, 2.0],
+                        },
+                        {
+                            "name": "rhs",
+                            "kind": "buffer",
+                            "dtype": "float32",
+                            "shape": [2],
+                            "values": [10.0, 20.0],
+                        },
+                    ],
+                    expectedOutputs=[
+                        {
+                            "name": "out",
+                            "kind": "buffer",
+                            "dtype": "float32",
+                            "shape": [2],
+                            "values": [11.0, 22.0],
+                        }
+                    ],
+                )
+            ]
+        },
+        executors={"opengl": AliasAdapter()},
+    )
+
+    result = report["results"][0]
+    assert result["status"] == PASSED
+    bindings = result["runtimeExecution"]["resourceBindings"]
+    assert [binding["source"] for binding in bindings] == [
+        "input",
+        "input",
+        "expectedOutput",
+    ]
+
+
+def test_verify_runtime_fixtures_resolves_explicit_resource_aliases(tmp_path):
+    class ExplicitAliasAdapter(RuntimeExecutionAdapter):
+        name = "explicit-alias-adapter"
+
+        def dispatch_fixture(self, state):
+            assert state.resource_values["generatedOutputBuffer"] is None
+            state.record_step("dispatch", "explicit-alias-dispatch")
+            return {
+                "out": {
+                    "dtype": "float32",
+                    "shape": [2],
+                    "values": [2.0, 4.0],
+                }
+            }
+
+    report = verify_runtime_fixtures(
+        _artifact_report(
+            tmp_path,
+            [
+                _translated_artifact(
+                    entryPoints=[{"name": "main", "stage": "compute"}],
+                    resourceBindings=[
+                        {
+                            "name": "generatedOutputBuffer",
+                            "kind": "buffer",
+                            "binding": 0,
+                        },
+                    ],
+                    dispatch={"entryPoint": "main", "workgroupCount": [1, 1, 1]},
+                )
+            ],
+        ),
+        {
+            "fixtures": [
+                _runtime_fixture(
+                    inputs=[],
+                    expectedOutputs=[
+                        {
+                            "name": "out",
+                            "kind": "buffer",
+                            "dtype": "float32",
+                            "shape": [2],
+                            "values": [2.0, 4.0],
+                            "aliases": ["generatedOutputBuffer"],
+                        }
+                    ],
+                )
+            ]
+        },
+        executors={"opengl": ExplicitAliasAdapter()},
+    )
+
+    result = report["results"][0]
+    assert result["status"] == PASSED
+    binding = result["runtimeExecution"]["resourceBindings"][0]
+    assert binding["value"]["name"] == "out"
+    assert binding["value"]["metadata"] == {"aliases": ["generatedOutputBuffer"]}
+    assert binding["source"] == "expectedOutput"
+
+
+def test_plan_runtime_test_manifest_warns_for_unbound_incomplete_layout_resource(
+    tmp_path,
+):
+    artifact_report = _artifact_report(
+        tmp_path,
+        [
+            _translated_artifact(
+                entryPoints=[{"name": "main", "stage": "compute"}],
+                resourceBindings=[
+                    {
+                        "name": "float16_t",
+                        "kind": "uniform",
+                        "binding": None,
+                        "status": "layout-missing",
+                    }
+                ],
+                dispatch={"entryPoint": "main", "workgroupCount": [1, 1, 1]},
+            )
+        ],
+    )
+    manifest = build_runtime_test_manifest(
+        artifact_report,
+        {
+            "fixtures": [
+                _runtime_fixture(
+                    inputs=[],
+                    expectedOutputs=[{"name": "out", "values": []}],
+                )
+            ]
+        },
+        project_root=tmp_path,
+    )
+
+    plan = plan_runtime_test_manifest(artifact_report, manifest, project_root=tmp_path)
+
+    case = plan["testCases"][0]
+    assert case["status"] == "planned"
+    assert case["diagnostics"][0]["severity"] == "warning"
+    assert case["diagnostics"][0]["code"] == (
+        "project.runtime-verification.resource-unbound"
+    )
+    assert plan["summary"]["failedCount"] == 0
+
+
 def test_verify_runtime_fixtures_reports_setup_diagnostic_with_source_span(tmp_path):
     source_span = {
         "file": "kernels/add.cgl",
