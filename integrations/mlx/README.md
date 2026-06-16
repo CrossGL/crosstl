@@ -17,8 +17,9 @@ The current harness verifies:
 - Vulkan assembly and validator checks when SPIR-V tools are available and no
   active validation blocker is tracked;
 - OpenGL artifact generation for `arange.metal`;
-- runtime-test manifest and runtime-test plan generation for reduced `arange`
-  readiness probes across DirectX, OpenGL, and Vulkan.
+- runtime artifact manifest, runtime-test manifest, and runtime-test plan
+  generation for reduced `arange` readiness probes across DirectX, OpenGL, and
+  Vulkan.
 
 Pull requests run the reduced frontier above. Scheduled and manually triggered
 CI also run the full-corpus artifact scout with finite Metal template
@@ -44,9 +45,10 @@ GPU unit tests against non-Metal targets requires runtime adapters, host-side
 dispatch wiring, data layout validation, and backend-specific build integration.
 The reduced harness now emits runtime readiness artifacts so those gaps are
 visible in CI reports without claiming runtime parity. The current readiness
-plans are blocked because translated project artifacts do not yet carry enough
-entry point, resource binding, and dispatch metadata for adapter-backed
-execution.
+manifests consume reflected runtime artifact metadata, including entry points,
+resource bindings, and dispatch geometry. The generated runtime-test plans are
+still blocked because fixture resources must be resolved through source-level
+and target-reflected aliases before adapter-backed execution can run.
 
 ## Running Locally
 
@@ -93,7 +95,8 @@ full-corpus Metal template materialization work for backend artifacts.
 CrossGL/crosstl#1376 tracks bounded runtime for the scheduled full-corpus scout.
 CrossGL/crosstl#1312 tracks native toolchain validation coverage for project
 CI. CrossGL/crosstl#1388 tracks the artifact execution metadata required by
-runtime-test manifests and native adapters. Future scouts should add
+runtime-test manifests and native adapters. CrossGL/crosstl#1392 tracks fixture
+resource binding through reflected backend aliases. Future scouts should add
 issue-backed blockers only when there are concrete repros. Host runtime
 integration gaps should be handled in repository integration code or downstream
 runtime adapters, not hidden as shader translation successes.
