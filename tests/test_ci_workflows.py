@@ -2102,9 +2102,9 @@ def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
 def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     workflows = _workflow_texts()
     mlx_porting = workflows.get("mlx-project-porting.yml", "")
-    harness = (ROOT / "demos" / "integrations" / "mlx" / "run_mlx_porting.py").read_text(
-        encoding="utf-8"
-    )
+    harness = (
+        ROOT / "demos" / "integrations" / "mlx" / "run_mlx_porting.py"
+    ).read_text(encoding="utf-8")
     mlx_commit = "968d264f2903d578e699c4452a4dbf48633921aa"
 
     assert mlx_porting, "mlx-project-porting.yml must exist"
