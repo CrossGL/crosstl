@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-HARNESS_PATH = ROOT / "integrations" / "mlx" / "run_mlx_porting.py"
+HARNESS_PATH = ROOT / "demos" / "integrations" / "mlx" / "run_mlx_porting.py"
 
 
 def _load_harness():

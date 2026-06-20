@@ -11,7 +11,7 @@ on:
       - ".github/actions/install-linux-dxc/**"
       - ".github/workflows/mlx-project-porting.yml"
       - "crosstl/**"
-      - "integrations/mlx/**"
+      - "demos/integrations/mlx/**"
       - "pyproject.toml"
       - "requirements.txt"
       - "tests/test_ci_workflows.py"
@@ -21,7 +21,7 @@ on:
       - ".github/actions/install-linux-dxc/**"
       - ".github/workflows/mlx-project-porting.yml"
       - "crosstl/**"
-      - "integrations/mlx/**"
+      - "demos/integrations/mlx/**"
       - "pyproject.toml"
       - "requirements.txt"
       - "tests/test_ci_workflows.py"
@@ -139,7 +139,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python integrations/mlx/run_mlx_porting.py \
+          python demos/integrations/mlx/run_mlx_porting.py \
             --mode full-corpus \
             --mlx-root mlx-upstream \
             --summary mlx-upstream/.crosstl-mlx-porting/full-corpus-summary.json
