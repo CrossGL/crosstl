@@ -185,6 +185,29 @@ class MetalToCrossGLConverter:
         "popcount": "bitCount",
         "reverse_bits": "bitfieldReverse",
     }
+    # Metal SIMD-group (wave) intrinsics -> canonical CrossGL Wave* ops.
+    # The inverse mapping lives in crosstl/translator/codegen/metal_codegen.py,
+    # and the DirectX and SPIR-V code generators already lower these canonical
+    # names. Only same-arity, same-argument-order intrinsics are mapped here;
+    # the shuffle (up/down/xor) family and inclusive-prefix scans need
+    # argument-aware lowering and are handled separately.
+    metal_wave_intrinsics = {
+        "simd_sum": "WaveActiveSum",
+        "simd_product": "WaveActiveProduct",
+        "simd_min": "WaveActiveMin",
+        "simd_max": "WaveActiveMax",
+        "simd_and": "WaveActiveBitAnd",
+        "simd_or": "WaveActiveBitOr",
+        "simd_xor": "WaveActiveBitXor",
+        "simd_all": "WaveActiveAllTrue",
+        "simd_any": "WaveActiveAnyTrue",
+        "simd_ballot": "WaveActiveBallot",
+        "simd_broadcast": "WaveReadLaneAt",
+        "simd_broadcast_first": "WaveReadLaneFirst",
+        "simd_shuffle": "WaveReadLaneAt",
+        "simd_prefix_exclusive_sum": "WavePrefixSum",
+        "simd_prefix_exclusive_product": "WavePrefixProduct",
+    }
 
     def __init__(self):
         self.rt_qualifiers = {
@@ -2376,6 +2399,9 @@ class MetalToCrossGLConverter:
             metal_math_name = self.map_metal_math_function_name(name)
             if metal_math_name is not None:
                 return metal_math_name
+            metal_wave_name = self.map_metal_wave_function_name(name)
+            if metal_wave_name is not None:
+                return metal_wave_name
             return self.sanitize_identifier(name)
 
         target_type = self.normalized_metal_type(match.group(1))
@@ -2395,6 +2421,14 @@ class MetalToCrossGLConverter:
         if text in self.user_function_names:
             return None
         return self.metal_bit_intrinsics.get(text)
+
+    def map_metal_wave_function_name(self, name):
+        text = str(name)
+        if text.startswith("metal::"):
+            return self.metal_wave_intrinsics.get(text.split("::")[-1])
+        if text in self.user_function_names:
+            return None
+        return self.metal_wave_intrinsics.get(text)
 
     def map_metal_type_constructor_name(self, name):
         text = str(name)

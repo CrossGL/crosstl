@@ -14,6 +14,7 @@ from crosstl.translator.codegen.directx_codegen import (
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -4178,6 +4179,105 @@ def test_codegen_preserves_threadgroup_imageblock_local_pointer_roundtrip():
     metal = MetalCodeGen().generate(parse_crossgl(crossgl))
     assert "threadgroup_imageblock TransparentFragmentValues* fragmentValues" in metal
     assert "thread TransparentFragmentValues* fragmentValues" not in metal
+
+
+def test_codegen_lowers_metal_simd_group_intrinsics_to_crossgl_wave_ops():
+    # Metal SIMD-group (wave) intrinsics must lower to canonical CrossGL Wave*
+    # ops. Otherwise they leak unchanged into the IR and the DirectX/SPIR-V
+    # backends emit uncompilable or silently-defaulted code. Mirrors the SIMD
+    # reductions that MLX metal kernels rely on (reduce / softmax / gemv).
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void wave_ops(
+        device const float* in [[buffer(0)]],
+        device float* outf [[buffer(1)]],
+        device uint* outu [[buffer(2)]],
+        uint gid [[thread_position_in_grid]]) {
+        float v = in[gid];
+        uint u = outu[gid];
+        outf[gid] = simd_sum(v) + simd_product(v) + simd_min(v) + simd_max(v)
+            + simd_prefix_exclusive_sum(v) + simd_prefix_exclusive_product(v)
+            + simd_broadcast_first(v) + simd_broadcast(v, 0u);
+        outu[gid] = simd_and(u) + simd_or(u) + simd_xor(u) + simd_ballot(v > 0.0);
+        if (simd_all(v > 0.0) && simd_any(v < 0.0)) {
+            outf[gid] = v;
+        }
+    }
+    """
+    generated = convert(code)
+
+    for token in (
+        "WaveActiveSum(v)",
+        "WaveActiveProduct(v)",
+        "WaveActiveMin(v)",
+        "WaveActiveMax(v)",
+        "WavePrefixSum(v)",
+        "WavePrefixProduct(v)",
+        "WaveReadLaneFirst(v)",
+        "WaveReadLaneAt(v",
+        "WaveActiveBitAnd(u)",
+        "WaveActiveBitOr(u)",
+        "WaveActiveBitXor(u)",
+        "WaveActiveAllTrue(",
+        "WaveActiveAnyTrue(",
+        "WaveActiveBallot(",
+    ):
+        assert token in generated, f"missing {token} in:\n{generated}"
+
+    # The raw Metal spellings must not leak into the CrossGL IR.
+    for leaked in (
+        "simd_sum",
+        "simd_product",
+        "simd_min",
+        "simd_max",
+        "simd_prefix_exclusive",
+        "simd_broadcast",
+        "simd_and",
+        "simd_or",
+        "simd_xor",
+        "simd_all",
+        "simd_any",
+        "simd_ballot",
+    ):
+        assert leaked not in generated, f"leaked {leaked} in:\n{generated}"
+
+    assert parse_crossgl(generated) is not None
+
+
+def test_metal_simd_reductions_reach_backend_wave_instructions():
+    # End to end: Metal simd_* reductions become real subgroup instructions on
+    # the DirectX and SPIR-V (Vulkan) backends instead of leaking into output.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void wave_reduce(
+        device const float* in [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint gid [[thread_position_in_grid]]) {
+        float v = in[gid];
+        ushort lane = ushort(gid & 31u);
+        out[gid] = simd_sum(v) + simd_prefix_exclusive_sum(v)
+            + simd_broadcast(v, lane);
+    }
+    """
+    ast = parse_crossgl(convert(code))
+
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    assert "WaveActiveSum(" in hlsl
+    assert "WavePrefixSum(" in hlsl
+    # simd_broadcast carries a ushort lane (min16uint); DirectX must accept it.
+    assert "WaveReadLaneAt(" in hlsl
+    assert "simd_sum" not in hlsl
+    assert "simd_broadcast" not in hlsl
+
+    spirv = VulkanSPIRVCodeGen().generate(ast)
+    assert "OpGroupNonUniformFAdd" in spirv
+    # WaveReadLaneAt lowers to a dynamic-lane shuffle, not a constant broadcast.
+    assert "OpGroupNonUniformShuffle" in spirv
+    assert "cannot lower unknown function" not in spirv
 
 
 if __name__ == "__main__":

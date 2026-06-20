@@ -9191,7 +9191,7 @@ class VulkanSPIRVCodeGen:
             return self.call_group_non_uniform_ballot(operation, args)
 
         if operation == "WaveReadLaneAt":
-            return self.call_group_non_uniform_broadcast(operation, args)
+            return self.call_group_non_uniform_shuffle(operation, args)
 
         if operation == "WaveReadLaneFirst":
             return self.call_group_non_uniform_broadcast_first(operation, args)
@@ -9355,7 +9355,7 @@ class VulkanSPIRVCodeGen:
         self.value_types[id_value] = ballot_type
         return spirv_id
 
-    def call_group_non_uniform_broadcast(
+    def call_group_non_uniform_shuffle(
         self, operation: str, args: List[SpirvId]
     ) -> SpirvId:
         if len(args) != 2:
@@ -9367,11 +9367,15 @@ class VulkanSPIRVCodeGen:
         if lane is None:
             return self.wave_result_default(operation, args)
 
+        # WaveReadLaneAt reads from an arbitrary (possibly dynamic) lane, so it
+        # lowers to OpGroupNonUniformShuffle (capability GroupNonUniformShuffle),
+        # mirroring GLSL subgroupShuffle. OpGroupNonUniformBroadcast cannot be
+        # used here because it requires a constant lane id before SPIR-V 1.5.
         self.require_group_non_uniform("GroupNonUniformShuffle")
         scope = self.subgroup_scope_id()
         id_value = self.get_id()
         self.emit(
-            f"%{id_value} = OpGroupNonUniformBroadcast %{result_type.id} "
+            f"%{id_value} = OpGroupNonUniformShuffle %{result_type.id} "
             f"%{scope.id} %{args[0].id} %{lane.id}"
         )
 

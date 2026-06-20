@@ -7683,7 +7683,7 @@ class TestVulkanSPIRVCodeGen:
             "OpGroupNonUniformAny",
             "OpGroupNonUniformAll",
             "OpGroupNonUniformBallot",
-            "OpGroupNonUniformBroadcast",
+            "OpGroupNonUniformShuffle",
             "OpGroupNonUniformBroadcastFirst",
         ):
             assert operation in spv_code
@@ -25298,7 +25298,7 @@ class TestVulkanSPIRVCodeGen:
             Parser(Lexer(source_code).tokens).parse()
         )
 
-        assert "OpGroupNonUniformBroadcast" in spv_code
+        assert "OpGroupNonUniformShuffle" in spv_code
         assert "OpGroupNonUniformBroadcastFirst" in spv_code
         assert "WARNING" not in spv_code
 
@@ -26634,12 +26634,10 @@ class TestVulkanSPIRVCodeGen:
         assert "OpCapability GroupNonUniformShuffle" in spv_code
         assert "OpCapability GroupNonUniformBallot" in spv_code
 
-        broadcast_ids = spirv_result_ids_for_opcode(
-            spv_code, "OpGroupNonUniformBroadcast"
-        )
-        assert len(broadcast_ids) == 1
+        shuffle_ids = spirv_result_ids_for_opcode(spv_code, "OpGroupNonUniformShuffle")
+        assert len(shuffle_ids) == 1
         assert re.search(
-            rf"{re.escape(broadcast_ids[0])} = OpGroupNonUniformBroadcast "
+            rf"{re.escape(shuffle_ids[0])} = OpGroupNonUniformShuffle "
             rf"%\d+ %\d+ %\d+ %\d+",
             spv_code,
         )
