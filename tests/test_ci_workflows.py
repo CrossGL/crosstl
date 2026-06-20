@@ -2137,7 +2137,16 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "without tracked issue references" in harness
     assert "runtime-readiness" in harness
     assert "runtime-test-manifest" in harness
-    for tracked_issue_number in (1312, 1354, 1362, 1376, 1388, 1392):
+    for tracked_issue_number in (
+        1312,
+        1354,
+        1362,
+        1376,
+        1388,
+        1392,
+        1394,
+        1396,
+    ):
         assert f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}" in (
             harness
         )

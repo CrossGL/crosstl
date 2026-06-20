@@ -21,7 +21,7 @@
     "artifacts": 1
   },
   "runtime_readiness_status": {
-    "status": "blocked-by-tracked-issues",
+    "status": "planned",
     "source": "mlx/backend/metal/kernels/arange.metal",
     "targets": [
       "directx",
@@ -30,15 +30,14 @@
     ],
     "artifact_manifest_included": true,
     "metadata_manifest_status": "passing",
-    "blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1392"
-    ],
+    "blocked_by": [],
     "metadata_diagnostics_by_code": {},
     "runtime_artifact_diagnostics_by_code": {
       "project.runtime-manifest.resource-binding-layout-incomplete": 1
     },
     "runtime_plan_diagnostics_by_code": {
-      "project.runtime-verification.resource-unbound": 84
+      "project.runtime-test.platform-requirements-unavailable": 1,
+      "project.runtime-verification.resource-unbound": 1
     }
   },
   "full_corpus_scout": {
@@ -86,7 +85,9 @@
     "https://github.com/CrossGL/crosstl/issues/1354",
     "https://github.com/CrossGL/crosstl/issues/1376",
     "https://github.com/CrossGL/crosstl/issues/1388",
-    "https://github.com/CrossGL/crosstl/issues/1392"
+    "https://github.com/CrossGL/crosstl/issues/1392",
+    "https://github.com/CrossGL/crosstl/issues/1394",
+    "https://github.com/CrossGL/crosstl/issues/1396"
   ],
   "resolved_issues": [
     "https://github.com/CrossGL/crosstl/issues/1300",

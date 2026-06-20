@@ -3578,6 +3578,9 @@ def _parse_runtime_resource_binding(
         metadata["required"] = _optional_bool(
             value.get("required"), field_name=f"{field_name}.required"
         )
+    status = _optional_string(value.get("status"), field_name=f"{field_name}.status")
+    if status is not None:
+        metadata["status"] = status
     return RuntimeResourceBinding(
         binding_id=binding_id,
         name=name,
@@ -3736,6 +3739,19 @@ def _parse_runtime_value(
         metadata = {}
     if not isinstance(metadata, Mapping):
         raise RuntimeVerificationError(f"{field_name}.metadata must be an object.")
+    metadata = dict(metadata)
+    aliases = []
+    for alias_key in _RUNTIME_RESOURCE_ALIAS_KEYS:
+        if alias_key not in value:
+            continue
+        aliases.extend(
+            _parse_runtime_aliases(
+                value.get(alias_key), field_name=f"{field_name}.{alias_key}"
+            )
+        )
+    if aliases:
+        existing_aliases = _runtime_metadata_aliases(metadata)
+        metadata["aliases"] = _dedupe_strings((*existing_aliases, *aliases))
     return RuntimeValue(
         name=name,
         kind=kind,
@@ -3743,8 +3759,45 @@ def _parse_runtime_value(
         shape=shape,
         values=value.get("values"),
         tolerance=tolerance,
-        metadata=dict(metadata),
+        metadata=metadata,
     )
+
+
+_RUNTIME_RESOURCE_ALIAS_KEYS = ("aliases", "resourceAliases", "bindingAliases")
+_RUNTIME_RESOURCE_LOGICAL_SUFFIXES = (
+    "_Buffer",
+    "Buffer",
+    "_Uniform",
+    "Uniform",
+    "_Args",
+    "Args",
+)
+
+
+def _parse_runtime_aliases(value: Any, *, field_name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        alias = value.strip()
+        return (alias,) if alias else ()
+    if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
+        raise RuntimeVerificationError(f"{field_name} must be a string or list.")
+    aliases: list[str] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str):
+            raise RuntimeVerificationError(f"{field_name}[{index}] must be a string.")
+        alias = item.strip()
+        if alias:
+            aliases.append(alias)
+    return tuple(aliases)
+
+
+def _dedupe_strings(values: Sequence[str]) -> list[str]:
+    deduped: list[str] = []
+    for value in values:
+        if value not in deduped:
+            deduped.append(value)
+    return deduped
 
 
 def _parse_shape(value: Any, *, field_name: str) -> tuple[int, ...]:
@@ -4744,8 +4797,12 @@ def _runtime_fixture_values_by_name(
     values: dict[str, tuple[RuntimeValue, str]] = {}
     for value in fixture.inputs:
         values[value.name] = (value, "input")
+        for alias in _runtime_value_aliases(value):
+            values.setdefault(alias, (value, "input"))
     for value in fixture.expected_outputs:
         values.setdefault(value.name, (value, "expectedOutput"))
+        for alias in _runtime_value_aliases(value):
+            values.setdefault(alias, (value, "expectedOutput"))
     return values
 
 
@@ -4758,15 +4815,78 @@ def _runtime_resource_value(
         if isinstance(value, str) and value not in candidate_names:
             candidate_names.append(value)
     for candidate in candidate_names:
-        match = values_by_name.get(candidate)
-        if match is not None:
-            return match
+        for lookup_name in _runtime_resource_lookup_names(candidate):
+            match = values_by_name.get(lookup_name)
+            if match is not None:
+                return match
     return None, None
+
+
+def _runtime_value_aliases(value: RuntimeValue) -> tuple[str, ...]:
+    return _runtime_metadata_aliases(value.metadata)
+
+
+def _runtime_metadata_aliases(metadata: Mapping[str, Any]) -> tuple[str, ...]:
+    aliases: list[str] = []
+    for alias_key in _RUNTIME_RESOURCE_ALIAS_KEYS:
+        value = metadata.get(alias_key)
+        if isinstance(value, str):
+            alias = value.strip()
+            if alias:
+                aliases.append(alias)
+            continue
+        if isinstance(value, Sequence) and not isinstance(
+            value, (bytes, bytearray, str)
+        ):
+            aliases.extend(
+                alias.strip()
+                for alias in value
+                if isinstance(alias, str) and alias.strip()
+            )
+    return tuple(_dedupe_strings(aliases))
+
+
+def _runtime_resource_lookup_names(name: str) -> tuple[str, ...]:
+    candidates = [name]
+    logical_name = _runtime_resource_logical_name(name)
+    if logical_name is not None and logical_name not in candidates:
+        candidates.append(logical_name)
+    return tuple(candidates)
+
+
+def _runtime_resource_logical_name(name: str) -> str | None:
+    candidate = name.strip()
+    if not candidate:
+        return None
+    parts = candidate.split("|")
+    if len(parts) >= 4:
+        candidate = parts[-2]
+    normalized = candidate
+    for suffix in _RUNTIME_RESOURCE_LOGICAL_SUFFIXES:
+        if normalized.lower().endswith(suffix.lower()):
+            normalized = normalized[: -len(suffix)]
+            break
+    normalized = normalized.rstrip("_")
+    if "_" in normalized:
+        normalized = next(
+            (part for part in reversed(normalized.split("_")) if part),
+            normalized,
+        )
+    if normalized and normalized != name:
+        return normalized
+    return None
 
 
 def _runtime_resource_required(binding: RuntimeResourceBinding) -> bool:
     required = binding.metadata.get("required")
-    return required if isinstance(required, bool) else True
+    if isinstance(required, bool):
+        return required
+    status = binding.metadata.get("status")
+    if isinstance(status, str) and status.strip().lower() != "bound":
+        return False
+    if binding.binding is None:
+        return False
+    return True
 
 
 def _runtime_resource_binding_name(binding: RuntimeResourceBinding) -> str | None:

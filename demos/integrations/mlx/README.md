@@ -46,9 +46,11 @@ dispatch wiring, data layout validation, and backend-specific build integration.
 The reduced harness now emits runtime readiness artifacts so those gaps are
 visible in CI reports without claiming runtime parity. The current readiness
 manifests consume reflected runtime artifact metadata, including entry points,
-resource bindings, and dispatch geometry. The generated runtime-test plans are
-still blocked because fixture resources must be resolved through source-level
-and target-reflected aliases before adapter-backed execution can run.
+resource bindings, and dispatch geometry. Runtime-test plans now resolve
+source-level fixture names against common generated resource aliases and report
+remaining non-blocking platform or layout warnings. These plans are still
+metadata readiness artifacts; they do not execute the upstream MLX runtime on
+non-Metal backends.
 
 ## Running Locally
 
@@ -96,8 +98,11 @@ CrossGL/crosstl#1376 tracks bounded runtime for the scheduled full-corpus scout.
 CrossGL/crosstl#1312 tracks native toolchain validation coverage for project
 CI. CrossGL/crosstl#1388 tracks the artifact execution metadata required by
 runtime-test manifests and native adapters. CrossGL/crosstl#1392 tracks fixture
-resource binding through reflected backend aliases. Future scouts should add
-issue-backed blockers only when there are concrete repros. Host runtime
+resource binding through reflected backend aliases. CrossGL/crosstl#1394 tracks
+entry-point-scoped runtime adapter contracts for multi-entry artifacts.
+CrossGL/crosstl#1396 tracks generated GLSL helper uniforms that reflection
+currently reports as layout-incomplete runtime resources. Future scouts should
+add issue-backed blockers only when there are concrete repros. Host runtime
 integration gaps should be handled in repository integration code or downstream
 runtime adapters, not hidden as shader translation successes.
 
