@@ -606,6 +606,36 @@ class VulkanSPIRVCodeGen:
 
         return spirv_id
 
+    def struct_members_match(
+        self, name: str, members: List[Tuple[SpirvId, str]]
+    ) -> bool:
+        existing_members = self.current_struct_members.get(name)
+        if existing_members is None or len(existing_members) != len(members):
+            return False
+        return all(
+            existing_type.id == member_type.id and existing_name == member_name
+            for (existing_type, existing_name), (member_type, member_name) in zip(
+                existing_members, members
+            )
+        )
+
+    def unique_struct_type_name(
+        self, preferred_name: str, members: List[Tuple[SpirvId, str]]
+    ) -> str:
+        if preferred_name not in self.struct_types or self.struct_members_match(
+            preferred_name, members
+        ):
+            return preferred_name
+
+        suffix = 1
+        while True:
+            candidate = f"{preferred_name}_{suffix}"
+            if candidate not in self.struct_types or self.struct_members_match(
+                candidate, members
+            ):
+                return candidate
+            suffix += 1
+
     def register_layout_struct_type(
         self,
         source_type: SpirvId,
@@ -13751,9 +13781,10 @@ class VulkanSPIRVCodeGen:
         )
 
         block_name = f"{node.name}Buffer"
+        block_members = [(runtime_array_type, node.name)]
         block_type = self.register_struct_type(
-            block_name,
-            [(runtime_array_type, node.name)],
+            self.unique_struct_type_name(block_name, block_members),
+            block_members,
         )
         self.decorations.append(f"OpDecorate %{block_type.id} BufferBlock")
         self.decorations.append(f"OpMemberDecorate %{block_type.id} 0 Offset 0")
@@ -20635,6 +20666,9 @@ class VulkanSPIRVCodeGen:
                 element_type = self.register_primitive_type("float")
             target_size = len(values)
             array_type = self.register_array_type(element_type, target_size)
+            values = [
+                self.convert_value_to_type(value, element_type) for value in values
+            ]
 
         if target_size is not None:
             values = values[:target_size]
@@ -21071,6 +21105,12 @@ class VulkanSPIRVCodeGen:
 
             array_type = self.variable_value_types.get(array_variable.id)
             element_type = self.array_element_type_from_type(array_type)
+            if (
+                element_type is None
+                and array_type is not None
+                and array_type.type.base_type not in self.current_struct_members
+            ):
+                return array_variable, array_type
             if element_type is None:
                 element_type = self.determine_array_element_type(array_variable)
             if element_type is None:

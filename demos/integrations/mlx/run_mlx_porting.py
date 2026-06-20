@@ -40,7 +40,7 @@ FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK = 131072
 FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS = 900
 REDUCED_FRONTIER_MODE = "reduced-frontier"
 FULL_CORPUS_MODE = "full-corpus"
-FRONTIER_VALIDATION_TRACKED_ISSUES = ("https://github.com/CrossGL/crosstl/issues/1362",)
+FRONTIER_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()
 FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1354",
     "https://github.com/CrossGL/crosstl/issues/1376",
@@ -68,6 +68,7 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *RUNTIME_READINESS_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1362",
     "https://github.com/CrossGL/crosstl/issues/1317",
     "https://github.com/CrossGL/crosstl/issues/1300",
     "https://github.com/CrossGL/crosstl/issues/939",
@@ -411,7 +412,6 @@ def _translate_directx_vulkan_frontier(
         output_dir=_relpath(work_dir / "out-directx-vulkan-frontier", mlx_root),
     )
     run_toolchains = not FRONTIER_VALIDATION_TRACKED_ISSUES
-    validation_flag = "--run-toolchains" if run_toolchains else "--validate"
     _run_command(
         "translate-directx-vulkan-frontier",
         [
@@ -424,7 +424,7 @@ def _translate_directx_vulkan_frontier(
             str(config_path),
             "--report",
             str(report_path),
-            validation_flag,
+            "--validate",
         ],
         log_dir=log_dir,
     )
@@ -469,7 +469,39 @@ def _translate_directx_vulkan_frontier(
         artifact_validation.get("failedCount") == 0,
         "artifact validation reported failures for DirectX/Vulkan frontier outputs",
     )
-    toolchain_runs = validation.get("toolchainRuns", [])
+    toolchain_payload = payload
+    if run_toolchains:
+        toolchain_config_path = config_dir / "vulkan-frontier-toolchain.toml"
+        toolchain_report_path = report_dir / "vulkan-frontier-toolchain.json"
+        _write_project_config(
+            toolchain_config_path,
+            include=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+            targets=("vulkan",),
+            output_dir=_relpath(work_dir / "out-vulkan-frontier-toolchain", mlx_root),
+        )
+        _run_command(
+            "validate-vulkan-frontier-toolchain",
+            [
+                python,
+                "-m",
+                "crosstl",
+                "translate-project",
+                str(mlx_root),
+                "--config",
+                str(toolchain_config_path),
+                "--report",
+                str(toolchain_report_path),
+                "--run-toolchains",
+            ],
+            log_dir=log_dir,
+        )
+        toolchain_payload = _load_json(toolchain_report_path)
+    toolchain_validation = toolchain_payload.get("validation", {})
+    _require(
+        isinstance(toolchain_validation, dict),
+        "Vulkan toolchain validation must be an object",
+    )
+    toolchain_runs = toolchain_validation.get("toolchainRuns", [])
     _require(isinstance(toolchain_runs, list), "toolchainRuns must be a list")
     vulkan_runs = [
         run
@@ -477,8 +509,22 @@ def _translate_directx_vulkan_frontier(
         if isinstance(run, dict) and run.get("target") == "vulkan"
     ]
     if require_vulkan_toolchain and run_toolchains:
+        vulkan_artifact_paths = {
+            artifact.get("path")
+            for artifact in toolchain_payload.get("artifacts", [])
+            if isinstance(artifact, dict)
+            and artifact.get("target") == "vulkan"
+            and artifact.get("status") == "translated"
+            and isinstance(artifact.get("path"), str)
+        }
+        validated_vulkan_paths = {
+            run.get("path")
+            for run in vulkan_runs
+            if run.get("status") == "ok" and isinstance(run.get("path"), str)
+        }
         _require(
-            len(vulkan_runs) == frontier_count,
+            len(vulkan_artifact_paths) == frontier_count
+            and vulkan_artifact_paths <= validated_vulkan_paths,
             "Vulkan toolchain validation was required for every frontier artifact",
         )
     for run in vulkan_runs:

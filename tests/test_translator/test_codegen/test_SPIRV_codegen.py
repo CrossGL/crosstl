@@ -24890,6 +24890,88 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_mlx_frontier_reused_buffer_names_keep_distinct_block_types(self, tmp_path):
+        source_code = """
+        shader MLXReusedBufferNames {
+            compute {
+                @ stage_entry
+                void write_u32(
+                    RWStructuredBuffer<uint> out @buffer(0),
+                    uint index @gl_GlobalInvocationID
+                ) {
+                    buffer_store(out, index, 1u);
+                }
+            }
+
+            compute {
+                @ stage_entry
+                void write_u64(
+                    RWStructuredBuffer<uint64> out @buffer(0),
+                    uint index @gl_GlobalInvocationID
+                ) {
+                    buffer_store(out, index, 1u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        ulong_type = re.search(r"(%\d+) = OpTypeInt 64 0\b", spv_code)
+        assert ulong_type is not None
+        ulong_array = re.search(
+            rf"(%\d+) = OpTypeRuntimeArray {re.escape(ulong_type.group(1))}\b",
+            spv_code,
+        )
+        assert ulong_array is not None
+        ulong_block = re.search(
+            rf"(%\d+) = OpTypeStruct {re.escape(ulong_array.group(1))}\b",
+            spv_code,
+        )
+        assert ulong_block is not None
+        ulong_block_pointer = re.search(
+            rf"(%\d+) = OpTypePointer Uniform {re.escape(ulong_block.group(1))}\b",
+            spv_code,
+        )
+        assert ulong_block_pointer is not None
+        assert re.search(
+            rf"%\d+ = OpVariable {re.escape(ulong_block_pointer.group(1))} Uniform",
+            spv_code,
+        )
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mlx_binary_two_scalar_fallback_indexing_validates(self, tmp_path):
+        source_code = """
+        shader MLXBinaryTwoScalarFallbackIndexing {
+            compute {
+                @ stage_entry
+                void write_pair(
+                    RWStructuredBuffer<uint> c @buffer(0),
+                    RWStructuredBuffer<uint> d @buffer(1),
+                    uint index @gl_GlobalInvocationID
+                ) {
+                    uint out_ = 0u;
+                    buffer_store(c, index, out_[0]);
+                    buffer_store(d, index, out_[1]);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        out_id = spirv_named_variable(spv_code, "out_", storage_class="Function")
+        assert not re.search(
+            rf"OpAccessChain %\d+ {re.escape(out_id)} %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_mlx_random_for_in_over_fixed_array_row_validates(self, tmp_path):
         source_code = """
         shader MLXRandomForInArrayRow {

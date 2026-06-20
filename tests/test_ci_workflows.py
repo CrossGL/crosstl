@@ -2125,8 +2125,9 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "full-corpus-summary.json" in mlx_porting
     assert "out-full-corpus" in mlx_porting
     assert "name: mlx-full-corpus-scout" in mlx_porting
+    assert "include-hidden-files: true" in mlx_porting
     assert "retention-days: 30" in mlx_porting
-    assert re.search(r"translate-project\b[\s\S]*validation_flag", harness)
+    assert "validate-vulkan-frontier-toolchain" in harness
     assert '"--run-toolchains"' in harness
     assert '"--validate"' in harness
     assert "FULL_CORPUS_EXPECTED_ARTIFACT_COUNT" in harness
@@ -2140,7 +2141,6 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     for tracked_issue_number in (
         1312,
         1354,
-        1362,
         1376,
         1388,
         1392,
@@ -2176,6 +2176,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         1340,
         1346,
         1355,
+        1362,
         1300,
         1317,
     ):
