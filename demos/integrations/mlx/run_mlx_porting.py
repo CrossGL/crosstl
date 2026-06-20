@@ -412,7 +412,6 @@ def _translate_directx_vulkan_frontier(
         output_dir=_relpath(work_dir / "out-directx-vulkan-frontier", mlx_root),
     )
     run_toolchains = not FRONTIER_VALIDATION_TRACKED_ISSUES
-    validation_flag = "--run-toolchains" if run_toolchains else "--validate"
     _run_command(
         "translate-directx-vulkan-frontier",
         [
@@ -425,7 +424,7 @@ def _translate_directx_vulkan_frontier(
             str(config_path),
             "--report",
             str(report_path),
-            validation_flag,
+            "--validate",
         ],
         log_dir=log_dir,
     )
@@ -470,7 +469,39 @@ def _translate_directx_vulkan_frontier(
         artifact_validation.get("failedCount") == 0,
         "artifact validation reported failures for DirectX/Vulkan frontier outputs",
     )
-    toolchain_runs = validation.get("toolchainRuns", [])
+    toolchain_payload = payload
+    if run_toolchains:
+        toolchain_config_path = config_dir / "vulkan-frontier-toolchain.toml"
+        toolchain_report_path = report_dir / "vulkan-frontier-toolchain.json"
+        _write_project_config(
+            toolchain_config_path,
+            include=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+            targets=("vulkan",),
+            output_dir=_relpath(work_dir / "out-vulkan-frontier-toolchain", mlx_root),
+        )
+        _run_command(
+            "validate-vulkan-frontier-toolchain",
+            [
+                python,
+                "-m",
+                "crosstl",
+                "translate-project",
+                str(mlx_root),
+                "--config",
+                str(toolchain_config_path),
+                "--report",
+                str(toolchain_report_path),
+                "--run-toolchains",
+            ],
+            log_dir=log_dir,
+        )
+        toolchain_payload = _load_json(toolchain_report_path)
+    toolchain_validation = toolchain_payload.get("validation", {})
+    _require(
+        isinstance(toolchain_validation, dict),
+        "Vulkan toolchain validation must be an object",
+    )
+    toolchain_runs = toolchain_validation.get("toolchainRuns", [])
     _require(isinstance(toolchain_runs, list), "toolchainRuns must be a list")
     vulkan_runs = [
         run
@@ -480,7 +511,7 @@ def _translate_directx_vulkan_frontier(
     if require_vulkan_toolchain and run_toolchains:
         vulkan_artifact_paths = {
             artifact.get("path")
-            for artifact in payload.get("artifacts", [])
+            for artifact in toolchain_payload.get("artifacts", [])
             if isinstance(artifact, dict)
             and artifact.get("target") == "vulkan"
             and artifact.get("status") == "translated"

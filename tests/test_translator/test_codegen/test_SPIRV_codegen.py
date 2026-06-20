@@ -24890,9 +24890,7 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_mlx_frontier_reused_buffer_names_keep_distinct_block_types(
-        self, tmp_path
-    ):
+    def test_mlx_frontier_reused_buffer_names_keep_distinct_block_types(self, tmp_path):
         source_code = """
         shader MLXReusedBufferNames {
             compute {
