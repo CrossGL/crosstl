@@ -6508,7 +6508,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if mapped_type is None:
             return
-        if array_suffix or base_type not in {"int", "uint"}:
+        # Accept any scalar integer width for the lane index. Metal's
+        # simd_shuffle/simd_broadcast take a ushort lane (-> min16uint), which
+        # HLSL implicitly widens to the uint laneIndex of WaveReadLaneAt; only
+        # non-integer or vector lane arguments are rejected.
+        if array_suffix or base_type not in self.HLSL_WAVE_INTEGER_COMPONENT_TYPES:
             raise ValueError(
                 f"DirectX wave intrinsic '{operation}' {role} argument must be "
                 f"scalar int or uint, got {mapped_type}"

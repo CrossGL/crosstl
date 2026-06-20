@@ -4257,7 +4257,10 @@ def test_metal_simd_reductions_reach_backend_wave_instructions():
         device const float* in [[buffer(0)]],
         device float* out [[buffer(1)]],
         uint gid [[thread_position_in_grid]]) {
-        out[gid] = simd_sum(in[gid]) + simd_prefix_exclusive_sum(in[gid]);
+        float v = in[gid];
+        ushort lane = ushort(gid & 31u);
+        out[gid] = simd_sum(v) + simd_prefix_exclusive_sum(v)
+            + simd_broadcast(v, lane);
     }
     """
     ast = parse_crossgl(convert(code))
@@ -4265,10 +4268,15 @@ def test_metal_simd_reductions_reach_backend_wave_instructions():
     hlsl = TranslatorHLSLCodeGen().generate(ast)
     assert "WaveActiveSum(" in hlsl
     assert "WavePrefixSum(" in hlsl
+    # simd_broadcast carries a ushort lane (min16uint); DirectX must accept it.
+    assert "WaveReadLaneAt(" in hlsl
     assert "simd_sum" not in hlsl
+    assert "simd_broadcast" not in hlsl
 
     spirv = VulkanSPIRVCodeGen().generate(ast)
     assert "OpGroupNonUniformFAdd" in spirv
+    # WaveReadLaneAt lowers to a dynamic-lane shuffle, not a constant broadcast.
+    assert "OpGroupNonUniformShuffle" in spirv
     assert "cannot lower unknown function" not in spirv
 
 
