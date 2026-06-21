@@ -91,6 +91,16 @@ class _MetalTemplateFunction:
     materializations: List[str] = field(default_factory=list)
 
 
+@dataclass
+class _MetalTemplateStruct:
+    name: str
+    template_parameters: List[str]
+    span: Tuple[int, int]
+    source: str
+    variadic_template_parameters: Set[str] = field(default_factory=set)
+    template_parameter_defaults: Dict[str, str] = field(default_factory=dict)
+
+
 @dataclass(frozen=True)
 class _MLXKernelInstantiation:
     host_name: str
@@ -526,6 +536,65 @@ class MetalPreprocessor(HLSLPreprocessor):
             pos = body_end
         return templates
 
+    def _find_template_structs(self, code: str) -> List[_MetalTemplateStruct]:
+        # Detect `template <...> struct/class Name { ... }` declarations, the
+        # struct counterpart of _find_template_functions. Foundation for the
+        # struct-template materializer (issue #1354): explicit specializations
+        # (empty `template <>`) yield no parameters and are skipped here.
+        structs: List[_MetalTemplateStruct] = []
+        pos = 0
+        while True:
+            match = re.search(r"\btemplate\s*<", code[pos:])
+            if match is None:
+                break
+            start = pos + match.start()
+            angle_start = code.find("<", start)
+            angle_end = self._find_matching_angle(code, angle_start)
+            if angle_end is None:
+                pos = start + len("template")
+                continue
+
+            declaration_start = angle_end + 1
+            header = code[declaration_start : declaration_start + 512]
+            header_match = re.match(
+                r"\s*(?:\[\[[^\]]*\]\]\s*)*(?:struct|class)\s+"
+                r"(?P<name>[A-Za-z_][A-Za-z0-9_:]*)\b",
+                header,
+                re.DOTALL,
+            )
+            parameter_text = code[angle_start + 1 : angle_end]
+            parameters = self._template_parameter_names(parameter_text)
+            if header_match is None or not parameters:
+                pos = declaration_start
+                continue
+
+            body_start = self._find_next_top_level_char(code, declaration_start, "{")
+            semicolon = self._find_next_top_level_char(code, declaration_start, ";")
+            if body_start is None or (semicolon is not None and semicolon < body_start):
+                pos = declaration_start
+                continue
+            body_end = self._find_matching_brace(code, body_start)
+            if body_end is None:
+                pos = body_start + 1
+                continue
+
+            structs.append(
+                _MetalTemplateStruct(
+                    name=header_match.group("name").split("::")[-1],
+                    template_parameters=parameters,
+                    span=(start, body_end),
+                    source=code[declaration_start:body_end],
+                    variadic_template_parameters=(
+                        self._variadic_template_parameter_names(parameter_text)
+                    ),
+                    template_parameter_defaults=(
+                        self._template_parameter_defaults(parameter_text)
+                    ),
+                )
+            )
+            pos = body_end
+        return structs
+
     def _materialize_template_function(
         self,
         code: str,
@@ -583,6 +652,37 @@ class MetalPreprocessor(HLSLPreprocessor):
         if host_name is not None:
             insertion = f'[[host_name("{host_name}")]]\n'
             materialized = insertion + materialized.lstrip()
+        if not materialized.endswith("\n"):
+            materialized += "\n"
+        return materialized
+
+    def _materialize_template_struct_with_name(
+        self,
+        template: _MetalTemplateStruct,
+        template_arguments: List[str],
+        struct_identifier: str,
+    ) -> str:
+        # Struct counterpart of _materialize_template_function_with_name: bind the
+        # template parameters (type and non-type) to the concrete arguments,
+        # substitute them through the struct body, and rename the declaration.
+        # Foundation for the struct-template materializer (issue #1354).
+        if not self._template_arguments_satisfy_parameters(
+            template,
+            template_arguments,
+        ):
+            return ""
+        substitutions, _variadic_bindings = self._template_argument_bindings(
+            template,
+            template_arguments,
+        )
+        if not substitutions:
+            return ""
+        materialized = self._replace_identifiers(template.source, substitutions)
+        materialized = self._rename_struct_definition(
+            materialized,
+            template.name,
+            struct_identifier,
+        )
         if not materialized.endswith("\n"):
             materialized += "\n"
         return materialized
@@ -1615,6 +1715,19 @@ class MetalPreprocessor(HLSLPreprocessor):
             return source
         match = matches[-1]
         return source[: match.start()] + new_name + source[match.end() :]
+
+    def _rename_struct_definition(
+        self, source: str, old_name: str, new_name: str
+    ) -> str:
+        pattern = re.compile(rf"\b(struct|class)\s+{re.escape(old_name)}\b")
+        match = pattern.search(source)
+        if match is None:
+            return source
+        return (
+            source[: match.start()]
+            + f"{match.group(1)} {new_name}"
+            + source[match.end() :]
+        )
 
     def _materialized_function_identifier(self, host_name: str, fallback: str) -> str:
         identifier = re.sub(r"\W", "_", host_name)

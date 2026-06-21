@@ -733,3 +733,54 @@ def test_preprocessor_can_be_disabled_for_raw_directive_tokens():
 
     assert "#define VALUE 1" in values
     assert "VALUE" in values
+
+
+def test_find_and_materialize_template_struct():
+    # Foundation for the struct-template materializer (issue #1354): detect a
+    # struct template and materialize a concrete instantiation by substituting
+    # both type and non-type parameters and renaming the declaration.
+    code = """
+    template <typename T, int N>
+    struct Tile {
+        T data[N];
+        T sum() {
+            T total = T(0);
+            for (int i = 0; i < N; ++i) {
+                total += data[i];
+            }
+            return total;
+        }
+    };
+    """
+    preprocessor = MetalPreprocessor()
+    structs = preprocessor._find_template_structs(code)
+    assert len(structs) == 1
+    struct = structs[0]
+    assert struct.name == "Tile"
+    assert struct.template_parameters == ["T", "N"]
+
+    materialized = preprocessor._materialize_template_struct_with_name(
+        struct, ["float", "4"], "Tile_float_4"
+    )
+    assert "struct Tile_float_4" in materialized
+    assert "float data[4];" in materialized
+    assert "for (int i = 0; i < 4; ++i)" in materialized
+    assert "float total = float(0);" in materialized
+    # Template parameters and the template<> header must not leak through.
+    assert "[N]" not in materialized
+    assert "template" not in materialized
+
+
+def test_materialize_template_struct_requires_all_parameters():
+    code = """
+    template <typename T>
+    struct Box {
+        T value;
+    };
+    """
+    preprocessor = MetalPreprocessor()
+    struct = preprocessor._find_template_structs(code)[0]
+    # No arguments for a required parameter -> not materialized.
+    assert (
+        preprocessor._materialize_template_struct_with_name(struct, [], "Box_x") == ""
+    )
