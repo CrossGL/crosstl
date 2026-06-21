@@ -1968,6 +1968,66 @@ def test_hlsl_stage_local_pointer_storage_buffer_lowers_to_structured_buffer():
     assert "PrimitiveType" not in generated_code
 
 
+def test_hlsl_compute_subgroup_builtin_parameters_lower_to_wave_intrinsics():
+    # Metal [[thread_index_in_simdgroup]] / [[threads_per_simdgroup]] arrive as
+    # explicit parameters carrying gl_Subgroup* semantics; HLSL has no matching
+    # system-value semantic, so they must become body locals initialised from the
+    # WaveGetLaneIndex()/WaveGetLaneCount() intrinsics rather than leaking the
+    # GLSL builtin names into an (invalid) parameter semantic.
+    shader = """
+    shader WaveBuiltinParamCompute {
+        compute {
+            @ stage_entry
+            void main(RWStructuredBuffer<float> data @buffer(0),
+                      uint tid @gl_GlobalInvocationID,
+                      uint lane @gl_SubgroupInvocationID,
+                      uint width @gl_SubgroupSize) {
+                float v = buffer_load(data, tid);
+                float s = WaveActiveSum(v);
+                if (lane == 0u) {
+                    buffer_store(data, tid, s / float(width));
+                }
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint lane = WaveGetLaneIndex();" in generated_code
+    assert "uint width = WaveGetLaneCount();" in generated_code
+    # The builtins must not survive as parameter semantics or stray identifiers.
+    assert "gl_SubgroupInvocationID" not in generated_code
+    assert "gl_SubgroupSize" not in generated_code
+    assert ": gl_Subgroup" not in generated_code
+
+
+def test_hlsl_compute_subgroup_builtin_body_references_lower_to_wave_intrinsics():
+    # GLSL-style body references to the subgroup builtins (no explicit parameter)
+    # lower to the same wave intrinsics.
+    shader = """
+    shader WaveBuiltinBodyCompute {
+        compute {
+            layout(local_size_x = 32) in;
+            layout(set = 0, binding = 0) buffer float* data;
+            void main() {
+                uint lane = gl_SubgroupInvocationID;
+                uint width = gl_SubgroupSize;
+                data[lane] = float(width);
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "WaveGetLaneIndex()" in generated_code
+    assert "WaveGetLaneCount()" in generated_code
+    assert "gl_SubgroupInvocationID" not in generated_code
+    assert "gl_SubgroupSize" not in generated_code
+
+
 def test_hlsl_stage_entry_buffer_pointer_params_promote_to_resources():
     shader = """
     shader MatMulPointerParameters {

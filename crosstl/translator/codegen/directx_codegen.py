@@ -572,6 +572,13 @@ class HLSLCodeGen:
     }
     HLSL_WAVE_BASIC_COMPONENT_TYPES = HLSL_WAVE_NUMERIC_COMPONENT_TYPES | {"bool"}
     HLSL_WAVE_SIZE_LANE_COUNTS = {4, 8, 16, 32, 64, 128}
+    # Subgroup/wave builtins (Metal [[thread_index_in_simdgroup]] /
+    # [[threads_per_simdgroup]], canonicalised to gl_Subgroup* in CrossGL) have no
+    # HLSL system-value semantic; HLSL exposes them only through wave intrinsics.
+    HLSL_WAVE_BUILTIN_INTRINSICS = {
+        "gl_SubgroupInvocationID": "WaveGetLaneIndex()",
+        "gl_SubgroupSize": "WaveGetLaneCount()",
+    }
     HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES = HLSL_RESERVED_IDENTIFIER_NAMES | {
         # GLSL atan(y, x) lowers to HLSL atan2(y, x); keep local symbols from
         # capturing that intrinsic because HLSL does not provide a namespace escape.
@@ -3706,6 +3713,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 parameter_prologue_statements.append(local_alias)
                 continue
 
+            if effective_shader_type == "compute":
+                wave_builtin_prologue = (
+                    self.hlsl_compute_wave_builtin_parameter_prologue(
+                        p, param_type, semantic
+                    )
+                )
+                if wave_builtin_prologue is not None:
+                    parameter_prologue_statements.append(wave_builtin_prologue)
+                    continue
+
             ray_role = None
             if effective_shader_type in self.hlsl_ray_stage_types():
                 ray_role = self.hlsl_ray_semantic_role(p)
@@ -6249,6 +6266,41 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         else:
             local_alias = f"uint2 {local_name} = {hlsl_param_name}.xy;"
         return declaration, local_alias
+
+    def hlsl_wave_builtin_intrinsic_expression(self, semantic):
+        if not isinstance(semantic, str):
+            return None
+        return self.HLSL_WAVE_BUILTIN_INTRINSICS.get(semantic.strip())
+
+    def hlsl_compute_wave_builtin_parameter_prologue(
+        self, parameter, param_type, semantic
+    ):
+        """Bridge an explicit compute parameter that carries a subgroup/wave
+        builtin semantic into HLSL.
+
+        Metal's ``[[thread_index_in_simdgroup]]`` / ``[[threads_per_simdgroup]]``
+        (canonicalised to ``gl_SubgroupInvocationID`` / ``gl_SubgroupSize``) have
+        no HLSL system-value semantic, so they cannot be emitted as entry-point
+        parameters. Instead the parameter becomes a body-local initialised from
+        the matching wave intrinsic (``WaveGetLaneIndex()`` /
+        ``WaveGetLaneCount()``). Returns the prologue statement, or ``None`` when
+        the parameter does not carry a wave builtin semantic.
+        """
+        intrinsic = self.hlsl_wave_builtin_intrinsic_expression(semantic)
+        if intrinsic is None:
+            return None
+
+        parameter_name = getattr(parameter, "name", None)
+        if not isinstance(parameter_name, str) or not parameter_name:
+            return None
+
+        base_type, array_suffix = split_array_type_suffix(str(param_type))
+        if array_suffix:
+            return None
+
+        local_name = self.hlsl_declaration_identifier_name(parameter_name)
+        self.local_variable_types[local_name] = base_type
+        return f"{base_type} {local_name} = {intrinsic};"
 
     def hlsl_bitcast_result_type(self, func_name, args):
         if (
@@ -14963,6 +15015,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "gl_LocalInvocationIndex",
             "gl_WorkGroupSize",
             "gl_NumWorkGroups",
+            *self.HLSL_WAVE_BUILTIN_INTRINSICS,
         }
         used_names = set()
         for node in self.walk_ast(body):
@@ -14999,6 +15052,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 None,
                 None,
                 self.hlsl_compute_num_workgroups_expression(),
+            ),
+            (
+                "gl_SubgroupInvocationID",
+                None,
+                None,
+                None,
+                self.HLSL_WAVE_BUILTIN_INTRINSICS["gl_SubgroupInvocationID"],
+            ),
+            (
+                "gl_SubgroupSize",
+                None,
+                None,
+                None,
+                self.HLSL_WAVE_BUILTIN_INTRINSICS["gl_SubgroupSize"],
             ),
         ]
         reserved_names = set(self.local_variable_types)

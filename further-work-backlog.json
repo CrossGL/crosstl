@@ -1,0 +1,239 @@
+{
+  "generated_at": "2026-06-15",
+  "generated_by": "Deep repository review of CrossGL/crosstl @ main (after the Python 3.8 CI fix and the demo/runtime/MLX PR merges). Synthesized from a code-level review plus two parallel codebase explorations (backend/translator codegen and support-matrix/pipeline/tests).",
+  "repository": "CrossGL/crosstl",
+  "description": "Comprehensive, untracked backlog of open issues to be worked on next. Each entry has an issue title and body suitable for filing on GitHub, with file:line evidence where available. Sources: (a) existing open GitHub issues deferred this session, (b) PR follow-ups discovered while integrating branches, (c) support-matrix gap analysis (support/generated/support-matrix.json: 93 non-supported cells), and (d) code-level review of crosstl/translator and crosstl/backend. This file is intentionally NOT committed.",
+  "summary": {
+    "total_items": 42,
+    "by_priority": { "high": 6, "medium": 23, "low": 13 },
+    "by_area": {
+      "pr_followup": 2,
+      "wgsl_webgpu": 6,
+      "webgl": 4,
+      "spirv_vulkan": 4,
+      "metal_directx": 4,
+      "cuda_hip": 5,
+      "other_backends": 5,
+      "stages": 1,
+      "pipeline_runtime_robustness": 8,
+      "process_ci_tests_docs": 3
+    },
+    "notes": [
+      "Support matrix status codes: supported, partial, diagnostic (deterministic diagnostic instead of bad output), validated_rejection (intentionally unsupported by target), unknown. On main: 0 partial, 77 diagnostic, 16 validated_rejection.",
+      "validated_rejection cells are intentional and are mostly excluded; a few are listed where the rejection is inconsistent or worth revisiting for product parity.",
+      "The two explicit `raise NotImplementedError` sites on main are HIP generic_visit (hip_codegen.py:1385) and Slang reverse conformance lowering (SlangCrossGLCodeGen.py:783). No TODO/FIXME/HACK comments exist in crosstl/translator or crosstl/backend; gaps are enforced via UNSUPPORTED_* sets, raise ValueError, diagnostic-comment emission, and parser recovery stubs."
+    ]
+  },
+  "issues": [
+    {
+      "title": "Update stale CUDA/Metal test expectations for const-pointer read-only buffer lowering (unblock PR #953)",
+      "body": "PR #953 makes a correct const-correctness change: `const T*` kernel params lower to read-only buffers (GLSL `readonly buffer`, HLSL `StructuredBuffer`/`t#`, WGSL `var<storage, read>`). The branch did not update the expectations encoding the old read-write behavior. A full local run of the #953 merge shows 23 failures (13,221 pass), e.g. test_translate_project_cuda_pointer_parameters_lower_to_opengl_buffers and test_translate_project_cli_cuda_vector_add_demo_directx_outputs_valid_hlsl, plus metal->DirectX tests (test_metal_threadgroup_scratch_lowers_to_directx_groupshared, test_metal_multi_entry_resource_names_are_scoped_for_directx). These pass on main, so they are stale expectations. Acceptance: validate each new output is const-correct and update expectations; confirm mutable pointers still lower to RW buffers; verify the metal tests are expectation updates (not regressions) before merging #953. The conflict-resolved #953 is already pushed (544228139, conflict-free).",
+      "area": "pr_followup", "source": "pr_followup:#953", "priority": "high", "related": ["#953"]
+    },
+    {
+      "title": "Fix MLX frontier Vulkan SPIR-V validation failures (#1362 / #1317)",
+      "body": "MLX reduced-frontier and full-corpus scouts translate cleanly but stay validation-blocked: integrations/mlx/expected-gaps.json sets frontier_status to passing-artifacts-validation-blocked and lists issue #1317 under blocked_by/validation_blocked_by; integrations/mlx/run_mlx_porting.py defines FRONTIER_VALIDATION_TRACKED_ISSUES and emits vulkanValidationStatus=blocked-by-tracked-issues, skipping required Vulkan toolchain runs. spirv-val rejects artifacts such as mlx/backend/metal/kernels/arange.metal (OpStore Pointer type does not match Object type). Fix the SPIR-V lowering in the translator (not the harness). Acceptance: frontier DirectX/Vulkan sources pass spirv-as/spirv-val under --require-vulkan-toolchain; remove the tracked-issue bypass.",
+      "area": "spirv_vulkan", "source": "deferred_github_issue:#1362", "priority": "high", "related": ["#1362", "#1317", "#1378"]
+    },
+    {
+      "title": "Finish MLX full-corpus Metal template materialization for backend artifacts (#1354)",
+      "body": "The pinned MLX full-corpus scout reports project-scale Metal template materialization failures: unitCount=40, artifactCount=120, translatedCount=57, failedCount=63, with project.translate.template-materialization-unsupported=50 and project.translate.metal-template-specialization=10. Work is in crosstl/project/pipeline.py metal template materialization/specialization. Acceptance: materialize currently-unsupported template forms (or emit precise diagnostics) and substantially raise translatedCount on the pinned corpus.",
+      "area": "pipeline_runtime_robustness", "source": "deferred_github_issue:#1354", "priority": "high", "related": ["#1354", "#1378"]
+    },
+    {
+      "title": "Bound project full-corpus materialization runtime in repository scouts (#1376)",
+      "body": "The MLX full-corpus scout can spend unbounded time in template materialization before writing a report (observed ~10 min CPU-bound at mlx/backend/metal/kernels/layer_norm.metal with no report). pipeline.py already has _MetalTemplateMaterializationWorkBudget (max_template_specializations=4096, max_template_materialization_work=131072) and raises MetalTemplateSpecializationError when exceeded; PR #1378 added blocked-by-tracked-issues reporting. Remaining work: enforce a general per-command/runtime budget for repository-scale project translation with a structured outcome instead of relying on CI timeouts. Acceptance: bounded runtime path with file/stage-level diagnostics on budget exhaustion.",
+      "area": "pipeline_runtime_robustness", "source": "deferred_github_issue:#1376", "priority": "medium", "related": ["#1376", "#1378"]
+    },
+    {
+      "title": "Triage and reduce auto-generated 'Support Signals' pytest_failure_summary issues (#1380)",
+      "body": "Issue #1380 is auto-generated by support-issue-sync from CI pytest failure summaries. With main green (the Py3.8 collection bug is fixed), confirm it auto-closes; if it persists, improve tools/pytest_failure_summary.py / support-signal extraction so 'unknown' collection errors are classified with enough context to avoid noisy/duplicate issues. Acceptance: no stale auto-generated support issues for already-fixed CI failures; extraction distinguishes collection errors from test failures.",
+      "area": "process_ci_tests_docs", "source": "deferred_github_issue:#1380", "priority": "low", "related": ["#1380"]
+    },
+    {
+      "title": "Finalize per-platform MLX native toolchain gating and land PR #1364 (#1312)",
+      "body": "PR #1364 (closes #1312) requires MLX project-porting CI to validate native toolchains, but currently requires DirectX/DXC on all platforms, so translate-directx-vulkan-frontier fails on macOS. Per #1312, gate DXC->Windows, OpenGL/glslangValidator->Linux (+macOS if installed), Vulkan/SPIR-V->Linux; keep artifact generation everywhere. The branch also conflicts with #1378's mlx-project-porting.yml changes now on main and must be re-merged. Acceptance: the three MLX Metal project porting jobs pass; independent require-<target>-toolchain flags; reports/logs upload on all platforms.",
+      "area": "pr_followup", "source": "pr_followup:#1364", "priority": "medium", "related": ["#1364", "#1312", "#1378"]
+    },
+    {
+      "title": "Add a native WGSL/WebGPU source frontend (target-only today)",
+      "body": "CrossGL emits WGSL but rejects WGSL as input: WGSL_SOURCE_UNSUPPORTED_MESSAGE in crosstl/translator/source_registry.py:294-296 and the unsupported registration at ~674; source.native_to_crossgl/lexing/preprocessing are validated_rejection for WGSL (and WebGL) in support/features.json, and support/backends.json marks both source_kind=target-only. Acceptance: register a WGSL (and optionally GLSL ES) lexer/parser in SOURCE_REGISTRY with an end-to-end translate test from .wgsl to another target.",
+      "area": "wgsl_webgpu", "source": "code_review", "priority": "medium", "related": ["source.native_to_crossgl"]
+    },
+    {
+      "title": "Deepen WGSL texture, image, resource and language lowering beyond conservative core",
+      "body": "WGSL has 20 diagnostic cells (support-matrix.rst: 42 supported, 20 diagnostic). Gaps: resources.memory_qualifiers, most textures.* (sampling, LOD/grad/offset, projected, gather, query, texel_fetch, multisample, advanced), images.* (storage, atomics), language.arrays, language.bitwise, language.synchronization, language.match. Notes say WGSL emits conservative core syntax / diagnostics. PR #953 began this (textureGather, shadow compare). Acceptance: implement real WGSL lowering where WebGPU has an equivalent, add naga-validated tests in tests/test_translator/test_codegen/test_wgsl_codegen.py, and promote to supported. See crosstl/translator/codegen/wgsl_codegen.py.",
+      "area": "wgsl_webgpu", "source": "support_matrix_gap", "priority": "high", "related": ["#953", "language.arrays", "language.bitwise", "language.synchronization", "language.match"]
+    },
+    {
+      "title": "Lower ByteAddressBuffer and append/consume buffers to WGSL",
+      "body": "WGSL codegen blocks several HLSL buffer models. wgsl_codegen.py:276-281 (UNSUPPORTED_STORAGE_BUFFER_TYPE_NAMES) covers ByteAddressBuffer/RWByteAddressBuffer/AppendStructuredBuffer/ConsumeStructuredBuffer; helper calls buffer_append/buffer_consume/buffer_dimensions rejected at 286-290 and 2972-2976; member helpers append/consume/IncrementCounter and load2-store4 rejected at 295-307 and 2983-2988. Acceptance: map byte-address buffers to array<atomic<u32>>/storage views; implement counter buffers or emit structured diagnostics with missing-capability metadata.",
+      "area": "wgsl_webgpu", "source": "code_review", "priority": "medium", "related": []
+    },
+    {
+      "title": "Support WGSL module-scope resource arrays and structured-buffer parameters",
+      "body": "Parameter lowering in wgsl_codegen.py:1457-1483 rejects GLSL buffer-block params, unsupported storage-buffer types, StructuredBuffer params, and sampled-texture arrays (needs project-level binding expansion). resources.resource_arrays is diagnostic for WGSL: fixed sampled-texture arrays expand to module-scope bindings, but sampler-only arrays, storage-image arrays, StructuredBuffer arrays, arrays of resource-bearing structs, unsized arrays, multisampled array textures, and resource-array params remain diagnostic. Acceptance: extend module-scope-binding expansion to these forms where WebGPU permits; add tests for arrayed Texture2D params.",
+      "area": "wgsl_webgpu", "source": "support_matrix_gap", "priority": "medium", "related": ["resources.resource_arrays"]
+    },
+    {
+      "title": "Lower match, do-while, for-in, and generic types in WGSL",
+      "body": "wgsl_codegen.py generate_statement() at 2465-2472 raises for DoWhileNode/ForInNode/MatchNode, and map_type() raises for GenericType at 3912. Constructs other backends handle are hard errors in WGSL. Acceptance: desugar do-while/for-in/match to supported control flow; monomorphize generics pre-codegen or reject via the shared specialization path used by CUDA/Slang.",
+      "area": "wgsl_webgpu", "source": "code_review", "priority": "medium", "related": ["language.match", "language.arrays"]
+    },
+    {
+      "title": "Implement WGSL wave/subgroup intrinsic lowering",
+      "body": "language.wave_intrinsics is diagnostic for WGSL while supported on DirectX/OpenGL/Metal/Vulkan/CUDA/HIP/Mojo/Rust/Slang (WebGL correctly validated_rejection). Acceptance: lower CrossGL Wave* ops to valid WGSL subgroup builtins (subgroupBallot/Add/etc.), add codegen tests, and promote the matrix row.",
+      "area": "wgsl_webgpu", "source": "support_matrix_gap", "priority": "medium", "related": ["language.wave_intrinsics"]
+    },
+    {
+      "title": "Promote WebGL2 / GLSL ES resource model from diagnostic to supported",
+      "body": "WebGL is the least-complete target: 22 diagnostic cells (38 supported). The resource-model group is entirely diagnostic: resources.bindings, resources.constant_buffers, resources.structured_buffers, resources.texture_sampler_split, resources.glsl_buffer_blocks. Notes say WebGL2 'has not been promoted to supported ... relies on GLSL diagnostics or remains gated until browser/WebGL validator coverage is added.' Acceptance: implement real WebGL2 lowering and add WebGL validator/browser-backed tests so these promote to supported. See crosstl/translator/codegen/webgl_codegen.py and tests/test_translator/test_codegen/test_webgl_codegen.py.",
+      "area": "webgl", "source": "support_matrix_gap", "priority": "high", "related": ["resources.bindings", "resources.constant_buffers", "resources.structured_buffers"]
+    },
+    {
+      "title": "Promote WebGL2 texture/image operations from diagnostic to supported",
+      "body": "On WebGL the texture/image families are diagnostic: texture sampling, LOD/grad/offset, projected, gather, shadow-compare, query, texel-fetch, multisample, advanced sampling, storage image load/store, image atomics, multisample storage. Acceptance: implement WebGL2-valid lowering for ops ES supports; keep deterministic diagnostics for ES-unsupported forms (gather/storage-image/atomics); add validator-backed tests. See webgl_codegen.py and image_access_contracts.py.",
+      "area": "webgl", "source": "support_matrix_gap", "priority": "medium", "related": ["texture.sampling", "image.storage", "image.atomics"]
+    },
+    {
+      "title": "Reject or lower unsupported WebGL resource/precision types and vertex builtins as structured diagnostics",
+      "body": "WebGL blocks many desktop-GL types via UNSUPPORTED_SAMPLED_RESOURCE_TYPES (webgl_codegen.py:65-88: 1D/MSAA/rect/buffer/cube-array samplers), UNSUPPORTED_FLOAT64_TYPES (89-106; map_type raises 114-118), and UNSUPPORTED_VERTEX_OUTPUT_BUILTINS (21, 563-591: gl_ClipDistance/gl_CullDistance). Acceptance: surface these as structured validation diagnostics (not opaque ValueError); emulate with extensions/scalar fallbacks where possible.",
+      "area": "webgl", "source": "code_review", "priority": "medium", "related": []
+    },
+    {
+      "title": "Define and enforce a consistent WebGL shader-stage policy (compute and advanced stages)",
+      "body": "WebGLCodeGen.UNSUPPORTED_STAGE_NAMES (webgl_codegen.py:22-31) excludes compute/geometry/tessellation/mesh/ray; validate_webgl_stage_support() raises at 661-676 when only unsupported stages exist. In the matrix, WebGL compute/geometry/tess/mesh/ray are validated_rejection while vertex/fragment are supported — an inconsistent surface (compute rejected though WebGL2/ES3.1 has some compute). Acceptance: either implement WebGL2 compute where ES 3.1 allows, or document a single stage policy and add a conformance test for the allowed/rejected stage matrix; emit diagnostics instead of ValueError.",
+      "area": "webgl", "source": "support_matrix_gap", "priority": "low", "related": ["stages.compute"]
+    },
+    {
+      "title": "Auto-specialize generic functions before SPIR-V emission",
+      "body": "SPIR-V rejects unspecialized generics via unsupported_generic_function_error() (SPIRV_codegen.py:16790-16807) and reject_unsupported_generic_functions() (24602-24612). Concrete specializations validate with spirv-as/spirv-val, but unspecialized helpers stay diagnostic (test_unspecialized_generic_function_reports_helper_context). Acceptance: integrate a shared prepare_generic_function_specializations() pre-pass that auto-specializes from call sites before SpirvCodeGen.generate(); keep diagnostics only when specialization is impossible.",
+      "area": "spirv_vulkan", "source": "code_review", "priority": "medium", "related": ["language.functions"]
+    },
+    {
+      "title": "Complete SPIR-V match-pattern and lambda lowering",
+      "body": "raise_match_pattern_gap() at SPIRV_codegen.py:22261-22262 raises for unsupported enum-payload patterns; lambdas fall back via unsupported_lambda_default_value() at 6082-6091 (WARNING + default). Slang/CUDA/Rust use shared match_utils with diagnostic assignments. Acceptance: extend SPIR-V match lowering to struct/enum destructuring used in tests; lower lambdas to outlined functions or reject with source locations.",
+      "area": "spirv_vulkan", "source": "code_review", "priority": "medium", "related": ["language.match"]
+    },
+    {
+      "title": "Lower remaining SPIR-V wave, indirect-callee, and array-literal assignment gaps",
+      "body": "Unhandled wave ops log '; WARNING: ... not supported' at SPIRV_codegen.py:9189; non-identifier callees (function-table/indirect calls) unsupported at 23060-23064; compound assignment from array literals unsupported at 21255-21257; matrix ops fall back via unsupported_matrix_operation() at 2710-2711. Acceptance: map remaining Wave* ops to OpGroupNonUniform*; support indirect callees (needed for ray tracing); desugar array-literal compound assignments.",
+      "area": "spirv_vulkan", "source": "code_review", "priority": "low", "related": ["language.wave_intrinsics"]
+    },
+    {
+      "title": "Support Metal ray-tracing resource arrays",
+      "body": "Arrays of acceleration structures and ray function tables are unsupported in Metal target codegen: metal_codegen.py:1942-1984 records unsupported_metal_*_array_variables and emits unsupported_metal_acceleration_structure_array_diagnostic() (11200-11205) and unsupported_metal_ray_function_table_array_diagnostic() (11249+). Acceptance: expand array bindings at project level (like texture arrays) or generate valid Metal argument buffers; remove placeholder diagnostics for single-element cases.",
+      "area": "metal_directx", "source": "code_review", "priority": "low", "related": []
+    },
+    {
+      "title": "Lower Metal input attachments and storage-texture sampling",
+      "body": "Metal codegen stubs subpass features: input attachment declarations emit '/* unsupported Metal input attachment declaration */' at metal_codegen.py:2216+ and unsupported_input_attachment_call() at 3515. The Metal frontend rejects storage-image sample() via unsupported_storage_texture_sampled_method() (MetalCrossGLCodeGen.py:3253-3265) and sampled-texture writes at 3267-3269. Acceptance: lower subpassInput to Metal texture2d/access::sample where subpass metadata exists; otherwise fail at validation with the Vulkan-subpass requirement.",
+      "area": "metal_directx", "source": "code_review", "priority": "medium", "related": []
+    },
+    {
+      "title": "Lower HLSL input attachments and tiled-resource queries",
+      "body": "directx_codegen.py:1774-1779 emits unsupported diagnostics for input attachments ('require Vulkan subpass lowering'); the HLSL frontend stubs CheckAccessFullyMapped as true (DirectxCrossGLCodeGen.py:4554-4558) and preserves some GetDimensions overloads with unsupported comments at 3980-3983. Acceptance: wire input attachments through subpass metadata; implement tiled-resource status or reject at project validation.",
+      "area": "metal_directx", "source": "code_review", "priority": "low", "related": []
+    },
+    {
+      "title": "Implement DirectX multisample storage-image stores and atomics, and shared image-op fallbacks",
+      "body": "image.multisample_storage is diagnostic for DirectX: multisample images are read-capable SRVs but stores/atomics emit diagnostics (test_directx_multisample_storage_images_emit_srv_reads_and_diagnostics). More broadly, crosstl/translator/codegen/image_access_contracts.py centralizes dozens of unsupported_* helpers (682+) for image atomics, multisample stores, texture queries (textureQueryLod/Levels/Samples), gather/compare, projected sampling, and storage-image ops, imported by GLSL/DirectX/Metal codegen. Acceptance: implement valid HLSL UAV store/atomic paths for supported formats with DXC tests; prioritize textureQueryLod, multisample texelFetch, and imageAtomic* per backend capability; replace comment stubs with compile errors where emulation is impossible.",
+      "area": "metal_directx", "source": "support_matrix_gap", "priority": "medium", "related": ["image.multisample_storage", "image.atomics"]
+    },
+    {
+      "title": "Implement generic-function monomorphization for CUDA, HIP, Mojo, and Slang",
+      "body": "language.functions is diagnostic for CUDA, HIP, Mojo, Slang: non-generic helpers lower fine but generic functions emit diagnostics until monomorphization/generic-ABI support lands (CUDA/HIP/Slang need monomorphization; Mojo needs a generic ABI). Vulkan already specializes concrete generic calls. Evidence: reject_unsupported_generic_functions() in mojo_codegen.py:1619 and the CUDA/HIP/Slang equivalents; test_generic_function_examples_report_backend_diagnostics. Acceptance: specialize templated/generic helpers per backend (mirror the SPIR-V approach), with tests for concrete specializations and diagnostics only when impossible.",
+      "area": "cuda_hip", "source": "support_matrix_gap", "priority": "high", "related": ["language.functions"]
+    },
+    {
+      "title": "Complete HIP AST visitor coverage (generic_visit NotImplementedError)",
+      "body": "HIP target codegen raises NotImplementedError in generic_visit() at hip_codegen.py:1383-1387 for any unhandled AST node — a broad stub that crashes HIP generation for newly added/rare nodes instead of emitting diagnostics. Acceptance: audit all ASTNode subclasses exercised in tests; implement visit_* methods or shared mixins; replace NotImplementedError with structured unsupported-feature errors.",
+      "area": "cuda_hip", "source": "code_review", "priority": "medium", "related": []
+    },
+    {
+      "title": "Support HIP/CUDA FP16 vec4 and advanced warp/cooperative primitives",
+      "body": "Both backends reject vec4<f16>/half4: CUDA_UNSUPPORTED_FP16_VECTOR_TYPES/HIP_UNSUPPORTED_FP16_VECTOR_TYPES (cuda_codegen.py:145-151, hip_codegen.py:190-197) with raise_unsupported_*_fp16_vector_type() at CUDA 10939-10944 / HIP 6071-6076. Frontends stub cooperative groups (CudaCrossGLCodeGen.py:5488-5507), partial HIP warp masks (HipCrossGLCodeGen.py:5477-5513), and CUDA async memcpy_async/pipeline (format_unsupported_cuda_async_* at 5530+). Acceptance: add half4 aliases (like cgl_half3); map masked warp ops and cooperative_groups to portable CrossGL wave/sync builtins where possible.",
+      "area": "cuda_hip", "source": "code_review", "priority": "low", "related": []
+    },
+    {
+      "title": "Lower HIP/CUDA texture sparse-residency intrinsics",
+      "body": "Sparse texture calls are unsupported in both NVIDIA frontends: CudaCrossGLCodeGen.format_cuda_texture_call() branches to format_unsupported_cuda_texture_sparse_residency_call() at 5824-5827; HIP mirrors at HipCrossGLCodeGen.py:6396-6401 (zero-vector + diagnostic comments). Acceptance: lower to non-sparse texture paths with documented assumptions or reject at validation when sparse textures appear.",
+      "area": "cuda_hip", "source": "code_review", "priority": "low", "related": []
+    },
+    {
+      "title": "Implement CUDA/HIP shadow-comparison sampler lowering and image atomics",
+      "body": "texture.shadow_compare is diagnostic for CUDA/HIP (no native shadow-comparison sampler contract; compare/compare-offset/LOD/gradient/projected/gather-compare emit diagnostics). image.atomics is diagnostic for CUDA/HIP (diagnostics or safe zero-value fallbacks for unsupported surface-atomic semantics). Acceptance: provide CUDA/HIP emulation (manual depth compare; real surface atomics where APIs allow), gated by validation, with codegen tests; keep diagnostics for genuinely unsupported combinations.",
+      "area": "cuda_hip", "source": "support_matrix_gap", "priority": "low", "related": ["texture.shadow_compare", "image.atomics"]
+    },
+    {
+      "title": "Implement Slang reverse interface/conformance lowering (NotImplementedError)",
+      "body": "Reverse codegen (Slang -> CrossGL) aborts on interface/conformance constructs: SlangCrossGLCodeGen.raise_for_unsupported_conformance_constructs() at SlangCrossGLCodeGen.py:744-786 collects extensions/generic-constraints/conformances then raises NotImplementedError (783); SlangParser.py:1596 rejects unknown interface members. Acceptance: lower conformances to CrossGL traits/extensions or emit a partial AST with explicit unsupported markers; no NotImplementedError for parsed conforming Slang.",
+      "area": "other_backends", "source": "code_review", "priority": "medium", "related": []
+    },
+    {
+      "title": "Lower Slang ByteAddressBuffer layouts, match expressions, and ray-tracing intrinsics",
+      "body": "Slang target codegen has buffer/control-flow gaps: collect_lowered_glsl_buffer_blocks() uses unsupported_type_message='type is not supported by Slang ByteAddressBuffer lowering' (slang_codegen.py:1375-1377) plus unsupported_glsl_buffer_block_call/unsupported_structured_buffer_call paths; match expressions without typed context/prelude emit comment stubs (10150-10195); ray-tracing uses slang_ray_tracing_diagnostic_expression() at 7344-7350. Acceptance: extend scalar/nested buffer-block lowering; reuse shared match_utils without a prelude requirement where safe.",
+      "area": "other_backends", "source": "code_review", "priority": "low", "related": []
+    },
+    {
+      "title": "Complete Rust geometry-stream/closure lowering and wave/sync maps",
+      "body": "Rust uses compile-oriented stubs: generate_rust_geometry_stream_helpers() (rust_codegen.py:875-909) emits no-op Append/RestartStrip on CglRust*Stream; reverse closure lowering refuses bodies with MatchNode/LoopNode/AwaitNode via closure_body_contains_unsupported_helper_node() (RustCrossGLCodeGen.py:9865-9878); wave ops/sync without map entries become comments (rust_codegen.py:5443, 5459). Acceptance: generate real geometry-stream output buffers or reject geometry stages; expand closure lowering to match/loops; complete wave_op_map/sync_map coverage.",
+      "area": "other_backends", "source": "code_review", "priority": "low", "related": ["stage.geometry"]
+    },
+    {
+      "title": "Satisfy OpenCL-to-target lowering contracts",
+      "body": "OpenCL intermediates cannot always lower to other targets: validate_opencl_intermediate_for_target() (crosstl/backend/OpenCL/target_lowering.py:276-320) raises OpenCLTargetUnsupportedError for unresolved non-void helpers (207-229), pointer helper params (232-251), and event/local-memory builtins (254-270); the OpenCL frontend emits '// unsupported OpenCL block declaration' (OpenCLCrossGLCodeGen.py:686-688). Acceptance: resolve helper bodies, rewrite pointer helpers to scalar passing, materialize event builtins, or block OpenCL->target early with actionable diagnostics.",
+      "area": "other_backends", "source": "code_review", "priority": "medium", "related": []
+    },
+    {
+      "title": "Lower GLSL tessellation patchconstantfunc and fragment-invocation density; preserve ARM tensor types",
+      "body": "GLSL frontend/parser reject specific features: validate_glsl_tessellation_control_patchconstantfunc() raises at GLSL_codegen.py:4988-4992 (requires manual gl_TessLevelOuter/Inner); OpenglParser.raise_unsupported_fragment_invocation_density() at OpenglParser.py:968-977 raises for GL_EXT_fragment_invocation_density. Separately, GLSL->CrossGL reverse codegen silently drops ARM tensorARM<...> uniforms: _is_unsupported_extension_resource_type() at openglCrossglCodegen.py:818-821 and the uniform loop at 2524-2526 continue without diagnostic. Acceptance: lower patchconstantfunc to separate tess-control functions in IR; map invocation density to per-backend VRS rates or explicit unsupported capability; emit diagnostics and preserve ARM type metadata instead of dropping uniforms.",
+      "area": "other_backends", "source": "code_review", "priority": "low", "related": ["stage.tessellation"]
+    },
+    {
+      "title": "Replace placeholder geometry/tessellation/mesh-stage lowering with native lowering where targets support it",
+      "body": "stage.geometry is diagnostic on CUDA/HIP/Metal/Mojo/Rust; stage.tessellation on CUDA/HIP/Metal/Mojo/OpenGL/Rust; stage.mesh_task on CUDA/HIP/Mojo/Rust/Slang. These lower to compile-oriented helper placeholders (PointStream/LineStream/TriangleStream, InputPatch/OutputPatch, SetMeshOutputCounts/DispatchMesh) plus metadata rather than functional stage execution; Mojo also raises for unknown mesh intrinsics (validate_mesh_intrinsic -> ValueError at mojo_codegen.py:2491). Acceptance: implement functional lowering where the target supports it (Metal tessellation/mesh, GL tessellation), keep validated diagnostics elsewhere, complete Mojo mesh-intrinsic coverage, and add per-backend tests.",
+      "area": "stages", "source": "support_matrix_gap", "priority": "medium", "related": ["stage.geometry", "stage.tessellation", "stage.mesh_task"]
+    },
+    {
+      "title": "Implement runtime parity adapters for Metal, CUDA, HIP, and WebGPU",
+      "body": "native_runtime_parity_adapters() in crosstl/project/runtime_verification.py returns adapters only for directx/opengl/vulkan; RuntimeParityExecutor reports 'Runtime parity adapter is not implemented' when runtime_adapter is None (test_verify_runtime_test_manifest_runs_runtime_parity_adapter_pipeline). RUNTIME_TEST_DEFAULT_ADAPTERS lists probes for cuda/hip/metal/mojo/rust/slang/webgl/wgsl but parity dispatch is missing for most. Acceptance: parity adapters for the graphics/compute targets used in demos/MLX so runtime test manifests execute beyond metadata-only planning.",
+      "area": "pipeline_runtime_robustness", "source": "code_review", "priority": "medium", "related": []
+    },
+    {
+      "title": "Wire runtime integration pipeline to actual device execution (currently metadata-only)",
+      "body": "crosstl/project/pipeline.py defines runtime integration artifacts with explicit non-goals: host-code-rewriting, device-execution, runtime-framework-generation (RUNTIME_*_NON_GOALS); RUNTIME_INTEGRATION_PLAN_SCOPE is metadata-only-runtime-integration-planning. The matrix shows runtime planning/handoff rows supported, but execution is metadata. Related: integrations/mlx/README.md notes full-corpus success is shader/kernel artifact coverage only, not a ported MLX host runtime. Acceptance: at least one end-to-end path (translated artifact -> host loader -> device dispatch) for a reference demo case, plus an MLX runtime-integration plan or explicit non-goals doc with executable fixtures for one non-Metal target.",
+      "area": "pipeline_runtime_robustness", "source": "code_review", "priority": "medium", "related": []
+    },
+    {
+      "title": "Generalize per-artifact toolchain coverage enforcement across project and demo validation (#1350)",
+      "body": "Issue #1350 strengthens the demo --require-toolchain-runs gate to artifact granularity (a target can currently pass with only one of several artifacts validated). The same weakness exists in broader project validation (crosstl/project/runtime_verification.py / pipeline.py). Acceptance: fail when any selected translated artifact for an available target lacks a successful native validator/compiler run, with a message identifying the missing artifact; share the rule between demo and project validation. (If the in-flight demo PR implements #1350, generalize it.)",
+      "area": "pipeline_runtime_robustness", "source": "code_review", "priority": "medium", "related": ["#1350"]
+    },
+    {
+      "title": "Improve large-project report inspection visibility (configurable truncation limits)",
+      "body": "pipeline.py caps inspection samples at 20 for diagnostics/artifacts/migration/external-corpus (ARTIFACT_MATRIX_INSPECTION_SAMPLE_LIMIT, EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT, RUNTIME_REFERENCE_LIMIT=100) and reports truncated*Count fields. Large MLX/full-corpus reports can hide failures beyond the sample. Acceptance: configurable limits via CLI, structured pagination, or guaranteed inclusion of all error-severity items regardless of cap.",
+      "area": "pipeline_runtime_robustness", "source": "code_review", "priority": "low", "related": []
+    },
+    {
+      "title": "Replace parser skip-token recovery with explicit unsupported-syntax reporting (add --strict)",
+      "body": "The CrossGL parser recovers from unrecognized syntax by skipping tokens: skip_unknown_token() at parser.py:4692-4695 is invoked from many recovery sites (e.g., 371, 444, 562); parse_global() at 4777 documents recovery; stuck-parser detection prints a warning and skips at 362-371. This yields silently incomplete ASTs that fail later in codegen. Acceptance: collect skipped-token spans into parser diagnostics; add a --strict mode that errors instead of recovering; track language_spec.py:579-582 grammar gaps as spec work.",
+      "area": "pipeline_runtime_robustness", "source": "code_review", "priority": "medium", "related": []
+    },
+    {
+      "title": "Split the 35k-line crosstl/project/pipeline.py into cohesive submodules",
+      "body": "crosstl/project/pipeline.py is ~35,000 lines concentrating project scanning, preprocessing, metal template materialization, source maps, artifact-matrix logic, and report validation. This made the Python 3.8 module-level-alias regression (fixed this session) easy to introduce and makes the metal-template/SPIR-V work harder. Acceptance: extract cohesive units (metal_templates, source_maps, artifact_matrix, scanning, report_validation) behind the existing public API with no behavior change and full test parity; keep `from __future__ import annotations` and avoid module-level builtin-generic aliases (use typing.Tuple/List) so Python 3.8 collection stays green.",
+      "area": "pipeline_runtime_robustness", "source": "code_review", "priority": "medium", "related": []
+    },
+    {
+      "title": "Reduce toolchain-gated test skips in CI (284 pytest.skip) and enable Metal 3 validation",
+      "body": "A scan found 284 pytest.skip() calls (0 @pytest.mark.skip/xfail), dominated by 'xcrun is not installed' (144), glslangValidator (45), dxc (39), SPIR-V tools (8), naga (2) — mostly in tests/test_translator/test_codegen/test_shader_validation.py — hiding regressions on Linux CI. Separately, 20 tests skip on 'xcrun metal does not support Metal 3 mesh/object stage attributes' though Metal mesh/task is supported in the matrix. Acceptance: install toolchains in CI matrices (and Metal 3-capable macOS runners) or add hermetic/mock validation tiers so core codegen tests run on every platform; document a test-tiering policy.",
+      "area": "process_ci_tests_docs", "source": "code_review", "priority": "medium", "related": []
+    },
+    {
+      "title": "Populate the support-matrix actionable backlog and add WebGL/WGSL demo corpus cases",
+      "body": "docs/source/support-matrix.rst 'Actionable backlog' tables are empty though support/generated/support-matrix.json has 93 non-supported cells (backlog: []). Many diagnostic rows represent real upgrade paths (WebGL/WGSL promotion, stage placeholders). Also, no demo crosstl.toml targets webgl or wgsl, yet those targets have the largest unsupported-marker counts. Acceptance: extend tools/support_matrix.py to emit grouped backlog rows with current-gap/next-scope fields; add representative web-facing demo cases and CI smoke for .webgl.glsl/.wgsl outputs.",
+      "area": "process_ci_tests_docs", "source": "support_matrix_gap", "priority": "low", "related": []
+    }
+  ]
+}
