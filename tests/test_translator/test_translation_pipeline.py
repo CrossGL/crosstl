@@ -1777,3 +1777,27 @@ def test_metal_template_placeholder_scan_ignores_comments():
     )
     # A genuine unresolved template parameter is still detected.
     assert _unresolved_metal_template_placeholders_in_type("T", {"T"}) == ["T"]
+
+
+def test_metal_function_header_masks_comments_spanning_the_header_start():
+    # Regression: a function span can begin inside a preceding comment (e.g. a
+    # license block), so masking only the already-sliced header missed the
+    # opening `/*` and leaked license prose (e.g. "OR"/"AND") into extracted
+    # return/parameter types. _metal_function_header masks with full-source
+    # context so the sliced header is comment-free regardless of where it starts.
+    from types import SimpleNamespace
+
+    from crosstl.project.pipeline import _metal_function_header
+
+    source = "/* ... OR BUSINESS INTERRUPTION ... */ float foo(int x) { return x; }"
+    body_start = source.index("{")
+    # Span deliberately begins mid-comment (after the opening `/*`).
+    function = SimpleNamespace(
+        span=(3, len(source)), body_span=(body_start, len(source))
+    )
+
+    header = _metal_function_header(source, function)
+
+    assert "OR" not in header
+    assert "BUSINESS" not in header
+    assert "float foo(int x)" in header
