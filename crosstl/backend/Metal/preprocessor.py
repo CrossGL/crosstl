@@ -167,6 +167,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         processed = super().preprocess(code, file_path=file_path)
         processed = self._materialize_project_template_instantiations(processed)
         processed = self._materialize_explicit_template_function_calls(processed)
+        processed = self._materialize_explicit_template_struct_instantiations(processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
     def _strip_leading_compiler_diagnostics(self, code: str) -> str:
@@ -341,6 +342,96 @@ class MetalPreprocessor(HLSLPreprocessor):
                 working = working.rstrip() + "\n\n" + "\n\n".join(new_materializations)
                 if not working.endswith("\n"):
                     working += "\n"
+
+    def _materialize_explicit_template_struct_instantiations(self, code: str) -> str:
+        # Struct counterpart of _materialize_explicit_template_function_calls
+        # (issue #1354). Replaces concrete `StructName<args>` type references with
+        # a materialized concrete struct, iterating so nested instantiations
+        # (e.g. BlockLoader referencing BlockMMA<...>) resolve. Regression-safe:
+        # any failure returns the unmodified source, so a kernel that previously
+        # reached the template-materialization diagnostic is left unchanged rather
+        # than emitting a half-rewritten translation.
+        try:
+            return self._materialize_explicit_template_struct_instantiations_impl(code)
+        except Exception:
+            return code
+
+    def _materialize_explicit_template_struct_instantiations_impl(
+        self, code: str
+    ) -> str:
+        materialized_names: Dict[Tuple[str, Tuple[str, ...]], str] = {}
+        working = code
+        # Each iteration resolves one "layer" of instantiations; the bound mirrors
+        # the specialization budget so deeply nested or pathological inputs cannot
+        # loop unbounded.
+        max_iterations = self.max_template_specializations + 1
+        for _ in range(max_iterations):
+            templates = self._find_template_structs(working)
+            if not templates:
+                return working
+            specialized = self._find_explicit_struct_specialization_names(working)
+            templates_by_name = {
+                template.name: template
+                for template in templates
+                if template.name not in specialized
+            }
+            if not templates_by_name:
+                return working
+            excluded_spans = self._find_template_declaration_spans(working)
+            instantiations = self._find_explicit_template_struct_instantiations(
+                working,
+                templates_by_name,
+                excluded_spans,
+            )
+            if not instantiations:
+                return working
+
+            replacements: List[Tuple[int, int, str]] = []
+            new_materializations: List[str] = []
+            for (
+                struct_name,
+                template_arguments,
+                spans,
+            ) in self._dedupe_explicit_template_function_calls(instantiations):
+                key = self._template_specialization_key(struct_name, template_arguments)
+                template = templates_by_name[struct_name]
+                if not self._template_arguments_satisfy_parameters(
+                    template, template_arguments
+                ):
+                    continue
+                specialized_name = materialized_names.get(key)
+                if specialized_name is not None:
+                    replacements.extend(
+                        (span[0], span[1], specialized_name) for span in spans
+                    )
+                    continue
+                if len(materialized_names) >= self.max_template_specializations:
+                    # Stay regression-safe instead of raising: leave the residual
+                    # `Name<...>` so the existing template-materialization
+                    # diagnostic fires exactly as it does today.
+                    return code
+                specialized_name = self._template_specialization_identifier(
+                    struct_name, list(key[1])
+                )
+                materialized = self._materialize_template_struct_with_name(
+                    template, template_arguments, specialized_name
+                )
+                if materialized:
+                    replacements.extend(
+                        (span[0], span[1], specialized_name) for span in spans
+                    )
+                    materialized_names[key] = specialized_name
+                    new_materializations.append(materialized)
+
+            if not replacements and not new_materializations:
+                return working
+
+            working = self._apply_text_replacements(working, replacements)
+            if new_materializations:
+                working = working.rstrip() + "\n\n" + "\n\n".join(new_materializations)
+                if not working.endswith("\n"):
+                    working += "\n"
+        return working
 
     def _find_mlx_kernel_instantiations(
         self, code: str
@@ -683,8 +774,12 @@ class MetalPreprocessor(HLSLPreprocessor):
             template.name,
             struct_identifier,
         )
-        if not materialized.endswith("\n"):
-            materialized += "\n"
+        # A struct/class definition must be terminated with a semicolon; the
+        # captured template source ends at the closing brace, so restore it.
+        materialized = materialized.rstrip()
+        if not materialized.endswith(";"):
+            materialized += ";"
+        materialized += "\n"
         return materialized
 
     def _find_explicit_template_function_calls(
@@ -761,6 +856,82 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             i += 1
         return calls
+
+    def _find_explicit_template_struct_instantiations(
+        self,
+        code: str,
+        struct_templates_by_name: Dict[str, _MetalTemplateStruct],
+        excluded_spans: List[Tuple[int, int]],
+    ) -> List[Tuple[str, List[str], Tuple[int, int]]]:
+        # Struct counterpart of _find_explicit_template_function_calls: locate
+        # concrete `StructName<args>` TYPE references (variable declarations, base
+        # classes, casts, nested template arguments, ...). Unlike a function call
+        # the reference need not be followed by "(", so that trailing guard is
+        # dropped. References inside template declarations (excluded_spans) are
+        # skipped: they are only materialized once their enclosing template is.
+        instantiations: List[Tuple[str, List[str], Tuple[int, int]]] = []
+        i = 0
+        while i < len(code):
+            if code[i] in "\"'":
+                _literal, consumed = self._read_string(code, i)
+                i += consumed
+                continue
+            if code.startswith("//", i):
+                end = code.find("\n", i)
+                if end == -1:
+                    break
+                i = end + 1
+                continue
+            if code.startswith("/*", i):
+                end = code.find("*/", i + 2)
+                if end == -1:
+                    break
+                i = end + 2
+                continue
+            span = self._containing_span(i, excluded_spans)
+            if span is not None:
+                i = span[1]
+                continue
+            if code[i].isalpha() or code[i] == "_":
+                ident, consumed = self._read_identifier(code, i)
+                if ident not in struct_templates_by_name:
+                    i += consumed
+                    continue
+                j = i + consumed
+                while j < len(code) and code[j].isspace():
+                    j += 1
+                if j >= len(code) or code[j] != "<":
+                    i += consumed
+                    continue
+                angle_end = self._find_matching_angle(code, j)
+                if angle_end is None:
+                    i += consumed
+                    continue
+                template_arguments = self._split_top_level_commas(
+                    code[j + 1 : angle_end]
+                )
+                span_start = self._scoped_identifier_start(code, i)
+                instantiations.append(
+                    (ident, template_arguments, (span_start, angle_end + 1))
+                )
+                i = angle_end + 1
+                continue
+            i += 1
+        return instantiations
+
+    def _find_explicit_struct_specialization_names(self, code: str) -> Set[str]:
+        # Names of struct/class templates that carry an explicit specialization
+        # (`template <> struct Name<...>`). Materializing the primary template for
+        # such a name would ignore the specialization, so these are left to the
+        # future specialization-aware path and fall back to today's diagnostic.
+        names: Set[str] = set()
+        for match in re.finditer(
+            r"\btemplate\s*<\s*>\s*(?:struct|class)\s+"
+            r"(?P<name>[A-Za-z_][A-Za-z0-9_:]*)\s*<",
+            code,
+        ):
+            names.add(match.group("name").split("::")[-1])
+        return names
 
     def _dedupe_explicit_template_function_calls(
         self,
