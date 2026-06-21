@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import bisect
 import fnmatch
+import functools
 import hashlib
 import json
 import math
@@ -10419,7 +10420,13 @@ def _metal_function_return_type(
 
 
 def _metal_function_header(source: str, function: Any) -> str:
-    return source[function.span[0] : function.body_span[0] - 1]
+    # Mask comments using full-source context before slicing: a function span can
+    # begin inside a comment (e.g. a preceding license block), and masking only
+    # the already-sliced header would miss the opening `/*`/`//` and leak comment
+    # prose into extracted return/parameter types (spuriously read as template
+    # placeholders, e.g. license words like "OR"/"AND").
+    masked = _masked_metal_non_code_text(source)
+    return masked[function.span[0] : function.body_span[0] - 1]
 
 
 def _metal_statement_spans(source: str, start: int, end: int) -> list[tuple[int, int]]:
@@ -12522,6 +12529,7 @@ def _template_materialization_unsupported_location(
     return SourceLocation(file=unit.relative_path)
 
 
+@functools.lru_cache(maxsize=8)
 def _masked_metal_non_code_text(source: str) -> str:
     chars = list(source)
     i = 0
