@@ -52,6 +52,38 @@ MLX_HOST_NAME_DECL_RE = re.compile(
 DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT = 512
 
 
+class MetalStructMethodError(ValueError):
+    """A struct member-function call that cannot be lowered safely.
+
+    Raised when a CALLED template member method of a struct cannot be
+    instantiated — either because a call argument type cannot be inferred with
+    the conservative rules, or because the method's template parameters do not
+    bind consistently. It deliberately PROPAGATES out of ``preprocess`` (it is
+    NOT swallowed by the regression-safety ``try/except`` in
+    ``_lower_struct_member_functions``) so the pipeline reports the kernel as a
+    clean translation FAILURE rather than emitting a dangling ``obj.method(...)``
+    call / broken output.
+    """
+
+    project_diagnostic_code = "project.translate.metal-struct-method"
+    missing_capabilities = ("struct.template-method",)
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        struct_name: Optional[str] = None,
+        method_name: Optional[str] = None,
+        requested_signature: Optional[str] = None,
+        suggested_action: Optional[str] = None,
+    ):
+        super().__init__(message)
+        self.struct_name = struct_name
+        self.method_name = method_name
+        self.requested_signature = requested_signature
+        self.suggested_action = suggested_action
+
+
 class MetalTemplateSpecializationError(ValueError):
     project_diagnostic_code = "project.translate.metal-template-specialization"
     missing_capabilities = ("template.specialization",)
@@ -130,6 +162,17 @@ class _MetalStructMethod:
     parameter_names: List[str]
     body: str
     span: Tuple[int, int]
+    # Template member methods carry their template parameter names; an empty list
+    # marks an ordinary (non-template) member function. The raw `RetType` /
+    # `parameters` text still contains the template parameter identifiers; they
+    # are substituted with concrete types at instantiation time.
+    template_parameters: List[str] = field(default_factory=list)
+    variadic_template_parameters: Set[str] = field(default_factory=set)
+    template_parameter_defaults: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def is_template(self) -> bool:
+        return bool(self.template_parameters)
 
 
 @dataclass
@@ -142,6 +185,10 @@ class _MetalStructDefinition:
     data_member_names: Set[str]
     methods: List[_MetalStructMethod]
     has_operator_call: bool
+    # Template member methods are kept separate from `methods`: they have no
+    # single concrete signature to emit up front, so they are instantiated on
+    # demand from their call sites' inferred argument types.
+    template_methods: List[_MetalStructMethod] = field(default_factory=list)
 
 
 class MetalPreprocessor(HLSLPreprocessor):
@@ -466,13 +513,21 @@ class MetalPreprocessor(HLSLPreprocessor):
         # dropped struct member functions while keeping the now-dangling
         # `obj.method(...)` call sites (invalid output). This pass lowers each
         # concrete (non-template) struct's member functions to FREE functions and
-        # rewrites the corresponding call sites BEFORE lexing/parsing. It runs
-        # after the struct-template materializer so concrete structs produced from
-        # templates (e.g. `Sum_float`) are lowered too. Regression-safe: any
-        # failure returns the unmodified source, and the pass no-ops when there
-        # are no struct methods (structs without methods stay byte-identical).
+        # rewrites the corresponding call sites BEFORE lexing/parsing. A CALLED
+        # template member method is instantiated from its call-site argument
+        # types and lowered to a concrete free function too. It runs after the
+        # struct-template materializer so concrete structs produced from
+        # templates (e.g. `Sum_float`) are lowered too. Regression-safe: an
+        # UNEXPECTED failure returns the unmodified source, and the pass no-ops
+        # when there are no struct methods (method-free structs stay
+        # byte-identical). A DELIBERATE clean-fail for an unresolvable template
+        # member method call (MetalStructMethodError) is re-raised so the
+        # pipeline reports the kernel as a translation FAILURE instead of leaving
+        # a dangling call.
         try:
             return self._lower_struct_member_functions_impl(code)
+        except MetalStructMethodError:
+            raise
         except Exception:
             return code
 
@@ -480,24 +535,37 @@ class MetalPreprocessor(HLSLPreprocessor):
         structs = self._find_concrete_struct_definitions(code)
         if not structs:
             return code
-        # Only structs that actually declare at least one (non-template,
-        # non-skipped) method need rewriting; everything else stays untouched so
-        # method-free structs and existing kernels are byte-identical.
-        structs_with_methods = [struct for struct in structs if struct.methods]
+        # Only structs that actually declare at least one member function (a
+        # concrete method OR a template method) need rewriting; everything else
+        # stays untouched so method-free structs and existing kernels are
+        # byte-identical.
+        structs_with_methods = [
+            struct for struct in structs if struct.methods or struct.template_methods
+        ]
         if not structs_with_methods:
             return code
 
         struct_names = {struct.name for struct in structs_with_methods}
-        # Methods keyed by struct name for call-site rewriting.
+        # Concrete methods keyed by struct name for direct call-site rewriting.
         methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]] = {}
+        # Template methods keyed by struct name for on-demand instantiation.
+        template_methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]] = {}
         operator_call_structs: Set[str] = set()
+        structs_by_name: Dict[str, _MetalStructDefinition] = {}
         for struct in structs_with_methods:
+            structs_by_name[struct.name] = struct
             method_map: Dict[str, _MetalStructMethod] = {}
             for method in struct.methods:
                 method_map[method.name] = method
                 if method.is_operator_call:
                     operator_call_structs.add(struct.name)
             methods_by_struct[struct.name] = method_map
+            template_map: Dict[str, _MetalStructMethod] = {}
+            for method in struct.template_methods:
+                template_map[method.name] = method
+                if method.is_operator_call:
+                    operator_call_structs.add(struct.name)
+            template_methods_by_struct[struct.name] = template_map
 
         replacements: List[Tuple[int, int, str]] = []
         free_functions: List[str] = []
@@ -508,17 +576,23 @@ class MetalPreprocessor(HLSLPreprocessor):
 
         # Rewrite call sites across the rest of the source (outside the structs
         # we are replacing, so receiver-less internal references are handled when
-        # the method body is emitted, not here).
+        # the method body is emitted, not here). Template-method call sites are
+        # instantiated here; each unique (struct, method, bindings) instance adds
+        # one concrete free function, deduplicated across call sites.
         struct_spans = [struct.span for struct in structs_with_methods]
-        replacements.extend(
-            self._rewrite_struct_member_call_sites(
-                code,
-                struct_names,
-                methods_by_struct,
-                operator_call_structs,
-                struct_spans,
-            )
+        instantiated_template_functions: Dict[str, str] = {}
+        call_replacements = self._rewrite_struct_member_call_sites(
+            code,
+            struct_names,
+            methods_by_struct,
+            template_methods_by_struct,
+            operator_call_structs,
+            struct_spans,
+            structs_by_name,
+            instantiated_template_functions,
         )
+        replacements.extend(call_replacements)
+        free_functions.extend(instantiated_template_functions.values())
 
         rewritten = self._apply_text_replacements(code, replacements)
         if free_functions:
@@ -569,7 +643,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 span_end = trailing + 1
 
             body = code[body_start + 1 : body_end_after - 1]
-            data_member_names, methods = self._split_struct_body(
+            data_member_names, methods, template_methods = self._split_struct_body(
                 name, body, body_start + 1
             )
             definitions.append(
@@ -579,20 +653,25 @@ class MetalPreprocessor(HLSLPreprocessor):
                     body_span=(body_start + 1, body_end_after - 1),
                     data_member_names=data_member_names,
                     methods=methods,
-                    has_operator_call=any(m.is_operator_call for m in methods),
+                    has_operator_call=any(m.is_operator_call for m in methods)
+                    or any(m.is_operator_call for m in template_methods),
+                    template_methods=template_methods,
                 )
             )
         return definitions
 
     def _split_struct_body(
         self, struct_name: str, body: str, body_offset: int
-    ) -> Tuple[Set[str], List[_MetalStructMethod]]:
+    ) -> Tuple[Set[str], List[_MetalStructMethod], List[_MetalStructMethod]]:
         # Walk a struct body separating DATA members from METHOD definitions.
         # A method is a declarator followed by `(params)` then `{...}`; everything
         # else terminated by `;` (or an access-specifier label) is data. Template
-        # member functions (`template <...> ...`) are skipped entirely.
+        # member functions (`template <...> ...`) are collected SEPARATELY: they
+        # are instantiated on demand from their call sites rather than emitted up
+        # front (a template method has no single concrete signature).
         data_member_names: Set[str] = set()
         methods: List[_MetalStructMethod] = []
+        template_methods: List[_MetalStructMethod] = []
         i = 0
         n = len(body)
         while i < n:
@@ -615,8 +694,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                 i += label.end()
                 continue
 
-            # A `template <...>` member function is out of scope: skip the
-            # declaration including its body/semicolon entirely.
+            # A `template <...>` member function: capture its definition so a
+            # CALLED instance can be instantiated from its call-site argument
+            # types. A bare prototype (no body) has nothing to lower and is
+            # skipped; only definitions with a body are recorded.
             if re.match(r"template\s*<", body[i:]):
                 angle_start = body.find("<", i)
                 angle_end = self._find_matching_angle(body, angle_start)
@@ -630,6 +711,19 @@ class MetalPreprocessor(HLSLPreprocessor):
                     semicolon is None or method_body_start < semicolon
                 ):
                     method_body_end = self._find_matching_brace(body, method_body_start)
+                    if method_body_end is not None:
+                        template_method = self._parse_struct_template_method(
+                            struct_name,
+                            body,
+                            i,
+                            angle_start,
+                            angle_end,
+                            method_body_start,
+                            method_body_end,
+                            body_offset,
+                        )
+                        if template_method is not None:
+                            template_methods.append(template_method)
                     i = method_body_end if method_body_end is not None else n
                 elif semicolon is not None:
                     i = semicolon + 1
@@ -694,7 +788,43 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if name:
                     data_member_names.add(name)
             i = semicolon + 1
-        return data_member_names, methods
+        return data_member_names, methods, template_methods
+
+    def _parse_struct_template_method(
+        self,
+        struct_name: str,
+        body: str,
+        decl_start: int,
+        angle_start: int,
+        angle_end: int,
+        method_body_start: int,
+        method_body_end: int,
+        body_offset: int,
+    ) -> Optional[_MetalStructMethod]:
+        # Parse a `template <...> RetType name(params) { body }` member function.
+        # The declarator AFTER the template-parameter list is parsed with the
+        # same machinery as a non-template method; the template parameter names
+        # are recorded so the method can be instantiated from a call site.
+        parameter_text = body[angle_start + 1 : angle_end]
+        template_parameters = self._template_parameter_names(parameter_text)
+        if not template_parameters:
+            return None
+        method = self._parse_struct_method(
+            struct_name, body, angle_end + 1, method_body_start
+        )
+        if method is None:
+            return None
+        method.template_parameters = template_parameters
+        method.variadic_template_parameters = self._variadic_template_parameter_names(
+            parameter_text
+        )
+        method.template_parameter_defaults = self._template_parameter_defaults(
+            parameter_text
+        )
+        # The span covers the whole `template <...> ... { ... }` definition so the
+        # data-only struct removes it cleanly.
+        method.span = (body_offset + decl_start, body_offset + method_body_end)
+        return method
 
     def _parse_struct_method(
         self, struct_name: str, body: str, decl_start: int, brace: int
@@ -862,8 +992,11 @@ class MetalPreprocessor(HLSLPreprocessor):
         body = struct_text[body_rel_start:body_rel_end]
 
         # Remove method spans (relative to body) to build the data-only body.
+        # Both concrete and template methods are stripped from the struct: the
+        # struct becomes pure data and every method (concrete now, template on
+        # demand) is re-emitted as a free function.
         removals: List[Tuple[int, int]] = []
-        for method in struct.methods:
+        for method in [*struct.methods, *struct.template_methods]:
             rel_start = method.span[0] - body_abs_start
             rel_end = method.span[1] - body_abs_start
             # Extend over a trailing `;` after the method body if present.
@@ -1093,19 +1226,26 @@ class MetalPreprocessor(HLSLPreprocessor):
         code: str,
         struct_names: Set[str],
         methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]],
+        template_methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]],
         operator_call_structs: Set[str],
         struct_spans: List[Tuple[int, int]],
+        structs_by_name: Dict[str, _MetalStructDefinition],
+        instantiated_template_functions: Dict[str, str],
     ) -> List[Tuple[int, int, str]]:
         # Rewrite call sites across the source (outside the struct definitions we
         # are replacing):
         #   var.m(args)  -> S__m(var, args)            (instance method)
         #   var(args)    -> S__operator_call(var, ...)  (var has operator())
         #   S::m(args)   -> S__m(args)                  (qualified static call)
-        # Local variable struct types are tracked per the declarations that
-        # introduce them (`S var;` / `S var = ...;` / `S var(...)`).
+        # A template member method call is instantiated from its argument types
+        # and rewritten to a concrete free function. Local variable struct types
+        # are tracked per the declarations that introduce them; scalar/vector
+        # local types and buffer element types feed template-argument inference.
         variable_types = self._collect_struct_variable_types(
             code, struct_names, struct_spans
         )
+        buffer_element_types = self._collect_buffer_element_types(code, struct_spans)
+        local_variable_types = self._collect_local_variable_types(code, struct_spans)
         replacements: List[Tuple[int, int, str]] = []
         i = 0
         n = len(code)
@@ -1137,8 +1277,13 @@ class MetalPreprocessor(HLSLPreprocessor):
                     ident_end,
                     struct_names,
                     methods_by_struct,
+                    template_methods_by_struct,
                     operator_call_structs,
                     variable_types,
+                    structs_by_name,
+                    buffer_element_types,
+                    local_variable_types,
+                    instantiated_template_functions,
                 )
                 if rewrite is not None:
                     end, replacement = rewrite
@@ -1158,8 +1303,13 @@ class MetalPreprocessor(HLSLPreprocessor):
         ident_end: int,
         struct_names: Set[str],
         methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]],
+        template_methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]],
         operator_call_structs: Set[str],
         variable_types: Dict[str, str],
+        structs_by_name: Dict[str, _MetalStructDefinition],
+        buffer_element_types: Dict[str, str],
+        local_variable_types: Dict[str, str],
+        instantiated_template_functions: Dict[str, str],
     ) -> Optional[Tuple[int, str]]:
         # Member access on a previous object (`a.var.m(...)`) is not a struct
         # variable we tracked; skip when the identifier is a member access.
@@ -1180,13 +1330,30 @@ class MetalPreprocessor(HLSLPreprocessor):
             member, consumed = self._read_identifier(code, k)
             if not member:
                 return None
-            method = methods_by_struct.get(ident, {}).get(member)
             after = k + consumed
             while after < len(code) and code[after].isspace():
                 after += 1
-            if method is None or after >= len(code) or code[after] != "(":
+            if after >= len(code) or code[after] != "(":
                 return None
-            return after, method.free_name
+            method = methods_by_struct.get(ident, {}).get(member)
+            if method is not None:
+                return after, method.free_name
+            # A static TEMPLATE member call `S::m(args)`: instantiate from args.
+            template_method = template_methods_by_struct.get(ident, {}).get(member)
+            if template_method is not None:
+                rewrite = self._instantiate_template_member_call(
+                    code,
+                    structs_by_name[ident],
+                    template_method,
+                    receiver=None,
+                    arg_open=after,
+                    buffer_element_types=buffer_element_types,
+                    local_variable_types=local_variable_types,
+                    instantiated_template_functions=instantiated_template_functions,
+                )
+                if rewrite is not None:
+                    return rewrite
+            return None
 
         struct_type = variable_types.get(ident)
         if struct_type is None:
@@ -1200,24 +1367,278 @@ class MetalPreprocessor(HLSLPreprocessor):
             member, consumed = self._read_identifier(code, k)
             if not member:
                 return None
-            method = methods_by_struct.get(struct_type, {}).get(member)
             after = k + consumed
             while after < len(code) and code[after].isspace():
                 after += 1
-            if method is None or after >= len(code) or code[after] != "(":
+            if after >= len(code) or code[after] != "(":
                 # A data-member access (`var.field`) — leave untouched.
                 return None
             arg_open = after
-            return self._build_instance_call_rewrite(code, ident, method, arg_open)
+            method = methods_by_struct.get(struct_type, {}).get(member)
+            if method is not None:
+                return self._build_instance_call_rewrite(code, ident, method, arg_open)
+            # An instance TEMPLATE member call `var.m(args)`.
+            template_method = template_methods_by_struct.get(struct_type, {}).get(
+                member
+            )
+            if template_method is not None:
+                return self._instantiate_template_member_call(
+                    code,
+                    structs_by_name[struct_type],
+                    template_method,
+                    receiver=ident,
+                    arg_open=arg_open,
+                    buffer_element_types=buffer_element_types,
+                    local_variable_types=local_variable_types,
+                    instantiated_template_functions=instantiated_template_functions,
+                )
+            return None
 
         # Functor call: `var(args)` -> `S__operator_call(var, ...)`.
         if code[j] == "(" and struct_type in operator_call_structs:
             method = methods_by_struct.get(struct_type, {}).get("operator()")
-            if method is None:
-                return None
-            return self._build_instance_call_rewrite(code, ident, method, j)
+            if method is not None:
+                return self._build_instance_call_rewrite(code, ident, method, j)
+            # A template `operator()` functor call `var(args)`.
+            template_method = template_methods_by_struct.get(struct_type, {}).get(
+                "operator()"
+            )
+            if template_method is not None:
+                return self._instantiate_template_member_call(
+                    code,
+                    structs_by_name[struct_type],
+                    template_method,
+                    receiver=ident,
+                    arg_open=j,
+                    buffer_element_types=buffer_element_types,
+                    local_variable_types=local_variable_types,
+                    instantiated_template_functions=instantiated_template_functions,
+                )
+            return None
 
         return None
+
+    def _instantiate_template_member_call(
+        self,
+        code: str,
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+        receiver: Optional[str],
+        arg_open: int,
+        buffer_element_types: Dict[str, str],
+        local_variable_types: Dict[str, str],
+        instantiated_template_functions: Dict[str, str],
+    ) -> Optional[Tuple[int, str]]:
+        # Instantiate a CALLED template member method from its call-site argument
+        # types and rewrite the call to the concrete free function. A call that
+        # cannot be resolved (un-inferable argument or non-binding template
+        # parameters) raises MetalStructMethodError — a clean translation
+        # failure — rather than leaving a dangling call.
+        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+        if arg_close is None:
+            return None
+        raw_args = code[arg_open + 1 : arg_close]
+        call_arguments = [
+            argument
+            for argument in self._split_top_level_commas(raw_args)
+            if argument.strip()
+        ]
+        signature = self._template_member_call_signature(
+            struct, method, receiver, raw_args
+        )
+
+        # Infer the concrete type of every call argument; one un-inferable
+        # argument is a clean failure.
+        concrete_argument_types: List[str] = []
+        for argument in call_arguments:
+            inferred = self._infer_argument_type(
+                argument, buffer_element_types, local_variable_types
+            )
+            if inferred is None:
+                raise MetalStructMethodError(
+                    "Cannot lower template member method "
+                    f"'{struct.name}::{method.name}': the type of call argument "
+                    f"'{argument.strip()}' could not be inferred conservatively. "
+                    f"Requested call: {signature}.",
+                    struct_name=struct.name,
+                    method_name=method.name,
+                    requested_signature=signature,
+                    suggested_action=(
+                        "pass the argument as a buffer-element access, a typed "
+                        "local variable, a literal, or an explicit cast so its "
+                        "type can be inferred, or specialize the method manually"
+                    ),
+                )
+            concrete_argument_types.append(inferred)
+
+        # Bind the method's template parameters by matching each declared
+        # parameter type (which contains the template params) against the
+        # inferred concrete argument type.
+        bindings = self._bind_template_method_parameters(
+            method, concrete_argument_types
+        )
+        if bindings is None:
+            raise MetalStructMethodError(
+                "Cannot lower template member method "
+                f"'{struct.name}::{method.name}': its template parameters "
+                f"{method.template_parameters} did not bind consistently from "
+                f"the inferred argument types {concrete_argument_types}. "
+                f"Requested call: {signature}.",
+                struct_name=struct.name,
+                method_name=method.name,
+                requested_signature=signature,
+                suggested_action=(
+                    "ensure each template parameter appears in a parameter type "
+                    "that matches the inferred argument types, or specialize the "
+                    "method manually"
+                ),
+            )
+
+        # Materialize (deduplicated by struct/method/bindings) and rewrite.
+        ordered_arguments = [bindings[name] for name in method.template_parameters]
+        free_name = self._template_member_free_name(struct, method, ordered_arguments)
+        if free_name not in instantiated_template_functions:
+            instantiated_template_functions[free_name] = (
+                self._emit_template_member_free_function(
+                    struct, method, bindings, free_name
+                )
+            )
+        receiver_name = receiver
+        if method.is_static:
+            receiver_name = None
+        return self._build_template_call_rewrite(
+            code, receiver_name, free_name, arg_open, arg_close
+        )
+
+    def _template_member_call_signature(
+        self,
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+        receiver: Optional[str],
+        raw_args: str,
+    ) -> str:
+        target = receiver if receiver is not None else struct.name
+        if method.is_operator_call:
+            return f"{target}({raw_args.strip()})"
+        return f"{target}.{method.name}({raw_args.strip()})"
+
+    def _bind_template_method_parameters(
+        self,
+        method: _MetalStructMethod,
+        concrete_argument_types: List[str],
+    ) -> Optional[Dict[str, str]]:
+        # Match each declared method-parameter type (which may contain the
+        # template parameters) against the inferred concrete argument type and
+        # collect consistent bindings. Returns None if any template parameter is
+        # left unbound or a parameter binds inconsistently.
+        template_parameter_set = set(method.template_parameters)
+        # `method.parameters` is the already-extracted parameter list (the
+        # `operator()` declarator is handled at parse time), so split it directly
+        # rather than reparsing a synthesized header — a synthesized
+        # `operator()` header would confuse the first-paren parameter finder.
+        declared_parameter_types = [
+            normalized
+            for normalized in (
+                self._normalize_function_parameter_type_text(parameter)
+                for parameter in self._split_top_level_commas(method.parameters)
+            )
+            if normalized and normalized != "void"
+        ]
+        if len(declared_parameter_types) != len(concrete_argument_types):
+            return None
+        # Bind each parameter into its OWN dict and merge with explicit conflict
+        # detection. `_infer_template_parameter_bindings_from_type` silently
+        # SKIPS a parameter whose new value conflicts with an existing binding;
+        # that is the wrong behavior here — a template parameter that the call
+        # site forces to two different concrete types (`pick(float, int)` for
+        # `T pick(T, T)`) must clean-fail, not silently keep the first guess.
+        bindings: Dict[str, str] = {}
+        for declared_type, concrete_type in zip(
+            declared_parameter_types, concrete_argument_types
+        ):
+            local_bindings: Dict[str, str] = {}
+            self._infer_template_parameter_bindings_from_type(
+                declared_type,
+                self._normalize_inferred_type(concrete_type),
+                template_parameter_set,
+                local_bindings,
+            )
+            for name, value in local_bindings.items():
+                existing = bindings.get(name)
+                if existing is not None and existing != value:
+                    return None
+                bindings[name] = value
+        # Every template parameter must be bound; a partially-bound method is a
+        # clean failure (we never guess a default for an inferred call).
+        for name in method.template_parameters:
+            if name not in bindings:
+                return None
+        return bindings
+
+    def _template_member_free_name(
+        self,
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+        ordered_arguments: List[str],
+    ) -> str:
+        # Concrete free-function name for an instantiated template member method:
+        # `S__m__<binding-suffix>` (or `S__operator_call__<suffix>`).
+        base = self._struct_member_free_name(
+            struct.name, method.name, method.is_operator_call
+        )
+        suffix = "_".join(
+            re.sub(r"[^A-Za-z0-9_]+", "_", str(value)).strip("_")
+            for value in ordered_arguments
+        ).strip("_")
+        if not suffix:
+            return base
+        return f"{base}__{suffix}"
+
+    def _emit_template_member_free_function(
+        self,
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+        bindings: Dict[str, str],
+        free_name: str,
+    ) -> str:
+        # Instantiate the template member method by substituting the bound
+        # template parameters into copies of its return type, parameters and
+        # body, then emit a concrete free function reusing the non-template
+        # lowering machinery (member references resolved to `self.x`).
+        instantiated_return = self._replace_identifiers(method.return_type, bindings)
+        instantiated_return = re.sub(r"\s+", " ", instantiated_return).strip()
+        instantiated_parameters = self._replace_identifiers(method.parameters, bindings)
+        instantiated_body = self._replace_identifiers(method.body, bindings)
+        concrete_method = _MetalStructMethod(
+            name=method.name,
+            free_name=free_name,
+            is_static=method.is_static,
+            is_operator_call=method.is_operator_call,
+            return_type=instantiated_return,
+            parameters=instantiated_parameters.strip(),
+            parameter_names=self._parameter_identifier_names(instantiated_parameters),
+            body=instantiated_body,
+            span=method.span,
+        )
+        return self._emit_free_function(struct, concrete_method)
+
+    def _build_template_call_rewrite(
+        self,
+        code: str,
+        receiver: Optional[str],
+        free_name: str,
+        arg_open: int,
+        arg_close: int,
+    ) -> Tuple[int, str]:
+        args = code[arg_open + 1 : arg_close].strip()
+        if receiver is None:
+            # Static template member call: no `self` receiver.
+            replacement = f"{free_name}({args})" if args else f"{free_name}()"
+        elif args:
+            replacement = f"{free_name}({receiver}, {args})"
+        else:
+            replacement = f"{free_name}({receiver})"
+        return arg_close + 1, replacement
 
     def _build_instance_call_rewrite(
         self,
@@ -1264,6 +1685,192 @@ class MetalPreprocessor(HLSLPreprocessor):
                     continue
                 variable_types[match.group(1)] = struct_name
         return variable_types
+
+    # ------------------------------------------------------------------ #
+    # Conservative call-argument type inference (template member methods). #
+    # ------------------------------------------------------------------ #
+    # The rules below NEVER guess: each returns None for any expression shape it
+    # does not recognize, and the caller turns a single un-inferable argument
+    # into a clean translation failure rather than emitting a dangling call.
+
+    def _collect_buffer_element_types(
+        self, code: str, struct_spans: List[Tuple[int, int]]
+    ) -> Dict[str, str]:
+        # Map a pointer/buffer parameter name to its ELEMENT type by scanning
+        # `device [const] T* buf` / `constant [const] T* buf` declarations
+        # (function parameters). `buf[expr]` then has element type T. Struct
+        # bodies are excluded so member declarations do not pollute the map.
+        element_types: Dict[str, str] = {}
+        pattern = re.compile(
+            r"\b(?:device|constant|threadgroup|thread)\b"
+            r"(?P<type>[^;,()\[\]{}]*?)\*\s*"
+            r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+        )
+        for match in pattern.finditer(code):
+            if self._containing_span(match.start(), struct_spans) is not None:
+                continue
+            element_type = self._normalize_inferred_type(match.group("type"))
+            if not element_type:
+                continue
+            element_types[match.group("name")] = element_type
+        return element_types
+
+    def _collect_local_variable_types(
+        self, code: str, struct_spans: List[Tuple[int, int]]
+    ) -> Dict[str, str]:
+        # Map a bare local variable name to its declared scalar/vector type by
+        # scanning `T name;` / `T name = ...;` statements outside struct bodies.
+        # Only declarations whose type is a recognized Metal scalar/vector type
+        # are recorded so a template-method argument that is a bare local can be
+        # typed; anything else is intentionally left un-inferable.
+        local_types: Dict[str, str] = {}
+        # A zero-width leading anchor (start-of-string or a statement/scope
+        # boundary) keeps consecutive declarations like `float acc=...; float
+        # x=...;` from cannibalizing each other's anchor.
+        pattern = re.compile(
+            r"(?:(?<=[;{}()])|^)\s*"
+            r"(?P<type>(?:const\s+|constexpr\s+|thread\s+|threadgroup\s+)*"
+            r"[A-Za-z_][A-Za-z0-9_]*)\s+"
+            r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?=[=;])",
+            re.MULTILINE,
+        )
+        for match in pattern.finditer(code):
+            if self._containing_span(match.start(), struct_spans) is not None:
+                continue
+            normalized = self._normalize_inferred_type(match.group("type"))
+            if normalized not in self._METAL_SCALAR_VECTOR_TYPES:
+                continue
+            local_types[match.group("name")] = normalized
+        return local_types
+
+    # Recognized Metal scalar / vector / matrix element types whose declarations
+    # are reliable enough to type a bare local variable.
+    _METAL_SCALAR_VECTOR_TYPES: Set[str] = {
+        base + suffix
+        for base in (
+            "float",
+            "half",
+            "double",
+            "int",
+            "uint",
+            "short",
+            "ushort",
+            "char",
+            "uchar",
+            "long",
+            "ulong",
+            "bool",
+        )
+        for suffix in ("", "2", "3", "4")
+    }
+
+    def _normalize_inferred_type(self, type_text: str) -> str:
+        # Collapse whitespace and strip leading cv/address-space qualifiers that
+        # do not change the value type used for template binding.
+        text = self._normalize_template_argument_text(type_text or "")
+        if not text:
+            return ""
+        tokens = text.split(" ")
+        dropped = {
+            "const",
+            "constexpr",
+            "device",
+            "constant",
+            "thread",
+            "threadgroup",
+            "volatile",
+        }
+        kept = [token for token in tokens if token not in dropped]
+        return " ".join(kept).strip()
+
+    def _infer_argument_type(
+        self,
+        argument: str,
+        buffer_element_types: Dict[str, str],
+        local_variable_types: Dict[str, str],
+    ) -> Optional[str]:
+        # Conservatively infer the concrete type of a call-argument expression.
+        # Returns None (un-inferable) for anything outside the recognized shapes.
+        expr = self._strip_template_argument_comments(argument).strip()
+        if not expr:
+            return None
+        # Strip a single fully-enclosing paren group: `(expr)` has the type of
+        # `expr` (but `T(expr)` is a cast handled below, so only strip when the
+        # paren is at position 0).
+        while (
+            expr.startswith("(")
+            and self._find_matching_delimiter(expr, 0, "(", ")") == len(expr) - 1
+        ):
+            expr = expr[1:-1].strip()
+            if not expr:
+                return None
+
+        # Cast: `static_cast<T>(expr)` -> T.
+        static_cast = re.match(r"static_cast\s*<(?P<type>.+)>\s*\(", expr, re.DOTALL)
+        if static_cast is not None:
+            angle_end = self._find_matching_angle(expr, expr.find("<"))
+            if angle_end is not None:
+                return self._normalize_inferred_type(
+                    expr[expr.find("<") + 1 : angle_end]
+                )
+
+        # Literal types.
+        literal_type = self._infer_literal_type(expr)
+        if literal_type is not None:
+            return literal_type
+
+        # Buffer-element access: `buf[expr]` -> element type of `buf`.
+        bracket = expr.find("[")
+        if bracket != -1 and expr.endswith("]"):
+            base = expr[:bracket].strip()
+            if IDENTIFIER_RE.fullmatch(base) and base in buffer_element_types:
+                # Ensure the brackets balance to the end (single subscript).
+                close = self._find_matching_delimiter(expr, bracket, "[", "]")
+                if close == len(expr) - 1:
+                    return buffer_element_types[base]
+
+        # Functional cast `T(expr)` where T is a recognized scalar/vector type.
+        cast = re.match(r"(?P<type>[A-Za-z_][A-Za-z0-9_]*)\s*\(", expr)
+        if cast is not None:
+            type_name = cast.group("type")
+            paren_start = expr.find("(")
+            paren_end = self._find_matching_delimiter(expr, paren_start, "(", ")")
+            if (
+                paren_end == len(expr) - 1
+                and type_name in self._METAL_SCALAR_VECTOR_TYPES
+            ):
+                return self._normalize_inferred_type(type_name)
+
+        # Bare local variable -> its declared type.
+        if IDENTIFIER_RE.fullmatch(expr) and expr in local_variable_types:
+            return local_variable_types[expr]
+
+        return None
+
+    def _infer_literal_type(self, expr: str) -> Optional[str]:
+        # Recognize the simple numeric/boolean literal forms required by the
+        # conservative inference contract.
+        if expr in {"true", "false"}:
+            return "bool"
+        # half literal: `1h`, `2.5h`.
+        if re.fullmatch(r"[0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?h", expr):
+            return "half"
+        # float literal: `1.0`, `2.5f`, `1.0f`, `3.f`, `1e3f`.
+        if re.fullmatch(r"[0-9]*\.[0-9]*(?:[eE][+-]?[0-9]+)?f?", expr) and any(
+            c.isdigit() for c in expr
+        ):
+            return "float"
+        if re.fullmatch(r"[0-9]+(?:[eE][+-]?[0-9]+)?f", expr):
+            return "float"
+        if re.fullmatch(r"[0-9]+[eE][+-]?[0-9]+", expr):
+            return "float"
+        # unsigned integer literal: `1u`, `42U`.
+        if re.fullmatch(r"[0-9]+[uU]", expr):
+            return "uint"
+        # plain integer literal: `1`, `42` (and hex).
+        if re.fullmatch(r"[0-9]+", expr) or re.fullmatch(r"0[xX][0-9A-Fa-f]+", expr):
+            return "int"
+        return None
 
     def _remove_spans(self, text: str, spans: List[Tuple[int, int]]) -> str:
         if not spans:
