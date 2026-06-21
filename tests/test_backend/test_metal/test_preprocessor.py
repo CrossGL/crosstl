@@ -4,6 +4,7 @@ from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.backend.Metal.preprocessor import (
     MetalPreprocessor,
+    MetalStructMethodError,
     MetalTemplateSpecializationError,
 )
 
@@ -1031,3 +1032,250 @@ def test_preprocessor_lowering_leaves_method_free_source_untouched():
     )
     preprocessor = MetalPreprocessor()
     assert preprocessor._lower_struct_member_functions(code) == code
+
+
+def test_preprocessor_instantiates_template_method_from_buffer_element_arg():
+    # A CALLED template member method is instantiated from a buffer-element
+    # argument (`in[i]` whose element type is float) and lowered to a concrete
+    # free function `S__m__float(S self, float val)`; the call is rewritten.
+    code = """
+    struct Sum { template <typename T> T reduce(T val){ return val + val; } };
+
+    kernel void k(
+        device const float* in [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint i [[thread_position_in_grid]]) {
+        Sum op;
+        out[i] = op.reduce(in[i]);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "float Sum__reduce__float(Sum self, float val)" in output
+    assert "Sum__reduce__float(op, in[i])" in output
+    # The struct is data-only; the template method is gone from it.
+    assert "template" not in output.split("struct Sum")[1].split("}")[0]
+    # No dangling template-method call survives.
+    assert "op.reduce(" not in output
+
+
+def test_preprocessor_instantiates_template_method_from_typed_local_arg():
+    # The argument is a bare local declared `half v = ...;` so the method
+    # instantiates with T=half.
+    code = """
+    struct Sum { template <typename T> T reduce(T val){ return val; } };
+
+    kernel void k(
+        device half* out [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        Sum op;
+        half v = out[i];
+        out[i] = op.reduce(v);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "half Sum__reduce__half(Sum self, half val)" in output
+    assert "Sum__reduce__half(op, v)" in output
+
+
+def test_preprocessor_instantiates_template_operator_call_from_typed_local():
+    # A template `operator()` is instantiated from the call-site argument types;
+    # the struct template parameter U is materialized first, the method's own
+    # template parameter T binds from the second argument.
+    code = """
+    template <typename U>
+    struct Op { template <typename T> U operator()(U a, T b){ return a + b; } };
+
+    [[kernel]] void k(
+        device const float* in [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint i [[thread_position_in_grid]]) {
+        Op<float> op;
+        float acc = out[i];
+        float x = in[i];
+        out[i] = op(acc, x);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "struct Op_float {" in output
+    assert (
+        "float Op_float__operator_call__float(Op_float self, float a, float b)"
+        in output
+    )
+    assert "Op_float__operator_call__float(op, acc, x)" in output
+    # No dangling functor call survives.
+    assert "= op(" not in output
+
+
+def test_preprocessor_instantiates_static_template_method_from_literal():
+    # A static template member method called as `S::m(literal)` instantiates from
+    # the literal type and lowers WITHOUT a `self` parameter.
+    code = """
+    struct Maths { template <typename T> static T twice(T a){ return a + a; } };
+
+    [[kernel]] void k(
+        device float* out [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        out[i] = Maths::twice(2.5f);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "float Maths__twice__float(float a)" in output
+    assert "Maths self" not in output
+    assert "Maths__twice__float(2.5f)" in output
+    assert "Maths::twice" not in output
+
+
+def test_preprocessor_template_method_instantiations_are_deduplicated():
+    # Two call sites with the same inferred argument type share ONE concrete
+    # free function (deduplicated by struct/method/bindings).
+    code = """
+    struct Sum { template <typename T> T reduce(T val){ return val; } };
+
+    kernel void k(
+        device const float* in [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint i [[thread_position_in_grid]]) {
+        Sum op;
+        float a = op.reduce(in[i]);
+        out[i] = op.reduce(a);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert output.count("float Sum__reduce__float(Sum self, float val)") == 1
+    assert "Sum__reduce__float(op, in[i])" in output
+    assert "Sum__reduce__float(op, a)" in output
+
+
+def test_preprocessor_template_method_uninferable_argument_clean_fails():
+    # An un-inferable argument shape (a function-call result) raises a clean
+    # MetalStructMethodError that PROPAGATES out of preprocess rather than
+    # leaving a dangling `op.reduce(...)` / broken output.
+    code = """
+    struct Sum { template <typename T> T reduce(T val){ return val; } };
+    float helper(uint i){ return 1.0; }
+
+    kernel void k(
+        device float* out [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        Sum op;
+        out[i] = op.reduce(helper(i));
+    }
+    """
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+    assert excinfo.value.struct_name == "Sum"
+    assert excinfo.value.method_name == "reduce"
+    assert (
+        excinfo.value.project_diagnostic_code == "project.translate.metal-struct-method"
+    )
+
+
+def test_preprocessor_template_method_conflicting_binding_clean_fails():
+    # The single template parameter T appears in two parameters whose call-site
+    # arguments infer to DIFFERENT concrete types (float and int). Rather than
+    # silently keeping the first guess, this clean-fails (never guess).
+    code = """
+    struct D { template <typename T> T pick(T a, T b){ return a; } };
+
+    kernel void k(
+        device float* o [[buffer(0)]],
+        device int* q [[buffer(1)]],
+        uint i [[thread_position_in_grid]]) {
+        D d;
+        o[i] = d.pick(o[i], q[i]);
+    }
+    """
+    with pytest.raises(MetalStructMethodError):
+        MetalPreprocessor().preprocess(code)
+
+
+def test_preprocessor_template_method_consistent_multi_param_instantiates():
+    # A multi-parameter template method whose parameters consistently bind T to
+    # one type instantiates to a single concrete free function.
+    code = """
+    struct D { template <typename T> T pick(T a, T b){ return a; } };
+
+    kernel void k(
+        device float* o [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        D d;
+        o[i] = d.pick(o[i], o[i]);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "float D__pick__float(D self, float a, float b)" in output
+    assert "D__pick__float(d, o[i], o[i])" in output
+
+
+def test_preprocessor_template_method_unbound_parameter_clean_fails():
+    # A template parameter that cannot be deduced from any argument (here T only
+    # appears in the return type) clean-fails rather than guessing.
+    code = """
+    struct Maker { template <typename T> T make(float a){ return T(a); } };
+
+    kernel void k(
+        device float* out [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        Maker m;
+        out[i] = m.make(out[i]);
+    }
+    """
+    with pytest.raises(MetalStructMethodError):
+        MetalPreprocessor().preprocess(code)
+
+
+def test_preprocessor_template_method_lowering_is_noop_without_template_calls():
+    # Regression-safety: a struct that DECLARES a template method but never CALLS
+    # it is left untouched (the uninstantiated template would be dropped by the
+    # parser exactly as before; no clean-fail, no spurious free function).
+    code = (
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct Sum { float x; template <typename T> T reduce(T v){ return v; } };\n"
+        "kernel void k(device float* o [[buffer(0)]],"
+        " uint i [[thread_position_in_grid]]) {\n"
+        "    o[i] = o[i] * 2.0;\n"
+        "}\n"
+    )
+    output = MetalPreprocessor().preprocess(code)
+    # No instantiation emitted and no exception raised; the data member survives.
+    assert "Sum__reduce" not in output
+    assert "float x;" in output
+
+
+def test_preprocessor_template_method_full_pipeline_to_hlsl():
+    # End-to-end: the Sum reduction example translates to valid HLSL with the
+    # correct T=float instantiation (simd_sum -> WaveActiveSum) and no dangling
+    # simd_reduce call.
+    from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
+    from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+    from crosstl.translator.lexer import Lexer as CrossGLLexer
+    from crosstl.translator.parser import Parser as CrossGLParser
+
+    code = (
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "template <typename U> struct Sum {"
+        " template <typename T> T simd_reduce(T val){ return simd_sum(val); }"
+        " U operator()(U a, U b){ return a + b; } };\n"
+        "kernel void reduce(device const float* in [[buffer(0)]],"
+        " device float* out [[buffer(1)]],"
+        " uint i [[thread_position_in_grid]]) {\n"
+        "    Sum<float> op;\n"
+        "    float v = op.simd_reduce(in[i]);\n"
+        "    out[i] = op(v, 0.0);\n"
+        "}\n"
+    )
+    pre = MetalPreprocessor().preprocess(code)
+    assert "float Sum_float__simd_reduce__float(Sum_float self, float val)" in pre
+    tokens = MetalLexer(pre).tokenize()
+    ast = MetalParser(tokens).parse()
+    crossgl = MetalToCrossGLConverter().generate(ast)
+    parsed = CrossGLParser(CrossGLLexer(crossgl).get_tokens()).parse()
+    hlsl = HLSLCodeGen().generate(parsed)
+    # No dangling receiver call and no bare Metal `simd_reduce(` builtin survive
+    # (the lowered free-function NAME legitimately contains the substring).
+    assert "op.simd_reduce(" not in hlsl
+    assert " simd_reduce(" not in hlsl
+    assert "WaveActiveSum" in hlsl
+    assert "Sum_float__simd_reduce__float(op, in_.Load(i))" in hlsl
