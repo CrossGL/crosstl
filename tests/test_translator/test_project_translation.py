@@ -12009,8 +12009,12 @@ def test_translate_project_opengl_inlines_mlx_ordering_dependent_aliases(
     artifact = payload["artifacts"][0]
     assert artifact["status"] == "translated"
     output = (repo / artifact["path"]).read_text(encoding="utf-8")
-    assert "float vals[4];" in output
-    assert "uint idxs[4];" in output
+    # The threadgroup-qualified locals are hoisted to module-scope GLSL `shared`
+    # declarations (workgroup-shared memory must live at global scope), not
+    # emitted as private per-invocation locals.
+    assert "shared float sortfloat32_vals[4];" in output
+    assert "shared uint sortfloat32_idxs[4];" in output
+    assert "float vals[4];" not in output
     assert "sort_kernel" not in output
     assert "IdxT" not in output
     assert "ValT" not in output
