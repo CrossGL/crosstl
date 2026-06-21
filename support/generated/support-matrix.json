@@ -615,7 +615,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1019
+        "test_count": 1021
       },
       "translator_codegen": {
         "exists": true,
