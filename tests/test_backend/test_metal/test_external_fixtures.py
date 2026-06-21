@@ -533,7 +533,7 @@ EXTERNAL_FIXTURES = [
         "roundtrip": True,
         "contains": [
             "alignas(8) struct AtomicVisibilityBuffer",
-            "atomic_fetch_add_explicit((&dst.count), src.count, memory_order_relaxed);",
+            "atomicAdd(dst.count, src.count);",
         ],
         "source": (
             """
@@ -1449,11 +1449,11 @@ EXTERNAL_FIXTURES = [
         "source_path": "c10/metal/atomic.h",
         "roundtrip": True,
         "contains": [
-            "void atomic_binary_op_helper(device atomic<AT>* data",
+            "void atomic_binary_op_helper(device AT* data",
             "T* op)",
             "val = op(value, value);",
         ],
-        "not_contains": ["(*op)"],
+        "not_contains": ["(*op)", "atomic<"],
         "source": (
             """
             #include <metal_atomic>
