@@ -1750,3 +1750,30 @@ def test_native_compute_extension_aliases_report_webgl_diagnostics(
         match="WebGL target does not support shader stage\\(s\\): compute",
     ):
         crosstl.translate(str(source_path), backend="webgl", format_output=False)
+
+
+def test_metal_template_placeholder_scan_ignores_comments():
+    # Regression: the residual-template placeholder scan treated comment words as
+    # identifiers, so a comment captured in an extracted type (e.g. a trailing
+    # `// Get the max ...`) produced a spurious "missing template parameter 'Get'"
+    # and wrongly blocked otherwise-translatable kernels (MLX softmax/logsumexp).
+    from crosstl.project.pipeline import (
+        _normalize_metal_type_text,
+        _unresolved_metal_template_placeholders_in_type,
+    )
+
+    # Comments are stripped from normalized type text.
+    assert (
+        _normalize_metal_type_text("void // Get the max and the normalizer") == "void"
+    )
+    assert _normalize_metal_type_text("float /* T */ x").replace(" ", "") == "floatx"
+
+    # No spurious placeholder is reported for comment words.
+    assert (
+        _unresolved_metal_template_placeholders_in_type(
+            "void // Get the max and the normalizer", set()
+        )
+        == []
+    )
+    # A genuine unresolved template parameter is still detected.
+    assert _unresolved_metal_template_placeholders_in_type("T", {"T"}) == ["T"]

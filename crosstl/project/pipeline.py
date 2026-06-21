@@ -10187,7 +10187,13 @@ def _strip_metal_attribute_blocks(text: str) -> str:
 
 
 def _normalize_metal_type_text(type_text: str) -> str:
-    text = _strip_metal_attribute_blocks(type_text)
+    # Strip C/C++ comments first: a type spelling never legitimately contains a
+    # comment, but extraction can pick one up (e.g. a trailing `// ...` after a
+    # return type). Leaving it in makes downstream token scans treat comment
+    # words as identifiers (e.g. flagging "Get" as a missing template parameter).
+    text = re.sub(r"/\*.*?\*/", " ", type_text, flags=re.DOTALL)
+    text = re.sub(r"//[^\n]*", " ", text)
+    text = _strip_metal_attribute_blocks(text)
     text = re.sub(r"\b(?:struct|class|typename)\s+", "", text)
     text = re.sub(r"\s+", " ", text).strip()
     text = re.sub(r"\s*([<>,*&\[\]()])\s*", r"\1", text)
