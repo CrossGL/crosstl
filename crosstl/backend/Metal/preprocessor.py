@@ -1789,23 +1789,24 @@ class MetalPreprocessor(HLSLPreprocessor):
         angle_depth = 0
         i = start
         while i < len(code):
-            if code[i] in "\"'":
+            ch = code[i]
+            if ch == '"' or ch == "'":
                 _literal, consumed = self._read_string(code, i)
                 i += consumed
                 continue
-            if code.startswith("//", i):
-                end = code.find("\n", i)
-                if end == -1:
-                    return None
-                i = end + 1
-                continue
-            if code.startswith("/*", i):
-                end = code.find("*/", i + 2)
-                if end == -1:
-                    return None
-                i = end + 2
-                continue
-            ch = code[i]
+            if ch == "/":
+                if code.startswith("//", i):
+                    end = code.find("\n", i)
+                    if end == -1:
+                        return None
+                    i = end + 1
+                    continue
+                if code.startswith("/*", i):
+                    end = code.find("*/", i + 2)
+                    if end == -1:
+                        return None
+                    i = end + 2
+                    continue
             if (
                 ch == target
                 and paren_depth == 0
@@ -1835,23 +1836,24 @@ class MetalPreprocessor(HLSLPreprocessor):
         brace_depth = 0
         i = start
         while i < len(code):
-            if code[i] in "\"'":
+            ch = code[i]
+            if ch == '"' or ch == "'":
                 _literal, consumed = self._read_string(code, i)
                 i += consumed
                 continue
-            if code.startswith("//", i):
-                end = code.find("\n", i)
-                if end == -1:
-                    return len(code)
-                i = end + 1
-                continue
-            if code.startswith("/*", i):
-                end = code.find("*/", i + 2)
-                if end == -1:
-                    return None
-                i = end + 2
-                continue
-            ch = code[i]
+            if ch == "/":
+                if code.startswith("//", i):
+                    end = code.find("\n", i)
+                    if end == -1:
+                        return len(code)
+                    i = end + 1
+                    continue
+                if code.startswith("/*", i):
+                    end = code.find("*/", i + 2)
+                    if end == -1:
+                        return None
+                    i = end + 2
+                    continue
             if (
                 ch == ";"
                 and paren_depth == 0
