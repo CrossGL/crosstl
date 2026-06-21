@@ -235,6 +235,73 @@ def test_glsl_user_defined_workgroup_barrier_is_not_lowered():
     assert "barrier();" not in generated_code
 
 
+def test_glsl_threadgroup_local_array_hoists_to_global_shared():
+    shader = """
+    shader SharedReduction {
+        compute {
+            @ stage_entry
+            void main(uint gid @gl_GlobalInvocationID,
+                      uint lid @gl_LocalInvocationIndex) {
+                threadgroup float[256] tile;
+                tile[lid] = float(gid);
+                tile[lid] = tile[lid] + 1.0;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    main_start = generated_code.index("void main(")
+    global_section = generated_code[:main_start]
+    main_body = generated_code[main_start:]
+
+    # (a) A global-scope ``shared`` declaration is emitted for the hoisted local.
+    shared_match = re.search(
+        r"^shared\s+float\s+(\w+)\[256\];", global_section, re.MULTILINE
+    )
+    assert shared_match is not None, generated_code
+    hoisted_name = shared_match.group(1)
+
+    # (b) No private local array of that name remains inside ``main``.
+    assert "float tile[256]" not in main_body
+    assert re.search(r"float\s+\w+\[256\]", main_body) is None, main_body
+
+    # References are rewritten to the hoisted global name, and the original
+    # local identifier ``tile`` no longer appears as a standalone name.
+    assert f"{hoisted_name}[" in main_body
+    assert re.search(r"(?<!\w)tile\b", main_body) is None, main_body
+
+
+def test_glsl_multiple_threadgroup_locals_hoist_with_unique_names():
+    shader = """
+    shader SharedScratch {
+        compute {
+            @ stage_entry
+            void main(uint lid @gl_LocalInvocationIndex) {
+                threadgroup float[64] scratch;
+                shared int counter;
+                scratch[lid] = 0.0;
+                counter = int(lid);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert re.search(
+        r"^shared\s+float\s+\w+\[64\];", generated_code, re.MULTILINE
+    ), generated_code
+    assert re.search(
+        r"^shared\s+int\s+\w+;", generated_code, re.MULTILINE
+    ), generated_code
+
+    main_body = generated_code[generated_code.index("void main(") :]
+    assert "float scratch[64]" not in main_body
+    assert "int counter;" not in main_body
+
+
 def test_structured_buffer_operations_lower_to_ssbo():
     code = """
     shader StructuredBufferGLSL {

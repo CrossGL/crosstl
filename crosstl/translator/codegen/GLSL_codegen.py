@@ -1066,6 +1066,9 @@ class GLSLCodeGen:
         self.stage_entry_resource_declaration_names = set()
         self.stage_entry_constant_value_cbuffer_names = set()
         self.current_identifier_aliases = {}
+        self.glsl_hoisted_shared_declarations = []
+        self.glsl_hoisted_shared_aliases_by_declaration = {}
+        self.glsl_hoisted_shared_declaration_ids = set()
         self.current_mesh_output_parameters = {}
         self.current_mesh_output_topology = None
         self.current_glsl_extensions = set()
@@ -2592,6 +2595,9 @@ class GLSLCodeGen:
         self.stage_entry_resource_declaration_names = set()
         self.stage_entry_constant_value_cbuffer_names = set()
         self.current_identifier_aliases = {}
+        self.glsl_hoisted_shared_declarations = []
+        self.glsl_hoisted_shared_aliases_by_declaration = {}
+        self.glsl_hoisted_shared_declaration_ids = set()
         self.current_target_stage = target_stage
         self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
         stage_names = {
@@ -3369,6 +3375,10 @@ class GLSLCodeGen:
         if cbuffers:
             code += "// Constant Buffers\n"
             code += self.generate_cbuffers(ast, target_stage)
+
+        self.collect_glsl_function_local_shared_declarations(ast, target_stage)
+        for node, alias in self.glsl_hoisted_shared_declarations:
+            code += self.generate_glsl_hoisted_shared_declaration(node, alias)
 
         combined_stage_entry_names = self.combined_stage_entry_names(ast, target_stage)
         previous_enforce_concrete_glsl_types = self.enforce_concrete_glsl_types
@@ -8878,6 +8888,12 @@ class GLSLCodeGen:
         if isinstance(stmt, VariableNode):
             if stmt.name in self.flattened_stage_variables:
                 return ""
+            if id(stmt) in self.glsl_hoisted_shared_declaration_ids:
+                # Workgroup-shared locals are emitted once at global scope; here
+                # we only register the alias so references resolve and drop the
+                # private local declaration entirely.
+                self.activate_glsl_hoisted_shared_declaration(stmt)
+                return ""
             var_type = self.local_variable_declared_type(stmt)
             stage_output_alias = self.current_identifier_aliases.get(stmt.name)
             if (
@@ -9340,6 +9356,112 @@ class GLSLCodeGen:
             alias = f"{name}_{suffix}"
         self.current_identifier_aliases[name] = alias
         return alias
+
+    def glsl_declaration_has_shared_qualifier(self, node):
+        """Return whether a declaration carries a workgroup-shared qualifier."""
+        qualifiers = {str(value).lower() for value in getattr(node, "qualifiers", [])}
+        return bool(qualifiers & {"groupshared", "shared", "threadgroup", "workgroup"})
+
+    def glsl_emitted_functions_for_shared_lowering(self, ast, target_stage=None):
+        """Return functions whose bodies are emitted for the requested stage."""
+        functions = []
+        seen = set()
+
+        def add(func):
+            if func is None or id(func) in seen:
+                return
+            seen.add(id(func))
+            functions.append(func)
+
+        for func in getattr(ast, "functions", []) or []:
+            qualifier_name = function_stage_name(func)
+            if should_emit_qualified_function(target_stage, qualifier_name):
+                add(func)
+
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if not stage_matches(target_stage, stage_name):
+                continue
+            for func in getattr(stage, "local_functions", []) or []:
+                add(func)
+            add(getattr(stage, "entry_point", None))
+
+        return functions
+
+    def glsl_unique_shared_identifier(self, base_name, used_names):
+        """Return a unique global identifier for a hoisted shared variable."""
+        candidate = base_name
+        while candidate in used_names or candidate in self.GLSL_RESERVED_IDENTIFIERS:
+            candidate += "_"
+        return candidate
+
+    def collect_glsl_function_local_shared_declarations(self, ast, target_stage=None):
+        """Hoist function-local workgroup-shared declarations to global scope.
+
+        GLSL requires ``shared`` variables to live at module scope, so every
+        threadgroup/groupshared/workgroup-qualified local declaration is given a
+        unique global alias.  References are rewritten to the alias and the
+        original local declaration is suppressed (mirrors the DirectX backend's
+        ``groupshared`` hoisting).
+        """
+        used_names = set(self.global_variable_types)
+        used_names.update(
+            getattr(node, "name", None)
+            for node in collect_stage_local_variables(
+                ast, target_stage, self.glsl_declaration_has_shared_qualifier
+            )
+            if getattr(node, "name", None)
+        )
+        declarations = []
+        aliases_by_declaration = {}
+        declaration_ids = set()
+
+        for func in self.glsl_emitted_functions_for_shared_lowering(ast, target_stage):
+            func_name = getattr(func, "name", None) or "shader"
+            for node in self.walk_ast(getattr(func, "body", [])):
+                if not isinstance(node, VariableNode):
+                    continue
+                if not self.glsl_declaration_has_shared_qualifier(node):
+                    continue
+
+                name = getattr(node, "name", None)
+                if not name:
+                    continue
+
+                alias = self.glsl_unique_shared_identifier(
+                    f"{func_name}_{name}", used_names
+                )
+                used_names.add(alias)
+                declared_type = self.local_variable_declared_type(node)
+                self.global_variable_types[alias] = declared_type
+                declarations.append((node, alias))
+                aliases_by_declaration[id(node)] = alias
+                declaration_ids.add(id(node))
+
+        self.glsl_hoisted_shared_declarations = declarations
+        self.glsl_hoisted_shared_aliases_by_declaration = aliases_by_declaration
+        self.glsl_hoisted_shared_declaration_ids = declaration_ids
+
+    def generate_glsl_hoisted_shared_declaration(self, node, alias):
+        """Render a hoisted workgroup-shared variable as a global declaration."""
+        vtype = self.local_variable_declared_type(node)
+        declaration = format_c_style_array_declaration(self.map_type(vtype), alias)
+        return f"{self.global_variable_qualifier(node)}{declaration};\n"
+
+    def activate_glsl_hoisted_shared_declaration(self, node):
+        """Alias a hoisted shared local to its global name for the current scope."""
+        alias = self.glsl_hoisted_shared_aliases_by_declaration.get(id(node))
+        if alias is None:
+            return False
+
+        name = getattr(node, "name", None)
+        if name:
+            self.current_identifier_aliases[name] = alias
+            declared_type = self.local_variable_declared_type(node)
+            if declared_type:
+                self.local_variable_types[name] = declared_type
+                self.local_variable_types[alias] = declared_type
+        return True
 
     def match_binding_name(self, name):
         return self.glsl_local_identifier_name(name)
