@@ -209,6 +209,21 @@ class MetalToCrossGLConverter:
         "simd_prefix_exclusive_product": "WavePrefixProduct",
     }
 
+    # Metal device/threadgroup atomics -> canonical CrossGL atomic intrinsics.
+    # Each Metal call carries a trailing memory_order argument that the CrossGL
+    # intrinsics (and the DirectX/GLSL/SPIR-V backends) do not take; it is dropped
+    # during lowering. Only the read-modify-write operations with a direct CrossGL
+    # counterpart are mapped here.
+    metal_atomic_intrinsics = {
+        "atomic_fetch_add_explicit": "atomicAdd",
+        "atomic_fetch_min_explicit": "atomicMin",
+        "atomic_fetch_max_explicit": "atomicMax",
+        "atomic_fetch_and_explicit": "atomicAnd",
+        "atomic_fetch_or_explicit": "atomicOr",
+        "atomic_fetch_xor_explicit": "atomicXor",
+        "atomic_exchange_explicit": "atomicExchange",
+    }
+
     def __init__(self):
         self.rt_qualifiers = {
             "intersection",
@@ -2119,6 +2134,9 @@ class MetalToCrossGLConverter:
             sync_call = self.metal_synchronization_function_call(expr.name, expr.args)
             if sync_call is not None:
                 return sync_call
+            atomic_call = self.metal_atomic_function_call(expr.name, expr.args, is_main)
+            if atomic_call is not None:
+                return atomic_call
             function_name = self.map_function_call_name(expr.name)
             if function_name == "sampler":
                 args = ", ".join(
@@ -2368,6 +2386,35 @@ class MetalToCrossGLConverter:
 
         return None
 
+    def metal_atomic_function_call(self, name, args, is_main):
+        unscoped_name = str(name).split("::")[-1]
+        mapped = self.metal_atomic_intrinsics.get(unscoped_name)
+        if mapped is None or unscoped_name in self.user_function_names:
+            return None
+        if len(args) < 2:
+            return None
+        # Drop Metal's trailing memory_order argument; keep the atomic target and
+        # the operand value.
+        target = self.generate_metal_atomic_target(args[0], is_main)
+        value = self.generate_expression(args[1], is_main)
+        return f"{mapped}({target}, {value})"
+
+    def generate_metal_atomic_target(self, expr, is_main):
+        # Metal addresses an atomic as a pointer (`&buffer[i]` or a pointer var);
+        # the CrossGL atomic intrinsics and the GLSL/DirectX/SPIR-V backends
+        # address the lvalue. Peel a leading address-of, and emit a structured
+        # buffer element as a plain subscript `buffer[index]` (not buffer_load,
+        # which the DirectX typed-buffer-atomic lowering does not recognise).
+        if isinstance(expr, UnaryOpNode) and getattr(expr, "op", None) == "&":
+            expr = expr.operand
+        if self.is_structured_buffer_element_access(expr):
+            buffer = self.generate_without_structured_buffer_index_lowering(
+                expr.array, is_main
+            )
+            index = self.generate_expression(expr.index, is_main)
+            return f"{buffer}[{index}]"
+        return self.generate_expression(expr, is_main)
+
     def metal_mem_flag_names(self, args):
         if len(args) != 1:
             return None
@@ -2521,9 +2568,9 @@ class MetalToCrossGLConverter:
                 base = base[len(tag_prefix) :].strip()
                 break
 
-        atomic_alias = self.atomic_type_alias(base)
-        if atomic_alias:
-            return f"{atomic_alias}{suffix}"
+        atomic_element = self.atomic_element_type(base)
+        if atomic_element is not None:
+            return f"{self.map_type(atomic_element)}{suffix}"
 
         function_table_alias = self.function_table_type_alias(base)
         if function_table_alias:
@@ -2742,19 +2789,22 @@ class MetalToCrossGLConverter:
             suffix = alias_suffix + suffix
         return f"{base}{suffix}"
 
-    def atomic_type_alias(self, metal_type):
+    def atomic_element_type(self, metal_type):
+        # Metal atomics lower to their plain element type in CrossGL; atomicity is
+        # carried by the atomic_* intrinsics, and the GLSL SSBO / DirectX UAV /
+        # SPIR-V backends store atomics as the underlying scalar (an
+        # atomic-wrapped element type is not a valid buffer element). Handles both
+        # the generic `atomic<T>` form and Metal's `atomic_int`-style aliases.
         base_name, generic_args = self.generic_type_parts(metal_type)
-        if base_name != "atomic" or len(generic_args) != 1:
-            return None
-
-        element_type = self.map_type(generic_args[0].strip())
+        if base_name == "atomic" and len(generic_args) == 1:
+            return generic_args[0].strip()
         return {
-            "int": "atomic_int",
-            "uint": "atomic_uint",
-            "bool": "atomic_bool",
-            "uint64": "atomic_ulong",
-            "float": "atomic_float",
-        }.get(element_type)
+            "atomic_int": "int",
+            "atomic_uint": "uint",
+            "atomic_bool": "bool",
+            "atomic_ulong": "uint64_t",
+            "atomic_float": "float",
+        }.get(str(metal_type).strip())
 
     def function_table_type_alias(self, metal_type):
         base_name, generic_args = self.generic_type_parts(metal_type)

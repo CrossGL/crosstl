@@ -2449,12 +2449,45 @@ def test_codegen_normalizes_generic_atomic_types_from_apple_msl_spec():
     """
     crossgl = convert(code)
 
-    assert "RWStructuredBuffer<atomic_uint> counters @buffer(0)" in crossgl
-    assert "RWStructuredBuffer<atomic_float> weights @buffer(1)" in crossgl
-    assert "RWStructuredBuffer<atomic_ulong> totals @buffer(2)" in crossgl
-    assert "RWStructuredBuffer<atomic_bool> flags @buffer(3)" in crossgl
+    # Metal atomics lower to their plain element type; atomicity is carried by the
+    # atomic_* intrinsics, and the GLSL/DirectX/SPIR-V backends store atomics as
+    # the underlying scalar (an atomic-wrapped buffer element is not valid).
+    assert "RWStructuredBuffer<uint> counters @buffer(0)" in crossgl
+    assert "RWStructuredBuffer<float> weights @buffer(1)" in crossgl
+    assert "RWStructuredBuffer<uint64> totals @buffer(2)" in crossgl
+    assert "RWStructuredBuffer<bool> flags @buffer(3)" in crossgl
     assert "atomic<" not in crossgl
     assert "metal::atomic" not in crossgl
+    assert "atomic_uint" not in crossgl
+    assert "atomic_float" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_lowers_metal_device_atomics_to_crossgl_intrinsics():
+    # Metal explicit atomics map to CrossGL atomic intrinsics: the trailing
+    # memory_order argument is dropped, and a `&buffer[i]` target lowers to the
+    # buffer element subscript the GLSL/DirectX/SPIR-V backends expect.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void scatter(device atomic_int* out [[buffer(0)]],
+                        device const int* idx [[buffer(1)]],
+                        device const int* val [[buffer(2)]],
+                        uint i [[thread_position_in_grid]]) {
+        atomic_fetch_add_explicit(&out[idx[i]], val[i], memory_order_relaxed);
+        atomic_fetch_max_explicit(&out[0], val[i], memory_order_relaxed);
+        atomic_exchange_explicit(&out[1], val[i], memory_order_relaxed);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "atomicAdd(out_[buffer_load(idx, i)], buffer_load(val, i));" in crossgl
+    assert "atomicMax(out_[0], buffer_load(val, i));" in crossgl
+    assert "atomicExchange(out_[1], buffer_load(val, i));" in crossgl
+    # The memory_order argument and the Metal spelling must not survive.
+    assert "atomic_fetch" not in crossgl
+    assert "memory_order" not in crossgl
     assert parse_crossgl(crossgl) is not None
 
 
