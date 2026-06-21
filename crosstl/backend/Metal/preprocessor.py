@@ -117,6 +117,33 @@ class _MetalFunctionDefinition:
     is_entry: bool
 
 
+@dataclass
+class _MetalStructMethod:
+    """A member function found inside a concrete struct/class definition."""
+
+    name: str
+    free_name: str
+    is_static: bool
+    is_operator_call: bool
+    return_type: str
+    parameters: str
+    parameter_names: List[str]
+    body: str
+    span: Tuple[int, int]
+
+
+@dataclass
+class _MetalStructDefinition:
+    """A concrete (non-template) struct/class with its members split out."""
+
+    name: str
+    span: Tuple[int, int]
+    body_span: Tuple[int, int]
+    data_member_names: Set[str]
+    methods: List[_MetalStructMethod]
+    has_operator_call: bool
+
+
 class MetalPreprocessor(HLSLPreprocessor):
     """Small Metal preprocessor used before lexing imported source files."""
 
@@ -168,6 +195,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         processed = self._materialize_project_template_instantiations(processed)
         processed = self._materialize_explicit_template_function_calls(processed)
         processed = self._materialize_explicit_template_struct_instantiations(processed)
+        processed = self._lower_struct_member_functions(processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
     def _strip_leading_compiler_diagnostics(self, code: str) -> str:
@@ -432,6 +460,828 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if not working.endswith("\n"):
                     working += "\n"
         return working
+
+    def _lower_struct_member_functions(self, code: str) -> str:
+        # CrossGL structs are data-only, so the Metal frontend has historically
+        # dropped struct member functions while keeping the now-dangling
+        # `obj.method(...)` call sites (invalid output). This pass lowers each
+        # concrete (non-template) struct's member functions to FREE functions and
+        # rewrites the corresponding call sites BEFORE lexing/parsing. It runs
+        # after the struct-template materializer so concrete structs produced from
+        # templates (e.g. `Sum_float`) are lowered too. Regression-safe: any
+        # failure returns the unmodified source, and the pass no-ops when there
+        # are no struct methods (structs without methods stay byte-identical).
+        try:
+            return self._lower_struct_member_functions_impl(code)
+        except Exception:
+            return code
+
+    def _lower_struct_member_functions_impl(self, code: str) -> str:
+        structs = self._find_concrete_struct_definitions(code)
+        if not structs:
+            return code
+        # Only structs that actually declare at least one (non-template,
+        # non-skipped) method need rewriting; everything else stays untouched so
+        # method-free structs and existing kernels are byte-identical.
+        structs_with_methods = [struct for struct in structs if struct.methods]
+        if not structs_with_methods:
+            return code
+
+        struct_names = {struct.name for struct in structs_with_methods}
+        # Methods keyed by struct name for call-site rewriting.
+        methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]] = {}
+        operator_call_structs: Set[str] = set()
+        for struct in structs_with_methods:
+            method_map: Dict[str, _MetalStructMethod] = {}
+            for method in struct.methods:
+                method_map[method.name] = method
+                if method.is_operator_call:
+                    operator_call_structs.add(struct.name)
+            methods_by_struct[struct.name] = method_map
+
+        replacements: List[Tuple[int, int, str]] = []
+        free_functions: List[str] = []
+        for struct in structs_with_methods:
+            data_only, lowered = self._render_lowered_struct(code, struct)
+            replacements.append((struct.span[0], struct.span[1], data_only))
+            free_functions.extend(lowered)
+
+        # Rewrite call sites across the rest of the source (outside the structs
+        # we are replacing, so receiver-less internal references are handled when
+        # the method body is emitted, not here).
+        struct_spans = [struct.span for struct in structs_with_methods]
+        replacements.extend(
+            self._rewrite_struct_member_call_sites(
+                code,
+                struct_names,
+                methods_by_struct,
+                operator_call_structs,
+                struct_spans,
+            )
+        )
+
+        rewritten = self._apply_text_replacements(code, replacements)
+        if free_functions:
+            rewritten = rewritten.rstrip() + "\n\n" + "\n\n".join(free_functions)
+            if not rewritten.endswith("\n"):
+                rewritten += "\n"
+        return rewritten
+
+    def _find_concrete_struct_definitions(
+        self, code: str
+    ) -> List[_MetalStructDefinition]:
+        # Locate every concrete (non-template) `struct/class Name { ... };` and
+        # split its body into data members and method definitions. Template
+        # structs/classes (`template <...> struct ...`) are skipped wholesale:
+        # those are handled by the materializer, and their (possibly template)
+        # methods are out of scope for lowering.
+        template_spans = self._find_template_declaration_spans(code)
+        definitions: List[_MetalStructDefinition] = []
+        for match in re.finditer(r"\b(?:struct|class)\s+", code):
+            start = match.start()
+            if self._containing_span(start, template_spans) is not None:
+                continue
+            name_start = match.end()
+            name, consumed = self._read_identifier(code, name_start)
+            if not name or not consumed:
+                continue
+            after_name = name_start + consumed
+            # Distinguish a definition (`struct Name { ... }`) from a forward
+            # declaration / variable usage (`struct Name x;`). Skip anything that
+            # is not immediately a `{` or a base-class clause `: ... {`.
+            body_start = self._find_next_top_level_char(code, after_name, "{")
+            semicolon = self._find_next_top_level_char(code, after_name, ";")
+            if body_start is None or (semicolon is not None and semicolon < body_start):
+                continue
+            between = code[after_name:body_start]
+            # Only a base-class clause may appear between the name and the body.
+            stripped_between = between.strip()
+            if stripped_between and not stripped_between.startswith(":"):
+                continue
+            body_end_after = self._find_matching_brace(code, body_start)
+            if body_end_after is None:
+                continue
+            # The struct definition span includes the trailing semicolon so the
+            # data-only replacement keeps the declaration well-formed.
+            span_end = body_end_after
+            trailing = code.find(";", body_end_after)
+            if trailing != -1 and code[body_end_after:trailing].strip() == "":
+                span_end = trailing + 1
+
+            body = code[body_start + 1 : body_end_after - 1]
+            data_member_names, methods = self._split_struct_body(
+                name, body, body_start + 1
+            )
+            definitions.append(
+                _MetalStructDefinition(
+                    name=name,
+                    span=(start, span_end),
+                    body_span=(body_start + 1, body_end_after - 1),
+                    data_member_names=data_member_names,
+                    methods=methods,
+                    has_operator_call=any(m.is_operator_call for m in methods),
+                )
+            )
+        return definitions
+
+    def _split_struct_body(
+        self, struct_name: str, body: str, body_offset: int
+    ) -> Tuple[Set[str], List[_MetalStructMethod]]:
+        # Walk a struct body separating DATA members from METHOD definitions.
+        # A method is a declarator followed by `(params)` then `{...}`; everything
+        # else terminated by `;` (or an access-specifier label) is data. Template
+        # member functions (`template <...> ...`) are skipped entirely.
+        data_member_names: Set[str] = set()
+        methods: List[_MetalStructMethod] = []
+        i = 0
+        n = len(body)
+        while i < n:
+            ch = body[i]
+            if ch.isspace():
+                i += 1
+                continue
+            if body.startswith("//", i):
+                end = body.find("\n", i)
+                i = n if end == -1 else end + 1
+                continue
+            if body.startswith("/*", i):
+                end = body.find("*/", i + 2)
+                i = n if end == -1 else end + 2
+                continue
+            # Access specifiers (public:/private:/protected:) are labels, not
+            # members; consume up to and including the colon.
+            label = re.match(r"(public|private|protected)\s*:", body[i:])
+            if label:
+                i += label.end()
+                continue
+
+            # A `template <...>` member function is out of scope: skip the
+            # declaration including its body/semicolon entirely.
+            if re.match(r"template\s*<", body[i:]):
+                angle_start = body.find("<", i)
+                angle_end = self._find_matching_angle(body, angle_start)
+                if angle_end is None:
+                    break
+                method_body_start = self._find_next_top_level_char(
+                    body, angle_end + 1, "{"
+                )
+                semicolon = self._find_next_top_level_char(body, angle_end + 1, ";")
+                if method_body_start is not None and (
+                    semicolon is None or method_body_start < semicolon
+                ):
+                    method_body_end = self._find_matching_brace(body, method_body_start)
+                    i = method_body_end if method_body_end is not None else n
+                elif semicolon is not None:
+                    i = semicolon + 1
+                else:
+                    break
+                continue
+
+            # Find the next statement boundary: either a `{` (method body or
+            # in-struct initializer braces) or a `;` (data member / declaration).
+            brace = self._find_next_top_level_char(body, i, "{")
+            semicolon = self._find_next_top_level_char(body, i, ";")
+            if brace is not None and (semicolon is None or brace < semicolon):
+                method = self._parse_struct_method(struct_name, body, i, brace)
+                brace_end = self._find_matching_brace(body, brace)
+                if brace_end is None:
+                    break
+                if method is not None:
+                    method.span = (body_offset + i, body_offset + brace_end)
+                    methods.append(method)
+                    i = brace_end
+                    # An optional trailing `;` after a method body.
+                    j = i
+                    while j < n and body[j].isspace():
+                        j += 1
+                    if j < n and body[j] == ";":
+                        i = j + 1
+                    continue
+                # `_parse_struct_method` declined this brace-delimited construct.
+                # It is either an OUT-OF-SCOPE method definition (constructor,
+                # destructor, conversion/comparison operator, ...) or a data
+                # member with a brace initializer (`size_t n_{0};`). A
+                # method-shaped construct has a top-level parameter list before
+                # the body and is left in place untouched so the parser's
+                # existing struct-method skipping drops it; a brace-initialized
+                # member is recorded as a data member.
+                if self._brace_construct_is_method_definition(body[i:brace]):
+                    i = brace_end
+                    # Consume an optional trailing `;`.
+                    j = i
+                    while j < n and body[j].isspace():
+                        j += 1
+                    if j < n and body[j] == ";":
+                        i = j + 1
+                    continue
+                decl_semicolon = self._find_next_top_level_char(body, brace_end, ";")
+                if decl_semicolon is None:
+                    i = brace_end
+                    continue
+                name = self._declared_data_member_name(body[i:decl_semicolon])
+                if name:
+                    data_member_names.add(name)
+                i = decl_semicolon + 1
+                continue
+            if semicolon is None:
+                break
+            # A declaration terminated by `;`. It may still be a method
+            # PROTOTYPE (declarator + params + ;) with no body — those have no
+            # definition to lower, so record any data member name otherwise.
+            declaration = body[i:semicolon]
+            if not self._declaration_is_method_prototype(declaration):
+                name = self._declared_data_member_name(declaration)
+                if name:
+                    data_member_names.add(name)
+            i = semicolon + 1
+        return data_member_names, methods
+
+    def _parse_struct_method(
+        self, struct_name: str, body: str, decl_start: int, brace: int
+    ) -> Optional[_MetalStructMethod]:
+        # Parse a `RetType name(params) <qualifiers> { body }` declarator that
+        # starts at decl_start with its body opening at `brace`. Returns None when
+        # the construct is not actually an instance/static member function we can
+        # lower (e.g. a constructor, destructor, or a brace-initialized member).
+        header = body[decl_start:brace]
+
+        # `operator()` is special: the declarator itself contains parentheses, so
+        # the actual parameter list is the paren group that FOLLOWS the empty
+        # `operator()` token rather than the first top-level `(`.
+        operator_match = re.search(r"\boperator\s*\(\s*\)", header)
+        is_operator_call = False
+        if operator_match is not None:
+            paren_start = self._function_parameter_start(header[operator_match.end() :])
+            if paren_start is None:
+                return None
+            paren_start += operator_match.end()
+            paren_end = self._find_matching_delimiter(header, paren_start, "(", ")")
+            if paren_end is None:
+                return None
+            is_operator_call = True
+            method_name = "operator()"
+            signature_prefix = header[: operator_match.start()].rstrip()
+            parameters = header[paren_start + 1 : paren_end]
+        else:
+            paren_start = self._function_parameter_start(header)
+            if paren_start is None:
+                return None
+            paren_end = self._find_matching_delimiter(header, paren_start, "(", ")")
+            if paren_end is None:
+                return None
+            before_params = header[:paren_start].rstrip()
+            parameters = header[paren_start + 1 : paren_end]
+            name_match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*$", before_params)
+            if name_match is None:
+                return None
+            method_name = name_match.group(1)
+            signature_prefix = before_params[: name_match.start()].rstrip()
+            # `operator+`, `operator==`, ... (overloaded operators other than the
+            # call operator) are not lowered: they are out of scope and the
+            # existing operator-overload handling/diagnostics still apply.
+            if signature_prefix.endswith("operator") or method_name == "operator":
+                return None
+            # Constructors/destructors have no return type and a name equal to the
+            # struct; leave them in place (out of scope, data-only structs do not
+            # model them and call sites use them as types, not methods).
+            if method_name == struct_name or signature_prefix.endswith("~"):
+                return None
+            # A bare `name(params) {` with no return type is a constructor-like
+            # declarator we do not lower.
+            if not signature_prefix:
+                return None
+
+        # Detect and strip a leading `static` qualifier from the return type.
+        is_static = bool(re.search(r"(^|\s)static(\s|$)", signature_prefix))
+        return_type = re.sub(r"\bstatic\b", " ", signature_prefix)
+        # Strip storage/qualifier keywords that are meaningless on a free
+        # function return type while preserving the actual type tokens.
+        return_type = re.sub(r"\binline\b", " ", return_type)
+        return_type = re.sub(r"\bconstexpr\b", " ", return_type)
+        return_type = re.sub(r"\s+", " ", return_type).strip()
+        if not return_type:
+            return None
+
+        method_body_end = self._find_matching_brace(body, brace)
+        if method_body_end is None:
+            return None
+        method_body = body[brace + 1 : method_body_end - 1]
+
+        parameter_names = self._parameter_identifier_names(parameters)
+        free_name = self._struct_member_free_name(
+            struct_name, method_name, is_operator_call
+        )
+        return _MetalStructMethod(
+            name=method_name,
+            free_name=free_name,
+            is_static=is_static,
+            is_operator_call=is_operator_call,
+            return_type=return_type,
+            parameters=parameters.strip(),
+            parameter_names=parameter_names,
+            body=method_body,
+            span=(decl_start, method_body_end),
+        )
+
+    def _struct_member_free_name(
+        self, struct_name: str, method_name: str, is_operator_call: bool
+    ) -> str:
+        if is_operator_call:
+            return f"{struct_name}__operator_call"
+        return f"{struct_name}__{method_name}"
+
+    def _brace_construct_is_method_definition(self, header: str) -> bool:
+        # Decide whether the text preceding a `{` body is a function declarator
+        # (constructor/destructor/operator/regular method) rather than a data
+        # member with a brace initializer. A method declarator has a top-level
+        # parameter list `(...)`; a brace-initialized member (`size_t n_{0}`) has
+        # the member name immediately before the brace with no parameter list.
+        # A constructor initializer list (`Foo(v) : a(v)`) also has parens, which
+        # is exactly why such constructs are classified as methods.
+        return self._function_parameter_start(header) is not None
+
+    def _declaration_is_method_prototype(self, declaration: str) -> bool:
+        # A declaration with a top-level parameter list and a name immediately
+        # before it is a function prototype rather than a data member.
+        paren_start = self._function_parameter_start(declaration)
+        if paren_start is None:
+            return False
+        paren_end = self._find_matching_delimiter(declaration, paren_start, "(", ")")
+        if paren_end is None:
+            return False
+        before = declaration[:paren_start].rstrip()
+        if re.search(r"\boperator\s*\(\s*\)\s*$", before):
+            return True
+        return re.search(r"[A-Za-z_][A-Za-z0-9_]*\s*$", before) is not None
+
+    def _declared_data_member_name(self, declaration: str) -> Optional[str]:
+        # Extract the declared identifier from a data-member declaration such as
+        # `float bias`, `T data[N]`, `device float* ptr`, or
+        # `static constexpr constant U init = U(0)`.
+        text = self._strip_top_level_default_value(declaration).strip()
+        if not text:
+            return None
+        # Drop any trailing array extents so the bare name is left.
+        while text.endswith("]"):
+            open_bracket = text.rfind("[")
+            if open_bracket == -1:
+                break
+            text = text[:open_bracket].rstrip()
+        match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*$", text)
+        if match is None:
+            return None
+        name = match.group(1)
+        # Guard against returning a type keyword when no name is present.
+        if name in {"struct", "class", "void"}:
+            return None
+        return name
+
+    def _parameter_identifier_names(self, parameters: str) -> List[str]:
+        names: List[str] = []
+        for parameter in self._split_top_level_commas(parameters):
+            name = self._declared_data_member_name(parameter)
+            if name and name != "void":
+                names.append(name)
+        return names
+
+    def _render_lowered_struct(
+        self, code: str, struct: _MetalStructDefinition
+    ) -> Tuple[str, List[str]]:
+        # Produce (data_only_struct_text, [free_function_text, ...]) for one
+        # struct. The data-only struct keeps the original header (including any
+        # base clause) and all NON-method statements; methods are removed and
+        # re-emitted as free functions.
+        struct_text = code[struct.span[0] : struct.span[1]]
+        header_body_start = self._find_next_top_level_char(struct_text, 0, "{")
+        header = struct_text[: header_body_start + 1]
+        # Body content sits between the struct span body bounds; recompute
+        # relative to the struct_text slice.
+        body_abs_start, body_abs_end = struct.body_span
+        body_rel_start = body_abs_start - struct.span[0]
+        body_rel_end = body_abs_end - struct.span[0]
+        body = struct_text[body_rel_start:body_rel_end]
+
+        # Remove method spans (relative to body) to build the data-only body.
+        removals: List[Tuple[int, int]] = []
+        for method in struct.methods:
+            rel_start = method.span[0] - body_abs_start
+            rel_end = method.span[1] - body_abs_start
+            # Extend over a trailing `;` after the method body if present.
+            tail = rel_end
+            while tail < len(body) and body[tail].isspace():
+                tail += 1
+            if tail < len(body) and body[tail] == ";":
+                rel_end = tail + 1
+            removals.append((rel_start, rel_end))
+        data_body = self._remove_spans(body, removals)
+        data_body = self._collapse_blank_lines(data_body)
+
+        data_only = header + data_body + "}"
+        data_only = data_only.rstrip()
+        if not data_only.endswith(";"):
+            data_only += ";"
+
+        free_functions = [
+            self._emit_free_function(struct, method) for method in struct.methods
+        ]
+        return data_only, free_functions
+
+    def _emit_free_function(
+        self, struct: _MetalStructDefinition, method: _MetalStructMethod
+    ) -> str:
+        # Emit `RetType S__m(S self, <params>) { body' }` for an instance method,
+        # or `RetType S__m(<params>) { body' }` for a static method. References to
+        # the struct's data members inside the body are rewritten to `self.x`.
+        rewritten_body = self._rewrite_method_body(struct, method)
+        params = method.parameters.strip()
+        if method.is_static:
+            new_params = params if params and params != "void" else ""
+        else:
+            self_param = f"{struct.name} self"
+            if params and params != "void":
+                new_params = f"{self_param}, {params}"
+            else:
+                new_params = self_param
+        return (
+            f"{method.return_type} {method.free_name}({new_params}) "
+            f"{{{rewritten_body}}}"
+        )
+
+    def _rewrite_method_body(
+        self, struct: _MetalStructDefinition, method: _MetalStructMethod
+    ) -> str:
+        # Rewrite member references inside a method body to `self.<member>`:
+        #   - `this->x` / `this.x` / `(*this).x` -> `self.x`; bare `this` -> `self`
+        #   - a bare identifier equal to a data-member name that is NOT a
+        #     parameter and NOT a local variable declared in the body -> self.x
+        # For a static method there is no `self`, so only the `this` forms (which
+        # cannot legally appear) are normalized and bare members are left as-is.
+        body = method.body
+        # Normalize the various `this` spellings to a single `self` token first.
+        body = re.sub(r"\(\s*\*\s*this\s*\)\s*(?=\.|->)", "self", body)
+        body = re.sub(r"\bthis\s*->\s*", "self.", body)
+        body = re.sub(r"\bthis\s*\.\s*", "self.", body)
+        body = re.sub(r"\bthis\b", "self", body)
+        if method.is_static:
+            return body
+
+        shadowed = set(method.parameter_names)
+        shadowed.update(self._local_variable_names(body))
+        members = struct.data_member_names - shadowed
+        if not members:
+            return body
+        return self._qualify_member_references(body, members)
+
+    def _qualify_member_references(self, body: str, members: Set[str]) -> str:
+        # Walk identifiers and prefix bare member references with `self.`, while
+        # leaving member accesses on OTHER objects (`obj.x`, `obj->x`) and
+        # already-qualified `self.x` untouched.
+        result: List[str] = []
+        i = 0
+        n = len(body)
+        while i < n:
+            ch = body[i]
+            if ch in "\"'":
+                literal, consumed = self._read_string(body, i)
+                result.append(literal)
+                i += consumed
+                continue
+            if body.startswith("//", i):
+                end = body.find("\n", i)
+                if end == -1:
+                    result.append(body[i:])
+                    break
+                result.append(body[i:end])
+                i = end
+                continue
+            if body.startswith("/*", i):
+                end = body.find("*/", i + 2)
+                if end == -1:
+                    result.append(body[i:])
+                    break
+                result.append(body[i : end + 2])
+                i = end + 2
+                continue
+            if ch.isalpha() or ch == "_":
+                ident, consumed = self._read_identifier(body, i)
+                if (
+                    ident in members
+                    and not self._is_member_identifier_context(body, i)
+                    and not self._identifier_is_declaration_or_call(
+                        body, i, i + consumed
+                    )
+                ):
+                    result.append(f"self.{ident}")
+                else:
+                    result.append(ident)
+                i += consumed
+                continue
+            result.append(ch)
+            i += 1
+        return "".join(result)
+
+    def _identifier_is_declaration_or_call(
+        self, body: str, start: int, end: int
+    ) -> bool:
+        # A member name is left untouched when it is used as a function name
+        # (`member(...)`) — a data member of struct type is not callable in our
+        # model, but a same-named free function might be — to stay conservative.
+        j = end
+        while j < len(body) and body[j].isspace():
+            j += 1
+        return j < len(body) and body[j] == "("
+
+    def _local_variable_names(self, body: str) -> Set[str]:
+        # Collect identifiers introduced as locals inside a method body so member
+        # references shadowed by a local are not rewritten to `self.x`. This is a
+        # best-effort scan of `Type name ...;` / `Type name = ...;` declarations
+        # at any brace depth, plus simple `for (Type name ...)` headers.
+        names: Set[str] = set()
+        for statement in self._iter_simple_declarations(body):
+            name = self._declared_local_name(statement)
+            if name:
+                names.add(name)
+        return names
+
+    def _iter_simple_declarations(self, body: str) -> List[str]:
+        # Yield candidate declaration statements: the text since the previous
+        # statement/scope boundary up to each top-level (relative) `;` or the
+        # initializer clauses of `for (...)` headers.
+        statements: List[str] = []
+        i = 0
+        n = len(body)
+        segment_start = 0
+        paren_depth = 0
+        while i < n:
+            ch = body[i]
+            if ch in "\"'":
+                _literal, consumed = self._read_string(body, i)
+                i += consumed
+                continue
+            if body.startswith("//", i):
+                end = body.find("\n", i)
+                i = n if end == -1 else end + 1
+                segment_start = i
+                continue
+            if body.startswith("/*", i):
+                end = body.find("*/", i + 2)
+                i = n if end == -1 else end + 2
+                segment_start = i
+                continue
+            if ch == "(":
+                # Capture `for (` initializer declarations specially.
+                preceding = body[segment_start:i]
+                if re.search(r"\bfor\s*$", preceding):
+                    close = self._find_matching_delimiter(body, i, "(", ")")
+                    if close is not None:
+                        header = body[i + 1 : close]
+                        first_clause = header.split(";", 1)[0]
+                        statements.append(first_clause)
+                        i = close + 1
+                        segment_start = i
+                        continue
+                paren_depth += 1
+                i += 1
+                continue
+            if ch == ")":
+                paren_depth = max(0, paren_depth - 1)
+                i += 1
+                continue
+            if paren_depth == 0 and ch in ";{}":
+                statements.append(body[segment_start:i])
+                i += 1
+                segment_start = i
+                continue
+            i += 1
+        if segment_start < n:
+            statements.append(body[segment_start:n])
+        return statements
+
+    def _declared_local_name(self, statement: str) -> Optional[str]:
+        # Recognize `Type name`, `Type name = ...`, `Type name(...)` where the
+        # leading token(s) look like a type. Reject pure expressions/assignments.
+        text = statement.strip()
+        if not text:
+            return None
+        # Strip an initializer to isolate the declarator.
+        declarator = self._strip_top_level_default_value(text)
+        # A call/paren-initialized declarator: `Type name(args)`.
+        paren = self._function_parameter_start(declarator)
+        if paren is not None:
+            declarator = declarator[:paren].rstrip()
+        # Drop trailing array extents.
+        while declarator.endswith("]"):
+            open_bracket = declarator.rfind("[")
+            if open_bracket == -1:
+                break
+            declarator = declarator[:open_bracket].rstrip()
+        tokens = IDENTIFIER_RE.findall(declarator)
+        # Need at least a type token and a name token; a single token is an
+        # expression (e.g. `i++` stripped) rather than a declaration.
+        if len(tokens) < 2:
+            return None
+        # Reject obvious non-declarations (control-flow keywords as the leader).
+        if tokens[0] in {"return", "if", "else", "while", "for", "switch", "do"}:
+            return None
+        name_match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*$", declarator)
+        if name_match is None:
+            return None
+        return name_match.group(1)
+
+    def _rewrite_struct_member_call_sites(
+        self,
+        code: str,
+        struct_names: Set[str],
+        methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]],
+        operator_call_structs: Set[str],
+        struct_spans: List[Tuple[int, int]],
+    ) -> List[Tuple[int, int, str]]:
+        # Rewrite call sites across the source (outside the struct definitions we
+        # are replacing):
+        #   var.m(args)  -> S__m(var, args)            (instance method)
+        #   var(args)    -> S__operator_call(var, ...)  (var has operator())
+        #   S::m(args)   -> S__m(args)                  (qualified static call)
+        # Local variable struct types are tracked per the declarations that
+        # introduce them (`S var;` / `S var = ...;` / `S var(...)`).
+        variable_types = self._collect_struct_variable_types(
+            code, struct_names, struct_spans
+        )
+        replacements: List[Tuple[int, int, str]] = []
+        i = 0
+        n = len(code)
+        while i < n:
+            ch = code[i]
+            if ch in "\"'":
+                _literal, consumed = self._read_string(code, i)
+                i += consumed
+                continue
+            if code.startswith("//", i):
+                end = code.find("\n", i)
+                i = n if end == -1 else end + 1
+                continue
+            if code.startswith("/*", i):
+                end = code.find("*/", i + 2)
+                i = n if end == -1 else end + 2
+                continue
+            span = self._containing_span(i, struct_spans)
+            if span is not None:
+                i = span[1]
+                continue
+            if ch.isalpha() or ch == "_":
+                ident, consumed = self._read_identifier(code, i)
+                ident_end = i + consumed
+                rewrite = self._try_rewrite_call_at(
+                    code,
+                    i,
+                    ident,
+                    ident_end,
+                    struct_names,
+                    methods_by_struct,
+                    operator_call_structs,
+                    variable_types,
+                )
+                if rewrite is not None:
+                    end, replacement = rewrite
+                    replacements.append((i, end, replacement))
+                    i = end
+                    continue
+                i = ident_end
+                continue
+            i += 1
+        return replacements
+
+    def _try_rewrite_call_at(
+        self,
+        code: str,
+        ident_start: int,
+        ident: str,
+        ident_end: int,
+        struct_names: Set[str],
+        methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]],
+        operator_call_structs: Set[str],
+        variable_types: Dict[str, str],
+    ) -> Optional[Tuple[int, str]]:
+        # Member access on a previous object (`a.var.m(...)`) is not a struct
+        # variable we tracked; skip when the identifier is a member access.
+        if self._is_member_identifier_context(code, ident_start):
+            return None
+
+        j = ident_end
+        while j < len(code) and code[j].isspace():
+            j += 1
+        if j >= len(code):
+            return None
+
+        # Qualified static call: `S::m(args)` -> `S__m(args)`.
+        if ident in struct_names and code[j : j + 2] == "::":
+            k = j + 2
+            while k < len(code) and code[k].isspace():
+                k += 1
+            member, consumed = self._read_identifier(code, k)
+            if not member:
+                return None
+            method = methods_by_struct.get(ident, {}).get(member)
+            after = k + consumed
+            while after < len(code) and code[after].isspace():
+                after += 1
+            if method is None or after >= len(code) or code[after] != "(":
+                return None
+            return after, method.free_name
+
+        struct_type = variable_types.get(ident)
+        if struct_type is None:
+            return None
+
+        # Instance method call: `var.m(args)` -> `S__m(var, args)`.
+        if code[j] == ".":
+            k = j + 1
+            while k < len(code) and code[k].isspace():
+                k += 1
+            member, consumed = self._read_identifier(code, k)
+            if not member:
+                return None
+            method = methods_by_struct.get(struct_type, {}).get(member)
+            after = k + consumed
+            while after < len(code) and code[after].isspace():
+                after += 1
+            if method is None or after >= len(code) or code[after] != "(":
+                # A data-member access (`var.field`) — leave untouched.
+                return None
+            arg_open = after
+            return self._build_instance_call_rewrite(code, ident, method, arg_open)
+
+        # Functor call: `var(args)` -> `S__operator_call(var, ...)`.
+        if code[j] == "(" and struct_type in operator_call_structs:
+            method = methods_by_struct.get(struct_type, {}).get("operator()")
+            if method is None:
+                return None
+            return self._build_instance_call_rewrite(code, ident, method, j)
+
+        return None
+
+    def _build_instance_call_rewrite(
+        self,
+        code: str,
+        receiver: str,
+        method: _MetalStructMethod,
+        arg_open: int,
+    ) -> Optional[Tuple[int, str]]:
+        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+        if arg_close is None:
+            return None
+        args = code[arg_open + 1 : arg_close].strip()
+        if args:
+            replacement = f"{method.free_name}({receiver}, {args})"
+        else:
+            replacement = f"{method.free_name}({receiver})"
+        return arg_close + 1, replacement
+
+    def _collect_struct_variable_types(
+        self,
+        code: str,
+        struct_names: Set[str],
+        struct_spans: List[Tuple[int, int]],
+    ) -> Dict[str, str]:
+        # Map local variable names to the lowered struct type that declares them
+        # by scanning `S var;`, `S var = ...;`, and `S var(...)` declarations
+        # outside the struct definitions. Last declaration wins, which is a
+        # best-effort approximation that suits the flat kernels we translate.
+        variable_types: Dict[str, str] = {}
+        for struct_name in struct_names:
+            pattern = re.compile(
+                rf"\b{re.escape(struct_name)}\s+([A-Za-z_][A-Za-z0-9_]*)\s*"
+                rf"(?=[;={{(])"
+            )
+            for match in pattern.finditer(code):
+                if self._containing_span(match.start(), struct_spans) is not None:
+                    continue
+                # Skip a match that is itself a member access (`x.S var` cannot
+                # happen, but guard scoped `Ns::S` by checking the preceding char).
+                preceding = match.start() - 1
+                while preceding >= 0 and code[preceding].isspace():
+                    preceding -= 1
+                if preceding >= 0 and code[preceding] in ".>":
+                    continue
+                variable_types[match.group(1)] = struct_name
+        return variable_types
+
+    def _remove_spans(self, text: str, spans: List[Tuple[int, int]]) -> str:
+        if not spans:
+            return text
+        result: List[str] = []
+        pos = 0
+        for start, end in sorted(spans):
+            if start < pos:
+                continue
+            result.append(text[pos:start])
+            pos = end
+        result.append(text[pos:])
+        return "".join(result)
+
+    def _collapse_blank_lines(self, text: str) -> str:
+        # Collapse runs of blank lines left behind by removed method bodies so
+        # the data-only struct stays tidy without altering meaningful content.
+        return re.sub(r"\n[ \t]*\n[ \t]*(\n[ \t]*)+", "\n\n", text)
 
     def _find_mlx_kernel_instantiations(
         self, code: str

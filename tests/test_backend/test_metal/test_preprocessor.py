@@ -883,3 +883,151 @@ def test_preprocessor_struct_materializer_ignores_non_template_structs():
     output = MetalPreprocessor().preprocess(code)
     assert "struct Plain {" in output
     assert "Plain_" not in output
+
+
+def test_preprocessor_lowers_instance_method_with_member_reference():
+    # CrossGL structs are data-only, so an instance member function is lowered to
+    # a free function taking the receiver `self` by value, and bare references to
+    # the struct's data members inside the body are rewritten to `self.member`.
+    code = """
+    struct Adder { float bias; float add(float a, float b){ return a + b + bias; } };
+
+    [[kernel]] void k(
+        device const float* in [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint i [[thread_position_in_grid]]) {
+        Adder adder;
+        adder.bias = 1.0;
+        out[i] = adder.add(in[i], 2.0);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    # The struct keeps only its data member; the method is gone from the struct.
+    assert "struct Adder { float bias;" in output
+    assert "float add(" not in output.split("struct Adder")[1].split("}")[0]
+    # The method is re-emitted as a free function with a by-value `self` receiver
+    # and the member reference qualified.
+    assert "float Adder__add(Adder self, float a, float b)" in output
+    assert "a + b + self.bias" in output
+    # The call site is rewritten to pass the receiver as the first argument.
+    assert "Adder__add(adder, in[i], 2.0)" in output
+    # A bare data-member access is left untouched.
+    assert "adder.bias = 1.0;" in output
+    # No dangling method call survives.
+    assert "adder.add(" not in output
+
+
+def test_preprocessor_lowers_static_method_without_self_parameter():
+    # A static member function is lowered to a free function with NO `self`
+    # parameter, and a qualified `S::m(args)` call becomes `S__m(args)`.
+    code = """
+    struct Maths { static float twice(float a){ return a * 2.0; } };
+
+    [[kernel]] void k(
+        device float* out [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        out[i] = Maths::twice(out[i]);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "float Maths__twice(float a)" in output
+    # No `self` is introduced for a static method.
+    assert "Maths self" not in output
+    assert "Maths__twice(out[i])" in output
+    assert "Maths::twice" not in output
+
+
+def test_preprocessor_lowers_call_operator_functor():
+    # An `operator()` functor is lowered to a free function named
+    # `S__operator_call`, and a `var(args)` call where `var` has type S is
+    # rewritten to `S__operator_call(var, args)`.
+    code = """
+    struct Sum { float operator()(float a, float b){ return a + b; } };
+
+    [[kernel]] void k(
+        device const float* in [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint i [[thread_position_in_grid]]) {
+        Sum op;
+        out[i] = op(in[i], out[i]);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "float Sum__operator_call(Sum self, float a, float b)" in output
+    assert "Sum__operator_call(op, in[i], out[i])" in output
+
+
+def test_preprocessor_lowers_materialized_template_functor():
+    # After the struct-template materializer produces a concrete `Sum_float`, the
+    # member-function lowering pass lowers its `operator()` and rewrites the call.
+    code = """
+    template <typename U>
+    struct Sum { static constexpr constant U init = U(0); U operator()(U a, U b){ return a + b; } };
+
+    [[kernel]] void k(
+        device const float* in [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint i [[thread_position_in_grid]]) {
+        Sum<float> op;
+        float acc = op(in[i], out[i]);
+        out[i] = acc;
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "struct Sum_float {" in output
+    assert "float Sum_float__operator_call(Sum_float self, float a, float b)" in output
+    assert "Sum_float__operator_call(op, in[i], out[i])" in output
+    # The primary template is left untouched (template methods are out of scope).
+    assert "template <typename U>" in output
+    # No dangling functor call survives on the concrete instance.
+    assert "= op(" not in output
+
+
+def test_preprocessor_lowering_qualifies_member_only_when_not_shadowed():
+    # A member reference shadowed by a parameter or a local stays bare; the
+    # `this->member` spelling is always rewritten to `self.member`.
+    code = """
+    struct C { float scale; float apply(float scale){ return this->scale * scale; } };
+
+    [[kernel]] void k(
+        device float* out [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        C c;
+        c.scale = 2.0;
+        out[i] = c.apply(out[i]);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    # `this->scale` -> `self.scale`; the parameter `scale` is NOT rewritten.
+    assert "return self.scale * scale;" in output
+    assert "C__apply(c, out[i])" in output
+
+
+def test_preprocessor_lowering_is_noop_without_struct_methods():
+    # Regression-safety: a struct with no member functions (and the surrounding
+    # kernel) must be byte-identical after the lowering pass.
+    code = (
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct Plain { float x; float y; };\n"
+        "kernel void k(device float* o [[buffer(0)]],"
+        " uint i [[thread_position_in_grid]]) {\n"
+        "    Plain p;\n"
+        "    p.x = 1.0;\n"
+        "    o[i] = p.x + p.y;\n"
+        "}\n"
+    )
+    preprocessor = MetalPreprocessor()
+    assert preprocessor._lower_struct_member_functions(code) == code
+
+
+def test_preprocessor_lowering_leaves_method_free_source_untouched():
+    # Regression-safety: a kernel with no structs at all is byte-identical.
+    code = (
+        "kernel void k(device float* o [[buffer(0)]],"
+        " uint i [[thread_position_in_grid]]) {\n"
+        "    o[i] = o[i] * 2.0;\n"
+        "}\n"
+    )
+    preprocessor = MetalPreprocessor()
+    assert preprocessor._lower_struct_member_functions(code) == code
