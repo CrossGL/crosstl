@@ -231,7 +231,7 @@ def test_preprocessor_materializes_signature_only_template_instantiation_entries
     assert "void naive_unfold_nd_float32_2(" in output
     assert "const device float* in" in output
     assert "device float* out" in output
-    assert "const constant ConvParams<2>* params" in output
+    assert "const constant ConvParams_2* params" in output
     assert "out[gid] = in[gid] + float(2 + params->shape[0]);" in output
     assert '[[host_name("naive_unfold_transpose_nd_float32_2")]]' in output
     assert "void naive_unfold_transpose_nd_float32_2(" in output
@@ -239,13 +239,21 @@ def test_preprocessor_materializes_signature_only_template_instantiation_entries
     assert '[[host_name("naive_unfold_nd_float16_3")]]' in output
     assert "void naive_unfold_nd_float16_3(" in output
     assert "const device half* in" in output
-    assert "const constant ConvParams<3>* params" in output
+    assert "const constant ConvParams_3* params" in output
     assert '[[host_name("naive_unfold_transpose_nd_float16_3")]]' in output
     assert "void naive_unfold_transpose_nd_float16_3(" in output
     assert "template [[host_name" not in output
     assert "naive_unfold_Nd(" not in output
     assert "naive_unfold_transpose_Nd(" not in output
     assert "ConvParams<n>" not in output
+    # The ConvParams<N> struct template referenced by the kernel signatures is
+    # materialized into concrete structs, with no residual instantiations left.
+    assert "struct ConvParams_2 {" in output
+    assert "int shape[2];" in output
+    assert "struct ConvParams_3 {" in output
+    assert "int shape[3];" in output
+    assert "ConvParams<2>" not in output
+    assert "ConvParams<3>" not in output
 
 
 def test_preprocessor_materialized_numeric_specialization_preserves_member_names():
@@ -784,3 +792,94 @@ def test_materialize_template_struct_requires_all_parameters():
     assert (
         preprocessor._materialize_template_struct_with_name(struct, [], "Box_x") == ""
     )
+
+
+def test_preprocessor_materializes_struct_template_instantiation():
+    # Wiring the struct-template materializer (issue #1354): a concrete
+    # `StructName<args>` type reference is rewritten to a materialized concrete
+    # struct, the counterpart of the function-template call materializer.
+    code = """
+    template <typename T, int N>
+    struct Tile {
+        T data[N];
+    };
+
+    [[kernel]] void k(
+        device float* out [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        Tile<float, 4> tile;
+        tile.data[0] = out[i];
+        out[i] = tile.data[0];
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "Tile_float_4 tile;" in output
+    assert "struct Tile_float_4 {" in output
+    assert "float data[4];" in output
+    # The materialized concrete struct is terminated with a semicolon.
+    assert output.rstrip().endswith(";")
+    # No residual instantiation survives.
+    assert "Tile<float, 4>" not in output
+
+
+def test_preprocessor_materializes_nested_struct_template_instantiations():
+    # Nested instantiations resolve through iteration: materializing Outer
+    # surfaces a concrete Inner<float, 8> reference, which is then materialized.
+    code = """
+    template <typename T, int N> struct Inner { T vals[N]; };
+    template <typename T, int N> struct Outer { Inner<T, N> inner; };
+
+    [[kernel]] void k(
+        device float* out [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        Outer<float, 8> o;
+        out[i] = o.inner.vals[0];
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "Outer_float_8 o;" in output
+    assert "struct Outer_float_8 {" in output
+    assert "Inner_float_8 inner;" in output
+    assert "struct Inner_float_8 {" in output
+    assert "float vals[8];" in output
+    assert "Outer<float, 8>" not in output
+    assert "Inner<float, 8>" not in output
+
+
+def test_preprocessor_leaves_specialized_struct_templates_unmaterialized():
+    # A struct template with an explicit specialization is left for the future
+    # specialization-aware path rather than incorrectly materializing only the
+    # primary template; the residual instantiation falls back to the diagnostic.
+    code = """
+    template <typename T> struct Trait { T value; };
+    template <> struct Trait<bool> { int value; };
+
+    [[kernel]] void k(
+        device int* out [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        Trait<bool> t;
+        out[i] = t.value;
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "Trait<bool>" in output
+    assert "struct Trait_bool {" not in output
+
+
+def test_preprocessor_struct_materializer_ignores_non_template_structs():
+    # Non-template structs are untouched; the materializer only rewrites concrete
+    # references to struct templates.
+    code = """
+    struct Plain { float x; };
+
+    [[kernel]] void k(
+        device float* out [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        Plain p;
+        p.x = out[i];
+        out[i] = p.x;
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "struct Plain {" in output
+    assert "Plain_" not in output
