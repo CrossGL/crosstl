@@ -2,6 +2,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -1777,6 +1778,175 @@ def test_metal_template_placeholder_scan_ignores_comments():
     )
     # A genuine unresolved template parameter is still detected.
     assert _unresolved_metal_template_placeholders_in_type("T", {"T"}) == ["T"]
+
+
+def test_metal_struct_member_templates_are_not_unresolved_free_templates():
+    # Regression: templated struct MEMBERS (constructors, conversion operators,
+    # `operator()` functors) carry their own `template <...>` header, so the
+    # residual-template scanner misread them as free template functions and
+    # reported spurious "missing template parameter" records such as
+    # `complex64_t<T>` / `operator<T>` / `T<T>` from MLX complex.h and the binary
+    # op functors — wrongly blocking otherwise-translatable kernels
+    # (MLX binary/copy/arg_reduce). Member templates are lowered to free functions
+    # by `_lower_struct_member_functions`; they must be excluded from the
+    # unresolved-free-template loop while genuine free templates still are not.
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+    from crosstl.project.pipeline import (
+        _metal_concrete_struct_member_spans,
+        _metal_template_is_struct_member,
+    )
+
+    preprocessor = MetalPreprocessor()
+    source = (
+        "struct complex64_t {\n"
+        "  float real;\n"
+        "  float imag;\n"
+        "  template <typename T>\n"
+        "  constexpr complex64_t(T x) thread : real(x), imag(0) {}\n"
+        "  template <typename T>\n"
+        "  constexpr operator T() const thread { return static_cast<T>(real); }\n"
+        "};\n"
+        "struct Add {\n"
+        "  template <typename T>\n"
+        "  T operator()(T x, T y) { return x + y; }\n"
+        "};\n"
+        "template <typename T, typename U, typename Op>\n"
+        "[[kernel]] void binary_ss(device const T* a, device U* c) {\n"
+        "  c[0] = Op()(a[0], a[0]);\n"
+        "}\n"
+    )
+
+    member_spans = _metal_concrete_struct_member_spans(preprocessor, source)
+    templates = preprocessor._find_template_functions(source)
+    classification = {
+        template.name: _metal_template_is_struct_member(
+            preprocessor, template, member_spans
+        )
+        for template in templates
+    }
+
+    # The templated constructor (name == struct name), the templated conversion
+    # operator (name == "T"), and the templated functor (name == "operator") are
+    # all member templates.
+    assert classification["complex64_t"] is True
+    assert classification["T"] is True
+    assert classification["operator"] is True
+    # The genuine free kernel template is NOT a member template and stays subject
+    # to materialization / unresolved detection.
+    assert classification["binary_ss"] is False
+
+
+def test_metal_project_template_instantiations_are_deduplicated():
+    # Regression: the same expanded `template [[host_name(...)]] ... Name<args>;`
+    # declaration is matched by more than one detector, so each instantiation was
+    # counted twice (overlapping spans). That doubled count inflated the
+    # `max_template_specializations` budget check and could spuriously bail out of
+    # materialization, leaving generic templates un-stripped and later flagged as
+    # unresolved (e.g. MLX binary/copy `binary_ss<T, U, Op>`). Identical
+    # specializations (same function, args, host) must collapse to one entry.
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    preprocessor = MetalPreprocessor()
+    source = (
+        "template <typename T, typename U>\n"
+        "[[kernel]] void copy_s(device const T* a, device U* c) { c[0] = a[0]; }\n"
+        'template [[host_name("copy_s_float")]] [[kernel]] '
+        "decltype(copy_s<float, float>) copy_s<float, float>;\n"
+    )
+
+    instantiations = preprocessor._find_project_template_instantiations(source)
+
+    copy_s = [inst for inst in instantiations if inst.function_name == "copy_s"]
+    assert len(copy_s) == 1, [
+        (inst.host_name, tuple(inst.template_arguments)) for inst in copy_s
+    ]
+    assert copy_s[0].host_name == "copy_s_float"
+    assert copy_s[0].template_arguments == ["float", "float"]
+
+
+def test_metal_struct_member_template_kernel_translates_without_false_positive(
+    tmp_path,
+):
+    # End-to-end regression mirroring MLX binary/copy/arg_reduce: a concrete struct
+    # with templated member constructors / conversion operators plus a templated
+    # `operator()` functor, used by an explicitly instantiated free kernel
+    # template. Before the fix the materializer reported a spurious
+    # `template-materialization-unsupported` for `complex64_t<T>` / `operator<T>`;
+    # now the kernel translates and emits no dangling template/member constructs.
+    from crosstl.project import load_project_config
+
+    repo = tmp_path / "repo"
+    source_dir = repo / "kernels"
+    source_dir.mkdir(parents=True)
+    (source_dir / "ops.metal").write_text(
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "\n"
+        "struct complex64_t {\n"
+        "  float real;\n"
+        "  float imag;\n"
+        "  constexpr complex64_t(float r, float i) : real(r), imag(i) {}\n"
+        "  constexpr complex64_t() : real(0), imag(0) {}\n"
+        "  template <typename T>\n"
+        "  constexpr complex64_t(T x) thread : real(x), imag(0) {}\n"
+        "  template <typename T>\n"
+        "  constexpr operator T() const thread { return static_cast<T>(real); }\n"
+        "};\n"
+        "\n"
+        "struct Add {\n"
+        "  template <typename T>\n"
+        "  T operator()(T x, T y) { return x + y; }\n"
+        "};\n"
+        "\n"
+        "template <typename T, typename Op>\n"
+        "[[kernel]] void binary_op(\n"
+        "    device const T* a [[buffer(0)]],\n"
+        "    device const T* b [[buffer(1)]],\n"
+        "    device T* c [[buffer(2)]],\n"
+        "    uint index [[thread_position_in_grid]]) {\n"
+        "  c[index] = Op()(a[index], b[index]);\n"
+        "}\n"
+        "\n"
+        'template [[host_name("add_float")]] [[kernel]] '
+        "decltype(binary_op<float, Add>) binary_op<float, Add>;\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(
+            """
+            [project]
+            source_roots = ["kernels"]
+            include = ["kernels/ops.metal"]
+            targets = ["vulkan"]
+            output_dir = "out"
+
+            [project.sources]
+            "**/*.metal" = "metal"
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo), format_output=False)
+    payload = report.to_json()
+
+    unsupported = [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic.get("code")
+        == "project.translate.template-materialization-unsupported"
+    ]
+    assert unsupported == [], unsupported
+
+    artifact = payload["artifacts"][0]
+    assert artifact.get("status") == "translated", artifact.get("error")
+
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    _assert_generated_output_is_usable(generated)
+    # No residual template/member-template scaffolding leaks into the output.
+    assert "complex64_t<" not in generated
+    assert "operator<T>" not in generated
+    assert "template <" not in generated
 
 
 def test_metal_function_header_masks_comments_spanning_the_header_start():

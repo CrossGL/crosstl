@@ -13083,6 +13083,39 @@ def _unmaterialized_metal_template_functor_records(
     return records
 
 
+def _metal_concrete_struct_member_spans(
+    preprocessor: Any,
+    source: str,
+) -> list[tuple[int, int]]:
+    # Body spans of every CONCRETE (non-template) struct/class. A `template <...>`
+    # header found inside one of these is a MEMBER template (a templated
+    # constructor, conversion operator, or `operator()` functor) — never a free
+    # template function. Member templates are specialized implicitly when the
+    # enclosing type's member is used and are lowered to free functions by
+    # `_lower_struct_member_functions`; they must NOT be reported as unresolved
+    # standalone templates. Template structs are intentionally excluded here: the
+    # struct materializer owns those, so their member templates stay in scope for
+    # the existing standalone scanners.
+    try:
+        structs = preprocessor._find_concrete_struct_definitions(source)
+    except Exception:  # noqa: BLE001
+        return []
+    return [struct.body_span for struct in structs]
+
+
+def _metal_template_is_struct_member(
+    preprocessor: Any,
+    template: Any,
+    member_spans: Sequence[tuple[int, int]],
+) -> bool:
+    if not member_spans:
+        return False
+    return (
+        preprocessor._containing_span(int(template.span[0]), list(member_spans))
+        is not None
+    )
+
+
 def _project_template_materialization_for_artifact(
     *,
     unit: ProjectTranslationUnit,
@@ -13537,6 +13570,10 @@ def _project_template_materialization_for_artifact(
         current_template_spans,
     )
     remaining_templates = preprocessor._find_template_functions(materialized)
+    concrete_struct_member_spans = _metal_concrete_struct_member_spans(
+        preprocessor,
+        materialized,
+    )
     reachable_template_names = _reachable_metal_template_function_names(
         preprocessor,
         materialized,
@@ -13545,6 +13582,19 @@ def _project_template_materialization_for_artifact(
         current_reachable_function_spans,
     )
     for template in remaining_templates:
+        if _metal_template_is_struct_member(
+            preprocessor,
+            template,
+            concrete_struct_member_spans,
+        ):
+            # Templated struct members (constructors, conversion operators,
+            # `operator()` functors) are specialized implicitly via their enclosing
+            # type and lowered by `_lower_struct_member_functions`. They are not
+            # free template functions, so they must be left in place rather than
+            # stripped or reported as unresolved template materializations (e.g. the
+            # spurious `complex64_t<T>` / `operator<T>` records from MLX complex.h
+            # and the binary-op functors).
+            continue
         if (
             template.name in explicit_template_names
             or template.name in inherited_template_names

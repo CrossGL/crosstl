@@ -3,7 +3,7 @@
 import operator
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Set, Tuple
 
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
@@ -1902,7 +1902,43 @@ class MetalPreprocessor(HLSLPreprocessor):
         instantiations.extend(self._find_raw_mlx_kernel_instantiations(code))
         instantiations.extend(self._find_declared_mlx_kernel_instantiations(code))
         instantiations.extend(self._find_declared_template_instantiations(code))
+        instantiations = self._dedupe_template_instantiations(instantiations)
         return sorted(instantiations, key=lambda item: item.span[0])
+
+    def _dedupe_template_instantiations(
+        self, instantiations: List[_MLXKernelInstantiation]
+    ) -> List[_MLXKernelInstantiation]:
+        # The same expanded `template [[host_name(...)]] ... Name<args>;`
+        # declaration is matched by more than one detector (the declared-host-name
+        # scanner and the generic declared-template scanner), so an instantiation
+        # can be reported twice with slightly different (overlapping) spans. Those
+        # duplicates double the instantiation count, which both inflates the
+        # `max_template_specializations` budget check (causing a spurious bail-out
+        # that leaves generic templates un-materialized and later flagged as
+        # unresolved) and adds redundant removal spans. Collapse entries that share
+        # the same target specialization — identical function name, normalized
+        # template arguments, and host name — keeping the widest covering span so
+        # the declaration is fully removed during materialization.
+        unique: dict[tuple[str, tuple[str, ...], str], _MLXKernelInstantiation] = {}
+        for instantiation in instantiations:
+            key = (
+                instantiation.function_name,
+                tuple(
+                    self._normalize_template_argument_text(argument)
+                    for argument in instantiation.template_arguments
+                ),
+                instantiation.host_name,
+            )
+            existing = unique.get(key)
+            if existing is None:
+                unique[key] = instantiation
+                continue
+            # Keep the widest span so the full declaration text is removed.
+            start = min(existing.span[0], instantiation.span[0])
+            end = max(existing.span[1], instantiation.span[1])
+            if (start, end) != existing.span:
+                unique[key] = replace(existing, span=(start, end))
+        return list(unique.values())
 
     def _find_raw_mlx_kernel_instantiations(
         self, code: str
