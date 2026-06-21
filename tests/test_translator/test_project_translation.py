@@ -44737,3 +44737,177 @@ def test_legacy_single_file_cli_still_works(tmp_path):
 
     assert "Successfully translated" in result.stdout
     assert output.exists()
+
+
+METAL_SIMD_SHUFFLE_DOWN_LEAK_KERNEL = textwrap.dedent("""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void reduce_kernel(device float* data [[buffer(0)]],
+                              uint tid [[thread_position_in_grid]]) {
+        float v = data[tid];
+        float s = simd_shuffle_down(v, 1);
+        data[tid] = s;
+    }
+    """).strip()
+
+
+METAL_ELEMENTWISE_COPY_KERNEL = textwrap.dedent("""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void copy_kernel(device float* src [[buffer(0)]],
+                            device float* dst [[buffer(1)]],
+                            uint tid [[thread_position_in_grid]]) {
+        dst[tid] = src[tid];
+    }
+    """).strip()
+
+
+def _write_metal_directx_project(repo: Path, kernel_name: str, source: str) -> Path:
+    kernel_dir = repo / "kernels"
+    kernel_dir.mkdir(parents=True)
+    (kernel_dir / f"{kernel_name}.metal").write_text(source, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["kernels"]
+            include = ["kernels/*.metal"]
+            targets = ["directx"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+    return repo
+
+
+def test_metal_simd_shuffle_down_leak_to_directx_is_flagged_unresolved(tmp_path):
+    # Sanity-check the leak: simd_shuffle_down is not in the Metal wave-intrinsic
+    # map, so it survives un-lowered into the HLSL artifact.
+    leak_dir = tmp_path / "leak-check"
+    leak_dir.mkdir()
+    leak_path = leak_dir / "reduce_kernel.metal"
+    leak_path.write_text(METAL_SIMD_SHUFFLE_DOWN_LEAK_KERNEL, encoding="utf-8")
+    leaked_hlsl = project_pipeline.translate(
+        str(leak_path), backend="directx", source_backend="metal"
+    )
+    assert "simd_shuffle_down" in leaked_hlsl
+
+    repo = _write_metal_directx_project(
+        tmp_path / "repo", "reduce_kernel", METAL_SIMD_SHUFFLE_DOWN_LEAK_KERNEL
+    )
+
+    payload = translate_project(
+        load_project_config(repo), format_output=False
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-unresolved-construct": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "metal.construct-lowering": 1
+    }
+
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.metal-unresolved-construct"
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["metal.construct-lowering"]
+    assert "Metal simd_* intrinsic" in diagnostic["message"]
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "directx"
+    assert "unresolved Metal source constructs" in artifact["error"]
+    assert "Metal simd_* intrinsic" in artifact["error"]
+    assert not (repo / artifact["path"]).exists()
+
+
+def test_metal_elementwise_copy_to_directx_is_not_flagged(tmp_path):
+    # The clean copy kernel lowers cleanly; the conservative guardrail must not
+    # flag valid HLSL output.
+    clean_dir = tmp_path / "clean-check"
+    clean_dir.mkdir()
+    clean_path = clean_dir / "copy_kernel.metal"
+    clean_path.write_text(METAL_ELEMENTWISE_COPY_KERNEL, encoding="utf-8")
+    clean_hlsl = project_pipeline.translate(
+        str(clean_path), backend="directx", source_backend="metal"
+    )
+    assert "simd_" not in clean_hlsl
+    assert "metal::" not in clean_hlsl
+
+    repo = _write_metal_directx_project(
+        tmp_path / "repo", "copy_kernel", METAL_ELEMENTWISE_COPY_KERNEL
+    )
+
+    payload = translate_project(
+        load_project_config(repo), format_output=False
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert (
+        "project.translate.metal-unresolved-construct"
+        not in payload["summary"]["diagnosticsByCode"]
+    )
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["target"] == "directx"
+    assert (repo / artifact["path"]).exists()
+
+
+def test_metal_unresolved_construct_findings_skip_locally_defined_simd_helpers():
+    # A target artifact that *defines* simd_* helpers (e.g. an MLX utils.h shim
+    # ported to HLSL) is valid output; only an undefined, dangling intrinsic
+    # call is a real leak. The guardrail must distinguish the two.
+    defined_helper_hlsl = textwrap.dedent("""
+        uint simd_shuffle_down(uint data, uint delta) {
+            return data;
+        }
+        bool simd_shuffle_down(bool data, uint delta) {
+            return simd_shuffle_down(uint(data), delta);
+        }
+        void CSMain(uint3 tid : SV_DispatchThreadID) {
+            uint v = 0u;
+            uint s = simd_shuffle_down(v, 1u);
+        }
+        """).strip()
+    assert (
+        project_pipeline._metal_unresolved_target_construct_findings(
+            "directx", defined_helper_hlsl
+        )
+        == []
+    )
+
+    leaked_call_hlsl = textwrap.dedent("""
+        void CSMain(uint3 tid : SV_DispatchThreadID) {
+            float v = 0.0;
+            float s = simd_shuffle_down(v, 1);
+        }
+        """).strip()
+    leak_findings = project_pipeline._metal_unresolved_target_construct_findings(
+        "directx", leaked_call_hlsl
+    )
+    assert [finding["id"] for finding in leak_findings] == ["metal-simd-intrinsic"]
+
+
+def test_metal_buffer_intrinsics_allowed_for_rust_and_mojo_targets():
+    # buffer_load/buffer_store are valid generated output for the Rust and Mojo
+    # backends (they emit matching helpers), so the guardrail must not flag
+    # them there even though every GPU shading target lowers them away.
+    buffer_source = "let value = buffer_load(data, index);"
+    for native_target in ("rust", "mojo"):
+        assert (
+            project_pipeline._metal_unresolved_target_construct_findings(
+                native_target, buffer_source
+            )
+            == []
+        )
+    for shading_target in ("directx", "opengl", "vulkan", "wgsl"):
+        findings = project_pipeline._metal_unresolved_target_construct_findings(
+            shading_target, buffer_source
+        )
+        assert [finding["id"] for finding in findings] == ["crossgl-buffer-load"]

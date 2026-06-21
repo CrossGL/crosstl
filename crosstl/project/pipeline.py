@@ -1758,6 +1758,10 @@ MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE = (
     "project.translate.mojo-unresolved-host-construct"
 )
 MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY = "mojo.host-runtime-lowering"
+METAL_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE = (
+    "project.translate.metal-unresolved-construct"
+)
+METAL_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY = "metal.construct-lowering"
 MOJO_RESOURCE_PLACEHOLDER_CAPABILITY = "mojo.resource-binding"
 MOJO_RESOURCE_PLACEHOLDER_KIND = "crossgl-resource-placeholders"
 PLACEHOLDER_MARKER_RULES = (
@@ -1893,6 +1897,94 @@ MOJO_UNRESOLVED_TARGET_CONSTRUCT_RULES = (
         "SPIR-V unresolved-lowering warning",
         re.compile(r";\s*WARNING:.*\b(?:Unknown|unknown|unresolved|Could not find)\b"),
     ),
+)
+# Conservative Metal-source leak guardrail. Every pattern below matches a token
+# that is UNAMBIGUOUSLY invalid in a non-Metal target artifact: if it survives
+# into generated output it means a Metal/CrossGL construct failed to lower. The
+# patterns are anchored (word boundaries / specific prefixes / trailing "(") so
+# they never match a substring inside a legitimate user identifier, and they are
+# only ever evaluated for targets other than "metal" and CrossGL ("cgl"/
+# "crossgl") (see _metal_target_construct_rule_applies), where these tokens are
+# genuinely valid.
+METAL_UNRESOLVED_TARGET_CONSTRUCT_RULES = (
+    (
+        "metal-namespace",
+        "Metal namespace qualifier (metal::)",
+        re.compile(r"\bmetal::"),
+    ),
+    (
+        "metal-memory-order",
+        "Metal memory_order_* enum",
+        re.compile(r"\bmemory_order_[a-z]"),
+    ),
+    (
+        "metal-atomic-fetch",
+        "Metal atomic_fetch_* intrinsic",
+        re.compile(r"\batomic_fetch_[a-z]"),
+    ),
+    (
+        "metal-atomic-load-explicit",
+        "Metal atomic_load_explicit intrinsic",
+        re.compile(r"\batomic_load_explicit\b"),
+    ),
+    (
+        "metal-atomic-store-explicit",
+        "Metal atomic_store_explicit intrinsic",
+        re.compile(r"\batomic_store_explicit\b"),
+    ),
+    (
+        "metal-atomic-exchange-explicit",
+        "Metal atomic_exchange_explicit intrinsic",
+        re.compile(r"\batomic_exchange_explicit\b"),
+    ),
+    (
+        # Match only the concrete Metal simd_* intrinsic names as whole words.
+        # A bare prefix (\bsimd_) would also flag user functions that merely
+        # start with "simd_" (e.g. a template a project defines named
+        # simd_shuffle_down, materialized to simd_shuffle_down_float) which are
+        # legitimate output. Anchoring on \b...\b means simd_shuffle_down matches
+        # but simd_shuffle_down_float (different token) does not.
+        "metal-simd-intrinsic",
+        "Metal simd_* intrinsic",
+        re.compile(
+            r"\b(?:"
+            r"simd_shuffle|simd_shuffle_down|simd_shuffle_up|simd_shuffle_xor|"
+            r"simd_shuffle_rotate_down|simd_shuffle_rotate_up|"
+            r"simd_shuffle_and_fill_down|simd_shuffle_and_fill_up|"
+            r"simd_broadcast|simd_broadcast_first|"
+            r"simd_ballot|simd_active_threads_mask|"
+            r"simd_is_first|simd_is_helper_thread|"
+            r"simd_prefix_inclusive_sum|simd_prefix_inclusive_product|"
+            r"simd_prefix_exclusive_sum|simd_prefix_exclusive_product|"
+            r"simd_sum|simd_product|simd_min|simd_max|"
+            r"simd_and|simd_or|simd_xor|simd_all|simd_any"
+            r")\b"
+        ),
+    ),
+    (
+        "crossgl-buffer-load",
+        "CrossGL buffer_load intrinsic",
+        re.compile(r"\bbuffer_load[0-9]*\s*\("),
+    ),
+    (
+        "crossgl-buffer-store",
+        "CrossGL buffer_store intrinsic",
+        re.compile(r"\bbuffer_store[0-9]*\s*\("),
+    ),
+    (
+        "glsl-builtin",
+        "GLSL builtin (gl_*) in HLSL output",
+        re.compile(r"\bgl_[A-Z]"),
+    ),
+)
+# A source that ports the Metal simd_* intrinsics by providing its own portable
+# helper definitions (e.g. MLX's utils.h emits "<type> simd_max(<type> v) {…}")
+# is valid output: the simd_* names are defined and called locally, not leaked.
+# This pattern captures the *name* of such a definition so the simd rule can
+# suppress those names; it deliberately requires a return-type token before the
+# name and an opening parenthesis, so plain call/return statements do not match.
+METAL_SIMD_LOCAL_DEFINITION_PATTERN = re.compile(
+    r"^[A-Za-z_][\w:<>,\*&\s]*?\b(simd_\w+)\s*\("
 )
 MOJO_SPIRV_BLOCK_ONLY_OPS = frozenset(
     (
@@ -14434,9 +14526,19 @@ def translate_project(
                             artifact, generated_source
                         )
                     )
-                    if mojo_host_diagnostics:
+                    metal_construct_diagnostics: list[ProjectDiagnostic] = []
+                    if unit.source_backend == "metal":
+                        metal_construct_diagnostics = (
+                            _metal_unresolved_target_construct_diagnostics(
+                                artifact, generated_source
+                            )
+                        )
+                    unresolved_construct_diagnostics = (
+                        mojo_host_diagnostics + metal_construct_diagnostics
+                    )
+                    if unresolved_construct_diagnostics:
                         artifact["status"] = "failed"
-                        artifact["error"] = mojo_host_diagnostics[0].message
+                        artifact["error"] = unresolved_construct_diagnostics[0].message
                         output_path.unlink(missing_ok=True)
                         artifact_records = [artifact]
                     else:
@@ -14457,7 +14559,7 @@ def translate_project(
                         diagnostics.extend(
                             _generated_placeholder_diagnostics(artifact_records, config)
                         )
-                    diagnostics.extend(mojo_host_diagnostics)
+                    diagnostics.extend(unresolved_construct_diagnostics)
                 except Exception as exc:  # noqa: BLE001
                     # Project translation reports per-artifact failures so one bad
                     # unit does not hide the rest of the repository's migration state.
@@ -15329,6 +15431,157 @@ def _mojo_unresolved_target_construct_diagnostics(
             **_artifact_diagnostic_context(artifact),
             check_kind="artifact",
             missing_capabilities=[MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY],
+        )
+    ]
+
+
+def _metal_target_construct_rule_applies(rule_id: str, target: str) -> bool:
+    # The Metal source backend is the origin of these tokens, so they are valid
+    # in Metal output. CrossGL (target "cgl"/"crossgl") is the IR and keeps its
+    # own intrinsics (e.g. buffer_load/buffer_store, metal::), so the CrossGL
+    # source-to-source output is never scanned either.
+    if target == "metal" or target in CROSSL_TARGETS:
+        return False
+    if rule_id == "glsl-builtin":
+        # gl_* builtins (gl_Position, gl_FragCoord, ...) are valid in
+        # OpenGL/Vulkan/GLSL output; only HLSL (DirectX) has no such namespace.
+        return target == "directx"
+    if rule_id in ("crossgl-buffer-load", "crossgl-buffer-store"):
+        # The Rust and Mojo backends have no native indexed-buffer syntax, so
+        # the CrossGL buffer_load/buffer_store intrinsics are part of their
+        # *valid* generated output (they emit matching helper functions). Every
+        # actual GPU shading target (directx, opengl, vulkan, wgsl, cuda, hip,
+        # slang) lowers them away, so leaks there are real failures.
+        return target not in ("rust", "mojo")
+    return True
+
+
+def _metal_locally_defined_simd_names(lines: Sequence[str]) -> set[str]:
+    """Names of simd_* functions defined (not merely called) in the artifact.
+
+    A definition is a declarator that starts with a return-type token, names a
+    ``simd_*`` function, and opens a body (``{``) before any statement
+    terminator. Pure call sites (``return simd_x(...)``) and assignments are
+    excluded so a leaked, undefined intrinsic call is never mistaken for a
+    locally provided helper.
+    """
+    names: set[str] = set()
+    count = len(lines)
+    for index, raw in enumerate(lines):
+        line = raw.strip()
+        if not line or line.startswith(("return", "//", "*", "/*")):
+            continue
+        match = METAL_SIMD_LOCAL_DEFINITION_PATTERN.match(line)
+        if match is None:
+            continue
+        prefix = line[: match.start(1)].strip()
+        if not prefix or "=" in prefix:
+            continue
+        # The declarator must open a brace before any terminator; scan ahead in
+        # case the brace is on a following line.
+        chunk = line[match.end(1) :]
+        scan = index
+        while "{" not in chunk and ";" not in chunk and scan + 1 < count:
+            scan += 1
+            chunk += " " + lines[scan].strip()
+        brace = chunk.find("{")
+        semicolon = chunk.find(";")
+        if brace != -1 and (semicolon == -1 or brace < semicolon):
+            names.add(match.group(1))
+    return names
+
+
+def _metal_unresolved_target_construct_findings(
+    target: str, generated_source: str
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    offset = 0
+    lines_only = generated_source.splitlines()
+    locally_defined_simd = _metal_locally_defined_simd_names(lines_only)
+    for line_number, line in enumerate(
+        generated_source.splitlines(keepends=True), start=1
+    ):
+        line_text = line.rstrip("\r\n")
+        for rule_id, label, pattern in METAL_UNRESOLVED_TARGET_CONSTRUCT_RULES:
+            if not _metal_target_construct_rule_applies(rule_id, target):
+                continue
+            match = pattern.search(line_text)
+            if match is None:
+                continue
+            if (
+                rule_id == "metal-simd-intrinsic"
+                and match.group(0) in locally_defined_simd
+            ):
+                # A locally defined simd_* helper (e.g. an MLX utils.h shim) is
+                # valid output, not a leaked Metal intrinsic. Skip it.
+                continue
+            findings.append(
+                {
+                    "id": rule_id,
+                    "label": label,
+                    "line": line_number,
+                    "column": match.start() + 1,
+                    "offset": offset + match.start(),
+                    "length": max(match.end() - match.start(), 1),
+                }
+            )
+        offset += len(line)
+    return findings
+
+
+def _metal_unresolved_target_construct_message(
+    artifact: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]
+) -> str:
+    labels = []
+    seen = set()
+    for finding in findings:
+        label = finding.get("label")
+        if not _is_non_empty_string(label) or label in seen:
+            continue
+        labels.append(label)
+        seen.add(label)
+    label_text = ", ".join(labels)
+    return (
+        f"Generated {artifact.get('target')} artifact contains unresolved Metal "
+        f"source constructs in {artifact.get('path')}: {label_text}. "
+        "Lower these Metal/CrossGL constructs to the target language before "
+        "codegen, or mark the target artifact unsupported."
+    )
+
+
+def _metal_unresolved_target_construct_diagnostics(
+    artifact: Mapping[str, Any],
+    generated_source: str,
+) -> list[ProjectDiagnostic]:
+    if artifact.get("sourceBackend") != "metal":
+        return []
+    target = str(artifact.get("target", ""))
+    if target == "metal" or target in CROSSL_TARGETS:
+        return []
+    findings = _metal_unresolved_target_construct_findings(target, generated_source)
+    if not findings:
+        return []
+
+    first_finding = findings[0]
+    return [
+        ProjectDiagnostic(
+            severity="error",
+            code=METAL_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE,
+            message=_metal_unresolved_target_construct_message(artifact, findings),
+            location=SourceLocation(
+                file=str(artifact.get("path", "")),
+                line=int(first_finding["line"]),
+                column=int(first_finding["column"]),
+                offset=int(first_finding["offset"]),
+                length=int(first_finding["length"]),
+                end_line=int(first_finding["line"]),
+                end_column=int(first_finding["column"]) + int(first_finding["length"]),
+                end_offset=int(first_finding["offset"]) + int(first_finding["length"]),
+            ),
+            original_location=SourceLocation(file=str(artifact.get("source", ""))),
+            **_artifact_diagnostic_context(artifact),
+            check_kind="artifact",
+            missing_capabilities=[METAL_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY],
         )
     ]
 
