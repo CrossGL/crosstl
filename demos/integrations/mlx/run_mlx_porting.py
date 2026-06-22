@@ -42,7 +42,6 @@ REDUCED_FRONTIER_MODE = "reduced-frontier"
 FULL_CORPUS_MODE = "full-corpus"
 FRONTIER_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()
 FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
-    "https://github.com/CrossGL/crosstl/issues/1354",
     "https://github.com/CrossGL/crosstl/issues/1376",
 )
 RUNTIME_READINESS_TRACKED_ISSUES = (
@@ -68,6 +67,10 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *RUNTIME_READINESS_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1454",
+    "https://github.com/CrossGL/crosstl/issues/1453",
+    "https://github.com/CrossGL/crosstl/issues/1452",
+    "https://github.com/CrossGL/crosstl/issues/1354",
     "https://github.com/CrossGL/crosstl/issues/1362",
     "https://github.com/CrossGL/crosstl/issues/1317",
     "https://github.com/CrossGL/crosstl/issues/1300",

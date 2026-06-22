@@ -15,6 +15,25 @@ def token_values(code, **lexer_options):
     return [value for _, value in MetalLexer(code, **lexer_options).tokenize()]
 
 
+def test_containing_span_preserves_sorted_lookup_boundaries():
+    preprocessor = MetalPreprocessor()
+    spans = [(2, 5), (8, 13), (20, 24)]
+
+    assert preprocessor._containing_span(1, spans) is None
+    assert preprocessor._containing_span(2, spans) == (2, 5)
+    assert preprocessor._containing_span(4, spans) == (2, 5)
+    assert preprocessor._containing_span(5, spans) is None
+    assert preprocessor._containing_span(12, spans) == (8, 13)
+
+
+def test_containing_span_preserves_unsorted_overlap_order():
+    preprocessor = MetalPreprocessor()
+    spans = [(10, 20), (0, 15), (30, 40)]
+
+    assert preprocessor._containing_span(12, spans) == (10, 20)
+    assert preprocessor._containing_span(5, spans) == (0, 15)
+
+
 def test_preprocessor_conditional_expansion():
     code = """
     #define ENABLED 1
@@ -1754,6 +1773,15 @@ def test_sfinae_simd_reduce_unrecognized_type_clean_fails():
     assert (
         excinfo.value.project_diagnostic_code == "project.translate.metal-struct-method"
     )
+    call_text = "simd_reduce(total)"
+    call_offset = code.index(call_text)
+    call_line_start = code.rfind("\n", 0, call_offset)
+    location = excinfo.value.source_location
+    assert location["line"] == code.count("\n", 0, call_offset) + 1
+    assert location["column"] == call_offset - call_line_start
+    assert location["length"] == len(call_text)
+    assert location["endLine"] == location["line"]
+    assert location["endColumn"] == location["column"] + len(call_text)
 
 
 def test_sfinae_simd_reduce_full_pipeline_to_hlsl():

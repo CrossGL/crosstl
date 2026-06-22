@@ -41007,7 +41007,7 @@ def test_translate_project_metal_source_instantiation_propagates_plain_helper_bi
     assert validation["success"] is True
 
 
-def test_translate_project_metal_templated_functor_header_reports_before_translation(
+def test_translate_project_metal_templated_functor_header_materializes(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -41051,55 +41051,20 @@ def test_translate_project_metal_templated_functor_header_reports_before_transla
     payload = report.to_json()
 
     artifact = payload["artifacts"][0]
-    assert artifact["status"] == "failed"
-    assert not (repo / artifact["path"]).exists()
-    assert artifact["templateMaterialization"] == {
-        "status": "unsupported",
-        "specializationCount": 0,
-        "configuredParameterCount": 0,
-        "configuredParameters": {},
-        "configuredParameterSources": {},
-        "specializations": [],
-        "unsupported": [
-            {
-                "name": "AddFunctor",
-                "parameters": ["T"],
-                "missingParameters": [],
-                "reason": "missing-template-arguments",
-                "sourceDeclaration": {
-                    "file": "binary_two.metal",
-                    "line": 4,
-                    "column": 1,
-                    "name": "AddFunctor",
-                },
-                "target": "opengl",
-                "requiredSignature": "AddFunctor<float>",
-            }
-        ],
-    }
-    assert payload["summary"]["diagnosticsByCode"] == {
-        "project.translate.template-materialization-unsupported": 1
-    }
-    diagnostic = payload["diagnostics"][0]
-    assert (
-        diagnostic["code"] == "project.translate.template-materialization-unsupported"
-    )
-    assert diagnostic["target"] == "opengl"
-    assert diagnostic["sourceBackend"] == "metal"
-    assert diagnostic["location"]["file"] == "binary_two.metal"
-    assert diagnostic["location"]["line"] == 4
-    assert diagnostic["missingCapabilities"] == ["template.specialization"]
-    assert "AddFunctor" in diagnostic["message"]
-    assert "unmaterialized concrete template functor use" in diagnostic["message"]
-    assert "required AddFunctor<float>" in diagnostic["message"]
-    assert "Expected type" not in diagnostic["message"]
+    assert artifact["status"] == "translated"
+    assert payload["diagnostics"] == []
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "struct AddFunctor_float" in output
+    assert "float AddFunctor_float__operator_call(" in output
+    assert "AddFunctor_float op;" in output
+    assert "AddFunctor_float__operator_call(op, lhs[gid], rhs[gid])" in output
+    assert "AddFunctor<float>" not in output
+    assert "op(lhs[gid], rhs[gid])" not in output
 
     report_path = repo / "out" / "report.json"
     report.write_json(report_path)
     validation = validate_project_report(report_path)
-    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
-        {"project.validate.invalid-report"}
-    )
+    assert validation["success"] is True
 
 
 def test_translate_project_metal_repeated_call_site_templates_share_budget_for_opengl(
@@ -41471,6 +41436,117 @@ def test_translate_project_applies_metal_target_source_pattern_materialization_w
     assert (
         "limit 4 from project.source_options.metal.max_template_materialization_work"
         in diagnostic["message"]
+    )
+
+
+def test_translate_project_metal_explicit_materialization_work_budget_diagnostic(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["directx"]
+            output_dir = "out"
+
+            [project.source_options.metal]
+            max_template_specializations = 4
+            max_template_materialization_work = 1
+            """).strip(),
+        encoding="utf-8",
+    )
+    source = textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            T cast_value(T value) {
+                return value;
+            }
+
+            kernel void launch(device float* out [[buffer(0)]]) {
+                out[0] = cast_value<float>(1.0);
+            }
+            """).strip()
+    source += (
+        "\n/*" + ("x" * project_pipeline.METAL_LARGE_TEMPLATE_SOURCE_MIN_CHARS) + "*/\n"
+    )
+    (repo / "explicit_budget.metal").write_text(source, encoding="utf-8")
+
+    payload = translate_project(load_project_config(repo)).to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert "template materialization work budget exceeded" in artifact["error"].lower()
+    assert "explicit-template-materialization" in artifact["error"]
+    assert not (repo / artifact["path"]).exists()
+
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-template-specialization": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["location"]["file"] == "explicit_budget.metal"
+    assert diagnostic["location"]["line"] == 4
+    detail = diagnostic["details"]["templateMaterialization"]
+    assert detail["limit"] == 1
+    assert (
+        detail["limitSource"]
+        == "project.source_options.metal.max_template_materialization_work"
+    )
+    assert detail["requiredWorkItems"] > detail["limit"]
+    assert "explicit-template-materialization" in detail["requestedSignature"]
+
+
+def test_translate_project_metal_struct_method_diagnostic_uses_call_location(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = textwrap.dedent("""
+        struct complex64_t { float real; float imag; };
+
+        template <typename U>
+        struct Sum {
+            U seed;
+            template <typename T,
+                      metal::enable_if_t<sizeof(T) < 8, bool> = true>
+            T simd_reduce(T value) { return value; }
+        };
+
+        kernel void reduce(
+            device const complex64_t* in [[buffer(0)]],
+            device complex64_t* out [[buffer(1)]],
+            uint gid [[thread_position_in_grid]]
+        ) {
+            Sum<complex64_t> op;
+            complex64_t total = in[gid];
+            out[gid] = op.simd_reduce(total);
+        }
+        """).strip()
+    (repo / "complex_reduce.metal").write_text(source, encoding="utf-8")
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-struct-method": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["location"]["file"] == "complex_reduce.metal"
+    call_offset = source.index("simd_reduce(total)")
+    call_line_start = source.rfind("\n", 0, call_offset)
+    assert diagnostic["location"]["line"] == source.count("\n", 0, call_offset) + 1
+    assert diagnostic["location"]["column"] == call_offset - call_line_start
+    assert (
+        diagnostic["details"]["templateMaterialization"]["requestedSignature"]
+        == "op.simd_reduce(total)"
     )
 
 

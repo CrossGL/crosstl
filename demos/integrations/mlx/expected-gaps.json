@@ -3,16 +3,14 @@
   "repository": "https://github.com/ml-explore/mlx",
   "commit": "968d264f2903d578e699c4452a4dbf48633921aa",
   "frontier_status": {
-    "status": "passing-artifacts-validation-blocked",
+    "status": "passing",
     "sources": 5,
     "targets": [
       "directx",
       "vulkan"
     ],
     "artifacts": 10,
-    "blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1362"
-    ]
+    "blocked_by": []
   },
   "opengl_smoke_status": {
     "status": "passing",
@@ -56,7 +54,7 @@
       "https://github.com/CrossGL/crosstl/issues/1376"
     ],
     "translation_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1354"
+      "https://github.com/CrossGL/crosstl/issues/1376"
     ],
     "last_completed": {
       "translated_artifacts": 24,
@@ -80,9 +78,7 @@
     }
   },
   "tracked_issues": [
-    "https://github.com/CrossGL/crosstl/issues/1362",
     "https://github.com/CrossGL/crosstl/issues/1312",
-    "https://github.com/CrossGL/crosstl/issues/1354",
     "https://github.com/CrossGL/crosstl/issues/1376",
     "https://github.com/CrossGL/crosstl/issues/1388",
     "https://github.com/CrossGL/crosstl/issues/1392",
@@ -90,6 +86,11 @@
     "https://github.com/CrossGL/crosstl/issues/1396"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1454",
+    "https://github.com/CrossGL/crosstl/issues/1453",
+    "https://github.com/CrossGL/crosstl/issues/1452",
+    "https://github.com/CrossGL/crosstl/issues/1362",
+    "https://github.com/CrossGL/crosstl/issues/1354",
     "https://github.com/CrossGL/crosstl/issues/1300",
     "https://github.com/CrossGL/crosstl/issues/1317",
     "https://github.com/CrossGL/crosstl/issues/939",

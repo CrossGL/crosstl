@@ -91,9 +91,6 @@ The harness writes reports, generated artifacts, and command logs under
 
 ## Current Translator Gaps
 
-CrossGL/crosstl#1362 tracks the remaining Vulkan SPIR-V validation failures for
-the reduced DirectX/Vulkan frontier. CrossGL/crosstl#1354 tracks the remaining
-full-corpus Metal template materialization work for backend artifacts.
 CrossGL/crosstl#1376 tracks bounded runtime for the scheduled full-corpus scout.
 CrossGL/crosstl#1312 tracks native toolchain validation coverage for project
 CI. CrossGL/crosstl#1388 tracks the artifact execution metadata required by
@@ -156,3 +153,8 @@ and full-corpus Metal template materialization fixes. CrossGL/crosstl#1329,
 CrossGL/crosstl#1338, CrossGL/crosstl#1340, and CrossGL/crosstl#1346 are closed
 by the current project-scale template and SPIR-V validation fixes.
 CrossGL/crosstl#1355 is closed by the current OpenGL MLX template binding fix.
+CrossGL/crosstl#1354 and CrossGL/crosstl#1362 are closed by the current
+full-corpus materialization and Vulkan validation work. CrossGL/crosstl#1452,
+CrossGL/crosstl#1453, and CrossGL/crosstl#1454 are covered by bounded template
+materialization with source-located diagnostics for unsupported MLX reduction,
+scan, and Steel specializations.
