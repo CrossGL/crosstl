@@ -610,6 +610,27 @@ class HLSLCodeGen:
             "gl_SubgroupSize",
             "gl_SubgroupID",
             "gl_NumSubgroups",
+            # Metal [[threads_per_grid]] has no GLSL canonical form (it is kept as
+            # the raw Metal name) and no HLSL system value; on a non-entry helper it
+            # must likewise be emitted as a plain parameter, never a ": ..." semantic.
+            "threads_per_grid",
+        }
+    )
+    # Compute builtins that, even on a true stage entry point, have NO valid HLSL
+    # parameter system value: they are either compile-time constants or
+    # uniform/derived expressions. Emitting them as ``: <builtin>`` parameter
+    # semantics produces invalid HLSL (and ``gl_WorkGroupSize`` additionally trips
+    # the ``\bgl_[A-Z]`` unresolved-construct guardrail). Such a parameter is instead
+    # lowered to a body-local initialised from the matching HLSL expression, or — when
+    # the expression is unavailable and the parameter is unused — dropped entirely.
+    #   gl_WorkGroupSize (Metal threads_per_threadgroup) -> uint3(numthreads...)
+    #   gl_NumWorkGroups (Metal threadgroups_per_grid)   -> num-workgroups uniform
+    #   threads_per_grid (raw Metal)                     -> num_workgroups * numthreads
+    HLSL_COMPUTE_VALUE_BUILTIN_SEMANTICS = frozenset(
+        {
+            "gl_WorkGroupSize",
+            "gl_NumWorkGroups",
+            "threads_per_grid",
         }
     )
     HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES = HLSL_RESERVED_IDENTIFIER_NAMES | {
@@ -3760,6 +3781,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     parameter_prologue_statements.append(wave_builtin_prologue)
                     continue
 
+                # Value-builtins (gl_WorkGroupSize / gl_NumWorkGroups /
+                # threads_per_grid) have no HLSL parameter system value even on a
+                # stage entry. Lower to a body-local from the matching expression, or
+                # drop the parameter when it is unrepresentable and unused — never
+                # leak an invalid ": <builtin>" entry-point parameter semantic.
+                value_builtin_prologue = (
+                    self.hlsl_compute_value_builtin_parameter_prologue(
+                        p, param_type, semantic, func, execution_config
+                    )
+                )
+                if value_builtin_prologue is self.HLSL_COMPUTE_DROP_PARAMETER:
+                    continue
+                if value_builtin_prologue is not None:
+                    parameter_prologue_statements.append(value_builtin_prologue)
+                    continue
+
             ray_role = None
             if effective_shader_type in self.hlsl_ray_stage_types():
                 ray_role = self.hlsl_ray_semantic_role(p)
@@ -3774,12 +3811,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 param_type, self.hlsl_declaration_identifier_name(p.name)
             )
             emit_semantic = semantic
-            if ray_role or self.hlsl_non_entry_compute_builtin_semantic(
-                effective_shader_type, semantic
+            if (
+                ray_role
+                or self.hlsl_non_entry_compute_builtin_semantic(
+                    effective_shader_type, semantic
+                )
+                or (
+                    effective_shader_type == "compute"
+                    and self.hlsl_compute_value_builtin_semantic(semantic)
+                )
             ):
                 # Ray-payload parameters carry no semantic; GLSL compute/subgroup
                 # builtins on a non-entry helper have no HLSL semantic form (the
                 # value arrives as a plain parameter) and must not leak as ": gl_*".
+                # A value-builtin reaching this point on a compute entry is one the
+                # prologue could not express (no uniform) but the body still uses, so
+                # it is kept as a plain parameter with its invalid semantic stripped.
                 emit_semantic = None
             semantic_attr = self.map_semantic(emit_semantic)
             params.append(
@@ -6386,6 +6433,112 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         local_name = self.hlsl_declaration_identifier_name(parameter_name)
         self.local_variable_types[local_name] = base_type
         return f"{base_type} {local_name} = {intrinsic};"
+
+    # Sentinel returned by hlsl_compute_value_builtin_parameter_prologue to signal
+    # that a value-builtin parameter has no HLSL expression form and is unused, so it
+    # must be dropped from the signature entirely (rather than emitted or lowered).
+    HLSL_COMPUTE_DROP_PARAMETER = object()
+
+    def hlsl_compute_value_builtin_semantic(self, semantic):
+        """True when ``semantic`` is a compute builtin that has no valid HLSL
+        parameter system value (it is a compile-time constant or uniform/derived
+        expression): gl_WorkGroupSize / gl_NumWorkGroups / threads_per_grid."""
+        if not isinstance(semantic, str):
+            return False
+        return semantic.strip() in self.HLSL_COMPUTE_VALUE_BUILTIN_SEMANTICS
+
+    def hlsl_compute_value_builtin_expression(self, semantic, execution_config=None):
+        """Return the HLSL expression a value-builtin lowers to, or ``None`` when no
+        expression is available (e.g. a num-workgroups uniform was not materialised).
+
+        These builtins have no HLSL system value, so a body reference / parameter is
+        replaced by:
+          gl_WorkGroupSize -> uint3(<numthreads x>, <y>, <z>)  (compile-time constant)
+          gl_NumWorkGroups -> the num-workgroups uniform member  (or None if absent)
+          threads_per_grid -> num_workgroups * uint3(numthreads) (or None if absent)
+        """
+        key = semantic.strip() if isinstance(semantic, str) else semantic
+        if key == "gl_WorkGroupSize":
+            return self.hlsl_compute_workgroup_size_expression(execution_config)
+        if key == "gl_NumWorkGroups":
+            return self.hlsl_compute_num_workgroups_expression()
+        if key == "threads_per_grid":
+            num_workgroups = self.hlsl_compute_num_workgroups_expression()
+            if not num_workgroups:
+                # HLSL has no system value for the total grid extent and we have no
+                # num-workgroups uniform to multiply, so it cannot be expressed.
+                return None
+            workgroup_size = self.hlsl_compute_workgroup_size_expression(
+                execution_config
+            )
+            return f"({num_workgroups} * {workgroup_size})"
+        return None
+
+    def hlsl_compute_value_builtin_parameter_prologue(
+        self, parameter, param_type, semantic, func, execution_config=None
+    ):
+        """Bridge a compute *entry* parameter that carries a value-builtin semantic
+        (gl_WorkGroupSize / gl_NumWorkGroups / threads_per_grid) into HLSL.
+
+        Metal kernels routinely declare ``[[threads_per_threadgroup]]`` /
+        ``[[threads_per_grid]]`` / ``[[threadgroups_per_grid]]`` entry parameters.
+        These canonicalise to builtins with no HLSL parameter system value, so they
+        cannot be emitted as ``: <builtin>`` semantics (and gl_WorkGroupSize would
+        additionally trip the unresolved-construct guardrail). Instead:
+
+        * when an HLSL expression exists, the parameter becomes a body-local
+          initialised from it (so any body references resolve naturally), and
+        * when no expression is available *and the parameter is unused* in the body
+          (the common MLX synthetic-entry case, e.g. arg_reduce's unused gsize), the
+          parameter is dropped.
+
+        Returns the prologue statement (a ``str``), ``HLSL_COMPUTE_DROP_PARAMETER``
+        when the parameter should be dropped, or ``None`` when the parameter does not
+        carry a value-builtin semantic (caller handles it normally).
+        """
+        if not self.hlsl_compute_value_builtin_semantic(semantic):
+            return None
+
+        parameter_name = getattr(parameter, "name", None)
+        if not isinstance(parameter_name, str) or not parameter_name:
+            return None
+
+        base_type, array_suffix = split_array_type_suffix(str(param_type))
+        if array_suffix:
+            return None
+
+        expression = self.hlsl_compute_value_builtin_expression(
+            semantic, execution_config
+        )
+        if expression is None:
+            # No HLSL expression form (e.g. threads_per_grid with no num-workgroups
+            # uniform). If the body never references the parameter, drop it (the
+            # common MLX synthetic-entry case, e.g. arg_reduce's unused gsize).
+            # Otherwise it is genuinely needed but unrepresentable as a system value,
+            # so fall through to normal emission, which strips the invalid semantic
+            # and keeps it as a plain parameter rather than leaving a dangling
+            # identifier (matching how GLSL/SPIR-V pass it as an ordinary argument).
+            if self.hlsl_compute_parameter_unused(func, parameter_name):
+                return self.HLSL_COMPUTE_DROP_PARAMETER
+            return None
+
+        local_name = self.hlsl_declaration_identifier_name(parameter_name)
+        self.local_variable_types[local_name] = base_type
+        return f"{base_type} {local_name} = {expression};"
+
+    def hlsl_compute_parameter_unused(self, func, parameter_name):
+        """True when ``parameter_name`` is never referenced in ``func``'s body."""
+        target = self.hlsl_declaration_identifier_name(parameter_name)
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not (hasattr(node, "__class__") and "Identifier" in str(node.__class__)):
+                continue
+            name = getattr(node, "name", "")
+            if not isinstance(name, str):
+                continue
+            base_name = name.split(".", 1)[0]
+            if base_name in (parameter_name, target):
+                return False
+        return True
 
     def hlsl_compute_group_index_dependency_name(self, param_list=None):
         """Return the name of the SV_GroupIndex parameter that gl_SubgroupID
@@ -15131,6 +15284,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "gl_LocalInvocationIndex",
             "gl_WorkGroupSize",
             "gl_NumWorkGroups",
+            "threads_per_grid",
             *self.HLSL_WAVE_BUILTIN_INTRINSICS,
         }
         used_names = set()
@@ -15168,6 +15322,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 None,
                 None,
                 self.hlsl_compute_num_workgroups_expression(),
+            ),
+            (
+                # Raw Metal [[threads_per_grid]] kept as-is by the frontend; HLSL has
+                # no system value, so a body reference lowers to
+                # num_workgroups * uint3(numthreads) when the uniform is available.
+                "threads_per_grid",
+                None,
+                None,
+                None,
+                self.hlsl_compute_value_builtin_expression(
+                    "threads_per_grid", execution_config
+                ),
             ),
             (
                 "gl_SubgroupInvocationID",

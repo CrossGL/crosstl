@@ -2182,6 +2182,159 @@ def test_hlsl_non_entry_compute_helper_drops_glsl_builtin_parameter_semantics():
     assert "__CROSSGL" not in generated_code
 
 
+def test_hlsl_compute_workgroup_size_parameter_lowers_to_numthreads_constant():
+    # Metal [[threads_per_threadgroup]] (canonicalised to gl_WorkGroupSize) has no
+    # HLSL parameter system value; on a compute entry it must lower to a body-local
+    # initialised from the compile-time numthreads constant rather than leaking the
+    # invalid ": gl_WorkGroupSize" parameter semantic (which also trips the
+    # \bgl_[A-Z] unresolved-construct guardrail).
+    shader = """
+    shader WorkGroupSizeParam {
+        compute {
+            @ stage_entry
+            @ numthreads(4, 2, 1)
+            void main(RWStructuredBuffer<float> data @buffer(0),
+                      uint3 gid @gl_GlobalInvocationID,
+                      uint3 lsize @gl_WorkGroupSize) {
+                uint idx = gid.x + lsize.y;
+                data[idx] = 1.0;
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint3 lsize = uint3(4, 2, 1);" in generated_code
+    assert "lsize.y" in generated_code
+    assert "gl_WorkGroupSize" not in generated_code
+    assert ": gl_" not in generated_code
+    assert ": threads_per_grid" not in generated_code
+    assert not re.search(r"\bgl_[A-Z]", generated_code)
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_compute_unused_value_builtin_parameters_are_dropped():
+    # An MLX synthetic compute entry frequently carries unused [[threads_per_grid]]
+    # (gsize) and [[threads_per_threadgroup]] (gl_WorkGroupSize, lsize) parameters
+    # alongside the subgroup builtins it actually uses (cf. arg_reduce). threads_per_grid
+    # has no HLSL expression (no num-workgroups uniform here) and is unused, so it is
+    # dropped; gl_WorkGroupSize lowers to its constant. Neither may leak an invalid
+    # parameter semantic.
+    shader = """
+    shader ArgReduceLikeEntry {
+        compute {
+            @ stage_entry
+            @ numthreads(1, 1, 1)
+            void main(RWStructuredBuffer<float> data @buffer(0),
+                      uint3 gid @gl_GlobalInvocationID,
+                      uint3 gsize @threads_per_grid,
+                      uint3 lid @gl_LocalInvocationID,
+                      uint3 lsize @gl_WorkGroupSize,
+                      uint simd_group_id @gl_SubgroupID) {
+                data[simd_group_id] = 1.0;
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    # No invalid parameter semantics leak for the value-builtins.
+    assert ": threads_per_grid" not in generated_code
+    assert "gl_WorkGroupSize" not in generated_code
+    assert not re.search(r"\bgl_[A-Z]", generated_code)
+    # The unused, unrepresentable threads_per_grid parameter is dropped entirely.
+    assert "gsize" not in generated_code
+    # gl_SubgroupID still lowers to the SV_GroupIndex / lane-count derivation.
+    assert "WaveGetLaneCount()" in generated_code
+    assert ": SV_GroupIndex" in generated_code
+    assert "__CROSSGL" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_compute_unrepresentable_value_builtin_used_param_keeps_plain_param():
+    # threads_per_grid has no HLSL system value and (without a num-workgroups uniform)
+    # no expression form. When it is genuinely referenced in the body it must be kept
+    # as a plain parameter with its invalid semantic stripped, never dropped (which
+    # would leave a dangling identifier) nor leaked as a parameter semantic.
+    shader = """
+    shader ThreadsPerGridUsed {
+        compute {
+            @ stage_entry
+            @ numthreads(1, 1, 1)
+            void main(RWStructuredBuffer<float> data @buffer(0),
+                      uint3 gid @gl_GlobalInvocationID,
+                      uint3 gsize @threads_per_grid) {
+                uint idx = gid.x + gsize.y;
+                data[idx] = 1.0;
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint3 gsize" in generated_code
+    assert "gsize.y" in generated_code
+    assert ": threads_per_grid" not in generated_code
+    assert not re.search(r"\bgl_[A-Z]", generated_code)
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_compute_workgroup_size_body_reference_lowers_to_numthreads_constant():
+    # A GLSL-style body reference to gl_WorkGroupSize on a compute entry (no explicit
+    # parameter) likewise lowers to the compile-time numthreads constant.
+    shader = """
+    shader WorkGroupSizeBody {
+        compute {
+            layout(local_size_x = 8, local_size_y = 4) in;
+            layout(set = 0, binding = 0) buffer float* data;
+            void main() {
+                uint w = gl_WorkGroupSize.x * gl_WorkGroupSize.y;
+                data[w] = 1.0;
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint3(8, 4, 1)" in generated_code
+    assert "gl_WorkGroupSize" not in generated_code
+    assert not re.search(r"\bgl_[A-Z]", generated_code)
+
+
+def test_hlsl_non_entry_compute_helper_drops_threads_per_grid_parameter_semantic():
+    # A non-entry compute helper carrying [[threads_per_grid]] (kept as the raw Metal
+    # name by the frontend) must emit it as a plain parameter, never leaking the
+    # invalid ": threads_per_grid" parameter semantic.
+    shader = """
+    shader NonEntryThreadsPerGrid {
+        compute {
+            void worker(RWStructuredBuffer<float> data @buffer(0),
+                        uint3 gid @gl_WorkGroupID,
+                        uint3 gsize @threads_per_grid) {
+                data[gid.x] = float(gsize.y);
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint3 gsize" in generated_code
+    assert "gsize.y" in generated_code
+    assert ": threads_per_grid" not in generated_code
+    assert ": gl_" not in generated_code
+    assert not re.search(r"\bgl_[A-Z]", generated_code)
+
+
 def test_hlsl_stage_entry_buffer_pointer_params_promote_to_resources():
     shader = """
     shader MatMulPointerParameters {
