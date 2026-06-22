@@ -1279,3 +1279,263 @@ def test_preprocessor_template_method_full_pipeline_to_hlsl():
     assert " simd_reduce(" not in hlsl
     assert "WaveActiveSum" in hlsl
     assert "Sum_float__simd_reduce__float(op, in_.Load(i))" in hlsl
+
+
+def test_preprocessor_instantiates_template_method_from_local_array_subscript():
+    # A CALLED template member method whose argument is a LOCAL ARRAY subscript
+    # (`totals[i]`, `T totals[N]`) instantiates with T = the array element type.
+    # This is the dominant argument shape in MLX reduce, where reduction
+    # accumulators are stack arrays.
+    code = """
+    struct Sum { template <typename T> T reduce(T val){ return val; } };
+
+    kernel void k(
+        device float* out [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        Sum op;
+        float totals[4];
+        totals[i] = out[i];
+        out[i] = op.reduce(totals[i]);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "float Sum__reduce__float(Sum self, float val)" in output
+    assert "Sum__reduce__float(op, totals[i])" in output
+
+
+def test_preprocessor_instantiates_template_method_from_threadgroup_array_subscript():
+    # A `threadgroup U sh[N]` array local subscript is element-typed too.
+    code = """
+    struct Sum { template <typename T> T reduce(T val){ return val; } };
+
+    kernel void k(
+        device half* out [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        Sum op;
+        threadgroup half shared_vals[32];
+        out[i] = op.reduce(shared_vals[i]);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "half Sum__reduce__half(Sum self, half val)" in output
+    assert "Sum__reduce__half(op, shared_vals[i])" in output
+
+
+def test_preprocessor_instantiates_template_method_from_member_access_subscript():
+    # A member-access subscript `obj.member[i]` is element-typed via the struct
+    # field's element type, even when the carrier struct (`Buf`) has NO methods.
+    code = """
+    struct Buf { device float* data; };
+    struct Sum { template <typename T> T reduce(T val){ return val; } };
+
+    kernel void k(
+        device float* o [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        Sum op;
+        Buf init;
+        o[i] = op.reduce(init.data[i]);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "float Sum__reduce__float(Sum self, float val)" in output
+    assert "Sum__reduce__float(op, init.data[i])" in output
+
+
+def test_preprocessor_instantiates_template_method_from_member_access():
+    # A bare member access `obj.member` (non-subscript) resolves to the field's
+    # declared type.
+    code = """
+    struct Pt { float x; };
+    struct Sum { template <typename T> T reduce(T val){ return val; } };
+
+    kernel void k(
+        device float* o [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        Sum op;
+        Pt p;
+        o[i] = op.reduce(p.x);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "float Sum__reduce__float(Sum self, float val)" in output
+    assert "Sum__reduce__float(op, p.x)" in output
+
+
+def test_preprocessor_instantiates_template_method_from_union_local():
+    # A union-typed local (`bool4_or_uint update;`) is recognized by the local
+    # scanner, so a bare such local is an inferable call argument.
+    code = """
+    union bool4_or_uint { bool4 b; unsigned int i; };
+    struct Sum { template <typename T> T reduce(T val){ return val; } };
+
+    kernel void k(
+        device uint* o [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        Sum op;
+        bool4_or_uint update;
+        o[i] = op.reduce(update).i;
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert (
+        "bool4_or_uint Sum__reduce__bool4_or_uint(Sum self, bool4_or_uint val)"
+        in output
+    )
+    assert "Sum__reduce__bool4_or_uint(op, update)" in output
+
+
+def test_preprocessor_instantiates_template_method_from_struct_local():
+    # A struct-typed local of a method-less carrier is an inferable bare argument.
+    code = """
+    struct Pair { float a; float b; };
+    struct Sum { template <typename T> T reduce(T val){ return val; } };
+
+    kernel void k(
+        device float* o [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        Sum op;
+        Pair p;
+        o[i] = op.reduce(p).a;
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "Pair Sum__reduce__Pair(Sum self, Pair val)" in output
+    assert "Sum__reduce__Pair(op, p)" in output
+
+
+def test_preprocessor_instantiates_template_method_from_function_pointer_parameter():
+    # A call argument that subscripts a POINTER PARAMETER of the enclosing
+    # function (`device T* p` -> `p[i]` is T) is inferable.
+    code = """
+    struct Sum { template <typename T> T reduce(T val){ return val; } };
+
+    float helper(device float* p, uint i) {
+        Sum op;
+        return op.reduce(p[i]);
+    }
+
+    kernel void k(
+        device float* o [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        o[i] = helper(o, i);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "float Sum__reduce__float(Sum self, float val)" in output
+    assert "Sum__reduce__float(op, p[i])" in output
+
+
+def test_preprocessor_instantiates_template_method_from_function_scalar_parameter():
+    # A call argument that is a bare SCALAR PARAMETER of the enclosing function is
+    # inferable (the local-declaration scanner alone misses comma-terminated
+    # parameters).
+    code = """
+    struct Sum { template <typename T> T reduce(T val){ return val; } };
+
+    half helper(half v) {
+        Sum op;
+        return op.reduce(v);
+    }
+
+    kernel void k(
+        device half* o [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        o[i] = helper(o[i]);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "half Sum__reduce__half(Sum self, half val)" in output
+    assert "Sum__reduce__half(op, v)" in output
+
+
+def test_preprocessor_template_member_lowering_is_deterministic_across_kernels():
+    # Regression for a PYTHONHASHSEED-dependent ordering bug: two kernels in one
+    # file that each declare a variable named `op` of a DIFFERENT concrete functor
+    # type must resolve `op` per-kernel (nearest preceding declaration) instead of
+    # collapsing to one set-iteration-order winner. The lowered output is the same
+    # regardless of declaration discovery order.
+    code = """
+    struct SumF { template <typename T> T reduce(T val){ return val + val; } };
+    struct MaxF { template <typename T> T reduce(T val){ return val; } };
+
+    kernel void k_sum(
+        device float* o [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        SumF op;
+        float totals[4];
+        o[i] = op.reduce(totals[i]);
+    }
+
+    kernel void k_max(
+        device int* o [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        MaxF op;
+        int totals[4];
+        o[i] = op.reduce(totals[i]);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    # Each kernel binds `op` to its OWN struct type and element type.
+    assert "float SumF__reduce__float(SumF self, float val)" in output
+    assert "int MaxF__reduce__int(MaxF self, int val)" in output
+    assert "SumF__reduce__float(op, totals[i])" in output
+    assert "MaxF__reduce__int(op, totals[i])" in output
+    # No cross-kernel mis-binding.
+    assert "MaxF__reduce__float" not in output
+    assert "SumF__reduce__int" not in output
+
+
+def test_infer_argument_type_local_array_and_member_subscript():
+    # Direct unit coverage of the conservative inference contract for the new
+    # shapes, using flat (position-resolved) views like the call site builds.
+    pp = MetalPreprocessor()
+    buffers = {"totals": "float", "buf": "uint"}
+    locals_ = {"acc": "half", "update": "bool4_or_uint"}
+    fields = {"init": {"data": "float", "scale": "half"}}
+    # Local array / buffer subscript -> element type.
+    assert pp._infer_argument_type("totals[i]", buffers, locals_, fields) == "float"
+    assert pp._infer_argument_type("buf[i + 1]", buffers, locals_, fields) == "uint"
+    # Member-access subscript -> struct field element type.
+    assert (
+        pp._infer_argument_type("init.data[elem]", buffers, locals_, fields) == "float"
+    )
+    # Bare member access -> field type.
+    assert pp._infer_argument_type("init.scale", buffers, locals_, fields) == "half"
+    # Union / struct local -> its declared type.
+    assert (
+        pp._infer_argument_type("update", buffers, locals_, fields) == "bool4_or_uint"
+    )
+    # Unknown shapes stay un-inferable (never guess).
+    assert pp._infer_argument_type("missing[i]", buffers, locals_, fields) is None
+    assert pp._infer_argument_type("init.unknown", buffers, locals_, fields) is None
+    assert pp._infer_argument_type("foo()", buffers, locals_, fields) is None
+
+
+def test_collect_buffer_element_types_rejects_non_declaration_subscripts():
+    # The array-declaration scanner must NEVER record a bogus element type from a
+    # statement that merely matches the `<token> name[` shape — e.g.
+    # `return totals[i]` (leading token `return`) or a control-flow subscript.
+    # Only a recognized scalar/vector or struct/union element type is accepted.
+    pp = MetalPreprocessor()
+    code = (
+        "struct Pair { float a; };\n"
+        "kernel void k(device float* o [[buffer(0)]],"
+        " uint i [[thread_position_in_grid]]) {\n"
+        "    float totals[4];\n"
+        "    Pair items[4];\n"
+        "    return totals[i];\n"
+        "    if (i) block[i];\n"
+        "}\n"
+    )
+    element_types = pp._collect_buffer_element_types(code, [])
+    # totals is a real `float totals[4]` array; the only recorded type is float.
+    assert [t for _, t in element_types.get("totals", [])] == ["float"]
+    # A struct array records its element struct type.
+    assert [t for _, t in element_types.get("items", [])] == ["Pair"]
+    # `return`/`if` tokens never become element types.
+    assert "block" not in element_types
+    assert all(
+        t not in {"return", "if", "else", "for", "while"}
+        for entries in element_types.values()
+        for _, t in entries
+    )
