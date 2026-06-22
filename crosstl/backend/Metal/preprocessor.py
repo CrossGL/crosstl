@@ -185,6 +185,11 @@ class _MetalStructDefinition:
     data_member_names: Set[str]
     methods: List[_MetalStructMethod]
     has_operator_call: bool
+    # Data-member name -> its declared element type (the value type a `self.x`
+    # access yields, with array extents stripped). Populated best-effort for
+    # members whose type is recognizable; missing entries are simply
+    # un-inferable. Used to type a `obj.member` / `obj.member[i]` call argument.
+    data_member_types: Dict[str, str] = field(default_factory=dict)
     # Template member methods are kept separate from `methods`: they have no
     # single concrete signature to emit up front, so they are instantiated on
     # demand from their call sites' inferred argument types.
@@ -546,6 +551,14 @@ class MetalPreprocessor(HLSLPreprocessor):
             return code
 
         struct_names = {struct.name for struct in structs_with_methods}
+        # ALL concrete struct/union definitions (with or without methods), keyed
+        # by name, so a member-access call argument (`obj.field` / `obj.field[i]`)
+        # can resolve `field`'s type even when `obj`'s struct carries no methods
+        # (e.g. a plain data carrier or a union). Kept separate from the
+        # method-driven maps used for call rewriting.
+        field_structs_by_name: Dict[str, _MetalStructDefinition] = {
+            struct.name: struct for struct in structs
+        }
         # Concrete methods keyed by struct name for direct call-site rewriting.
         methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]] = {}
         # Template methods keyed by struct name for on-demand instantiation.
@@ -580,6 +593,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         # instantiated here; each unique (struct, method, bindings) instance adds
         # one concrete free function, deduplicated across call sites.
         struct_spans = [struct.span for struct in structs_with_methods]
+        # Member-access field resolution must see ALL struct/union spans (so a
+        # field declaration is never mistaken for a local variable), and the
+        # names of every struct/union type (so `Type var;` locals of a method-less
+        # carrier are tracked).
+        all_struct_spans = [struct.span for struct in structs]
+        all_struct_names = {struct.name for struct in structs}
         instantiated_template_functions: Dict[str, str] = {}
         call_replacements = self._rewrite_struct_member_call_sites(
             code,
@@ -590,6 +609,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             struct_spans,
             structs_by_name,
             instantiated_template_functions,
+            field_structs_by_name=field_structs_by_name,
+            all_struct_spans=all_struct_spans,
+            all_struct_names=all_struct_names,
         )
         replacements.extend(call_replacements)
         free_functions.extend(instantiated_template_functions.values())
@@ -604,14 +626,16 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _find_concrete_struct_definitions(
         self, code: str
     ) -> List[_MetalStructDefinition]:
-        # Locate every concrete (non-template) `struct/class Name { ... };` and
-        # split its body into data members and method definitions. Template
+        # Locate every concrete (non-template) `struct/class/union Name { ... };`
+        # and split its body into data members and method definitions. Template
         # structs/classes (`template <...> struct ...`) are skipped wholesale:
         # those are handled by the materializer, and their (possibly template)
-        # methods are out of scope for lowering.
+        # methods are out of scope for lowering. Unions are captured for their
+        # data members only (they carry no methods we lower) so a `union var;`
+        # local and its members are type-resolvable for call-argument inference.
         template_spans = self._find_template_declaration_spans(code)
         definitions: List[_MetalStructDefinition] = []
-        for match in re.finditer(r"\b(?:struct|class)\s+", code):
+        for match in re.finditer(r"\b(?:struct|class|union)\s+", code):
             start = match.start()
             if self._containing_span(start, template_spans) is not None:
                 continue
@@ -643,9 +667,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 span_end = trailing + 1
 
             body = code[body_start + 1 : body_end_after - 1]
-            data_member_names, methods, template_methods = self._split_struct_body(
-                name, body, body_start + 1
-            )
+            (
+                data_member_names,
+                data_member_types,
+                methods,
+                template_methods,
+            ) = self._split_struct_body(name, body, body_start + 1)
             definitions.append(
                 _MetalStructDefinition(
                     name=name,
@@ -656,13 +683,16 @@ class MetalPreprocessor(HLSLPreprocessor):
                     has_operator_call=any(m.is_operator_call for m in methods)
                     or any(m.is_operator_call for m in template_methods),
                     template_methods=template_methods,
+                    data_member_types=data_member_types,
                 )
             )
         return definitions
 
     def _split_struct_body(
         self, struct_name: str, body: str, body_offset: int
-    ) -> Tuple[Set[str], List[_MetalStructMethod], List[_MetalStructMethod]]:
+    ) -> Tuple[
+        Set[str], Dict[str, str], List[_MetalStructMethod], List[_MetalStructMethod]
+    ]:
         # Walk a struct body separating DATA members from METHOD definitions.
         # A method is a declarator followed by `(params)` then `{...}`; everything
         # else terminated by `;` (or an access-specifier label) is data. Template
@@ -670,6 +700,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         # are instantiated on demand from their call sites rather than emitted up
         # front (a template method has no single concrete signature).
         data_member_names: Set[str] = set()
+        data_member_types: Dict[str, str] = {}
         methods: List[_MetalStructMethod] = []
         template_methods: List[_MetalStructMethod] = []
         i = 0
@@ -772,9 +803,11 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if decl_semicolon is None:
                     i = brace_end
                     continue
-                name = self._declared_data_member_name(body[i:decl_semicolon])
+                declaration = body[i:decl_semicolon]
+                name = self._declared_data_member_name(declaration)
                 if name:
                     data_member_names.add(name)
+                    self._record_data_member_type(data_member_types, name, declaration)
                 i = decl_semicolon + 1
                 continue
             if semicolon is None:
@@ -787,8 +820,41 @@ class MetalPreprocessor(HLSLPreprocessor):
                 name = self._declared_data_member_name(declaration)
                 if name:
                     data_member_names.add(name)
+                    self._record_data_member_type(data_member_types, name, declaration)
             i = semicolon + 1
-        return data_member_names, methods, template_methods
+        return data_member_names, data_member_types, methods, template_methods
+
+    def _record_data_member_type(
+        self, data_member_types: Dict[str, str], name: str, declaration: str
+    ) -> None:
+        # Best-effort capture of a data member's element type from its
+        # declaration text (`float bias`, `T data[N]`, `device float* ptr`,
+        # `bool4 b`). The type is the declaration with the trailing declarator
+        # (name + any array extents / default value) removed; pointer members
+        # keep a `*` marker so a `self.ptr[i]` access can still resolve. A type
+        # we cannot isolate is simply omitted (left un-inferable).
+        element_type = self._data_member_element_type(declaration)
+        if element_type:
+            data_member_types[name] = element_type
+
+    def _data_member_element_type(self, declaration: str) -> Optional[str]:
+        text = self._strip_top_level_default_value(declaration).strip()
+        if not text:
+            return None
+        # Drop trailing array extents so a `T data[N]` member yields element T.
+        while text.endswith("]"):
+            open_bracket = text.rfind("[")
+            if open_bracket == -1:
+                break
+            text = text[:open_bracket].rstrip()
+        # Strip the trailing member name to leave the type text.
+        type_text = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\s*$", "", text).strip()
+        normalized = self._normalize_inferred_type(type_text)
+        # A pointer member (`device T* ptr`) collapses to the pointee marked with
+        # a single trailing `*` so a subscript access can be element-typed.
+        if not normalized:
+            return None
+        return normalized
 
     def _parse_struct_template_method(
         self,
@@ -1231,6 +1297,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         struct_spans: List[Tuple[int, int]],
         structs_by_name: Dict[str, _MetalStructDefinition],
         instantiated_template_functions: Dict[str, str],
+        field_structs_by_name: Optional[Dict[str, _MetalStructDefinition]] = None,
+        all_struct_spans: Optional[List[Tuple[int, int]]] = None,
+        all_struct_names: Optional[Set[str]] = None,
     ) -> List[Tuple[int, int, str]]:
         # Rewrite call sites across the source (outside the struct definitions we
         # are replacing):
@@ -1244,8 +1313,37 @@ class MetalPreprocessor(HLSLPreprocessor):
         variable_types = self._collect_struct_variable_types(
             code, struct_names, struct_spans
         )
-        buffer_element_types = self._collect_buffer_element_types(code, struct_spans)
-        local_variable_types = self._collect_local_variable_types(code, struct_spans)
+        # All struct/union spans and type names are needed so member-access field
+        # resolution sees method-less carriers too; fall back to the method-driven
+        # views when the caller does not provide them.
+        field_structs_by_name = field_structs_by_name or structs_by_name
+        all_struct_spans = (
+            all_struct_spans if all_struct_spans is not None else struct_spans
+        )
+        all_struct_names = (
+            all_struct_names if all_struct_names is not None else struct_names
+        )
+        # Struct-typed locals for EVERY struct/union type (used for `obj.member`
+        # inference), resolved over the full struct span set so member-access
+        # works for data carriers without methods.
+        field_variable_types = self._collect_struct_variable_types(
+            code, all_struct_names, all_struct_spans
+        )
+        buffer_element_types = self._collect_buffer_element_types(
+            code, all_struct_spans
+        )
+        local_variable_types = self._collect_local_variable_types(
+            code, all_struct_spans
+        )
+        # Fold the enclosing functions' parameters into the same position-ordered
+        # maps so a call argument that is a parameter (or a subscript of one) is
+        # inferable.
+        self._collect_function_parameter_types(
+            code,
+            all_struct_spans,
+            buffer_element_types,
+            local_variable_types,
+        )
         replacements: List[Tuple[int, int, str]] = []
         i = 0
         n = len(code)
@@ -1284,6 +1382,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                     buffer_element_types,
                     local_variable_types,
                     instantiated_template_functions,
+                    field_variable_types=field_variable_types,
+                    field_structs_by_name=field_structs_by_name,
                 )
                 if rewrite is not None:
                     end, replacement = rewrite
@@ -1305,12 +1405,22 @@ class MetalPreprocessor(HLSLPreprocessor):
         methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]],
         template_methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]],
         operator_call_structs: Set[str],
-        variable_types: Dict[str, str],
+        variable_types: Dict[str, List[Tuple[int, str]]],
         structs_by_name: Dict[str, _MetalStructDefinition],
-        buffer_element_types: Dict[str, str],
-        local_variable_types: Dict[str, str],
+        buffer_element_types: Dict[str, List[Tuple[int, str]]],
+        local_variable_types: Dict[str, List[Tuple[int, str]]],
         instantiated_template_functions: Dict[str, str],
+        field_variable_types: Optional[Dict[str, List[Tuple[int, str]]]] = None,
+        field_structs_by_name: Optional[Dict[str, _MetalStructDefinition]] = None,
     ) -> Optional[Tuple[int, str]]:
+        # `field_variable_types` / `field_structs_by_name` cover EVERY struct/union
+        # type (including method-less data carriers) and are used only to resolve
+        # `obj.member` / `obj.member[i]` call arguments; call REWRITING still uses
+        # the method-driven `variable_types` / `structs_by_name`.
+        if field_variable_types is None:
+            field_variable_types = variable_types
+        if field_structs_by_name is None:
+            field_structs_by_name = structs_by_name
         # Member access on a previous object (`a.var.m(...)`) is not a struct
         # variable we tracked; skip when the identifier is a member access.
         if self._is_member_identifier_context(code, ident_start):
@@ -1350,12 +1460,17 @@ class MetalPreprocessor(HLSLPreprocessor):
                     buffer_element_types=buffer_element_types,
                     local_variable_types=local_variable_types,
                     instantiated_template_functions=instantiated_template_functions,
+                    structs_by_name=field_structs_by_name,
+                    variable_types=field_variable_types,
                 )
                 if rewrite is not None:
                     return rewrite
             return None
 
-        struct_type = variable_types.get(ident)
+        # Resolve the variable's struct type from the NEAREST declaration at or
+        # before this call site (deterministic; correct across sibling kernels
+        # that reuse a variable name for different functor types).
+        struct_type = self._resolve_declared_type_at(variable_types, ident, ident_start)
         if struct_type is None:
             return None
 
@@ -1391,6 +1506,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                     buffer_element_types=buffer_element_types,
                     local_variable_types=local_variable_types,
                     instantiated_template_functions=instantiated_template_functions,
+                    structs_by_name=field_structs_by_name,
+                    variable_types=field_variable_types,
                 )
             return None
 
@@ -1413,6 +1530,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                     buffer_element_types=buffer_element_types,
                     local_variable_types=local_variable_types,
                     instantiated_template_functions=instantiated_template_functions,
+                    structs_by_name=field_structs_by_name,
+                    variable_types=field_variable_types,
                 )
             return None
 
@@ -1425,9 +1544,11 @@ class MetalPreprocessor(HLSLPreprocessor):
         method: _MetalStructMethod,
         receiver: Optional[str],
         arg_open: int,
-        buffer_element_types: Dict[str, str],
-        local_variable_types: Dict[str, str],
+        buffer_element_types: Dict[str, List[Tuple[int, str]]],
+        local_variable_types: Dict[str, List[Tuple[int, str]]],
         instantiated_template_functions: Dict[str, str],
+        structs_by_name: Optional[Dict[str, _MetalStructDefinition]] = None,
+        variable_types: Optional[Dict[str, List[Tuple[int, str]]]] = None,
     ) -> Optional[Tuple[int, str]]:
         # Instantiate a CALLED template member method from its call-site argument
         # types and rewrite the call to the concrete free function. A call that
@@ -1447,12 +1568,25 @@ class MetalPreprocessor(HLSLPreprocessor):
             struct, method, receiver, raw_args
         )
 
+        # Resolve the position-ordered declaration maps to the FLAT views valid at
+        # this call site (nearest preceding declaration wins). Passing flat dicts
+        # keeps `_infer_argument_type` a pure, unit-testable function while the
+        # per-call-site resolution stays deterministic and scope-correct.
+        buffer_view = self._flatten_types_at(buffer_element_types, arg_open)
+        local_view = self._flatten_types_at(local_variable_types, arg_open)
+        struct_field_types = self._struct_field_types_at(
+            variable_types, structs_by_name, arg_open
+        )
+
         # Infer the concrete type of every call argument; one un-inferable
         # argument is a clean failure.
         concrete_argument_types: List[str] = []
         for argument in call_arguments:
             inferred = self._infer_argument_type(
-                argument, buffer_element_types, local_variable_types
+                argument,
+                buffer_view,
+                local_view,
+                struct_field_types,
             )
             if inferred is None:
                 raise MetalStructMethodError(
@@ -1662,13 +1796,20 @@ class MetalPreprocessor(HLSLPreprocessor):
         code: str,
         struct_names: Set[str],
         struct_spans: List[Tuple[int, int]],
-    ) -> Dict[str, str]:
-        # Map local variable names to the lowered struct type that declares them
-        # by scanning `S var;`, `S var = ...;`, and `S var(...)` declarations
-        # outside the struct definitions. Last declaration wins, which is a
-        # best-effort approximation that suits the flat kernels we translate.
-        variable_types: Dict[str, str] = {}
-        for struct_name in struct_names:
+    ) -> Dict[str, List[Tuple[int, str]]]:
+        # Map each local variable name to the POSITION-ORDERED list of struct
+        # declarations that introduce it (`S var;`, `S var = ...;`, `S var(...)`)
+        # outside the struct definitions. Returning every declaration with its
+        # source offset (instead of a single "last wins" entry) makes resolution
+        # deterministic and lets a call site bind to the NEAREST PRECEDING
+        # declaration — so two kernels in one file that each declare `op` of a
+        # different concrete functor type resolve `op` correctly per kernel
+        # rather than collapsing to one PYTHONHASHSEED-dependent winner.
+        declarations: Dict[str, List[Tuple[int, str]]] = {}
+        # Iterate struct names in a STABLE (sorted) order so the per-name lists,
+        # before sorting, do not depend on set iteration order; the final sort by
+        # position is what callers rely on, but a stable scan keeps ties stable.
+        for struct_name in sorted(struct_names):
             pattern = re.compile(
                 rf"\b{re.escape(struct_name)}\s+([A-Za-z_][A-Za-z0-9_]*)\s*"
                 rf"(?=[;={{(])"
@@ -1683,8 +1824,72 @@ class MetalPreprocessor(HLSLPreprocessor):
                     preceding -= 1
                 if preceding >= 0 and code[preceding] in ".>":
                     continue
-                variable_types[match.group(1)] = struct_name
-        return variable_types
+                declarations.setdefault(match.group(1), []).append(
+                    (match.start(), struct_name)
+                )
+        for entries in declarations.values():
+            entries.sort(key=lambda item: item[0])
+        return declarations
+
+    def _resolve_declared_type_at(
+        self,
+        declarations: Dict[str, List[Tuple[int, str]]],
+        name: str,
+        position: int,
+    ) -> Optional[str]:
+        # Resolve a name to the type of its NEAREST declaration appearing at or
+        # before `position`; falling back to the FIRST declaration when the name
+        # is only declared later (a best-effort that suits forward references in
+        # the flat kernels we translate). Deterministic regardless of hash seed.
+        entries = declarations.get(name)
+        if not entries:
+            return None
+        best: Optional[str] = None
+        for decl_position, declared_type in entries:
+            if decl_position <= position:
+                best = declared_type
+            else:
+                break
+        if best is not None:
+            return best
+        return entries[0][1]
+
+    def _flatten_types_at(
+        self,
+        declarations: Dict[str, List[Tuple[int, str]]],
+        position: int,
+    ) -> Dict[str, str]:
+        # Flatten a position-ordered declaration map to a name -> type view valid
+        # at `position` (nearest preceding declaration wins per name).
+        flattened: Dict[str, str] = {}
+        for name in declarations:
+            resolved = self._resolve_declared_type_at(declarations, name, position)
+            if resolved is not None:
+                flattened[name] = resolved
+        return flattened
+
+    def _struct_field_types_at(
+        self,
+        variable_types: Optional[Dict[str, List[Tuple[int, str]]]],
+        structs_by_name: Optional[Dict[str, _MetalStructDefinition]],
+        position: int,
+    ) -> Dict[str, Dict[str, str]]:
+        # Build a `variable name -> {field name -> field type}` view at the call
+        # site: for each struct-typed local in scope, expose its declaring
+        # struct's field types so a `obj.member` / `obj.member[i]` argument can be
+        # element-typed. Empty when struct metadata is unavailable.
+        if not variable_types or not structs_by_name:
+            return {}
+        field_types: Dict[str, Dict[str, str]] = {}
+        for name in variable_types:
+            struct_type = self._resolve_declared_type_at(variable_types, name, position)
+            if struct_type is None:
+                continue
+            struct = structs_by_name.get(struct_type)
+            if struct is None or not struct.data_member_types:
+                continue
+            field_types[name] = struct.data_member_types
+        return field_types
 
     # ------------------------------------------------------------------ #
     # Conservative call-argument type inference (template member methods). #
@@ -1695,35 +1900,82 @@ class MetalPreprocessor(HLSLPreprocessor):
 
     def _collect_buffer_element_types(
         self, code: str, struct_spans: List[Tuple[int, int]]
-    ) -> Dict[str, str]:
-        # Map a pointer/buffer parameter name to its ELEMENT type by scanning
-        # `device [const] T* buf` / `constant [const] T* buf` declarations
-        # (function parameters). `buf[expr]` then has element type T. Struct
-        # bodies are excluded so member declarations do not pollute the map.
-        element_types: Dict[str, str] = {}
-        pattern = re.compile(
+    ) -> Dict[str, List[Tuple[int, str]]]:
+        # Map each subscriptable name to the POSITION-ORDERED list of declarations
+        # that give it an ELEMENT type, so `name[expr]` can be element-typed. Three
+        # declaration shapes contribute:
+        #   * pointer/buffer parameters and locals: `device [const] T* buf`,
+        #     `constant T* p`, `thread U* q` -> element T (function parameters AND
+        #     local pointer variables).
+        #   * array locals/parameters: `U totals[4]`, `threadgroup U sh[32]`,
+        #     `const float vals[N]` -> element U/float (the dominant shape in MLX
+        #     reduce, where reduction accumulators are stack arrays).
+        # Struct bodies are excluded so member declarations do not pollute the map
+        # (struct fields are typed separately via `data_member_types`).
+        element_types: Dict[str, List[Tuple[int, str]]] = {}
+
+        def record(name: str, element_type: str, position: int) -> None:
+            normalized = self._normalize_inferred_type(element_type)
+            if not normalized:
+                return
+            element_types.setdefault(name, []).append((position, normalized))
+
+        pointer_pattern = re.compile(
             r"\b(?:device|constant|threadgroup|thread)\b"
             r"(?P<type>[^;,()\[\]{}]*?)\*\s*"
             r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
         )
-        for match in pattern.finditer(code):
+        for match in pointer_pattern.finditer(code):
             if self._containing_span(match.start(), struct_spans) is not None:
                 continue
-            element_type = self._normalize_inferred_type(match.group("type"))
-            if not element_type:
+            record(match.group("name"), match.group("type"), match.start())
+
+        # Array declarations: `<type> name[extent]` for locals and parameters.
+        # The leading anchor keeps consecutive declarations from cannibalizing
+        # each other; the type group allows address-space/cv qualifiers. Only a
+        # RECOGNIZED element type (scalar/vector or a known struct/union) is
+        # accepted so a non-declaration that happens to match the shape — e.g.
+        # `return totals[i]` (type token `return`) or `else block[i]` — never
+        # records a bogus element type (the never-guess contract).
+        recognized_aggregates = self._aggregate_type_names(code, struct_spans)
+        array_pattern = re.compile(
+            r"(?:(?<=[;{}(,])|^)\s*"
+            r"(?P<type>(?:const\s+|constexpr\s+|volatile\s+|thread\s+|"
+            r"threadgroup\s+|device\s+|constant\s+)*"
+            r"[A-Za-z_][A-Za-z0-9_]*)\s+"
+            r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\[",
+            re.MULTILINE,
+        )
+        for match in array_pattern.finditer(code):
+            if self._containing_span(match.start(), struct_spans) is not None:
                 continue
-            element_types[match.group("name")] = element_type
+            normalized = self._normalize_inferred_type(match.group("type"))
+            if (
+                normalized not in self._METAL_SCALAR_VECTOR_TYPES
+                and normalized not in recognized_aggregates
+            ):
+                continue
+            record(match.group("name"), normalized, match.start())
+
+        for entries in element_types.values():
+            entries.sort(key=lambda item: item[0])
         return element_types
 
     def _collect_local_variable_types(
         self, code: str, struct_spans: List[Tuple[int, int]]
-    ) -> Dict[str, str]:
-        # Map a bare local variable name to its declared scalar/vector type by
-        # scanning `T name;` / `T name = ...;` statements outside struct bodies.
-        # Only declarations whose type is a recognized Metal scalar/vector type
-        # are recorded so a template-method argument that is a bare local can be
-        # typed; anything else is intentionally left un-inferable.
-        local_types: Dict[str, str] = {}
+    ) -> Dict[str, List[Tuple[int, str]]]:
+        # Map each bare local/parameter name to the POSITION-ORDERED list of its
+        # declared types. Two declaration shapes contribute:
+        #   * scalar/vector locals: `T name;` / `T name = ...;` where T is a
+        #     recognized Metal scalar/vector type.
+        #   * union/struct locals: `bool4_or_uint update;` and any `Name var;`
+        #     whose type names a struct/union declared in this source — recorded
+        #     so a bare such local is inferable (and its members are resolvable).
+        # Position ordering makes resolution deterministic and per-scope (nearest
+        # preceding declaration wins), so same-named locals in sibling kernels do
+        # not collapse to one PYTHONHASHSEED-dependent type.
+        local_types: Dict[str, List[Tuple[int, str]]] = {}
+        recognized_aggregates = self._aggregate_type_names(code, struct_spans)
         # A zero-width leading anchor (start-of-string or a statement/scope
         # boundary) keeps consecutive declarations like `float acc=...; float
         # x=...;` from cannibalizing each other's anchor.
@@ -1737,11 +1989,109 @@ class MetalPreprocessor(HLSLPreprocessor):
         for match in pattern.finditer(code):
             if self._containing_span(match.start(), struct_spans) is not None:
                 continue
-            normalized = self._normalize_inferred_type(match.group("type"))
-            if normalized not in self._METAL_SCALAR_VECTOR_TYPES:
+            raw_type = match.group("type")
+            normalized = self._normalize_inferred_type(raw_type)
+            if (
+                normalized not in self._METAL_SCALAR_VECTOR_TYPES
+                and normalized not in recognized_aggregates
+            ):
                 continue
-            local_types[match.group("name")] = normalized
+            local_types.setdefault(match.group("name"), []).append(
+                (match.start(), normalized)
+            )
+        for entries in local_types.values():
+            entries.sort(key=lambda item: item[0])
         return local_types
+
+    def _aggregate_type_names(
+        self, code: str, struct_spans: List[Tuple[int, int]]
+    ) -> Set[str]:
+        # Names of `struct`/`class`/`union` types DEFINED in this source. A bare
+        # local of such a type is inferable, and (for structs) its members are
+        # resolvable via `data_member_types`. Unions are included so reduce's
+        # `bool4_or_uint update;` typed local is recognized.
+        names: Set[str] = set()
+        for match in re.finditer(
+            r"\b(?:struct|class|union)\s+([A-Za-z_][A-Za-z0-9_]*)", code
+        ):
+            names.add(match.group(1))
+        return names
+
+    def _collect_function_parameter_types(
+        self,
+        code: str,
+        struct_spans: List[Tuple[int, int]],
+        buffer_element_types: Dict[str, List[Tuple[int, str]]],
+        local_variable_types: Dict[str, List[Tuple[int, str]]],
+    ) -> None:
+        # Augment the (position-ordered) type maps with each FUNCTION PARAMETER,
+        # so a call argument that is a parameter (or a subscript of one) resolves
+        # via the parameter's declared type. Pointer/array parameters are already
+        # captured by `_collect_buffer_element_types` (they match its patterns in
+        # the header text); this adds SCALAR/VECTOR and struct/union parameters,
+        # which the local-declaration scanner misses because a parameter is
+        # comma-terminated rather than `=`/`;`-terminated. Each parameter is
+        # recorded at the function BODY-START offset so nearest-preceding
+        # resolution scopes it to that body. Struct method bodies are excluded
+        # (their parameters are handled by the member-method lowering itself).
+        recognized_aggregates = self._aggregate_type_names(code, struct_spans)
+        for function in self._find_non_template_function_definitions(
+            code, struct_spans
+        ):
+            header = code[function.span[0] : function.body_span[0] - 1]
+            paren_start = self._function_parameter_start(header)
+            if paren_start is None:
+                continue
+            paren_end = self._find_matching_delimiter(header, paren_start, "(", ")")
+            if paren_end is None:
+                continue
+            parameter_text = header[paren_start + 1 : paren_end]
+            body_start = function.body_span[0]
+            for parameter in self._split_top_level_commas(parameter_text):
+                if not parameter.strip():
+                    continue
+                name = self._declared_data_member_name(parameter)
+                if not name:
+                    continue
+                element = self._pointer_or_array_parameter_element_type(parameter)
+                if element is not None:
+                    buffer_element_types.setdefault(name, []).append(
+                        (body_start, element)
+                    )
+                    continue
+                scalar = self._normalize_inferred_type(
+                    self._normalize_function_parameter_type_text(parameter)
+                )
+                if (
+                    scalar in self._METAL_SCALAR_VECTOR_TYPES
+                    or scalar in recognized_aggregates
+                ):
+                    local_variable_types.setdefault(name, []).append(
+                        (body_start, scalar)
+                    )
+        for entries in buffer_element_types.values():
+            entries.sort(key=lambda item: item[0])
+        for entries in local_variable_types.values():
+            entries.sort(key=lambda item: item[0])
+
+    def _pointer_or_array_parameter_element_type(self, parameter: str) -> Optional[str]:
+        # Element type of a pointer (`device T* p`) or array (`T p[N]`) parameter,
+        # or None when the parameter is neither (so the caller treats it as a
+        # plain value parameter). Conservative: returns None unless a `*` or `[`
+        # declarator is present.
+        text = self._strip_top_level_default_value(parameter)
+        text = self._strip_metal_attributes(text).strip()
+        if not text:
+            return None
+        if "[" in text:
+            type_text = text[: text.find("[")]
+            type_text = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\s*$", "", type_text).strip()
+            return self._normalize_inferred_type(type_text) or None
+        star = text.rfind("*")
+        if star != -1:
+            type_text = text[:star]
+            return self._normalize_inferred_type(type_text) or None
+        return None
 
     # Recognized Metal scalar / vector / matrix element types whose declarations
     # are reliable enough to type a bare local variable.
@@ -1788,6 +2138,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         argument: str,
         buffer_element_types: Dict[str, str],
         local_variable_types: Dict[str, str],
+        struct_field_types: Optional[Dict[str, Dict[str, str]]] = None,
     ) -> Optional[str]:
         # Conservatively infer the concrete type of a call-argument expression.
         # Returns None (un-inferable) for anything outside the recognized shapes.
@@ -1819,15 +2170,20 @@ class MetalPreprocessor(HLSLPreprocessor):
         if literal_type is not None:
             return literal_type
 
-        # Buffer-element access: `buf[expr]` -> element type of `buf`.
+        # Subscript access `base[expr]` -> element type of `base`. `base` may be a
+        # bare buffer/array name (`buf[i]`, `totals[i]`) OR a member-access into a
+        # struct local (`obj.member[i]`); both balance to a single trailing
+        # subscript.
         bracket = expr.find("[")
         if bracket != -1 and expr.endswith("]"):
-            base = expr[:bracket].strip()
-            if IDENTIFIER_RE.fullmatch(base) and base in buffer_element_types:
-                # Ensure the brackets balance to the end (single subscript).
-                close = self._find_matching_delimiter(expr, bracket, "[", "]")
-                if close == len(expr) - 1:
-                    return buffer_element_types[base]
+            close = self._find_matching_delimiter(expr, bracket, "[", "]")
+            if close == len(expr) - 1:
+                base = expr[:bracket].strip()
+                element = self._infer_subscript_base_element_type(
+                    base, buffer_element_types, struct_field_types
+                )
+                if element is not None:
+                    return element
 
         # Functional cast `T(expr)` where T is a recognized scalar/vector type.
         cast = re.match(r"(?P<type>[A-Za-z_][A-Za-z0-9_]*)\s*\(", expr)
@@ -1845,7 +2201,69 @@ class MetalPreprocessor(HLSLPreprocessor):
         if IDENTIFIER_RE.fullmatch(expr) and expr in local_variable_types:
             return local_variable_types[expr]
 
+        # Member access `obj.member` -> the field type of `member` in `obj`'s
+        # struct (non-subscript). Pointer fields are not value-typeable as a bare
+        # access, so a trailing `*` marker is rejected here.
+        member_field_type = self._infer_member_access_type(expr, struct_field_types)
+        if member_field_type is not None:
+            return member_field_type
+
         return None
+
+    def _infer_subscript_base_element_type(
+        self,
+        base: str,
+        buffer_element_types: Dict[str, str],
+        struct_field_types: Optional[Dict[str, Dict[str, str]]],
+    ) -> Optional[str]:
+        # Element type of the subscript base `base[...]`:
+        #   * bare name: a buffer/array element type (`buf[i]`, `totals[i]`).
+        #   * member access `obj.member`: the element type of the struct field
+        #     `member` (array or pointer field) of struct local `obj`.
+        if IDENTIFIER_RE.fullmatch(base):
+            return buffer_element_types.get(base)
+        field_type = self._struct_member_field_type(base, struct_field_types)
+        if field_type is None:
+            return None
+        # A subscript yields the field's element type; strip a single pointer
+        # marker if the field type recorded one. Array fields already record the
+        # element type, so the value is returned as-is.
+        return field_type.rstrip("*").strip() or None
+
+    def _infer_member_access_type(
+        self,
+        expr: str,
+        struct_field_types: Optional[Dict[str, Dict[str, str]]],
+    ) -> Optional[str]:
+        field_type = self._struct_member_field_type(expr, struct_field_types)
+        if field_type is None:
+            return None
+        # A bare member access onto a pointer field is not a value; reject it.
+        if field_type.endswith("*"):
+            return None
+        return field_type or None
+
+    def _struct_member_field_type(
+        self,
+        access: str,
+        struct_field_types: Optional[Dict[str, Dict[str, str]]],
+    ) -> Optional[str]:
+        # Resolve a single-level `obj.member` access to `member`'s declared field
+        # type, using the per-variable struct field-type view. Conservative:
+        # only a bare `identifier.identifier` shape is recognized.
+        if not struct_field_types:
+            return None
+        match = re.fullmatch(
+            r"(?P<obj>[A-Za-z_][A-Za-z0-9_]*)\s*\.\s*"
+            r"(?P<member>[A-Za-z_][A-Za-z0-9_]*)",
+            access,
+        )
+        if match is None:
+            return None
+        fields = struct_field_types.get(match.group("obj"))
+        if not fields:
+            return None
+        return fields.get(match.group("member"))
 
     def _infer_literal_type(self, expr: str) -> Optional[str]:
         # Recognize the simple numeric/boolean literal forms required by the
