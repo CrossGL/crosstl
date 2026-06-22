@@ -1949,6 +1949,73 @@ def test_metal_struct_member_template_kernel_translates_without_false_positive(
     assert "template <" not in generated
 
 
+def test_metal_local_constexpr_array_extent_is_not_unresolved_template(tmp_path):
+    # End-to-end regression mirroring MLX conv/sdpa: a materialized kernel body can
+    # size a threadgroup/array with LOCAL `constexpr int` constants
+    # (`constexpr int BN = 32; threadgroup float tile[BN * BD];`). The standalone
+    # residual-template scanner's placeholder heuristic flags short capitalized
+    # tokens like `BN`/`BD`/`TGH` as missing template parameters. The struct/class
+    # path already suppresses these via the local-constant guard; before the fix
+    # the standalone path did not, so it wrongly reported
+    # `template-materialization-unsupported` and blocked translatable kernels.
+    from crosstl.project import load_project_config
+
+    repo = tmp_path / "repo"
+    source_dir = repo / "kernels"
+    source_dir.mkdir(parents=True)
+    (source_dir / "tg.metal").write_text(
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "\n"
+        "template <typename T>\n"
+        "[[kernel]] void tg_sum(\n"
+        "    device const T* a [[buffer(0)]],\n"
+        "    device T* c [[buffer(1)]],\n"
+        "    uint index [[thread_position_in_grid]],\n"
+        "    uint lid [[thread_position_in_threadgroup]]) {\n"
+        "  constexpr int BN = 32;\n"
+        "  constexpr int BD = 4;\n"
+        "  threadgroup T tile[BN * BD];\n"
+        "  tile[lid] = a[index];\n"
+        "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+        "  c[index] = tile[lid];\n"
+        "}\n"
+        "\n"
+        'template [[host_name("tg_sum_float")]] [[kernel]] '
+        "decltype(tg_sum<float>) tg_sum<float>;\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(
+            """
+            [project]
+            source_roots = ["kernels"]
+            include = ["kernels/tg.metal"]
+            targets = ["vulkan"]
+            output_dir = "out"
+
+            [project.sources]
+            "**/*.metal" = "metal"
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo), format_output=False)
+    payload = report.to_json()
+
+    unsupported = [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic.get("code")
+        == "project.translate.template-materialization-unsupported"
+    ]
+    assert unsupported == [], unsupported
+
+    artifact = payload["artifacts"][0]
+    assert artifact.get("status") == "translated", artifact.get("error")
+
+
 def test_metal_function_header_masks_comments_spanning_the_header_start():
     # Regression: a function span can begin inside a preceding comment (e.g. a
     # license block), so masking only the already-sliced header missed the

@@ -12902,12 +12902,27 @@ def _unresolved_metal_standalone_template_type_records(
         )
     }
 
-    def append_record(function: Any, type_text: str) -> None:
+    def append_record(function: Any, type_text: str, offset: int) -> None:
         missing = _unresolved_metal_template_placeholders_in_type(
             type_text,
             template_parameter_names,
         )
         if not missing:
+            return
+        # Suppress false positives where the "missing" tokens are actually local
+        # constants in scope at this point (e.g. `constexpr int BN = 32;` used as
+        # an array extent `threadgroup U outputs[BN * BD]`). The struct/class-path
+        # scanner already applies this guard; the standalone-type path must too,
+        # otherwise the over-broad placeholder heuristic flags body-local constexpr
+        # array extents (MLX conv `TGH`/`TGW`/`TGC`/`TH`/`TW`, sdpa `BN`/`BD`) as
+        # unresolved template parameters and wrongly blocks translatable kernels.
+        if _metal_template_arguments_are_local_constants(
+            preprocessor,
+            source,
+            offset,
+            missing,
+            template_spans,
+        ):
             return
         required_signature = _normalize_metal_type_text(type_text)
         declared_type_check = _strip_metal_type_qualifiers(required_signature)
@@ -12950,12 +12965,12 @@ def _unresolved_metal_standalone_template_type_records(
         header = _metal_function_header(source, function)
         return_type = return_types.get(str(function.name))
         if return_type:
-            append_record(function, return_type)
+            append_record(function, return_type, int(function.span[0]))
         for type_text, _name, _variadic in _metal_function_parameter_declarations(
             preprocessor,
             header,
         ):
-            append_record(function, type_text)
+            append_record(function, type_text, int(function.span[0]))
 
         body_start, body_end = function.body_span
         environment = _metal_function_type_environment(
@@ -12974,7 +12989,7 @@ def _unresolved_metal_standalone_template_type_records(
             if declaration is None:
                 continue
             _name, type_text = declaration
-            append_record(function, type_text)
+            append_record(function, type_text, start)
     return records
 
 
