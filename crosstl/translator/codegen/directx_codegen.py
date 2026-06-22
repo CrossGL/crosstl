@@ -575,10 +575,43 @@ class HLSLCodeGen:
     # Subgroup/wave builtins (Metal [[thread_index_in_simdgroup]] /
     # [[threads_per_simdgroup]], canonicalised to gl_Subgroup* in CrossGL) have no
     # HLSL system-value semantic; HLSL exposes them only through wave intrinsics.
+    # gl_SubgroupID / gl_NumSubgroups have no direct wave intrinsic either, so they
+    # are derived from SV_GroupIndex and the (compile-time) thread group size:
+    #   simdgroup index within threadgroup = SV_GroupIndex / WaveGetLaneCount()
+    #   simdgroups per threadgroup         = ceil(GROUPSIZE / WaveGetLaneCount())
+    # The SV_GroupIndex placeholder below is rewritten to the actual emitted
+    # SV_GroupIndex parameter (or GROUPSIZE constant) at lowering time.
+    HLSL_WAVE_GROUP_INDEX_PLACEHOLDER = "__CROSSGL_SV_GROUP_INDEX__"
+    HLSL_WAVE_GROUP_SIZE_PLACEHOLDER = "__CROSSGL_GROUP_SIZE__"
     HLSL_WAVE_BUILTIN_INTRINSICS = {
         "gl_SubgroupInvocationID": "WaveGetLaneIndex()",
         "gl_SubgroupSize": "WaveGetLaneCount()",
+        "gl_SubgroupID": f"({HLSL_WAVE_GROUP_INDEX_PLACEHOLDER} / WaveGetLaneCount())",
+        "gl_NumSubgroups": (
+            f"(({HLSL_WAVE_GROUP_SIZE_PLACEHOLDER} + WaveGetLaneCount() - 1u) "
+            "/ WaveGetLaneCount())"
+        ),
     }
+    # GLSL compute/subgroup system-value builtins, canonicalised from Metal
+    # [[thread_position_in_grid]] / [[simdgroup_index_in_threadgroup]] / etc. These
+    # are only meaningful as HLSL system-value semantics (or wave intrinsics) on a
+    # true stage entry point. On an ordinary (non-entry) helper function they have
+    # no HLSL semantic form and must not leak into a parameter ``: gl_*`` semantic;
+    # the value flows in as a plain parameter, exactly as GLSL/SPIR-V emit it.
+    HLSL_GLSL_COMPUTE_BUILTIN_SEMANTICS = frozenset(
+        {
+            "gl_GlobalInvocationID",
+            "gl_LocalInvocationID",
+            "gl_WorkGroupID",
+            "gl_LocalInvocationIndex",
+            "gl_WorkGroupSize",
+            "gl_NumWorkGroups",
+            "gl_SubgroupInvocationID",
+            "gl_SubgroupSize",
+            "gl_SubgroupID",
+            "gl_NumSubgroups",
+        }
+    )
     HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES = HLSL_RESERVED_IDENTIFIER_NAMES | {
         # GLSL atan(y, x) lowers to HLSL atan2(y, x); keep local symbols from
         # capturing that intrinsic because HLSL does not provide a namespace escape.
@@ -3618,6 +3651,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.current_function_name = getattr(func, "name", None) or entry_name
         self.local_variable_types = {}
         self.current_identifier_aliases = {}
+        # Name of the SV_GroupIndex parameter an explicit @gl_SubgroupID compute
+        # parameter needs injected, populated lazily while emitting parameters and
+        # consumed by the post-loop compute-builtin parameter pass.
+        self.current_hlsl_compute_group_index_param = None
         self.current_hlsl_stage_output_lowering = stage_output_lowering
         self.current_identifier_reserved_names = (
             self.collect_hlsl_function_identifier_names(func)
@@ -3716,7 +3753,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if effective_shader_type == "compute":
                 wave_builtin_prologue = (
                     self.hlsl_compute_wave_builtin_parameter_prologue(
-                        p, param_type, semantic
+                        p, param_type, semantic, execution_config, param_list
                     )
                 )
                 if wave_builtin_prologue is not None:
@@ -3736,7 +3773,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             declaration = format_c_style_array_declaration(
                 param_type, self.hlsl_declaration_identifier_name(p.name)
             )
-            semantic_attr = "" if ray_role else self.map_semantic(semantic)
+            emit_semantic = semantic
+            if ray_role or self.hlsl_non_entry_compute_builtin_semantic(
+                effective_shader_type, semantic
+            ):
+                # Ray-payload parameters carry no semantic; GLSL compute/subgroup
+                # builtins on a non-entry helper have no HLSL semantic form (the
+                # value arrives as a plain parameter) and must not leak as ": gl_*".
+                emit_semantic = None
+            semantic_attr = self.map_semantic(emit_semantic)
             params.append(
                 f"{declaration} {semantic_attr}" if semantic_attr else declaration
             )
@@ -3824,6 +3869,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 param_names.add(name)
                 self.local_variable_types[name] = param_type
+            # An explicit @gl_SubgroupID compute parameter (handled as a body-local
+            # prologue above) requires an SV_GroupIndex parameter in scope; inject
+            # it here if no SV_GroupIndex parameter was already emitted.
+            group_index_param = self.current_hlsl_compute_group_index_param
+            if group_index_param and group_index_param not in param_names:
+                params_str = self.append_hlsl_parameter_declaration(
+                    params_str, f"uint {group_index_param} : SV_GroupIndex"
+                )
+                param_names.add(group_index_param)
+                self.local_variable_types[group_index_param] = "uint"
         elif effective_shader_type == "vertex":
             for (
                 name,
@@ -6272,19 +6327,38 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
         return self.HLSL_WAVE_BUILTIN_INTRINSICS.get(semantic.strip())
 
+    def hlsl_non_entry_compute_builtin_semantic(self, effective_shader_type, semantic):
+        """True when ``semantic`` is a GLSL compute/subgroup builtin appearing on a
+        parameter of a non-stage-entry helper function.
+
+        Such builtins (gl_GlobalInvocationID, gl_SubgroupID, gl_WorkGroupSize, ...)
+        only have an HLSL system-value/wave-intrinsic form on a true stage entry
+        point. On an ordinary helper they have no HLSL semantic and would leak as an
+        invalid ``: gl_*`` parameter semantic, so the caller drops the semantic and
+        emits a plain parameter (matching GLSL/SPIR-V, which receive these as plain
+        function arguments)."""
+        if not isinstance(semantic, str):
+            return False
+        if normalize_stage_name(effective_shader_type) in self.stage_entry_types():
+            return False
+        return semantic.strip() in self.HLSL_GLSL_COMPUTE_BUILTIN_SEMANTICS
+
     def hlsl_compute_wave_builtin_parameter_prologue(
-        self, parameter, param_type, semantic
+        self, parameter, param_type, semantic, execution_config=None, param_list=None
     ):
         """Bridge an explicit compute parameter that carries a subgroup/wave
         builtin semantic into HLSL.
 
-        Metal's ``[[thread_index_in_simdgroup]]`` / ``[[threads_per_simdgroup]]``
-        (canonicalised to ``gl_SubgroupInvocationID`` / ``gl_SubgroupSize``) have
-        no HLSL system-value semantic, so they cannot be emitted as entry-point
-        parameters. Instead the parameter becomes a body-local initialised from
-        the matching wave intrinsic (``WaveGetLaneIndex()`` /
-        ``WaveGetLaneCount()``). Returns the prologue statement, or ``None`` when
-        the parameter does not carry a wave builtin semantic.
+        Metal's ``[[thread_index_in_simdgroup]]`` / ``[[threads_per_simdgroup]]`` /
+        ``[[simdgroup_index_in_threadgroup]]`` / ``[[simdgroups_per_threadgroup]]``
+        (canonicalised to ``gl_SubgroupInvocationID`` / ``gl_SubgroupSize`` /
+        ``gl_SubgroupID`` / ``gl_NumSubgroups``) have no HLSL system-value
+        semantic, so they cannot be emitted as entry-point parameters. Instead the
+        parameter becomes a body-local initialised from the matching wave intrinsic
+        (``WaveGetLaneIndex()`` / ``WaveGetLaneCount()``) or, for
+        ``gl_SubgroupID`` / ``gl_NumSubgroups``, the SV_GroupIndex / thread-group
+        size derivation. Returns the prologue statement, or ``None`` when the
+        parameter does not carry a wave builtin semantic.
         """
         intrinsic = self.hlsl_wave_builtin_intrinsic_expression(semantic)
         if intrinsic is None:
@@ -6298,9 +6372,51 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if array_suffix:
             return None
 
+        if self.HLSL_WAVE_GROUP_SIZE_PLACEHOLDER in intrinsic:
+            intrinsic = intrinsic.replace(
+                self.HLSL_WAVE_GROUP_SIZE_PLACEHOLDER,
+                self.hlsl_compute_group_size_constant(execution_config),
+            )
+        if self.HLSL_WAVE_GROUP_INDEX_PLACEHOLDER in intrinsic:
+            intrinsic = intrinsic.replace(
+                self.HLSL_WAVE_GROUP_INDEX_PLACEHOLDER,
+                self.hlsl_compute_group_index_dependency_name(param_list),
+            )
+
         local_name = self.hlsl_declaration_identifier_name(parameter_name)
         self.local_variable_types[local_name] = base_type
         return f"{base_type} {local_name} = {intrinsic};"
+
+    def hlsl_compute_group_index_dependency_name(self, param_list=None):
+        """Return the name of the SV_GroupIndex parameter that gl_SubgroupID
+        derivations depend on, allocating and recording one for injection by the
+        post-loop compute-builtin parameter pass when it is not already in scope.
+
+        Reuses an SV_GroupIndex parameter already present (an explicit
+        @gl_LocalInvocationIndex parameter, or the one emitted for a
+        gl_LocalInvocationIndex body reference) so only a single such parameter is
+        added to the entry point."""
+        existing = self.current_identifier_aliases.get("gl_LocalInvocationIndex")
+        if existing:
+            return existing
+        for sibling in param_list or []:
+            sibling_semantic = self.hlsl_canonical_semantic(
+                self.semantic_from_node(sibling)
+            )
+            if sibling_semantic == "SV_GroupIndex":
+                return self.hlsl_declaration_identifier_name(
+                    getattr(sibling, "name", None)
+                )
+        if self.current_hlsl_compute_group_index_param:
+            return self.current_hlsl_compute_group_index_param
+        reserved_names = set(self.local_variable_types)
+        reserved_names.update(self.global_variable_types)
+        reserved_names.update(self.current_identifier_reserved_names)
+        reserved_names.update(self.current_identifier_aliases.values())
+        name = self.hlsl_unique_local_identifier("groupIndex", reserved_names)
+        self.current_hlsl_compute_group_index_param = name
+        self.local_variable_types[name] = "uint"
+        return name
 
     def hlsl_bitcast_result_type(self, func_name, args):
         if (
@@ -15067,16 +15183,37 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 None,
                 self.HLSL_WAVE_BUILTIN_INTRINSICS["gl_SubgroupSize"],
             ),
+            (
+                "gl_NumSubgroups",
+                None,
+                None,
+                None,
+                self.HLSL_WAVE_BUILTIN_INTRINSICS["gl_NumSubgroups"].replace(
+                    self.HLSL_WAVE_GROUP_SIZE_PLACEHOLDER,
+                    self.hlsl_compute_group_size_constant(execution_config),
+                ),
+            ),
         ]
         reserved_names = set(self.local_variable_types)
         reserved_names.update(self.global_variable_types)
         reserved_names.update(self.current_identifier_reserved_names)
         reserved_names.update(self.current_identifier_aliases.values())
 
+        # gl_SubgroupID (simdgroup index within the threadgroup) has no direct HLSL
+        # wave intrinsic; it is SV_GroupIndex / WaveGetLaneCount(). It therefore
+        # depends on the flattened local thread index. Reuse the SV_GroupIndex
+        # parameter emitted for gl_LocalInvocationIndex when present, otherwise
+        # inject a dedicated one so the expansion has its dependency in scope.
+        subgroup_id_used = "gl_SubgroupID" in used_names
+        group_index_name = None
+
         required_parameters = []
         for parameter in builtin_parameters:
             builtin_name, base_name, param_type, semantic, *alias = parameter
-            if builtin_name not in used_names:
+            needed = builtin_name in used_names
+            if builtin_name == "gl_LocalInvocationIndex" and subgroup_id_used:
+                needed = True
+            if not needed:
                 continue
             alias_expression = alias[0] if alias else None
             if alias_expression is not None:
@@ -15086,12 +15223,50 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 continue
             name = self.hlsl_unique_local_identifier(base_name, reserved_names)
             reserved_names.add(name)
+            if builtin_name == "gl_LocalInvocationIndex":
+                group_index_name = name
             required_parameters.append((builtin_name, name, param_type, semantic, None))
+
+        if subgroup_id_used:
+            if group_index_name is None:
+                group_index_name = self.hlsl_unique_local_identifier(
+                    "groupIndex", reserved_names
+                )
+                reserved_names.add(group_index_name)
+                required_parameters.append(
+                    (
+                        "_crossgl_subgroup_group_index",
+                        group_index_name,
+                        "uint",
+                        "SV_GroupIndex",
+                        None,
+                    )
+                )
+            subgroup_id_alias = self.HLSL_WAVE_BUILTIN_INTRINSICS[
+                "gl_SubgroupID"
+            ].replace(self.HLSL_WAVE_GROUP_INDEX_PLACEHOLDER, group_index_name)
+            required_parameters.append(
+                ("gl_SubgroupID", None, None, None, subgroup_id_alias)
+            )
         return required_parameters
 
     def hlsl_compute_workgroup_size_expression(self, execution_config=None):
         x, y, z = compute_local_size(execution_config)
         return f"uint3({x}, {y}, {z})"
+
+    def hlsl_compute_group_size_constant(self, execution_config=None):
+        """Return the flattened thread-group size (product of the numthreads dims)
+        as an HLSL unsigned expression. When every dimension is an integer literal
+        the product is folded to a single ``<n>u`` constant; otherwise the
+        dimensions are multiplied at runtime."""
+        dims = compute_local_size(execution_config)
+        try:
+            product = 1
+            for dim in dims:
+                product *= int(str(dim))
+            return f"{product}u"
+        except (TypeError, ValueError):
+            return "(" + " * ".join(f"uint({dim})" for dim in dims) + ")"
 
     def hlsl_compute_num_workgroups_expression(self):
         uniform = self.hlsl_compute_num_workgroups_uniform or {}

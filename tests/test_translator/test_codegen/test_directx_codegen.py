@@ -2028,6 +2028,160 @@ def test_hlsl_compute_subgroup_builtin_body_references_lower_to_wave_intrinsics(
     assert "gl_SubgroupSize" not in generated_code
 
 
+def test_hlsl_compute_subgroup_id_body_reference_lowers_to_group_index_division():
+    # gl_SubgroupID (Metal [[simdgroup_index_in_threadgroup]]) is the simdgroup
+    # index within the threadgroup; HLSL has no wave intrinsic for it, so it is
+    # SV_GroupIndex / WaveGetLaneCount(). The SV_GroupIndex parameter must be
+    # injected into the compute entry so the expansion has its dependency in scope.
+    shader = """
+    shader SubgroupIDBody {
+        compute {
+            layout(local_size_x = 64) in;
+            layout(set = 0, binding = 0) buffer float* data;
+            void main() {
+                uint sg = gl_SubgroupID;
+                data[sg] = 1.0;
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert ": SV_GroupIndex" in generated_code
+    assert "WaveGetLaneCount()" in generated_code
+    assert re.search(r"uint sg = \(\w+ / WaveGetLaneCount\(\)\);", generated_code)
+    assert "gl_SubgroupID" not in generated_code
+    assert "__CROSSGL" not in generated_code
+
+
+def test_hlsl_compute_num_subgroups_body_reference_lowers_to_group_size_ceildiv():
+    # gl_NumSubgroups (Metal [[simdgroups_per_threadgroup]]) is the simdgroup count
+    # per threadgroup: ceil(GROUPSIZE / lane count) where GROUPSIZE is the product
+    # of the numthreads dimensions (here 32 * 2 * 1 = 64), folded to a constant.
+    shader = """
+    shader NumSubgroupsBody {
+        compute {
+            layout(local_size_x = 32, local_size_y = 2) in;
+            layout(set = 0, binding = 0) buffer float* data;
+            void main() {
+                uint nsg = gl_NumSubgroups;
+                data[0] = float(nsg);
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "uint nsg = ((64u + WaveGetLaneCount() - 1u) / WaveGetLaneCount());"
+        in generated_code
+    )
+    assert "gl_NumSubgroups" not in generated_code
+    assert "__CROSSGL" not in generated_code
+
+
+def test_hlsl_compute_subgroup_id_reuses_local_invocation_index_group_index_param():
+    # When gl_LocalInvocationIndex (SV_GroupIndex) is already referenced, the
+    # gl_SubgroupID derivation reuses that single SV_GroupIndex parameter rather
+    # than injecting a second one (HLSL forbids duplicate system-value semantics).
+    shader = """
+    shader SubgroupIDReuse {
+        compute {
+            layout(local_size_x = 32) in;
+            layout(set = 0, binding = 0) buffer float* data;
+            void main() {
+                uint li = gl_LocalInvocationIndex;
+                uint sg = gl_SubgroupID;
+                data[li] = float(sg);
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert generated_code.count(": SV_GroupIndex") == 1
+    assert "gl_SubgroupID" not in generated_code
+    assert "gl_LocalInvocationIndex" not in generated_code
+    assert "__CROSSGL" not in generated_code
+
+
+def test_hlsl_compute_subgroup_id_and_num_subgroups_parameters_lower_to_wave_forms():
+    # Metal [[simdgroup_index_in_threadgroup]] / [[simdgroups_per_threadgroup]]
+    # arrive as explicit parameters carrying gl_SubgroupID / gl_NumSubgroups
+    # semantics; HLSL has no matching system-value semantic, so they become body
+    # locals derived from SV_GroupIndex / the thread-group size, with a single
+    # SV_GroupIndex parameter injected.
+    shader = """
+    shader WaveGroupParamCompute {
+        compute {
+            @ stage_entry
+            @ numthreads(64, 1, 1)
+            void main(RWStructuredBuffer<float> data @buffer(0),
+                      uint tid @gl_GlobalInvocationID,
+                      uint sgid @gl_SubgroupID,
+                      uint nsg @gl_NumSubgroups) {
+                float v = buffer_load(data, tid);
+                if (sgid == 0u) {
+                    buffer_store(data, tid, v / float(nsg));
+                }
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert generated_code.count(": SV_GroupIndex") == 1
+    assert re.search(r"uint sgid = \(\w+ / WaveGetLaneCount\(\)\);", generated_code)
+    assert (
+        "uint nsg = ((64u + WaveGetLaneCount() - 1u) / WaveGetLaneCount());"
+        in generated_code
+    )
+    # The builtins must not survive as parameter semantics, stray identifiers, or
+    # unexpanded placeholders.
+    assert "gl_SubgroupID" not in generated_code
+    assert "gl_NumSubgroups" not in generated_code
+    assert ": gl_Subgroup" not in generated_code
+    assert "__CROSSGL" not in generated_code
+
+
+def test_hlsl_non_entry_compute_helper_drops_glsl_builtin_parameter_semantics():
+    # A compute helper that is NOT a stage entry (e.g. an instantiated MLX kernel
+    # emitted alongside a synthetic entry) carries GLSL compute/subgroup builtin
+    # semantics on its parameters. HLSL has no system-value semantic for these on a
+    # non-entry function, so they must be emitted as plain parameters (matching
+    # GLSL/SPIR-V) rather than leaking an invalid ": gl_*" parameter semantic.
+    shader = """
+    shader NonEntryComputeHelper {
+        compute {
+            void block_softmax(RWStructuredBuffer<float> data @buffer(0),
+                               uint gid @gl_WorkGroupID,
+                               uint lid @gl_LocalInvocationID,
+                               uint simd_lane_id @gl_SubgroupInvocationID,
+                               uint simd_group_id @gl_SubgroupID) {
+                data[gid] = float(simd_lane_id + simd_group_id + lid);
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    # The helper's builtin parameters become plain uints with no leaked semantic.
+    assert "uint simd_lane_id" in generated_code
+    assert "uint simd_group_id" in generated_code
+    assert not re.search(r"\bgl_[A-Za-z0-9_]+", generated_code)
+    assert ": gl_" not in generated_code
+    assert "__CROSSGL" not in generated_code
+
+
 def test_hlsl_stage_entry_buffer_pointer_params_promote_to_resources():
     shader = """
     shader MatMulPointerParameters {
