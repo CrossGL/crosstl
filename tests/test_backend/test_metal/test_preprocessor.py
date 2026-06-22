@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from crosstl.backend.Metal.MetalLexer import MetalLexer
@@ -1539,3 +1541,236 @@ def test_collect_buffer_element_types_rejects_non_declaration_subscripts():
         for entries in element_types.values()
         for _, t in entries
     )
+
+
+# --------------------------------------------------------------------------- #
+# SFINAE-overloaded template member methods (MLX `simd_reduce`, issue #1354).  #
+# --------------------------------------------------------------------------- #
+
+# A synthetic struct mirroring MLX's DEFINE_SIMD_REDUCE() macro expansion plus a
+# return-type-SFINAE `simd_reduce_impl` (Min/Max style), used across the tests
+# below. It exercises BOTH SFINAE layers: the non-type constraint on
+# `simd_reduce` (sizeof) and the return-type constraint on `simd_reduce_impl`
+# (is_integral_v).
+_SFINAE_SIMD_REDUCE_STRUCT = (
+    "static constant constexpr const uint8_t simd_size = 32;\n"
+    "template <typename U>\n"
+    "struct Red {\n"
+    "  template <typename T, metal::enable_if_t<sizeof(T) < 8, bool> = true>\n"
+    "  T simd_reduce(T val) { return simd_reduce_impl(val); }\n"
+    "  template <typename T, metal::enable_if_t<sizeof(T) == 8, bool> = true>\n"
+    "  T simd_reduce(T val) {\n"
+    "    for (short i = simd_size / 2; i > 0; i /= 2) {\n"
+    "      val = operator()(val, simd_shuffle_down(val, i));\n"
+    "    }\n"
+    "    return val;\n"
+    "  }\n"
+    "  template <typename T>\n"
+    "  metal::enable_if_t<metal::is_integral_v<T>, T> simd_reduce_impl(T val) {\n"
+    "    return simd_sum(val);\n"
+    "  }\n"
+    "  template <typename T>\n"
+    "  metal::enable_if_t<!metal::is_integral_v<T>, T> simd_reduce_impl(T val) {\n"
+    "    return simd_sum(val);\n"
+    "  }\n"
+    "  U operator()(U a, U b) { return a + b; }\n"
+    "};\n"
+)
+
+
+def _sfinae_reduce_source(elem):
+    return (
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        + _SFINAE_SIMD_REDUCE_STRUCT
+        + f"kernel void reduce(device const {elem}* in [[buffer(0)]],\n"
+        f"  device {elem}* out [[buffer(1)]],\n"
+        "  uint i [[thread_position_in_grid]]) {\n"
+        f"    Red<{elem}> op;\n"
+        f"    {elem} total = in[i];\n"
+        "    out[i] = op.simd_reduce(total);\n"
+        "}\n"
+    )
+
+
+def test_sfinae_template_param_list_parses_constraint_separately():
+    # The `<` disambiguation: a SFINAE non-type parameter whose constraint embeds
+    # a comparison (`sizeof(T) < 8`) is parsed as ONE parameter; the bindable type
+    # parameter list is just `T` and the constraint text is recorded apart.
+    pp = MetalPreprocessor()
+    text = "typename T, metal::enable_if_t<sizeof(T) < 8, bool> = true"
+    assert pp._template_parameter_names(text) == ["T"]
+    assert pp._template_parameter_constraints(text) == [
+        "metal::enable_if_t<sizeof(T) < 8, bool>"
+    ]
+    # The matching angle for the parameter list is found despite the comparison.
+    header = "<" + text + ">"
+    assert pp._find_matching_template_param_angle(header, 0) == len(header) - 1
+    # The `== 8` variant likewise yields a single bindable `T`, not a spurious one.
+    text_eq = "typename T, metal::enable_if_t<sizeof(T) == 8, bool> = true"
+    assert pp._template_parameter_names(text_eq) == ["T"]
+    # Existing parameter shapes are unchanged.
+    assert pp._template_parameter_names("typename U = bool") == ["U"]
+    assert pp._template_parameter_defaults("typename U = bool") == {"U": "bool"}
+    assert pp._template_parameter_names("typename T, int N") == ["T", "N"]
+    assert pp._variadic_template_parameter_names("typename... Args") == {"Args"}
+
+
+def test_sfinae_simd_reduce_recognized_as_template_methods():
+    # Both `simd_reduce` overloads and both `simd_reduce_impl` overloads are
+    # recognized as template member methods (bindable `T`), with their SFINAE
+    # constraints captured and the return-type SFINAE unwrapped to the value type.
+    pp = MetalPreprocessor()
+    body = _SFINAE_SIMD_REDUCE_STRUCT.split("struct Red {", 1)[1].rsplit("};", 1)[0]
+    _names, _types, concrete, templates = pp._split_struct_body("Red", body, 0)
+    by_name = {}
+    for method in templates:
+        by_name.setdefault(method.name, []).append(method)
+    assert len(by_name.get("simd_reduce", [])) == 2
+    assert len(by_name.get("simd_reduce_impl", [])) == 2
+    for method in templates:
+        assert method.template_parameters == ["T"]
+    reduce_constraints = {
+        c for m in by_name["simd_reduce"] for c in m.template_constraints
+    }
+    assert reduce_constraints == {
+        "metal::enable_if_t<sizeof(T) < 8, bool>",
+        "metal::enable_if_t<sizeof(T) == 8, bool>",
+    }
+    for method in by_name["simd_reduce_impl"]:
+        # Return-type SFINAE unwrapped to plain `T`; constraint recorded.
+        assert method.return_type == "T"
+        assert method.return_type_constraint in {
+            "metal::is_integral_v<T>",
+            "!metal::is_integral_v<T>",
+        }
+
+
+def test_sfinae_constraint_evaluation_size_and_integral_tables():
+    # Direct coverage of the size / is_integral tables and constraint evaluation.
+    pp = MetalPreprocessor()
+    assert pp._sizeof_concrete_type("float") == 4
+    assert pp._sizeof_concrete_type("int") == 4
+    assert pp._sizeof_concrete_type("long") == 8
+    assert pp._sizeof_concrete_type("double") == 8
+    assert pp._sizeof_concrete_type("half") == 2
+    assert pp._sizeof_concrete_type("float4") == 16
+    assert pp._is_integral_concrete_type("int") is True
+    assert pp._is_integral_concrete_type("uint") is True
+    assert pp._is_integral_concrete_type("float") is False
+    assert pp._is_integral_concrete_type("half") is False
+    less8 = "metal::enable_if_t<sizeof(T) < 8, bool>"
+    eq8 = "metal::enable_if_t<sizeof(T) == 8, bool>"
+    assert pp._evaluate_template_constraint(less8, {"T": "float"}) is True
+    assert pp._evaluate_template_constraint(less8, {"T": "long"}) is False
+    assert pp._evaluate_template_constraint(eq8, {"T": "double"}) is True
+    assert pp._evaluate_template_constraint(eq8, {"T": "int"}) is False
+    assert (
+        pp._evaluate_template_constraint("metal::is_integral_v<T>", {"T": "int"})
+        is True
+    )
+    assert (
+        pp._evaluate_template_constraint("!metal::is_integral_v<T>", {"T": "float"})
+        is True
+    )
+    # An unrecognized constraint / type clean-fails (raises, never guesses).
+    with pytest.raises(MetalPreprocessor._UnrecognizedConstraint):
+        pp._evaluate_template_constraint(
+            "metal::is_floating_point_v<T>", {"T": "float"}
+        )
+    with pytest.raises(MetalPreprocessor._UnrecognizedConstraint):
+        pp._evaluate_template_constraint(less8, {"T": "complex64_t"})
+
+
+@pytest.mark.parametrize(
+    "elem,impl_suffix",
+    [
+        ("float", "float"),  # sizeof 4 -> <8 ; non-integral simd_reduce_impl
+        ("int", "int"),  # sizeof 4 -> <8 ; integral simd_reduce_impl
+    ],
+)
+def test_sfinae_simd_reduce_selects_less8_overload_and_lowers_chain(elem, impl_suffix):
+    # `T` of size 4 selects the sizeof<8 overload, whose body calls
+    # `simd_reduce_impl` — the second SFINAE layer is resolved too, so the whole
+    # chain lowers to free functions with no dangling call.
+    output = MetalPreprocessor().preprocess(_sfinae_reduce_source(elem))
+    reduce_fn = f"{elem} Red_{elem}__simd_reduce__{elem}(Red_{elem} self, {elem} val)"
+    assert reduce_fn in output
+    assert f"Red_{elem}__simd_reduce_impl__{impl_suffix}" in output
+    assert f"Red_{elem}__simd_reduce__{elem}(op, total)" in output
+    # No dangling receiver call survives.
+    assert "op.simd_reduce(" not in output
+    # The lowered `simd_reduce` free function calls the LOWERED impl, not a bare
+    # `simd_reduce_impl(...)`. (A bare `simd_reduce_impl(` legitimately remains in
+    # the leftover PRIMARY template body, which the downstream parser drops.)
+    reduce_body = output.split(reduce_fn, 1)[1].split("}", 1)[0]
+    assert "self" in reduce_body  # receiver threaded into the internal call
+    assert re.search(r"(?<![\w_])simd_reduce_impl\s*\(", reduce_body) is None
+    # The only call sites of the bare impl name are inside `template <` blocks.
+    for match in re.finditer(r"(?<![\w_])simd_reduce_impl\s*\(", output):
+        preceding = output[: match.start()]
+        assert "template <" in preceding.rsplit("struct", 1)[-1]
+
+
+@pytest.mark.parametrize("elem", ["long", "double"])
+def test_sfinae_simd_reduce_selects_eq8_overload(elem):
+    # `T` of size 8 selects the sizeof==8 overload, whose body combines elements
+    # with `operator()` (lowered to the concrete call operator) and never calls
+    # `simd_reduce_impl`.
+    output = MetalPreprocessor().preprocess(_sfinae_reduce_source(elem))
+    reduce_fn = f"{elem} Red_{elem}__simd_reduce__{elem}(Red_{elem} self, {elem} val)"
+    assert reduce_fn in output
+    assert f"Red_{elem}__simd_reduce__{elem}(op, total)" in output
+    # The ==8 body's `operator()(...)` is lowered to the concrete free function.
+    assert f"Red_{elem}__operator_call(self," in output
+    # The ==8 overload does not call simd_reduce_impl, so the lowered free
+    # function body contains no impl call and NO lowered impl is emitted.
+    reduce_body = output.split(reduce_fn, 1)[1].split("}", 1)[0]
+    assert "simd_reduce_impl" not in reduce_body
+    assert f"Red_{elem}__simd_reduce_impl" not in output
+    assert "op.simd_reduce(" not in output
+
+
+def test_sfinae_simd_reduce_unrecognized_type_clean_fails():
+    # A call whose concrete `T` is a non-scalar type (`complex64_t`) has no
+    # recognized sizeof, so no overload's constraint can be evaluated: the method
+    # clean-fails with MetalStructMethodError rather than guessing an overload.
+    code = (
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct complex64_t { float real; float imag; };\n"
+        + _SFINAE_SIMD_REDUCE_STRUCT
+        + "kernel void reduce(device const complex64_t* in [[buffer(0)]],\n"
+        "  device complex64_t* out [[buffer(1)]],\n"
+        "  uint i [[thread_position_in_grid]]) {\n"
+        "    Red<complex64_t> op;\n"
+        "    complex64_t total = in[i];\n"
+        "    out[i] = op.simd_reduce(total);\n"
+        "}\n"
+    )
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+    assert excinfo.value.method_name == "simd_reduce"
+    assert (
+        excinfo.value.project_diagnostic_code == "project.translate.metal-struct-method"
+    )
+
+
+def test_sfinae_simd_reduce_full_pipeline_to_hlsl():
+    # End-to-end: the sizeof<8 + is_integral chain for T=float translates to HLSL
+    # with `simd_sum` -> `WaveActiveSum` and no dangling simd_reduce calls.
+    from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
+    from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+    from crosstl.translator.lexer import Lexer as CrossGLLexer
+    from crosstl.translator.parser import Parser as CrossGLParser
+
+    pre = MetalPreprocessor().preprocess(_sfinae_reduce_source("float"))
+    assert "Red_float__simd_reduce__float(Red_float self, float val)" in pre
+    tokens = MetalLexer(pre).tokenize()
+    ast = MetalParser(tokens).parse()
+    crossgl = MetalToCrossGLConverter().generate(ast)
+    parsed = CrossGLParser(CrossGLLexer(crossgl).get_tokens()).parse()
+    hlsl = HLSLCodeGen().generate(parsed)
+    assert "op.simd_reduce(" not in hlsl
+    assert re.search(r"(?<![\w_])simd_reduce\s*\(", hlsl) is None
+    assert "WaveActiveSum" in hlsl

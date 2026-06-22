@@ -149,6 +149,31 @@ class _MetalFunctionDefinition:
     is_entry: bool
 
 
+@dataclass(frozen=True)
+class _TemplateParameter:
+    """One entry of a parsed `template <...>` parameter list.
+
+    A parameter is either a BINDABLE type parameter (`typename T` / `class T`,
+    optionally variadic / with a default) or an anonymous non-type SFINAE
+    CONSTRAINT parameter such as ``metal::enable_if_t<sizeof(T) < 8, bool> =
+    true``. Only bindable type parameters take part in template-argument binding;
+    constraints are recorded verbatim so an overload set can be disambiguated by
+    evaluating each constraint against the concrete type arguments.
+    """
+
+    name: Optional[str]
+    is_type_parameter: bool
+    is_variadic: bool = False
+    default: Optional[str] = None
+    constraint_text: Optional[str] = None
+
+    @property
+    def is_constraint(self) -> bool:
+        # A non-type parameter whose declarator is anonymous (no bindable name)
+        # is a SFINAE enabler we keep only for overload selection.
+        return not self.is_type_parameter and self.constraint_text is not None
+
+
 @dataclass
 class _MetalStructMethod:
     """A member function found inside a concrete struct/class definition."""
@@ -169,6 +194,16 @@ class _MetalStructMethod:
     template_parameters: List[str] = field(default_factory=list)
     variadic_template_parameters: Set[str] = field(default_factory=set)
     template_parameter_defaults: Dict[str, str] = field(default_factory=dict)
+    # SFINAE constraint texts harvested from anonymous non-type template
+    # parameters (e.g. `metal::enable_if_t<sizeof(T) < 8, bool>`). They are NOT
+    # bindable parameters; they are evaluated against the concrete type bindings
+    # to pick the unique enabled overload when a method name is overloaded.
+    template_constraints: List[str] = field(default_factory=list)
+    # The return type BEFORE any return-type SFINAE wrapper is stripped (the
+    # second SFINAE layer, e.g. `metal::enable_if_t<is_integral_v<T>, T>`). Kept
+    # so the wrapped form can be recorded as an extra constraint while the
+    # emitted free function uses the unwrapped value type.
+    return_type_constraint: Optional[str] = None
 
     @property
     def is_template(self) -> bool:
@@ -561,8 +596,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         }
         # Concrete methods keyed by struct name for direct call-site rewriting.
         methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]] = {}
-        # Template methods keyed by struct name for on-demand instantiation.
-        template_methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]] = {}
+        # Template methods keyed by struct name then method name to the LIST of
+        # overloads sharing that name (e.g. the two SFINAE `simd_reduce`
+        # overloads). A single-overload name is just a one-element list, so the
+        # non-overloaded path is unchanged; an overload set is resolved by
+        # evaluating each candidate's SFINAE constraints at the call site.
+        template_methods_by_struct: Dict[str, Dict[str, List[_MetalStructMethod]]] = {}
         operator_call_structs: Set[str] = set()
         structs_by_name: Dict[str, _MetalStructDefinition] = {}
         for struct in structs_with_methods:
@@ -573,9 +612,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if method.is_operator_call:
                     operator_call_structs.add(struct.name)
             methods_by_struct[struct.name] = method_map
-            template_map: Dict[str, _MetalStructMethod] = {}
+            template_map: Dict[str, List[_MetalStructMethod]] = {}
             for method in struct.template_methods:
-                template_map[method.name] = method
+                template_map.setdefault(method.name, []).append(method)
                 if method.is_operator_call:
                     operator_call_structs.add(struct.name)
             template_methods_by_struct[struct.name] = template_map
@@ -731,7 +770,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             # skipped; only definitions with a body are recorded.
             if re.match(r"template\s*<", body[i:]):
                 angle_start = body.find("<", i)
-                angle_end = self._find_matching_angle(body, angle_start)
+                angle_end = self._find_matching_template_param_angle(body, angle_start)
                 if angle_end is None:
                     break
                 method_body_start = self._find_next_top_level_char(
@@ -887,10 +926,257 @@ class MetalPreprocessor(HLSLPreprocessor):
         method.template_parameter_defaults = self._template_parameter_defaults(
             parameter_text
         )
+        method.template_constraints = self._template_parameter_constraints(
+            parameter_text
+        )
+        # A SECOND SFINAE layer can hide on the RETURN TYPE, e.g. Sum/Min/Max:
+        #   metal::enable_if_t<metal::is_integral_v<T>, T> simd_reduce_impl(T val)
+        # Unwrap it so the emitted free function returns the real value type while
+        # the wrapped constraint joins the overload-selection set.
+        return_constraint, unwrapped = self._split_return_type_sfinae(
+            method.return_type
+        )
+        if return_constraint is not None:
+            method.return_type = unwrapped
+            method.return_type_constraint = return_constraint
+            method.template_constraints = [
+                *method.template_constraints,
+                return_constraint,
+            ]
         # The span covers the whole `template <...> ... { ... }` definition so the
         # data-only struct removes it cleanly.
         method.span = (body_offset + decl_start, body_offset + method_body_end)
         return method
+
+    def _split_return_type_sfinae(self, return_type: str) -> Tuple[Optional[str], str]:
+        # Detect a return-type SFINAE wrapper `[metal::]enable_if_t<COND, TYPE>`
+        # (the second SFINAE layer used by Sum/Min/Max's `simd_reduce_impl`). On a
+        # match return (COND, TYPE) — the enabling condition and the unwrapped
+        # value type; otherwise (None, return_type) unchanged. Only a return type
+        # that is EXACTLY an `enable_if_t<...>` template-id is unwrapped, so an
+        # ordinary `T` / `float4` return is left intact (never guess).
+        text = return_type.strip()
+        match = re.match(r"^(?:typename\s+)?(?:metal\s*::\s*)?enable_if_t\s*<", text)
+        if match is None:
+            return None, return_type
+        angle_start = text.find("<", match.end() - 1)
+        # Use the SFINAE-aware angle/split so a condition containing a comparison
+        # (`sizeof(T) < 8`) balances correctly.
+        angle_end = self._find_matching_template_param_angle(text, angle_start)
+        if angle_end is None or text[angle_end + 1 :].strip():
+            # Trailing tokens after the angle (e.g. a pointer/qualifier) are not a
+            # simple wrapper; leave it for clean-fail rather than mis-parse.
+            return None, return_type
+        arguments = self._split_template_parameter_list(
+            text[angle_start + 1 : angle_end]
+        )
+        if len(arguments) != 2:
+            return None, return_type
+        condition = arguments[0].strip()
+        value_type = arguments[1].strip()
+        if not condition or not value_type:
+            return None, return_type
+        return condition, value_type
+
+    # ------------------------------------------------------------------ #
+    # SFINAE constraint evaluation for overload selection.               #
+    # ------------------------------------------------------------------ #
+    # Only the two constraint families MLX `reduce` needs are understood:
+    # `sizeof(T) <cmp> N` and `[!]is_integral_v<T>`. Any other constraint shape
+    # is a clean-fail (the overload set is left unresolved so the existing
+    # diagnostic fires) — the contract is to NEVER guess or mis-select.
+
+    # Byte sizes of the scalar element types (vectors scale by component count).
+    _METAL_SCALAR_TYPE_SIZES: Dict[str, int] = {
+        "bool": 1,
+        "char": 1,
+        "uchar": 1,
+        "short": 2,
+        "ushort": 2,
+        "half": 2,
+        "int": 4,
+        "uint": 4,
+        "float": 4,
+        "long": 8,
+        "ulong": 8,
+        "double": 8,
+        "size_t": 8,
+    }
+    # Integral scalar element types for `is_integral_v<T>`.
+    _METAL_INTEGRAL_SCALAR_TYPES: Set[str] = {
+        "bool",
+        "char",
+        "uchar",
+        "short",
+        "ushort",
+        "int",
+        "uint",
+        "long",
+        "ulong",
+        "size_t",
+    }
+
+    class _UnrecognizedConstraint(Exception):
+        """A SFINAE constraint outside the small recognized set — clean-fail."""
+
+    def _scalar_and_width(self, type_text: str) -> Optional[Tuple[str, int]]:
+        # Decompose a scalar/vector type into (scalar base, component width). A
+        # trailing 2/3/4 on a known scalar denotes a vector; otherwise width 1.
+        # Returns None when the base is not a recognized scalar.
+        text = self._normalize_inferred_type(type_text)
+        if not text or " " in text:
+            return None
+        match = re.fullmatch(
+            r"(?P<base>[A-Za-z_][A-Za-z0-9_]*?)(?P<width>[234])?", text
+        )
+        if match is None:
+            return None
+        base = match.group("base")
+        if base not in self._METAL_SCALAR_TYPE_SIZES:
+            # A width suffix that is actually part of the name (e.g. an unknown
+            # type) — treat the whole token as the base.
+            if text in self._METAL_SCALAR_TYPE_SIZES:
+                return text, 1
+            return None
+        width = int(match.group("width")) if match.group("width") else 1
+        return base, width
+
+    def _sizeof_concrete_type(self, type_text: str) -> Optional[int]:
+        decomposed = self._scalar_and_width(type_text)
+        if decomposed is None:
+            return None
+        base, width = decomposed
+        return self._METAL_SCALAR_TYPE_SIZES[base] * width
+
+    def _is_integral_concrete_type(self, type_text: str) -> Optional[bool]:
+        decomposed = self._scalar_and_width(type_text)
+        if decomposed is None:
+            return None
+        base, _width = decomposed
+        return base in self._METAL_INTEGRAL_SCALAR_TYPES
+
+    def _evaluate_template_constraint(
+        self, constraint: str, bindings: Dict[str, str]
+    ) -> bool:
+        # Evaluate a single SFINAE constraint for the concrete `bindings` and
+        # return whether the overload is ENABLED. Raises _UnrecognizedConstraint
+        # for any constraint shape outside the recognized set so the caller can
+        # clean-fail rather than guess.
+        text = constraint.strip()
+        # Unwrap an `[metal::]enable_if_t<COND, type>` enabler down to COND; a
+        # bare `enable_if_t<COND>` (one argument) unwraps to COND too. The
+        # presence of the alias means "enabled iff COND".
+        enable_match = re.match(
+            r"^(?:typename\s+)?(?:metal\s*::\s*)?enable_if_t\s*<", text
+        )
+        if enable_match is not None:
+            angle_start = text.find("<", enable_match.end() - 1)
+            # The enabler's condition may embed a comparison `<` (`sizeof(T) < 8`),
+            # so balance the angle and split its arguments with the SFINAE-aware
+            # helpers rather than the generic ones.
+            angle_end = self._find_matching_template_param_angle(text, angle_start)
+            if angle_end is None or text[angle_end + 1 :].strip():
+                raise self._UnrecognizedConstraint(constraint)
+            arguments = self._split_template_parameter_list(
+                text[angle_start + 1 : angle_end]
+            )
+            if not arguments:
+                raise self._UnrecognizedConstraint(constraint)
+            return self._evaluate_boolean_constraint(arguments[0].strip(), bindings)
+        return self._evaluate_boolean_constraint(text, bindings)
+
+    def _evaluate_boolean_constraint(
+        self, expression: str, bindings: Dict[str, str]
+    ) -> bool:
+        expr = expression.strip()
+        if not expr:
+            raise self._UnrecognizedConstraint(expression)
+        # Leading negation.
+        if expr.startswith("!"):
+            return not self._evaluate_boolean_constraint(expr[1:], bindings)
+        # Strip a single fully-enclosing paren group.
+        while (
+            expr.startswith("(")
+            and self._find_matching_delimiter(expr, 0, "(", ")") == len(expr) - 1
+        ):
+            expr = expr[1:-1].strip()
+            if not expr:
+                raise self._UnrecognizedConstraint(expression)
+            if expr.startswith("!"):
+                return not self._evaluate_boolean_constraint(expr[1:], bindings)
+
+        # `is_integral_v<T>` (optionally `metal::`).
+        integral_match = re.fullmatch(
+            r"(?:metal\s*::\s*)?is_integral_v\s*<\s*(?P<arg>[^<>]+?)\s*>", expr
+        )
+        if integral_match is not None:
+            concrete = self._resolve_constraint_type(
+                integral_match.group("arg"), bindings
+            )
+            result = self._is_integral_concrete_type(concrete)
+            if result is None:
+                raise self._UnrecognizedConstraint(expression)
+            return result
+
+        # `sizeof(T) <cmp> N`.
+        sizeof_match = re.fullmatch(
+            r"sizeof\s*\(\s*(?P<arg>[^()]+?)\s*\)\s*"
+            r"(?P<op><=|>=|==|!=|<|>)\s*(?P<rhs>[0-9]+)",
+            expr,
+        )
+        if sizeof_match is not None:
+            concrete = self._resolve_constraint_type(
+                sizeof_match.group("arg"), bindings
+            )
+            size = self._sizeof_concrete_type(concrete)
+            if size is None:
+                raise self._UnrecognizedConstraint(expression)
+            rhs = int(sizeof_match.group("rhs"))
+            return self._compare(size, sizeof_match.group("op"), rhs)
+
+        raise self._UnrecognizedConstraint(expression)
+
+    def _resolve_constraint_type(self, arg: str, bindings: Dict[str, str]) -> str:
+        # Resolve a constraint's type operand (`T`) to its concrete binding,
+        # leaving an already-concrete type as-is.
+        text = arg.strip()
+        return bindings.get(text, text)
+
+    def _compare(self, left: int, op: str, right: int) -> bool:
+        comparisons = {
+            "<": operator.lt,
+            ">": operator.gt,
+            "<=": operator.le,
+            ">=": operator.ge,
+            "==": operator.eq,
+            "!=": operator.ne,
+        }
+        return comparisons[op](left, right)
+
+    def _select_constrained_overload(
+        self,
+        overloads: List[_MetalStructMethod],
+        bindings: Dict[str, str],
+    ) -> Optional[_MetalStructMethod]:
+        # Pick the unique overload whose SFINAE constraints ALL evaluate true for
+        # `bindings`. Returns None when zero or more than one overload is enabled,
+        # or when any constraint is unrecognized — every such case is a clean
+        # failure (never guess / never mis-select). An overload with NO
+        # constraints is considered always-enabled (a plain template method),
+        # which keeps the single-overload, no-SFINAE path unchanged.
+        enabled: List[_MetalStructMethod] = []
+        for overload in overloads:
+            try:
+                if all(
+                    self._evaluate_template_constraint(constraint, bindings)
+                    for constraint in overload.template_constraints
+                ):
+                    enabled.append(overload)
+            except self._UnrecognizedConstraint:
+                return None
+        if len(enabled) == 1:
+            return enabled[0]
+        return None
 
     def _parse_struct_method(
         self, struct_name: str, body: str, decl_start: int, brace: int
@@ -1292,7 +1578,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         code: str,
         struct_names: Set[str],
         methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]],
-        template_methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]],
+        template_methods_by_struct: Dict[str, Dict[str, List[_MetalStructMethod]]],
         operator_call_structs: Set[str],
         struct_spans: List[Tuple[int, int]],
         structs_by_name: Dict[str, _MetalStructDefinition],
@@ -1403,7 +1689,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         ident_end: int,
         struct_names: Set[str],
         methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]],
-        template_methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]],
+        template_methods_by_struct: Dict[str, Dict[str, List[_MetalStructMethod]]],
         operator_call_structs: Set[str],
         variable_types: Dict[str, List[Tuple[int, str]]],
         structs_by_name: Dict[str, _MetalStructDefinition],
@@ -1449,12 +1735,12 @@ class MetalPreprocessor(HLSLPreprocessor):
             if method is not None:
                 return after, method.free_name
             # A static TEMPLATE member call `S::m(args)`: instantiate from args.
-            template_method = template_methods_by_struct.get(ident, {}).get(member)
-            if template_method is not None:
+            template_overloads = template_methods_by_struct.get(ident, {}).get(member)
+            if template_overloads:
                 rewrite = self._instantiate_template_member_call(
                     code,
                     structs_by_name[ident],
-                    template_method,
+                    template_overloads,
                     receiver=None,
                     arg_open=after,
                     buffer_element_types=buffer_element_types,
@@ -1462,6 +1748,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     instantiated_template_functions=instantiated_template_functions,
                     structs_by_name=field_structs_by_name,
                     variable_types=field_variable_types,
+                    template_methods_by_struct=template_methods_by_struct,
                 )
                 if rewrite is not None:
                     return rewrite
@@ -1493,14 +1780,14 @@ class MetalPreprocessor(HLSLPreprocessor):
             if method is not None:
                 return self._build_instance_call_rewrite(code, ident, method, arg_open)
             # An instance TEMPLATE member call `var.m(args)`.
-            template_method = template_methods_by_struct.get(struct_type, {}).get(
+            template_overloads = template_methods_by_struct.get(struct_type, {}).get(
                 member
             )
-            if template_method is not None:
+            if template_overloads:
                 return self._instantiate_template_member_call(
                     code,
                     structs_by_name[struct_type],
-                    template_method,
+                    template_overloads,
                     receiver=ident,
                     arg_open=arg_open,
                     buffer_element_types=buffer_element_types,
@@ -1508,6 +1795,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     instantiated_template_functions=instantiated_template_functions,
                     structs_by_name=field_structs_by_name,
                     variable_types=field_variable_types,
+                    template_methods_by_struct=template_methods_by_struct,
                 )
             return None
 
@@ -1517,14 +1805,14 @@ class MetalPreprocessor(HLSLPreprocessor):
             if method is not None:
                 return self._build_instance_call_rewrite(code, ident, method, j)
             # A template `operator()` functor call `var(args)`.
-            template_method = template_methods_by_struct.get(struct_type, {}).get(
+            template_overloads = template_methods_by_struct.get(struct_type, {}).get(
                 "operator()"
             )
-            if template_method is not None:
+            if template_overloads:
                 return self._instantiate_template_member_call(
                     code,
                     structs_by_name[struct_type],
-                    template_method,
+                    template_overloads,
                     receiver=ident,
                     arg_open=j,
                     buffer_element_types=buffer_element_types,
@@ -1532,6 +1820,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     instantiated_template_functions=instantiated_template_functions,
                     structs_by_name=field_structs_by_name,
                     variable_types=field_variable_types,
+                    template_methods_by_struct=template_methods_by_struct,
                 )
             return None
 
@@ -1541,7 +1830,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         self,
         code: str,
         struct: _MetalStructDefinition,
-        method: _MetalStructMethod,
+        overloads: List[_MetalStructMethod],
         receiver: Optional[str],
         arg_open: int,
         buffer_element_types: Dict[str, List[Tuple[int, str]]],
@@ -1549,12 +1838,18 @@ class MetalPreprocessor(HLSLPreprocessor):
         instantiated_template_functions: Dict[str, str],
         structs_by_name: Optional[Dict[str, _MetalStructDefinition]] = None,
         variable_types: Optional[Dict[str, List[Tuple[int, str]]]] = None,
+        template_methods_by_struct: Optional[
+            Dict[str, Dict[str, List[_MetalStructMethod]]]
+        ] = None,
     ) -> Optional[Tuple[int, str]]:
         # Instantiate a CALLED template member method from its call-site argument
-        # types and rewrite the call to the concrete free function. A call that
-        # cannot be resolved (un-inferable argument or non-binding template
-        # parameters) raises MetalStructMethodError — a clean translation
-        # failure — rather than leaving a dangling call.
+        # types and rewrite the call to the concrete free function. `overloads`
+        # holds every method sharing the called name; the unique overload whose
+        # SFINAE constraints are satisfied by the inferred type bindings is
+        # selected. A call that cannot be resolved (un-inferable argument,
+        # non-binding template parameters, or ambiguous/unrecognized constraints)
+        # raises MetalStructMethodError — a clean translation failure — rather
+        # than leaving a dangling call or mis-selecting an overload.
         arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
         if arg_close is None:
             return None
@@ -1564,8 +1859,11 @@ class MetalPreprocessor(HLSLPreprocessor):
             for argument in self._split_top_level_commas(raw_args)
             if argument.strip()
         ]
+        # All overloads of one name share a declared-parameter shape; bind using a
+        # representative for argument typing and the diagnostic signature.
+        representative = overloads[0]
         signature = self._template_member_call_signature(
-            struct, method, receiver, raw_args
+            struct, representative, receiver, raw_args
         )
 
         # Resolve the position-ordered declaration maps to the FLAT views valid at
@@ -1591,11 +1889,11 @@ class MetalPreprocessor(HLSLPreprocessor):
             if inferred is None:
                 raise MetalStructMethodError(
                     "Cannot lower template member method "
-                    f"'{struct.name}::{method.name}': the type of call argument "
-                    f"'{argument.strip()}' could not be inferred conservatively. "
-                    f"Requested call: {signature}.",
+                    f"'{struct.name}::{representative.name}': the type of call "
+                    f"argument '{argument.strip()}' could not be inferred "
+                    f"conservatively. Requested call: {signature}.",
                     struct_name=struct.name,
-                    method_name=method.name,
+                    method_name=representative.name,
                     requested_signature=signature,
                     suggested_action=(
                         "pass the argument as a buffer-element access, a typed "
@@ -1605,21 +1903,49 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
             concrete_argument_types.append(inferred)
 
-        # Bind the method's template parameters by matching each declared
-        # parameter type (which contains the template params) against the
-        # inferred concrete argument type.
+        free_name = self._instantiate_template_member_overload(
+            struct,
+            overloads,
+            concrete_argument_types,
+            signature,
+            instantiated_template_functions,
+            template_methods_by_struct,
+        )
+        # Static-ness comes from the overload set; all overloads of one name agree
+        # on static-ness in the patterns we handle, so the representative decides.
+        receiver_name = None if representative.is_static else receiver
+        return self._build_template_call_rewrite(
+            code, receiver_name, free_name, arg_open, arg_close
+        )
+
+    def _instantiate_template_member_overload(
+        self,
+        struct: _MetalStructDefinition,
+        overloads: List[_MetalStructMethod],
+        concrete_argument_types: List[str],
+        signature: str,
+        instantiated_template_functions: Dict[str, str],
+        template_methods_by_struct: Optional[
+            Dict[str, Dict[str, List[_MetalStructMethod]]]
+        ],
+    ) -> str:
+        # Bind, select the enabled overload, materialize it (recursively lowering
+        # any internal template-member calls in its body), and return the
+        # concrete free-function name. Raises MetalStructMethodError on any
+        # unresolved/ambiguous case.
+        representative = overloads[0]
         bindings = self._bind_template_method_parameters(
-            method, concrete_argument_types
+            representative, concrete_argument_types
         )
         if bindings is None:
             raise MetalStructMethodError(
                 "Cannot lower template member method "
-                f"'{struct.name}::{method.name}': its template parameters "
-                f"{method.template_parameters} did not bind consistently from "
-                f"the inferred argument types {concrete_argument_types}. "
+                f"'{struct.name}::{representative.name}': its template parameters "
+                f"{representative.template_parameters} did not bind consistently "
+                f"from the inferred argument types {concrete_argument_types}. "
                 f"Requested call: {signature}.",
                 struct_name=struct.name,
-                method_name=method.name,
+                method_name=representative.name,
                 requested_signature=signature,
                 suggested_action=(
                     "ensure each template parameter appears in a parameter type "
@@ -1628,21 +1954,40 @@ class MetalPreprocessor(HLSLPreprocessor):
                 ),
             )
 
-        # Materialize (deduplicated by struct/method/bindings) and rewrite.
-        ordered_arguments = [bindings[name] for name in method.template_parameters]
-        free_name = self._template_member_free_name(struct, method, ordered_arguments)
+        selected = self._select_constrained_overload(overloads, bindings)
+        if selected is None:
+            raise MetalStructMethodError(
+                "Cannot lower template member method "
+                f"'{struct.name}::{representative.name}': no unique overload is "
+                f"enabled by its SFINAE constraints for bindings {bindings} "
+                f"(zero or several matched, or a constraint is unsupported). "
+                f"Requested call: {signature}.",
+                struct_name=struct.name,
+                method_name=representative.name,
+                requested_signature=signature,
+                suggested_action=(
+                    "specialize the method manually, or restrict the call to a "
+                    "type whose constraint is recognized (sizeof / is_integral_v)"
+                ),
+            )
+
+        ordered_arguments = [bindings[name] for name in selected.template_parameters]
+        free_name = self._template_member_free_name(struct, selected, ordered_arguments)
         if free_name not in instantiated_template_functions:
+            # Reserve the name first so a (pathological) self-recursive method does
+            # not loop forever; the body is filled in below.
+            instantiated_template_functions[free_name] = ""
             instantiated_template_functions[free_name] = (
                 self._emit_template_member_free_function(
-                    struct, method, bindings, free_name
+                    struct,
+                    selected,
+                    bindings,
+                    free_name,
+                    instantiated_template_functions=instantiated_template_functions,
+                    template_methods_by_struct=template_methods_by_struct,
                 )
             )
-        receiver_name = receiver
-        if method.is_static:
-            receiver_name = None
-        return self._build_template_call_rewrite(
-            code, receiver_name, free_name, arg_open, arg_close
-        )
+        return free_name
 
     def _template_member_call_signature(
         self,
@@ -1734,6 +2079,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         method: _MetalStructMethod,
         bindings: Dict[str, str],
         free_name: str,
+        instantiated_template_functions: Optional[Dict[str, str]] = None,
+        template_methods_by_struct: Optional[
+            Dict[str, Dict[str, List[_MetalStructMethod]]]
+        ] = None,
     ) -> str:
         # Instantiate the template member method by substituting the bound
         # template parameters into copies of its return type, parameters and
@@ -1743,6 +2092,20 @@ class MetalPreprocessor(HLSLPreprocessor):
         instantiated_return = re.sub(r"\s+", " ", instantiated_return).strip()
         instantiated_parameters = self._replace_identifiers(method.parameters, bindings)
         instantiated_body = self._replace_identifiers(method.body, bindings)
+        # Lower any call to a SIBLING template member method made from this body
+        # (the second SFINAE layer: `simd_reduce` calls `simd_reduce_impl`). With
+        # the outer bindings applied the body's parameter/local types are concrete,
+        # so each internal call selects+instantiates its own overload and is
+        # rewritten to the concrete free function — leaving no dangling call.
+        if instantiated_template_functions is not None and template_methods_by_struct:
+            instantiated_body = self._lower_internal_template_member_calls(
+                struct,
+                method,
+                instantiated_parameters,
+                instantiated_body,
+                instantiated_template_functions,
+                template_methods_by_struct,
+            )
         concrete_method = _MetalStructMethod(
             name=method.name,
             free_name=free_name,
@@ -1755,6 +2118,305 @@ class MetalPreprocessor(HLSLPreprocessor):
             span=method.span,
         )
         return self._emit_free_function(struct, concrete_method)
+
+    def _lower_internal_template_member_calls(
+        self,
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+        instantiated_parameters: str,
+        instantiated_body: str,
+        instantiated_template_functions: Dict[str, str],
+        template_methods_by_struct: Dict[str, Dict[str, List[_MetalStructMethod]]],
+    ) -> str:
+        # Rewrite receiver-less calls to OTHER template member methods of the same
+        # struct inside an already-substituted method body. Argument types are
+        # inferred from the (now concrete) parameter types and the body's local
+        # declarations; the existing argument-inference + overload selection is
+        # reused, so an un-inferable / ambiguous internal call clean-fails exactly
+        # like a top-level call. The instance receiver is `self` (the free
+        # function's first parameter); a static sibling takes no receiver.
+        sibling_overloads = template_methods_by_struct.get(struct.name, {})
+        # A method whose body has no sibling-template call is returned unchanged.
+        if not sibling_overloads:
+            return instantiated_body
+        # Build flat name->type views for the body scope from the concrete
+        # parameters plus body-local declarations.
+        local_view: Dict[str, str] = {}
+        buffer_view: Dict[str, str] = {}
+        for parameter in self._split_top_level_commas(instantiated_parameters):
+            if not parameter.strip():
+                continue
+            name = self._declared_data_member_name(parameter)
+            if not name:
+                continue
+            element = self._pointer_or_array_parameter_element_type(parameter)
+            if element is not None:
+                buffer_view[name] = element
+                continue
+            scalar = self._normalize_inferred_type(
+                self._normalize_function_parameter_type_text(parameter)
+            )
+            if scalar:
+                local_view[name] = scalar
+        for statement in self._iter_simple_declarations(instantiated_body):
+            name = self._declared_local_name(statement)
+            if not name:
+                continue
+            element_type = self._data_member_element_type(statement)
+            if element_type:
+                local_view.setdefault(name, element_type)
+
+        result: List[str] = []
+        i = 0
+        n = len(instantiated_body)
+        while i < n:
+            ch = instantiated_body[i]
+            if ch in "\"'":
+                literal, consumed = self._read_string(instantiated_body, i)
+                result.append(literal)
+                i += consumed
+                continue
+            if instantiated_body.startswith("//", i):
+                end = instantiated_body.find("\n", i)
+                if end == -1:
+                    result.append(instantiated_body[i:])
+                    break
+                result.append(instantiated_body[i:end])
+                i = end
+                continue
+            if instantiated_body.startswith("/*", i):
+                end = instantiated_body.find("*/", i + 2)
+                if end == -1:
+                    result.append(instantiated_body[i:])
+                    break
+                result.append(instantiated_body[i : end + 2])
+                i = end + 2
+                continue
+            if ch.isalpha() or ch == "_":
+                ident, consumed = self._read_identifier(instantiated_body, i)
+                ident_end = i + consumed
+                rewrite = self._try_rewrite_internal_template_call(
+                    struct,
+                    method,
+                    ident,
+                    ident_end,
+                    instantiated_body,
+                    sibling_overloads,
+                    local_view,
+                    buffer_view,
+                    instantiated_template_functions,
+                    template_methods_by_struct,
+                )
+                if rewrite is not None:
+                    end, replacement = rewrite
+                    result.append(replacement)
+                    i = end
+                    continue
+                result.append(ident)
+                i = ident_end
+                continue
+            result.append(ch)
+            i += 1
+        return "".join(result)
+
+    def _try_rewrite_internal_template_call(
+        self,
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+        ident: str,
+        ident_end: int,
+        body: str,
+        sibling_overloads: Dict[str, List[_MetalStructMethod]],
+        local_view: Dict[str, str],
+        buffer_view: Dict[str, str],
+        instantiated_template_functions: Dict[str, str],
+        template_methods_by_struct: Dict[str, Dict[str, List[_MetalStructMethod]]],
+    ) -> Optional[Tuple[int, str]]:
+        # A receiver-less `name(args)` where `name` is a sibling member method
+        # (template OR concrete) is lowered to its concrete free function with an
+        # implicit `self` receiver. A member access (`x.name(...)`) is excluded.
+        # Skip a `.name(`/`->name(` member access — handled by the normal call
+        # rewriter at the top level, not as an implicit-this call here.
+        previous = ident_end - len(ident) - 1
+        while previous >= 0 and body[previous].isspace():
+            previous -= 1
+        if previous >= 0 and (
+            body[previous] == "."
+            or (previous >= 1 and body[previous - 1 : previous + 1] == "->")
+        ):
+            return None
+
+        # An implicit-this `operator()(args)` call (e.g. the sizeof==8 reduction
+        # combining elements). The declarator is `operator` then an empty `()`
+        # then the real argument list.
+        if ident == "operator":
+            after_operator = ident_end
+            while after_operator < len(body) and body[after_operator].isspace():
+                after_operator += 1
+            if (
+                after_operator < len(body)
+                and body[after_operator] == "("
+                and body[after_operator + 1 : after_operator + 2] == ")"
+            ):
+                return self._rewrite_internal_operator_call(
+                    struct,
+                    method,
+                    after_operator,
+                    body,
+                    sibling_overloads,
+                    local_view,
+                    buffer_view,
+                    instantiated_template_functions,
+                    template_methods_by_struct,
+                )
+            return None
+
+        template_overloads = sibling_overloads.get(ident)
+        concrete_siblings = [m for m in struct.methods if m.name == ident]
+        if not template_overloads and not concrete_siblings:
+            return None
+        j = ident_end
+        while j < len(body) and body[j].isspace():
+            j += 1
+        if j >= len(body) or body[j] != "(":
+            return None
+        arg_open = j
+        arg_close = self._find_matching_delimiter(body, arg_open, "(", ")")
+        if arg_close is None:
+            return None
+        raw_args = body[arg_open + 1 : arg_close]
+        args = raw_args.strip()
+
+        # A CONCRETE sibling has a fixed signature; lower it directly (no overload
+        # selection / argument typing needed). When both a concrete and a template
+        # sibling share the name, prefer the concrete one only if there is exactly
+        # one — otherwise fall through to the template path / clean-fail.
+        if concrete_siblings and not template_overloads:
+            if len(concrete_siblings) != 1:
+                return None
+            concrete = concrete_siblings[0]
+            if concrete.is_static:
+                replacement = (
+                    f"{concrete.free_name}({args})"
+                    if args
+                    else f"{concrete.free_name}()"
+                )
+            elif args:
+                replacement = f"{concrete.free_name}(self, {args})"
+            else:
+                replacement = f"{concrete.free_name}(self)"
+            return arg_close + 1, replacement
+
+        overloads = template_overloads
+        call_arguments = [
+            argument
+            for argument in self._split_top_level_commas(raw_args)
+            if argument.strip()
+        ]
+        representative = overloads[0]
+        signature = f"{struct.name}::{method.name} -> {ident}({raw_args.strip()})"
+        concrete_argument_types: List[str] = []
+        for argument in call_arguments:
+            inferred = self._infer_argument_type(argument, buffer_view, local_view, {})
+            if inferred is None:
+                raise MetalStructMethodError(
+                    "Cannot lower template member method "
+                    f"'{struct.name}::{method.name}': internal call to "
+                    f"'{ident}' has argument '{argument.strip()}' whose type "
+                    f"could not be inferred. Requested call: {signature}.",
+                    struct_name=struct.name,
+                    method_name=method.name,
+                    requested_signature=signature,
+                )
+            concrete_argument_types.append(inferred)
+
+        free_name = self._instantiate_template_member_overload(
+            struct,
+            overloads,
+            concrete_argument_types,
+            signature,
+            instantiated_template_functions,
+            template_methods_by_struct,
+        )
+        if representative.is_static:
+            replacement = f"{free_name}({args})" if args else f"{free_name}()"
+        elif args:
+            replacement = f"{free_name}(self, {args})"
+        else:
+            replacement = f"{free_name}(self)"
+        return arg_close + 1, replacement
+
+    def _rewrite_internal_operator_call(
+        self,
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+        empty_paren_open: int,
+        body: str,
+        sibling_overloads: Dict[str, List[_MetalStructMethod]],
+        local_view: Dict[str, str],
+        buffer_view: Dict[str, str],
+        instantiated_template_functions: Dict[str, str],
+        template_methods_by_struct: Dict[str, Dict[str, List[_MetalStructMethod]]],
+    ) -> Optional[Tuple[int, str]]:
+        # Lower an implicit-this `operator()(args)` call. `empty_paren_open` is the
+        # `(` of the empty `()` after `operator`; the real argument list follows.
+        empty_close = self._find_matching_delimiter(body, empty_paren_open, "(", ")")
+        if empty_close is None:
+            return None
+        arg_open = empty_close + 1
+        while arg_open < len(body) and body[arg_open].isspace():
+            arg_open += 1
+        if arg_open >= len(body) or body[arg_open] != "(":
+            return None
+        arg_close = self._find_matching_delimiter(body, arg_open, "(", ")")
+        if arg_close is None:
+            return None
+        raw_args = body[arg_open + 1 : arg_close]
+        args = raw_args.strip()
+        # The caller has not yet emitted the `operator` token, so the returned
+        # replacement fully replaces `operator()(args)` from that token onward;
+        # only the end offset is needed.
+        concrete = next((m for m in struct.methods if m.name == "operator()"), None)
+        if concrete is not None:
+            replacement = (
+                f"{concrete.free_name}(self, {args})"
+                if args
+                else f"{concrete.free_name}(self)"
+            )
+            return arg_close + 1, replacement
+        template_overloads = sibling_overloads.get("operator()")
+        if not template_overloads:
+            return None
+        call_arguments = [
+            argument
+            for argument in self._split_top_level_commas(raw_args)
+            if argument.strip()
+        ]
+        signature = f"{struct.name}::{method.name} -> operator()({args})"
+        concrete_argument_types: List[str] = []
+        for argument in call_arguments:
+            inferred = self._infer_argument_type(argument, buffer_view, local_view, {})
+            if inferred is None:
+                raise MetalStructMethodError(
+                    "Cannot lower template member method "
+                    f"'{struct.name}::{method.name}': internal call to "
+                    f"'operator()' has argument '{argument.strip()}' whose type "
+                    f"could not be inferred. Requested call: {signature}.",
+                    struct_name=struct.name,
+                    method_name=method.name,
+                    requested_signature=signature,
+                )
+            concrete_argument_types.append(inferred)
+        free_name = self._instantiate_template_member_overload(
+            struct,
+            template_overloads,
+            concrete_argument_types,
+            signature,
+            instantiated_template_functions,
+            template_methods_by_struct,
+        )
+        replacement = f"{free_name}(self, {args})" if args else f"{free_name}(self)"
+        return arg_close + 1, replacement
 
     def _build_template_call_rewrite(
         self,
@@ -2492,7 +3154,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 break
             start = pos + match.start()
             angle_start = code.find("<", start)
-            angle_end = self._find_matching_angle(code, angle_start)
+            angle_end = self._find_matching_template_param_angle(code, angle_start)
             if angle_end is None:
                 pos = start + len("template")
                 continue
@@ -2551,7 +3213,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 break
             start = pos + match.start()
             angle_start = code.find("<", start)
-            angle_end = self._find_matching_angle(code, angle_start)
+            angle_end = self._find_matching_template_param_angle(code, angle_start)
             if angle_end is None:
                 pos = start + len("template")
                 continue
@@ -3257,7 +3919,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 break
             start = pos + match.start()
             angle_start = code.find("<", start)
-            angle_end = self._find_matching_angle(code, angle_start)
+            angle_end = self._find_matching_template_param_angle(code, angle_start)
             if angle_end is None:
                 pos = start + len("template")
                 continue
@@ -3414,43 +4076,344 @@ class MetalPreprocessor(HLSLPreprocessor):
             i += 1
         return result
 
-    def _template_parameter_names(self, template_parameters: str) -> List[str]:
-        names: List[str] = []
-        for parameter in self._split_top_level_commas(template_parameters):
-            parameter = parameter.strip()
+    # ------------------------------------------------------------------ #
+    # `<` disambiguation for template-PARAMETER lists.                    #
+    # ------------------------------------------------------------------ #
+    # A template-parameter list may contain a SFINAE non-type parameter whose
+    # constraint embeds comparison operators, e.g.
+    #   template <typename T, metal::enable_if_t<sizeof(T) < 8, bool> = true>
+    # The generic `_find_matching_angle` / `_split_top_level_commas` treat the
+    # comparison `<` in `sizeof(T) < 8` as a template-open angle, so the angle
+    # nesting never balances and the parameter list (and the method it heads) is
+    # dropped. The helpers below scan a template-parameter list treating a `<`
+    # as a template-argument opener ONLY when it immediately follows a
+    # template-name identifier character (e.g. `enable_if_t<`, `is_integral_v<`);
+    # a `<`/`>` used as a comparison (`sizeof(T) < 8`, `<=`, `>=`) does NOT change
+    # angle depth. These are deliberately SEPARATE from the template-ARGUMENT
+    # handling so other `<` parsing is left untouched.
+
+    def _find_matching_template_param_angle(
+        self, code: str, start: int
+    ) -> Optional[int]:
+        # Index of the `>` that closes the template-parameter-list `<` at `start`,
+        # ignoring comparison `<`/`>` inside SFINAE constraints. Returns None when
+        # unbalanced.
+        if start < 0 or start >= len(code) or code[start] != "<":
+            return None
+        # The `<` at `start` is the parameter-list opener by construction (it is
+        # the `<` of `template <`), so it always counts as depth 1 regardless of
+        # what precedes it; the open-disambiguation only applies to later `<`.
+        depth = 1
+        i = start + 1
+        n = len(code)
+        while i < n:
+            ch = code[i]
+            if ch in "\"'":
+                _literal, consumed = self._read_string(code, i)
+                i += consumed
+                continue
+            if code.startswith("//", i):
+                end = code.find("\n", i)
+                if end == -1:
+                    return None
+                i = end + 1
+                continue
+            if code.startswith("/*", i):
+                end = code.find("*/", i + 2)
+                if end == -1:
+                    return None
+                i = end + 2
+                continue
+            if ch == "<":
+                if code[i + 1 : i + 2] == "=":
+                    # `<=` comparison — never an angle; skip both chars.
+                    i += 2
+                    continue
+                if self._template_param_angle_is_open(code, i):
+                    depth += 1
+                i += 1
+                continue
+            if ch == ">":
+                if code[i + 1 : i + 2] == "=":
+                    # `>=` comparison — never an angle; skip both chars.
+                    i += 2
+                    continue
+                # `->` is a member access, not an angle close.
+                if i > 0 and code[i - 1] == "-":
+                    i += 1
+                    continue
+                if depth > 0:
+                    depth -= 1
+                    if depth == 0:
+                        return i
+                i += 1
+                continue
+            i += 1
+        return None
+
+    def _template_param_angle_is_open(self, code: str, index: int) -> bool:
+        # A `<` opens a template-argument list (rather than being a comparison)
+        # iff it immediately follows an identifier character — the formatting
+        # `enable_if_t<` / `is_integral_v<` uses no separating space, whereas a
+        # comparison is written `sizeof(T) < 8` (preceded by `)`/space). This is
+        # conservative: an unexpected spaced template-open would fail to balance
+        # and the method would simply be left unrecognized (clean-fail), never
+        # mis-lowered.
+        previous = index - 1
+        if previous < 0:
+            return False
+        prev = code[previous]
+        return prev.isalnum() or prev == "_"
+
+    def _split_template_parameter_list(self, text: str) -> List[str]:
+        # Top-level comma split of a template-parameter list that respects the
+        # SFINAE `<` disambiguation above (so `enable_if_t<sizeof(T) < 8, bool>`
+        # stays one parameter while the comma separating two parameters splits).
+        parts: List[str] = []
+        current = ""
+        paren_depth = 0
+        bracket_depth = 0
+        brace_depth = 0
+        angle_depth = 0
+        i = 0
+        n = len(text)
+        while i < n:
+            ch = text[i]
+            if ch in "\"'":
+                literal, consumed = self._read_string(text, i)
+                current += literal
+                i += consumed
+                continue
+            if text.startswith("//", i):
+                current += text[i:]
+                break
+            if text.startswith("/*", i):
+                end = text.find("*/", i + 2)
+                if end == -1:
+                    current += text[i:]
+                    break
+                current += text[i : end + 2]
+                i = end + 2
+                continue
+            if ch == "(":
+                paren_depth += 1
+            elif ch == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif ch == "[":
+                bracket_depth += 1
+            elif ch == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif ch == "{":
+                brace_depth += 1
+            elif ch == "}":
+                brace_depth = max(0, brace_depth - 1)
+            elif ch == "<":
+                if text[i + 1 : i + 2] == "=":
+                    current += "<="
+                    i += 2
+                    continue
+                if self._template_param_angle_is_open(text, i):
+                    angle_depth += 1
+            elif ch == ">":
+                if text[i + 1 : i + 2] == "=":
+                    current += ">="
+                    i += 2
+                    continue
+                if not (i > 0 and text[i - 1] == "-") and angle_depth > 0:
+                    angle_depth -= 1
+            elif (
+                ch == ","
+                and paren_depth == 0
+                and bracket_depth == 0
+                and brace_depth == 0
+                and angle_depth == 0
+            ):
+                parts.append(current.strip())
+                current = ""
+                i += 1
+                continue
+            current += ch
+            i += 1
+        if current.strip():
+            parts.append(current.strip())
+        return parts
+
+    def _parse_template_parameter_list(self, text: str) -> List[_TemplateParameter]:
+        # Parse a template-parameter list into structured records, classifying
+        # each entry as a bindable type parameter or an anonymous SFINAE
+        # constraint. A non-type parameter that DOES name a bindable value (e.g.
+        # `int N`) is recorded as a bindable parameter too (existing behavior for
+        # `<typename T, int N>`); only an ANONYMOUS non-type parameter (no
+        # trailing declarator name) becomes a constraint.
+        records: List[_TemplateParameter] = []
+        for raw in self._split_template_parameter_list(text):
+            parameter = raw.strip()
             if not parameter:
                 continue
-            parameter = parameter.split("=", 1)[0].strip()
-            tokens = IDENTIFIER_RE.findall(parameter)
+            default: Optional[str] = None
+            declarator = parameter
+            eq = self._template_parameter_default_split(parameter)
+            if eq is not None:
+                declarator, default = eq
+            is_variadic = "..." in declarator
+            declarator_no_pack = declarator.replace("...", " ")
+            tokens = IDENTIFIER_RE.findall(declarator_no_pack)
             if not tokens:
                 continue
-            if tokens[0] in {"typename", "class"} and len(tokens) >= 2:
-                names.append(tokens[-1])
-            elif len(tokens) >= 2:
-                names.append(tokens[-1])
-        return names
+            if tokens[0] in {"typename", "class"}:
+                # `typename T` / `class T` (optionally `typename...`). A trailing
+                # name is the bindable parameter; a bare `typename` with no name
+                # is anonymous and unbindable (skip — nothing to bind).
+                if len(tokens) >= 2:
+                    records.append(
+                        _TemplateParameter(
+                            name=tokens[-1],
+                            is_type_parameter=True,
+                            is_variadic=is_variadic,
+                            default=default,
+                        )
+                    )
+                continue
+            # A non-type parameter. If its declarator ends in a bindable name
+            # (`int N`) keep it as a (non-type) bindable parameter; otherwise it
+            # is an anonymous SFINAE constraint (`metal::enable_if_t<...> [= v]`).
+            if self._non_type_parameter_has_name(declarator_no_pack):
+                records.append(
+                    _TemplateParameter(
+                        name=tokens[-1],
+                        is_type_parameter=False,
+                        is_variadic=is_variadic,
+                        default=default,
+                    )
+                )
+                continue
+            records.append(
+                _TemplateParameter(
+                    name=None,
+                    is_type_parameter=False,
+                    is_variadic=is_variadic,
+                    default=default,
+                    constraint_text=declarator.strip(),
+                )
+            )
+        return records
+
+    def _template_parameter_default_split(
+        self, parameter: str
+    ) -> Optional[Tuple[str, str]]:
+        # Split a template parameter on its TOP-LEVEL `=` default separator,
+        # ignoring `=` inside angles/parens/brackets and the `==`/`<=`/`>=`/`!=`
+        # comparison operators that appear in SFINAE constraints. Returns
+        # (declarator, default) or None when there is no default.
+        paren_depth = 0
+        bracket_depth = 0
+        brace_depth = 0
+        angle_depth = 0
+        i = 0
+        n = len(parameter)
+        while i < n:
+            ch = parameter[i]
+            if ch in "\"'":
+                _literal, consumed = self._read_string(parameter, i)
+                i += consumed
+                continue
+            if ch == "(":
+                paren_depth += 1
+            elif ch == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif ch == "[":
+                bracket_depth += 1
+            elif ch == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif ch == "{":
+                brace_depth += 1
+            elif ch == "}":
+                brace_depth = max(0, brace_depth - 1)
+            elif ch == "<":
+                if parameter[i + 1 : i + 2] == "=":
+                    i += 2
+                    continue
+                if self._template_param_angle_is_open(parameter, i):
+                    angle_depth += 1
+            elif ch == ">":
+                if parameter[i + 1 : i + 2] == "=":
+                    i += 2
+                    continue
+                if not (i > 0 and parameter[i - 1] == "-") and angle_depth > 0:
+                    angle_depth -= 1
+            elif ch == "=":
+                # Skip comparison operators `==`, `!=`, `<=`, `>=`.
+                nxt = parameter[i + 1 : i + 2]
+                prv = parameter[i - 1] if i > 0 else ""
+                if nxt == "=" or prv in "=!<>":
+                    i += 2 if nxt == "=" else 1
+                    continue
+                if (
+                    paren_depth == 0
+                    and bracket_depth == 0
+                    and brace_depth == 0
+                    and angle_depth == 0
+                ):
+                    return parameter[:i].strip(), parameter[i + 1 :].strip()
+            i += 1
+        return None
+
+    def _non_type_parameter_has_name(self, declarator: str) -> bool:
+        # A non-type template parameter `Type name` ends in a bindable identifier
+        # that is NOT part of a trailing template-id. An anonymous SFINAE
+        # parameter ends in `>` (the closing angle of `enable_if_t<...>`), so it
+        # has no trailing name. Conservative: only a declarator whose final
+        # top-level token is a bare identifier (not immediately following a `>`
+        # close of its own type) is treated as named.
+        text = declarator.strip()
+        if not text:
+            return False
+        if text.endswith(">"):
+            return False
+        # The last token must be an identifier preceded by type text (so a single
+        # token such as `bool` — a lone type with no name — is NOT a named
+        # parameter; that is the `enable_if_t<...>` value-type leftover case).
+        match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*$", text)
+        if match is None:
+            return False
+        before = text[: match.start()].strip()
+        return bool(before)
+
+    def _template_parameter_names(self, template_parameters: str) -> List[str]:
+        # Bindable parameter names only: type parameters (`typename T`) and named
+        # non-type parameters (`int N`). Anonymous SFINAE constraint parameters
+        # are deliberately EXCLUDED — they are not bound from call arguments.
+        return [
+            parameter.name
+            for parameter in self._parse_template_parameter_list(template_parameters)
+            if parameter.name is not None
+        ]
+
+    def _template_parameter_constraints(self, template_parameters: str) -> List[str]:
+        # SFINAE constraint texts from the anonymous non-type parameters, in
+        # source order, for overload selection.
+        return [
+            parameter.constraint_text
+            for parameter in self._parse_template_parameter_list(template_parameters)
+            if parameter.is_constraint and parameter.constraint_text
+        ]
 
     def _template_parameter_defaults(self, template_parameters: str) -> Dict[str, str]:
         defaults: Dict[str, str] = {}
-        for parameter in self._split_top_level_commas(template_parameters):
-            if "=" not in parameter:
+        for parameter in self._parse_template_parameter_list(template_parameters):
+            if parameter.name is None or parameter.default is None:
                 continue
-            names = self._template_parameter_names(parameter)
-            if not names:
-                continue
-            defaults[names[-1]] = parameter.split("=", 1)[1].strip()
+            defaults[parameter.name] = parameter.default
         return defaults
 
     def _variadic_template_parameter_names(self, template_parameters: str) -> Set[str]:
-        names: Set[str] = set()
-        for parameter in self._split_top_level_commas(template_parameters):
-            parameter = parameter.split("=", 1)[0].strip()
-            if "..." not in parameter:
-                continue
-            tokens = IDENTIFIER_RE.findall(parameter)
-            if len(tokens) >= 2 and tokens[0] in {"typename", "class"}:
-                names.add(tokens[-1])
-        return names
+        return {
+            parameter.name
+            for parameter in self._parse_template_parameter_list(template_parameters)
+            if parameter.is_variadic
+            and parameter.is_type_parameter
+            and parameter.name is not None
+        }
 
     def _template_arguments_with_defaults(
         self,
@@ -3592,7 +4555,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 break
             start = pos + match.start()
             angle_start = code.find("<", start)
-            angle_end = self._find_matching_angle(code, angle_start)
+            angle_end = self._find_matching_template_param_angle(code, angle_start)
             if angle_end is None:
                 pos = start + len("template")
                 continue
