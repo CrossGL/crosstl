@@ -2529,6 +2529,10 @@ class VulkanSPIRVCodeGen:
         if matrix_result is not None:
             return matrix_result
 
+        complex_result = self.complex_struct_arithmetic_operation(op, left, right)
+        if complex_result is not None:
+            return complex_result
+
         arithmetic_ops = {
             "+": ("OpFAdd", "OpIAdd", "OpIAdd"),
             "-": ("OpFSub", "OpISub", "OpISub"),
@@ -2556,6 +2560,9 @@ class VulkanSPIRVCodeGen:
             )
             spv_op = "OpLogicalAnd" if op == "&&" else "OpLogicalOr"
         elif op in comparison_ops:
+            complex_result = self.complex_struct_comparison_operation(op, left, right)
+            if complex_result is not None:
+                return complex_result
             result_type, left, right = self.comparison_result_type_and_operands(
                 left, right
             )
@@ -2972,6 +2979,138 @@ class VulkanSPIRVCodeGen:
             return value
         return self.convert_value_to_type(value, bool_type)
 
+    def complex_struct_comparison_operation(
+        self, op: str, left: SpirvId, right: SpirvId
+    ) -> Optional[SpirvId]:
+        left_type = self.registered_value_type(left) or self.ensure_registered_type(
+            left.type
+        )
+        right_type = self.registered_value_type(right) or self.ensure_registered_type(
+            right.type
+        )
+        left_members = self.current_struct_members.get(left_type.type.base_type)
+        right_members = self.current_struct_members.get(right_type.type.base_type)
+        if left_members is None or right_members is None:
+            return None
+        if not self.complex_struct_types_are_layout_compatible(
+            left_type, right_type, left_members, right_members
+        ):
+            return None
+
+        left_real = self.composite_extract(left, left_members[0][0], 0)
+        left_imag = self.composite_extract(left, left_members[1][0], 1)
+        right_real = self.composite_extract(right, right_members[0][0], 0)
+        right_imag = self.composite_extract(right, right_members[1][0], 1)
+        bool_type = self.register_primitive_type("bool")
+
+        if op == "==":
+            real_equal = self.binary_operation("==", bool_type, left_real, right_real)
+            imag_equal = self.binary_operation("==", bool_type, left_imag, right_imag)
+            return self.binary_operation("&&", bool_type, real_equal, imag_equal)
+        if op == "!=":
+            real_not_equal = self.binary_operation(
+                "!=", bool_type, left_real, right_real
+            )
+            imag_not_equal = self.binary_operation(
+                "!=", bool_type, left_imag, right_imag
+            )
+            return self.binary_operation(
+                "||", bool_type, real_not_equal, imag_not_equal
+            )
+
+        primary_op = ">" if op in {">", ">="} else "<"
+        secondary_op = ">=" if op == ">=" else "<=" if op == "<=" else primary_op
+        primary = self.binary_operation(primary_op, bool_type, left_real, right_real)
+        real_equal = self.binary_operation("==", bool_type, left_real, right_real)
+        secondary = self.binary_operation(
+            secondary_op, bool_type, left_imag, right_imag
+        )
+        tied_secondary = self.binary_operation("&&", bool_type, real_equal, secondary)
+        return self.binary_operation("||", bool_type, primary, tied_secondary)
+
+    def complex_struct_operand_info(self, value: SpirvId):
+        type_id = self.registered_value_type(value) or self.ensure_registered_type(
+            value.type
+        )
+        members = self.current_struct_members.get(type_id.type.base_type)
+        if members is None or not self.is_complex_struct_type(type_id, members):
+            return None
+        return type_id, members
+
+    def complex_struct_arithmetic_operation(
+        self, op: str, left: SpirvId, right: SpirvId
+    ) -> Optional[SpirvId]:
+        if op == "MULTIPLY":
+            op = "*"
+        if op not in {"+", "-", "*", "/", "%"}:
+            return None
+
+        left_info = self.complex_struct_operand_info(left)
+        right_info = self.complex_struct_operand_info(right)
+        if left_info is None and right_info is None:
+            return None
+
+        result_type, result_members = left_info or right_info
+        if left_info is None:
+            left = self.convert_value_to_type(left, result_type)
+            left_info = self.complex_struct_operand_info(left)
+        if right_info is None:
+            right = self.convert_value_to_type(right, result_type)
+            right_info = self.complex_struct_operand_info(right)
+        if left_info is None or right_info is None:
+            return None
+
+        left_type, left_members = left_info
+        right_type, right_members = right_info
+        if not self.complex_struct_types_are_layout_compatible(
+            left_type, right_type, left_members, right_members
+        ):
+            return None
+
+        left_real = self.composite_extract(left, left_members[0][0], 0)
+        left_imag = self.composite_extract(left, left_members[1][0], 1)
+        right_real = self.composite_extract(right, right_members[0][0], 0)
+        right_imag = self.composite_extract(right, right_members[1][0], 1)
+        real_type = result_members[0][0]
+        imag_type = result_members[1][0]
+
+        if op == "+":
+            real = self.binary_operation("+", real_type, left_real, right_real)
+            imag = self.binary_operation("+", imag_type, left_imag, right_imag)
+        elif op == "-":
+            real = self.binary_operation("-", real_type, left_real, right_real)
+            imag = self.binary_operation("-", imag_type, left_imag, right_imag)
+        elif op == "*":
+            ac = self.binary_operation("*", real_type, left_real, right_real)
+            bd = self.binary_operation("*", real_type, left_imag, right_imag)
+            ad = self.binary_operation("*", imag_type, left_real, right_imag)
+            bc = self.binary_operation("*", imag_type, left_imag, right_real)
+            real = self.binary_operation("-", real_type, ac, bd)
+            imag = self.binary_operation("+", imag_type, ad, bc)
+        elif op == "/":
+            c2 = self.binary_operation("*", real_type, right_real, right_real)
+            d2 = self.binary_operation("*", real_type, right_imag, right_imag)
+            denom = self.binary_operation("+", real_type, c2, d2)
+            ac = self.binary_operation("*", real_type, left_real, right_real)
+            bd = self.binary_operation("*", real_type, left_imag, right_imag)
+            bc = self.binary_operation("*", imag_type, left_imag, right_real)
+            ad = self.binary_operation("*", imag_type, left_real, right_imag)
+            x = self.binary_operation("+", real_type, ac, bd)
+            y = self.binary_operation("-", imag_type, bc, ad)
+            real = self.binary_operation("/", real_type, x, denom)
+            imag = self.binary_operation("/", imag_type, y, denom)
+        else:
+            real = self.binary_operation("%", real_type, left_real, right_real)
+            imag = self.binary_operation("%", imag_type, left_imag, right_imag)
+
+        real = self.convert_value_to_type(real, real_type)
+        imag = self.convert_value_to_type(imag, imag_type)
+        if not self.value_has_type(real, real_type) or not self.value_has_type(
+            imag, imag_type
+        ):
+            return None
+        return self.composite_construct(result_type, [real, imag])
+
     def comparison_result_type_and_operands(
         self, left: SpirvId, right: SpirvId
     ) -> Tuple[SpirvId, SpirvId, SpirvId]:
@@ -3312,6 +3451,9 @@ class VulkanSPIRVCodeGen:
         if source_type_name == target_type_name:
             return value
 
+        float_types = {"float", "double"}
+        integer_types = self.INTEGER_TYPE_NAMES
+
         if source_type_name == "bool" and target_type_name in self.INTEGER_TYPE_NAMES:
             true_value = self.register_constant(1, target_type)
             false_value = self.register_constant(0, target_type)
@@ -3323,8 +3465,12 @@ class VulkanSPIRVCodeGen:
             bool_type = self.register_primitive_type("bool")
             return self.binary_operation("!=", bool_type, value, zero_value)
 
-        float_types = {"float", "double"}
-        integer_types = self.INTEGER_TYPE_NAMES
+        if source_type_name in float_types and target_type_name == "bool":
+            source_type = self.ensure_registered_type(value.type)
+            zero_value = self.register_constant(0.0, source_type)
+            bool_type = self.register_primitive_type("bool")
+            return self.binary_operation("!=", bool_type, value, zero_value)
+
         scalar_types = float_types | integer_types
         if source_type_name not in scalar_types or target_type_name not in scalar_types:
             return value
