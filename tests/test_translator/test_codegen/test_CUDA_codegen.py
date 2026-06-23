@@ -11600,6 +11600,49 @@ class TestCudaCodeGen:
         assert "textureLod(" not in cuda_code
         assert "textureGrad(" not in cuda_code
 
+    def test_integer_sampled_texture_resources_emit_typed_cuda_calls(self):
+        source_code = """
+        shader IntegerSampledTextures {
+            isampler2d signedTex;
+            usampler2d unsignedTex;
+
+            void sample(vec2 uv, ivec2 pixel) {
+                ivec4 signedColor = texture(signedTex, uv);
+                uvec4 unsignedColor = textureLod(unsignedTex, uv, 1.0);
+                ivec4 signedFetch = texelFetch(signedTex, pixel, 0);
+                uvec4 unsignedFetch = texelFetchOffset(unsignedTex, pixel, 0, pixel);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "cudaTextureObject_t signedTex;" in cuda_code
+        assert "cudaTextureObject_t unsignedTex;" in cuda_code
+        assert "int4 signedColor = tex2D<int4>(signedTex, uv.x, uv.y);" in cuda_code
+        assert (
+            "uint4 unsignedColor = tex2DLod<uint4>(unsignedTex, uv.x, uv.y, 1.0);"
+            in cuda_code
+        )
+        assert (
+            "int4 signedFetch = tex2D<int4>(signedTex, pixel.x, pixel.y);" in cuda_code
+        )
+        assert (
+            "uint4 unsignedFetch = tex2D<uint4>"
+            "(unsignedTex, (pixel.x + pixel.x), (pixel.y + pixel.y));" in cuda_code
+        )
+        assert "texture(signedTex" not in cuda_code
+        assert "textureLod(unsignedTex" not in cuda_code
+        assert "texelFetch(signedTex" not in cuda_code
+
     def test_texture_grad_derivative_shapes_emit_cuda_helpers_or_diagnostics(self):
         source_code = """
         shader TextureGradientShapes {
