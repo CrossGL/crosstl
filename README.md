@@ -114,124 +114,163 @@ CrossTL uses a multi-stage translation pipeline:
 
 ### PBR Shader Example
 
+The README demo uses the same current CrossGL source file as the showcase
+notebook: [`demos/readme/showcase_pbr.cgl`](demos/readme/showcase_pbr.cgl) and
+[`demos/readme/demo.ipynb`](demos/readme/demo.ipynb). The shader demonstrates a
+real PBR-style material path: tangent-space normal mapping, GGX normal
+distribution, Smith geometry, Schlick Fresnel, multiple point lights, texture
+sampling, tone mapping, and gamma correction.
+
+It uses the current struct-return stage style so backends such as Metal can
+emit proper stage input/output structs and `vertex`/`fragment` entry points.
+
 ```cpp
-// Physically-based rendering shader
-struct Material {
-    albedo: vec3,
-    metallic: float,
-    roughness: float,
-    normal_map: texture2d,
-    displacement: texture2d
-}
+shader ShowcasePBRShader {
+    const float PI = 3.14159265359;
+    const float EPSILON = 0.0001;
+    const int MAX_LIGHTS = 4;
 
-struct Lighting {
-    position: vec3,
-    color: vec3,
-    intensity: float,
-    attenuation: vec3
-}
+    struct VertexInput {
+        vec3 position;
+        vec3 normal;
+        vec3 tangent;
+        vec2 texCoord;
+    }
 
-shader PBRShader {
+    struct VertexOutput {
+        vec3 worldPosition;
+        vec3 worldNormal;
+        vec3 worldTangent;
+        vec3 worldBitangent;
+        vec2 uv;
+        vec4 position;
+    }
+
+    struct FragmentInput {
+        vec3 worldPosition;
+        vec3 worldNormal;
+        vec3 worldTangent;
+        vec3 worldBitangent;
+        vec2 uv;
+    }
+
+    struct FragmentOutput {
+        vec4 color;
+    }
+
+    float distributionGGX(vec3 normal, vec3 halfVector, float roughness) {
+        float alpha = roughness * roughness;
+        float alpha2 = alpha * alpha;
+        float ndoth = max(dot(normal, halfVector), 0.0);
+        float denom = ndoth * ndoth * (alpha2 - 1.0) + 1.0;
+        return alpha2 / max(PI * denom * denom, EPSILON);
+    }
+
+    float geometrySchlickGGX(float ndotv, float roughness) {
+        float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+        return ndotv / max(ndotv * (1.0 - k) + k, EPSILON);
+    }
+
+    float geometrySmith(vec3 normal, vec3 viewDir, vec3 lightDir, float roughness) {
+        float ndotv = max(dot(normal, viewDir), 0.0);
+        float ndotl = max(dot(normal, lightDir), 0.0);
+        return geometrySchlickGGX(ndotv, roughness) * geometrySchlickGGX(ndotl, roughness);
+    }
+
+    vec3 fresnelSchlick(float cosTheta, vec3 baseReflectance) {
+        return baseReflectance + (vec3(1.0) - baseReflectance) * pow(max(1.0 - cosTheta, 0.0), 5.0);
+    }
+
     vertex {
-        input vec3 position;
-        input vec3 normal;
-        input vec2 texCoord;
-        input vec4 tangent;
-
         uniform mat4 modelMatrix;
-        uniform mat4 viewMatrix;
-        uniform mat4 projectionMatrix;
+        uniform mat4 viewProjectionMatrix;
+        uniform mat3 normalMatrix;
 
-        output vec3 worldPos;
-        output vec3 worldNormal;
-        output vec2 uv;
-        output mat3 TBN;
-
-        void main() {
-            vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-            worldPos = worldPosition.xyz;
-
-            vec3 T = normalize(vec3(modelMatrix * vec4(tangent.xyz, 0.0)));
-            vec3 N = normalize(vec3(modelMatrix * vec4(normal, 0.0)));
-            vec3 B = cross(N, T) * tangent.w;
-            TBN = mat3(T, B, N);
-
-            worldNormal = N;
-            uv = texCoord;
-
-            gl_Position = projectionMatrix * viewMatrix * worldPosition;
+        VertexOutput main(VertexInput input) {
+            VertexOutput output;
+            vec4 worldPosition = modelMatrix * vec4(input.position, 1.0);
+            output.worldPosition = worldPosition.xyz;
+            output.worldNormal = normalize(normalMatrix * input.normal);
+            output.worldTangent = normalize(normalMatrix * input.tangent);
+            output.worldBitangent = normalize(cross(output.worldNormal, output.worldTangent));
+            output.uv = input.texCoord;
+            output.position = viewProjectionMatrix * worldPosition;
+            return output;
         }
     }
 
     fragment {
-        input vec3 worldPos;
-        input vec3 worldNormal;
-        input vec2 uv;
-        input mat3 TBN;
+        uniform sampler2D albedoMap;
+        uniform sampler2D normalMap;
+        uniform sampler2D metallicRoughnessMap;
+        uniform vec3 cameraPosition;
+        uniform vec3 lightPositions[MAX_LIGHTS];
+        uniform vec3 lightColors[MAX_LIGHTS];
+        uniform int activeLightCount;
+        uniform vec3 baseColor;
+        uniform float metallicFactor;
+        uniform float roughnessFactor;
 
-        uniform Material material;
-        uniform Lighting lights[8];
-        uniform int lightCount;
-        uniform vec3 cameraPos;
-
-        output vec4 fragColor;
-
-        vec3 calculatePBR(vec3 albedo, float metallic, float roughness,
-                         vec3 normal, vec3 viewDir, vec3 lightDir, vec3 lightColor) {
-            vec3 halfVector = normalize(viewDir + lightDir);
-            float NdotV = max(dot(normal, viewDir), 0.0);
-            float NdotL = max(dot(normal, lightDir), 0.0);
-            float NdotH = max(dot(normal, halfVector), 0.0);
-            float VdotH = max(dot(viewDir, halfVector), 0.0);
-
-            vec3 F0 = mix(vec3(0.04), albedo, metallic);
-            vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
-
-            float alpha = roughness * roughness;
-            float alpha2 = alpha * alpha;
-            float denom = NdotH * NdotH * (alpha2 - 1.0) + 1.0;
-            float D = alpha2 / (3.14159 * denom * denom);
-
-            float G = geometrySmith(NdotV, NdotL, roughness);
-
-            vec3 numerator = D * G * F;
-            float denominator = 4.0 * NdotV * NdotL + 0.001;
-            vec3 specular = numerator / denominator;
-
-            vec3 kS = F;
-            vec3 kD = vec3(1.0) - kS;
-            kD *= 1.0 - metallic;
-
-            return (kD * albedo / 3.14159 + specular) * lightColor * NdotL;
+        vec3 decodeNormal(vec3 encodedNormal, mat3 tangentFrame) {
+            vec3 tangentNormal = encodedNormal * 2.0 - 1.0;
+            return normalize(tangentFrame * tangentNormal);
         }
 
-        void main() {
-            vec3 normal = normalize(TBN * (texture(material.normal_map, uv).rgb * 2.0 - 1.0));
-            vec3 viewDir = normalize(cameraPos - worldPos);
+        FragmentOutput main(FragmentInput input) {
+            FragmentOutput output;
+            mat3 tangentFrame = mat3(
+                normalize(input.worldTangent),
+                normalize(input.worldBitangent),
+                normalize(input.worldNormal)
+            );
+            vec3 normal = decodeNormal(texture(normalMap, input.uv).rgb, tangentFrame);
+            vec3 viewDir = normalize(cameraPosition - input.worldPosition);
+            vec3 albedo = texture(albedoMap, input.uv).rgb * baseColor;
+            vec3 materialSample = texture(metallicRoughnessMap, input.uv).rgb;
+            float metallic = clamp(materialSample.b * metallicFactor, 0.0, 1.0);
+            float roughness = clamp(materialSample.g * roughnessFactor, 0.04, 1.0);
+            vec3 baseReflectance = mix(vec3(0.04), albedo, metallic);
+            vec3 radianceSum = vec3(0.0);
 
-            vec3 color = vec3(0.0);
+            for (int i = 0; i < MAX_LIGHTS; i++) {
+                if (i >= activeLightCount) {
+                    break;
+                }
+                vec3 lightVector = lightPositions[i] - input.worldPosition;
+                float distanceSq = max(dot(lightVector, lightVector), EPSILON);
+                vec3 lightDir = normalize(lightVector);
+                vec3 halfVector = normalize(viewDir + lightDir);
+                float attenuation = 1.0 / distanceSq;
+                vec3 radiance = lightColors[i] * attenuation;
 
-            for (int i = 0; i < lightCount; ++i) {
-                vec3 lightDir = normalize(lights[i].position - worldPos);
-                float distance = length(lights[i].position - worldPos);
-                float attenuation = 1.0 / (lights[i].attenuation.x +
-                                          lights[i].attenuation.y * distance +
-                                          lights[i].attenuation.z * distance * distance);
-
-                vec3 lightColor = lights[i].color * lights[i].intensity * attenuation;
-                color += calculatePBR(material.albedo, material.metallic,
-                                     material.roughness, normal, viewDir, lightDir, lightColor);
+                float normalDistribution = distributionGGX(normal, halfVector, roughness);
+                float geometry = geometrySmith(normal, viewDir, lightDir, roughness);
+                vec3 fresnel = fresnelSchlick(max(dot(halfVector, viewDir), 0.0), baseReflectance);
+                vec3 diffuseShare = (vec3(1.0) - fresnel) * (1.0 - metallic);
+                vec3 numerator = normalDistribution * geometry * fresnel;
+                float denominator = max(4.0 * max(dot(normal, viewDir), 0.0) * max(dot(normal, lightDir), 0.0), EPSILON);
+                vec3 specular = numerator / denominator;
+                float ndotl = max(dot(normal, lightDir), 0.0);
+                radianceSum += (diffuseShare * albedo / PI + specular) * radiance * ndotl;
             }
 
-            color += material.albedo * 0.03;
-
+            vec3 ambient = albedo * 0.03;
+            vec3 color = ambient + radianceSum;
             color = color / (color + vec3(1.0));
-            color = pow(color, vec3(1.0/2.2));
-
-            fragColor = vec4(color, 1.0);
+            color = pow(color, vec3(1.0 / 2.2));
+            output.color = vec4(color, 1.0);
+            return output;
         }
     }
 }
+```
+
+Run the showcase notebook or translate the source directly:
+
+```bash
+python -m crosstl translate demos/readme/showcase_pbr.cgl --backend metal --output -
+python -m crosstl translate demos/readme/showcase_pbr.cgl --backend directx --output -
+python -m crosstl translate demos/readme/showcase_pbr.cgl --backend opengl --output -
 ```
 
 ## Backend Compatibility
@@ -261,22 +300,38 @@ pip install crosstl
 
 ```cpp
 shader SimpleShader {
-    vertex {
-        input vec3 position;
-        uniform mat4 modelViewProjection;
-        output vec4 fragPosition;
+    struct VertexInput {
+        vec3 position;
+        vec2 texCoord;
+    }
 
-        void main() {
-            fragPosition = modelViewProjection * vec4(position, 1.0);
+    struct VertexOutput {
+        vec2 uv;
+        vec4 position;
+    }
+
+    struct FragmentInput {
+        vec2 uv;
+    }
+
+    struct FragmentOutput {
+        vec4 color;
+    }
+
+    vertex {
+        VertexOutput main(VertexInput input) {
+            VertexOutput output;
+            output.uv = input.texCoord;
+            output.position = vec4(input.position, 1.0);
+            return output;
         }
     }
 
     fragment {
-        input vec4 fragPosition;
-        output vec4 fragColor;
-
-        void main() {
-            fragColor = vec4(1.0, 0.0, 0.0, 1.0);
+        FragmentOutput main(FragmentInput input) {
+            FragmentOutput output;
+            output.color = vec4(input.uv, 0.5, 1.0);
+            return output;
         }
     }
 }
