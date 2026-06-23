@@ -12709,6 +12709,41 @@ def test_sampled_texture_builtins_emit_slang_methods():
     assert "texelFetch(" not in generated_code
 
 
+def test_integer_sampled_texture_builtins_emit_typed_slang_methods():
+    code = """
+    shader IntegerSampledTextures {
+        isampler2d signedTex;
+        usampler2d unsignedTex;
+
+        compute {
+            void sample(vec2 uv, ivec2 pixel) {
+                ivec4 signedColor = texture(signedTex, uv);
+                uvec4 unsignedColor = textureLod(unsignedTex, uv, 1.0);
+                ivec4 signedFetch = texelFetch(signedTex, pixel, 0);
+                uvec4 unsignedFetch = texelFetchOffset(unsignedTex, pixel, 0, pixel);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "[[vk::binding(0, 0)]] Sampler2D<int4> signedTex" in generated_code
+    assert "[[vk::binding(1, 0)]] Sampler2D<uint4> unsignedTex" in generated_code
+    assert "int4 signedColor = signedTex.Sample(uv);" in generated_code
+    assert "uint4 unsignedColor = unsignedTex.SampleLevel(uv, 1.0);" in generated_code
+    assert "int4 signedFetch = signedTex.Load(int3(pixel, 0));" in generated_code
+    assert (
+        "uint4 unsignedFetch = unsignedTex.Load(int3(pixel, 0), pixel);"
+        in generated_code
+    )
+    assert "texture(signedTex" not in generated_code
+    assert "textureLod(unsignedTex" not in generated_code
+    assert "texelFetch(signedTex" not in generated_code
+
+
 def test_slang_texture_multisample_backlog_fetch_queries_and_diagnostics():
     code = """
     shader SlangMultisampleTextureBacklog {

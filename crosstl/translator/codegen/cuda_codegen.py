@@ -7474,14 +7474,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def resource_call_result_type(self, func_name, raw_args):
         """Infer CUDA-specific resource diagnostic result types."""
-        if func_name in {"texelFetch", "texelFetchOffset"} and raw_args:
+        if func_name in self.cuda_sampled_vector_result_calls() and raw_args:
             resource_type = self.resource_base_type(
                 self.resource_expression_type(raw_args[0])
             )
-            if self.is_shadow_resource_type(resource_type):
-                return "float"
-            if self.is_sampled_texture_family_type(resource_type):
-                return self.sampled_texture_value_type(resource_type)
+            if resource_type is not None:
+                if self.is_shadow_resource_type(resource_type):
+                    return "float"
+                if self.is_sampled_texture_family_type(resource_type):
+                    return self.sampled_texture_value_type(resource_type)
 
         result_type = super().resource_call_result_type(func_name, raw_args)
         if result_type is not None:
@@ -7502,7 +7503,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return None
             if self.is_shadow_resource_type(resource_type):
                 return "float"
-            return "float4"
+            return self.sampled_texture_value_type(resource_type)
 
         if func_name in self.cuda_image_atomic_calls() and raw_args:
             resource_type = self.resource_base_type(
@@ -7535,6 +7536,25 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "textureProjLodOffset",
             "textureProjGrad",
             "textureProjGradOffset",
+            "texelFetchOffset",
+        }
+
+    def cuda_sampled_vector_result_calls(self):
+        """Return sampled texture calls whose value type follows the resource."""
+        return {
+            "texture",
+            "textureLod",
+            "textureGrad",
+            "textureOffset",
+            "textureLodOffset",
+            "textureGradOffset",
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+            "texelFetch",
             "texelFetchOffset",
         }
 
@@ -11514,65 +11534,76 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         grad_y=None,
     ):
         """Return a CUDA texture sample call from precomputed components."""
+        value_type = self.sampled_texture_value_type(texture_type)
+        texture_type = self.sampled_texture_shape_type(texture_type)
         if texture_type == "sampler1D" and len(components) >= 1:
             coord_args = f"{texture_name}, {components[0]}"
             if func_name == "texture":
-                return f"tex1D<float4>({coord_args})"
+                return f"tex1D<{value_type}>({coord_args})"
             if func_name == "textureLod" and lod is not None:
-                return f"tex1DLod<float4>({coord_args}, {lod})"
+                return f"tex1DLod<{value_type}>({coord_args}, {lod})"
             if func_name == "textureGrad" and grad_x is not None:
-                return f"tex1DGrad<float4>({coord_args}, {grad_x}, {grad_y})"
+                return f"tex1DGrad<{value_type}>({coord_args}, {grad_x}, {grad_y})"
 
         if texture_type == "sampler1DArray" and len(components) >= 2:
             coord_args = f"{texture_name}, {components[0]}, {components[1]}"
             if func_name == "texture":
-                return f"tex1DLayered<float4>({coord_args})"
+                return f"tex1DLayered<{value_type}>({coord_args})"
             if func_name == "textureLod" and lod is not None:
-                return f"tex1DLayeredLod<float4>({coord_args}, {lod})"
+                return f"tex1DLayeredLod<{value_type}>({coord_args}, {lod})"
             if func_name == "textureGrad" and grad_x is not None:
-                return f"tex1DLayeredGrad<float4>({coord_args}, {grad_x}, {grad_y})"
+                return (
+                    f"tex1DLayeredGrad<{value_type}>"
+                    f"({coord_args}, {grad_x}, {grad_y})"
+                )
 
         if texture_type == "sampler2D" and len(components) >= 2:
             coord_args = f"{texture_name}, {components[0]}, {components[1]}"
             if func_name == "texture":
-                return f"tex2D<float4>({coord_args})"
+                return f"tex2D<{value_type}>({coord_args})"
             if func_name == "textureLod" and lod is not None:
-                return f"tex2DLod<float4>({coord_args}, {lod})"
+                return f"tex2DLod<{value_type}>({coord_args}, {lod})"
             if func_name == "textureGrad" and grad_x is not None:
-                return f"tex2DGrad<float4>({coord_args}, {grad_x}, {grad_y})"
+                return f"tex2DGrad<{value_type}>({coord_args}, {grad_x}, {grad_y})"
 
         if texture_type == "sampler2DArray" and len(components) >= 3:
             coord_args = (
                 f"{texture_name}, {components[0]}, {components[1]}, {components[2]}"
             )
             if func_name == "texture":
-                return f"tex2DLayered<float4>({coord_args})"
+                return f"tex2DLayered<{value_type}>({coord_args})"
             if func_name == "textureLod" and lod is not None:
-                return f"tex2DLayeredLod<float4>({coord_args}, {lod})"
+                return f"tex2DLayeredLod<{value_type}>({coord_args}, {lod})"
             if func_name == "textureGrad" and grad_x is not None:
-                return f"tex2DLayeredGrad<float4>({coord_args}, {grad_x}, {grad_y})"
+                return (
+                    f"tex2DLayeredGrad<{value_type}>"
+                    f"({coord_args}, {grad_x}, {grad_y})"
+                )
 
         if texture_type == "sampler3D" and len(components) >= 3:
             coord_args = (
                 f"{texture_name}, {components[0]}, {components[1]}, {components[2]}"
             )
             if func_name == "texture":
-                return f"tex3D<float4>({coord_args})"
+                return f"tex3D<{value_type}>({coord_args})"
             if func_name == "textureLod" and lod is not None:
-                return f"tex3DLod<float4>({coord_args}, {lod})"
+                return f"tex3DLod<{value_type}>({coord_args}, {lod})"
             if func_name == "textureGrad" and grad_x is not None:
-                return f"tex3DGrad<float4>({coord_args}, {grad_x}, {grad_y})"
+                return f"tex3DGrad<{value_type}>({coord_args}, {grad_x}, {grad_y})"
 
         if texture_type == "samplerCube" and len(components) >= 3:
             coord_args = (
                 f"{texture_name}, {components[0]}, {components[1]}, {components[2]}"
             )
             if func_name == "texture":
-                return f"texCubemap<float4>({coord_args})"
+                return f"texCubemap<{value_type}>({coord_args})"
             if func_name == "textureLod" and lod is not None:
-                return f"texCubemapLod<float4>({coord_args}, {lod})"
+                return f"texCubemapLod<{value_type}>({coord_args}, {lod})"
             if func_name == "textureGrad" and grad_x is not None:
-                return f"texCubemapGrad<float4>({coord_args}, {grad_x}, {grad_y})"
+                return (
+                    f"texCubemapGrad<{value_type}>"
+                    f"({coord_args}, {grad_x}, {grad_y})"
+                )
 
         if texture_type == "samplerCubeArray" and len(components) >= 4:
             coord_args = (
@@ -11580,12 +11611,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 f"{components[2]}, {components[3]}"
             )
             if func_name == "texture":
-                return f"texCubemapLayered<float4>({coord_args})"
+                return f"texCubemapLayered<{value_type}>({coord_args})"
             if func_name == "textureLod" and lod is not None:
-                return f"texCubemapLayeredLod<float4>({coord_args}, {lod})"
+                return f"texCubemapLayeredLod<{value_type}>({coord_args}, {lod})"
             if func_name == "textureGrad" and grad_x is not None:
                 return (
-                    f"texCubemapLayeredGrad<float4>"
+                    f"texCubemapLayeredGrad<{value_type}>"
                     f"({coord_args}, {grad_x}, {grad_y})"
                 )
 
@@ -12317,6 +12348,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             texture_type = self.resource_base_type(
                 self.resource_expression_type(raw_args[0])
             )
+            texture_shape = self.sampled_texture_shape_type(texture_type)
+            value_type = self.sampled_texture_value_type(texture_type)
             if self.is_multisample_resource_type(texture_type):
                 return self.unsupported_multisample_resource_call(
                     func_name, texture_type, args
@@ -12358,50 +12391,50 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             texture_name = args[0]
             coord = args[coord_index]
             lod_index = coord_index + 1
-            if texture_type == "sampler1D":
+            if texture_shape == "sampler1D":
                 if func_name == "texture":
-                    return f"tex1D<float4>({texture_name}, {coord})"
+                    return f"tex1D<{value_type}>({texture_name}, {coord})"
                 if func_name == "textureLod" and len(args) > lod_index:
                     return (
-                        f"tex1DLod<float4>"
+                        f"tex1DLod<{value_type}>"
                         f"({texture_name}, {coord}, {args[lod_index]})"
                     )
                 if func_name == "textureGrad" and grad_x is not None:
                     return (
-                        f"tex1DGrad<float4>"
+                        f"tex1DGrad<{value_type}>"
                         f"({texture_name}, {coord}, {grad_x}, {grad_y})"
                     )
 
-            if texture_type == "sampler1DArray":
+            if texture_shape == "sampler1DArray":
                 coord_args = (
                     f"{texture_name}, "
                     f"{self.coord_component(coord, 'x')}, "
                     f"{self.coord_component(coord, 'y')}"
                 )
                 if func_name == "texture":
-                    return f"tex1DLayered<float4>({coord_args})"
+                    return f"tex1DLayered<{value_type}>({coord_args})"
                 if func_name == "textureLod" and len(args) > lod_index:
-                    return f"tex1DLayeredLod<float4>({coord_args}, {args[lod_index]})"
+                    return f"tex1DLayeredLod<{value_type}>({coord_args}, {args[lod_index]})"
                 if func_name == "textureGrad" and grad_x is not None:
                     return (
-                        f"tex1DLayeredGrad<float4>"
+                        f"tex1DLayeredGrad<{value_type}>"
                         f"({coord_args}, {grad_x}, {grad_y})"
                     )
 
-            if texture_type == "sampler2D":
+            if texture_shape == "sampler2D":
                 coord_args = (
                     f"{texture_name}, "
                     f"{self.coord_component(coord, 'x')}, "
                     f"{self.coord_component(coord, 'y')}"
                 )
                 if func_name == "texture":
-                    return f"tex2D<float4>({coord_args})"
+                    return f"tex2D<{value_type}>({coord_args})"
                 if func_name == "textureLod" and len(args) > lod_index:
-                    return f"tex2DLod<float4>({coord_args}, {args[lod_index]})"
+                    return f"tex2DLod<{value_type}>({coord_args}, {args[lod_index]})"
                 if func_name == "textureGrad" and grad_x is not None:
-                    return f"tex2DGrad<float4>({coord_args}, {grad_x}, {grad_y})"
+                    return f"tex2DGrad<{value_type}>({coord_args}, {grad_x}, {grad_y})"
 
-            if texture_type == "sampler2DArray":
+            if texture_shape == "sampler2DArray":
                 coord_args = (
                     f"{texture_name}, "
                     f"{self.coord_component(coord, 'x')}, "
@@ -12409,16 +12442,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     f"{self.coord_component(coord, 'z')}"
                 )
                 if func_name == "texture":
-                    return f"tex2DLayered<float4>({coord_args})"
+                    return f"tex2DLayered<{value_type}>({coord_args})"
                 if func_name == "textureLod" and len(args) > lod_index:
-                    return f"tex2DLayeredLod<float4>({coord_args}, {args[lod_index]})"
+                    return f"tex2DLayeredLod<{value_type}>({coord_args}, {args[lod_index]})"
                 if func_name == "textureGrad" and grad_x is not None:
                     return (
-                        f"tex2DLayeredGrad<float4>"
+                        f"tex2DLayeredGrad<{value_type}>"
                         f"({coord_args}, {grad_x}, {grad_y})"
                     )
 
-            if texture_type == "sampler3D":
+            if texture_shape == "sampler3D":
                 coord_args = (
                     f"{texture_name}, "
                     f"{self.coord_component(coord, 'x')}, "
@@ -12426,13 +12459,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     f"{self.coord_component(coord, 'z')}"
                 )
                 if func_name == "texture":
-                    return f"tex3D<float4>({coord_args})"
+                    return f"tex3D<{value_type}>({coord_args})"
                 if func_name == "textureLod" and len(args) > lod_index:
-                    return f"tex3DLod<float4>({coord_args}, {args[lod_index]})"
+                    return f"tex3DLod<{value_type}>({coord_args}, {args[lod_index]})"
                 if func_name == "textureGrad" and grad_x is not None:
-                    return f"tex3DGrad<float4>({coord_args}, {grad_x}, {grad_y})"
+                    return f"tex3DGrad<{value_type}>({coord_args}, {grad_x}, {grad_y})"
 
-            if texture_type == "samplerCube":
+            if texture_shape == "samplerCube":
                 coord_args = (
                     f"{texture_name}, "
                     f"{self.coord_component(coord, 'x')}, "
@@ -12440,13 +12473,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     f"{self.coord_component(coord, 'z')}"
                 )
                 if func_name == "texture":
-                    return f"texCubemap<float4>({coord_args})"
+                    return f"texCubemap<{value_type}>({coord_args})"
                 if func_name == "textureLod" and len(args) > lod_index:
-                    return f"texCubemapLod<float4>({coord_args}, {args[lod_index]})"
+                    return (
+                        f"texCubemapLod<{value_type}>({coord_args}, {args[lod_index]})"
+                    )
                 if func_name == "textureGrad" and grad_x is not None:
-                    return f"texCubemapGrad<float4>({coord_args}, {grad_x}, {grad_y})"
+                    return f"texCubemapGrad<{value_type}>({coord_args}, {grad_x}, {grad_y})"
 
-            if texture_type == "samplerCubeArray":
+            if texture_shape == "samplerCubeArray":
                 coord_args = (
                     f"{texture_name}, "
                     f"{self.coord_component(coord, 'x')}, "
@@ -12455,15 +12490,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     f"{self.coord_component(coord, 'w')}"
                 )
                 if func_name == "texture":
-                    return f"texCubemapLayered<float4>({coord_args})"
+                    return f"texCubemapLayered<{value_type}>({coord_args})"
                 if func_name == "textureLod" and len(args) > lod_index:
                     return (
-                        f"texCubemapLayeredLod<float4>"
+                        f"texCubemapLayeredLod<{value_type}>"
                         f"({coord_args}, {args[lod_index]})"
                     )
                 if func_name == "textureGrad" and grad_x is not None:
                     return (
-                        f"texCubemapLayeredGrad<float4>"
+                        f"texCubemapLayeredGrad<{value_type}>"
                         f"({coord_args}, {grad_x}, {grad_y})"
                     )
 
