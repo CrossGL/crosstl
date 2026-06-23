@@ -3,6 +3,7 @@
 import operator
 import os
 import re
+from bisect import bisect_right
 from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -50,6 +51,7 @@ MLX_HOST_NAME_DECL_RE = re.compile(
     re.DOTALL,
 )
 DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT = 512
+TEMPLATE_MATERIALIZATION_SCAN_CHARS_PER_WORK_ITEM = 8
 
 
 class MetalStructMethodError(ValueError):
@@ -76,12 +78,14 @@ class MetalStructMethodError(ValueError):
         method_name: Optional[str] = None,
         requested_signature: Optional[str] = None,
         suggested_action: Optional[str] = None,
+        source_location: Optional[object] = None,
     ):
         super().__init__(message)
         self.struct_name = struct_name
         self.method_name = method_name
         self.requested_signature = requested_signature
         self.suggested_action = suggested_action
+        self.source_location = source_location
 
 
 class MetalTemplateSpecializationError(ValueError):
@@ -269,6 +273,15 @@ class MetalPreprocessor(HLSLPreprocessor):
         self.template_specialization_limit_source = (
             template_specialization_limit_source or "max_template_specializations"
         )
+        self._containing_span_cache: Optional[
+            Tuple[
+                List[Tuple[int, int]],
+                int,
+                Optional[Tuple[int, int]],
+                Optional[Tuple[int, int]],
+                Optional[List[int]],
+            ]
+        ] = None
         self.macros.setdefault(
             "TARGET_OS_SIMULATOR",
             Macro(name="TARGET_OS_SIMULATOR", replacement="0"),
@@ -361,7 +374,9 @@ class MetalPreprocessor(HLSLPreprocessor):
 
         return self._apply_text_replacements(code, replacements)
 
-    def _materialize_explicit_template_function_calls(self, code: str) -> str:
+    def _materialize_explicit_template_function_calls(
+        self, code: str, *, work_budget: Optional[object] = None
+    ) -> str:
         materialized_names: Dict[Tuple[str, Tuple[str, ...]], str] = {}
         working = code
 
@@ -372,6 +387,19 @@ class MetalPreprocessor(HLSLPreprocessor):
 
             templates_by_name = {template.name: template for template in templates}
             template_spans = self._find_template_declaration_spans(working)
+            if work_budget is not None:
+                work_budget.consume(
+                    self._template_materialization_scan_work_items(working),
+                    offset=templates[0].span[0],
+                    length=max(templates[0].span[1] - templates[0].span[0], 0),
+                    context="explicit template source scan",
+                )
+                work_budget.consume(
+                    len(templates) * max(1, len(template_spans)),
+                    offset=templates[0].span[0],
+                    length=max(templates[0].span[1] - templates[0].span[0], 0),
+                    context="explicit template reachability scan",
+                )
             reachable_function_spans = self._reachable_function_spans(
                 working, template_spans
             )
@@ -385,6 +413,13 @@ class MetalPreprocessor(HLSLPreprocessor):
                 explicit_specialization_keys,
                 reachable_function_spans,
             )
+            if work_budget is not None:
+                first_call_offset = calls[0][2][0] if calls else templates[0].span[0]
+                work_budget.consume(
+                    len(calls) * max(1, len(templates_by_name)),
+                    offset=first_call_offset,
+                    context="explicit template call matching",
+                )
             if not calls:
                 return working
 
@@ -458,7 +493,17 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if not working.endswith("\n"):
                     working += "\n"
 
-    def _materialize_explicit_template_struct_instantiations(self, code: str) -> str:
+    @staticmethod
+    def _template_materialization_scan_work_items(code: str) -> int:
+        return max(
+            1,
+            (len(code) + TEMPLATE_MATERIALIZATION_SCAN_CHARS_PER_WORK_ITEM - 1)
+            // TEMPLATE_MATERIALIZATION_SCAN_CHARS_PER_WORK_ITEM,
+        )
+
+    def _materialize_explicit_template_struct_instantiations(
+        self, code: str, *, work_budget: Optional[object] = None
+    ) -> str:
         # Struct counterpart of _materialize_explicit_template_function_calls
         # (issue #1354). Replaces concrete `StructName<args>` type references with
         # a materialized concrete struct, iterating so nested instantiations
@@ -467,12 +512,17 @@ class MetalPreprocessor(HLSLPreprocessor):
         # reached the template-materialization diagnostic is left unchanged rather
         # than emitting a half-rewritten translation.
         try:
-            return self._materialize_explicit_template_struct_instantiations_impl(code)
+            return self._materialize_explicit_template_struct_instantiations_impl(
+                code,
+                work_budget=work_budget,
+            )
+        except MetalTemplateSpecializationError:
+            raise
         except Exception:
             return code
 
     def _materialize_explicit_template_struct_instantiations_impl(
-        self, code: str
+        self, code: str, *, work_budget: Optional[object] = None
     ) -> str:
         materialized_names: Dict[Tuple[str, Tuple[str, ...]], str] = {}
         working = code
@@ -484,6 +534,13 @@ class MetalPreprocessor(HLSLPreprocessor):
             templates = self._find_template_structs(working)
             if not templates:
                 return working
+            if work_budget is not None:
+                work_budget.consume(
+                    self._template_materialization_scan_work_items(working),
+                    offset=templates[0].span[0],
+                    length=max(templates[0].span[1] - templates[0].span[0], 0),
+                    context="explicit template struct source scan",
+                )
             specialized = self._find_explicit_struct_specialization_names(working)
             templates_by_name = {
                 template.name: template
@@ -493,11 +550,26 @@ class MetalPreprocessor(HLSLPreprocessor):
             if not templates_by_name:
                 return working
             excluded_spans = self._find_template_declaration_spans(working)
+            if work_budget is not None:
+                work_budget.consume(
+                    len(templates_by_name) * max(1, len(excluded_spans)),
+                    offset=templates[0].span[0],
+                    context="explicit template struct declaration matching",
+                )
             instantiations = self._find_explicit_template_struct_instantiations(
                 working,
                 templates_by_name,
                 excluded_spans,
             )
+            if work_budget is not None:
+                first_offset = (
+                    instantiations[0][2][0] if instantiations else templates[0].span[0]
+                )
+                work_budget.consume(
+                    len(instantiations) * max(1, len(templates_by_name)),
+                    offset=first_offset,
+                    context="explicit template struct instantiation matching",
+                )
             if not instantiations:
                 return working
 
@@ -1865,6 +1937,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         signature = self._template_member_call_signature(
             struct, representative, receiver, raw_args
         )
+        call_start = code.rfind(representative.name, 0, arg_open)
+        if call_start < 0:
+            call_start = arg_open
+        call_location = self._source_location_for_offsets(
+            code, call_start, arg_close + 1
+        )
 
         # Resolve the position-ordered declaration maps to the FLAT views valid at
         # this call site (nearest preceding declaration wins). Passing flat dicts
@@ -1900,23 +1978,47 @@ class MetalPreprocessor(HLSLPreprocessor):
                         "local variable, a literal, or an explicit cast so its "
                         "type can be inferred, or specialize the method manually"
                     ),
+                    source_location=call_location,
                 )
             concrete_argument_types.append(inferred)
 
-        free_name = self._instantiate_template_member_overload(
-            struct,
-            overloads,
-            concrete_argument_types,
-            signature,
-            instantiated_template_functions,
-            template_methods_by_struct,
-        )
+        try:
+            free_name = self._instantiate_template_member_overload(
+                struct,
+                overloads,
+                concrete_argument_types,
+                signature,
+                instantiated_template_functions,
+                template_methods_by_struct,
+            )
+        except MetalStructMethodError as exc:
+            if exc.source_location is None:
+                exc.source_location = call_location
+            raise
         # Static-ness comes from the overload set; all overloads of one name agree
         # on static-ness in the patterns we handle, so the representative decides.
         receiver_name = None if representative.is_static else receiver
         return self._build_template_call_rewrite(
             code, receiver_name, free_name, arg_open, arg_close
         )
+
+    @staticmethod
+    def _source_location_for_offsets(code: str, start: int, end: int) -> Dict[str, int]:
+        start = max(0, min(start, len(code)))
+        end = max(start, min(end, len(code)))
+        line = code.count("\n", 0, start) + 1
+        end_line = code.count("\n", 0, end) + 1
+        previous_newline = code.rfind("\n", 0, start)
+        end_previous_newline = code.rfind("\n", 0, end)
+        return {
+            "line": line,
+            "column": start - previous_newline,
+            "offset": start,
+            "length": end - start,
+            "endLine": end_line,
+            "endColumn": end - end_previous_newline,
+            "endOffset": end,
+        }
 
     def _instantiate_template_member_overload(
         self,
@@ -3984,6 +4086,39 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _containing_span(
         self, position: int, spans: List[Tuple[int, int]]
     ) -> Optional[Tuple[int, int]]:
+        if not spans:
+            return None
+
+        first = spans[0]
+        last = spans[-1]
+        cached = self._containing_span_cache
+        if (
+            cached is None
+            or cached[0] is not spans
+            or cached[1] != len(spans)
+            or cached[2] != first
+            or cached[3] != last
+        ):
+            is_sorted_non_overlapping = all(
+                spans[index - 1][0] <= spans[index][0]
+                and spans[index - 1][1] <= spans[index][0]
+                for index in range(1, len(spans))
+            )
+            starts = (
+                [start for start, _end in spans] if is_sorted_non_overlapping else None
+            )
+            cached = (spans, len(spans), first, last, starts)
+            self._containing_span_cache = cached
+
+        starts = cached[4]
+        if starts is not None:
+            index = bisect_right(starts, position) - 1
+            if index >= 0:
+                start, end = spans[index]
+                if position < end:
+                    return start, end
+            return None
+
         for start, end in spans:
             if start <= position < end:
                 return start, end

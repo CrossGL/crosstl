@@ -1285,6 +1285,7 @@ METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION = (
     "template_materialization_work_limit_source"
 )
 METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_MULTIPLIER = 64
+METAL_LARGE_TEMPLATE_SOURCE_MIN_CHARS = 96 * 1024
 METAL_DIAGNOSTIC_TEMPLATE_HELPER_RE = re.compile(
     r"(^|_)(?:debug|dbg|log|trace|diagnostic|diag|assert)($|_)"
 )
@@ -11514,6 +11515,8 @@ def _metal_reachable_function_return_types(
 def _materialize_plain_template_helper_calls(
     preprocessor: Any,
     source: str,
+    *,
+    work_budget: _MetalTemplateMaterializationWorkBudget | None = None,
 ) -> tuple[
     str,
     list[dict[str, Any]],
@@ -11538,6 +11541,19 @@ def _materialize_plain_template_helper_calls(
         for template in templates:
             templates_by_name.setdefault(template.name, []).append(template)
         template_spans = preprocessor._find_template_declaration_spans(working)
+        if work_budget is not None:
+            work_budget.consume(
+                preprocessor._template_materialization_scan_work_items(working),
+                offset=templates[0].span[0],
+                length=max(templates[0].span[1] - templates[0].span[0], 0),
+                context="plain template helper source scan",
+            )
+            work_budget.consume(
+                len(templates) * max(1, len(template_spans)),
+                offset=templates[0].span[0],
+                length=max(templates[0].span[1] - templates[0].span[0], 0),
+                context="plain template helper reachability scan",
+            )
         reachable_function_spans = preprocessor._reachable_function_spans(
             working,
             template_spans,
@@ -13248,10 +13264,7 @@ def _project_template_materialization_for_artifact(
         "decltype" in preprocessed[instantiation.span[0] : instantiation.span[1]]
         for instantiation in source_instantiations
     )
-    if unsupported_type_records and (
-        not source_instantiations
-        or (unmaterialized_functor_records and source_instantiations_use_decltype)
-    ):
+    if unsupported_type_records and not source_instantiations:
         metadata = _template_materialization_metadata(
             specializations=[],
             configured_parameters={},
@@ -13305,6 +13318,20 @@ def _project_template_materialization_for_artifact(
     )
     if stripped_diagnostic_helpers:
         templates = preprocessor._find_template_functions(preprocessed)
+
+    explicit_work_budget = (
+        _MetalTemplateMaterializationWorkBudget(
+            limit=materialization_work_limit,
+            limit_source=materialization_work_limit_source,
+            unit=unit,
+            source=preprocessed,
+            target=target,
+            pass_name="explicit-template-materialization",
+        )
+        if materialization_work_limit > 0
+        and len(preprocessed) >= METAL_LARGE_TEMPLATE_SOURCE_MIN_CHARS
+        else None
+    )
 
     specializations: list[dict[str, Any]] = []
     source_instantiation_unsupported: list[dict[str, Any]] = []
@@ -13476,6 +13503,19 @@ def _project_template_materialization_for_artifact(
     templates = preprocessor._find_template_functions(preprocessed)
     templates_by_name = {template.name: template for template in templates}
     template_spans = preprocessor._find_template_declaration_spans(preprocessed)
+    if templates and explicit_work_budget is not None:
+        explicit_work_budget.consume(
+            preprocessor._template_materialization_scan_work_items(preprocessed),
+            offset=templates[0].span[0],
+            length=max(templates[0].span[1] - templates[0].span[0], 0),
+            context="project explicit template source scan",
+        )
+        explicit_work_budget.consume(
+            len(templates) * max(1, len(template_spans)),
+            offset=templates[0].span[0],
+            length=max(templates[0].span[1] - templates[0].span[0], 0),
+            context="project explicit template reachability scan",
+        )
     reachable_function_spans = preprocessor._reachable_function_spans(
         preprocessed, template_spans
     )
@@ -13489,6 +13529,12 @@ def _project_template_materialization_for_artifact(
         explicit_specialization_keys,
         reachable_function_spans,
     )
+    if calls and explicit_work_budget is not None:
+        explicit_work_budget.consume(
+            len(calls) * max(1, len(templates_by_name)),
+            offset=calls[0][2][0],
+            context="project explicit template call matching",
+        )
 
     explicit_template_names: set[str] = set()
     seen_call_specializations: set[tuple[str, tuple[str, ...]]] = set()
@@ -13529,7 +13575,8 @@ def _project_template_materialization_for_artifact(
 
     try:
         materialized = preprocessor._materialize_explicit_template_function_calls(
-            preprocessed
+            preprocessed,
+            work_budget=explicit_work_budget,
         )
     except MetalTemplateSpecializationError:
         raise
@@ -13570,8 +13617,18 @@ def _project_template_materialization_for_artifact(
     ) = _materialize_plain_template_helper_calls(
         preprocessor,
         materialized,
+        work_budget=explicit_work_budget,
     )
     specializations.extend(inferred_plain_specializations)
+
+    if source_instantiations_use_decltype:
+        materialized = (
+            preprocessor._materialize_explicit_template_struct_instantiations(
+                materialized,
+                work_budget=explicit_work_budget,
+            )
+        )
+        materialized = preprocessor._lower_struct_member_functions(materialized)
 
     replacements: list[tuple[int, int, str]] = []
     unsupported: list[dict[str, Any]] = list(source_instantiation_unsupported)

@@ -1192,6 +1192,40 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "WARNING" not in spv_code
 
+    def test_numeric_scalar_logical_ops_compare_operands_against_zero(self):
+        source_code = """
+        shader NumericScalarLogic {
+            compute {
+                void main() {
+                    float a = 1.0;
+                    float b = 0.0;
+                    bool c = a || b;
+                    bool d = a && b;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        bool_type = re.search(r"(%\d+) = OpTypeBool", spv_code)
+        assert bool_type is not None
+        bool_type_id = bool_type.group(1)
+
+        assert spv_code.count(f"OpFOrdNotEqual {bool_type_id}") >= 4
+        assert re.search(
+            rf"OpLogicalOr {re.escape(bool_type_id)} %\d+ %\d+\b", spv_code
+        )
+        assert re.search(
+            rf"OpLogicalAnd {re.escape(bool_type_id)} %\d+ %\d+\b", spv_code
+        )
+        assert not re.search(
+            rf"OpLogical(?:Or|And) {re.escape(bool_type_id)} %float_", spv_code
+        )
+        assert "WARNING" not in spv_code
+
     def test_scalar_vector_constructors_splat_spirv_components(self):
         source_code = """
         shader VectorSplat {
@@ -2162,6 +2196,87 @@ class TestVulkanSPIRVCodeGen:
             spv_code,
         )
         assert_spirv_function_calls_use_declared_parameter_types(spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_complex_struct_comparisons_lower_to_member_comparisons(self, tmp_path):
+        source_code = """
+        shader ComplexCompare {
+            struct complex64_t {
+                float real;
+                float imag;
+            }
+
+            compute {
+                void main() {
+                    complex64_t left;
+                    complex64_t right;
+                    bool greater = left > right;
+                    bool equal = left == right;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        bool_type = re.search(r"(%\d+) = OpTypeBool", spv_code)
+        complex_type = spirv_named_id(spv_code, "complex64_t")
+        assert bool_type is not None
+        assert complex_type is not None
+
+        bool_type_id = bool_type.group(1)
+        assert spv_code.count("OpCompositeExtract") >= 8
+        assert re.search(
+            rf"OpFOrdGreaterThan {re.escape(bool_type_id)} %\d+ %\d+\b",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpFOrdEqual {re.escape(bool_type_id)} %\d+ %\d+\b", spv_code
+        )
+        assert "OpLogicalAnd" in spv_code
+        assert "OpLogicalOr" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_complex_struct_arithmetic_lowers_to_member_arithmetic(self, tmp_path):
+        source_code = """
+        shader ComplexArithmetic {
+            struct complex64_t {
+                float real;
+                float imag;
+            }
+
+            compute {
+                void main() {
+                    complex64_t left;
+                    complex64_t right;
+                    complex64_t sum = left + right;
+                    complex64_t diff = left - right;
+                    complex64_t product = left * right;
+                    complex64_t quotient = left / right;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        complex_type = spirv_named_id(spv_code, "complex64_t")
+        assert complex_type is not None
+        assert spv_code.count("OpCompositeExtract") >= 16
+        assert spv_code.count(f"OpCompositeConstruct {complex_type}") >= 4
+        assert "OpFAdd" in spv_code
+        assert "OpFSub" in spv_code
+        assert "OpFMul" in spv_code
+        assert "OpFDiv" in spv_code
+        assert not re.search(
+            rf"OpF(?:Add|Sub|Mul|Div) {re.escape(complex_type)}\b", spv_code
+        )
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
