@@ -854,7 +854,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 780
+        "test_count": 781
       },
       "translator_codegen": {
         "exists": true,
@@ -971,7 +971,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 830
+        "test_count": 831
       },
       "translator_codegen": {
         "exists": true,
@@ -1322,7 +1322,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 790
+        "test_count": 791
       },
       "translator_codegen": {
         "exists": true,
