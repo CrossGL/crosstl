@@ -92,6 +92,8 @@ RUNTIME_TEST_DEFAULT_ADAPTERS = {
         "requiredTools": ("naga",),
     },
 }
+RUNTIME_METADATA_READY_STATUSES = frozenset(("available", "not-applicable"))
+RUNTIME_METADATA_INCOMPLETE_STATUSES = frozenset(("partial", "unavailable"))
 
 
 class RuntimeVerificationError(ValueError):
@@ -2093,6 +2095,19 @@ def build_runtime_test_manifest(
                 fixture_index=index,
             )
         )
+        runtime_metadata = _runtime_test_manifest_runtime_metadata(
+            test_case, artifact_payload
+        )
+        diagnostics.extend(
+            _runtime_test_manifest_runtime_metadata_diagnostics(
+                test_case,
+                runtime_metadata,
+                fixture_index=index,
+            )
+        )
+        test_case = _runtime_test_case_with_runtime_metadata(
+            test_case, runtime_metadata
+        )
         test_cases.append(test_case)
 
     generated_adapters = {adapter.adapter_id: adapter for adapter in adapters}
@@ -2566,6 +2581,142 @@ def _runtime_test_manifest_artifact_diagnostics(
     ]
 
 
+def _runtime_metadata_status_value(value: Any) -> str:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return "not-recorded"
+
+
+def _runtime_metadata_overall_status(fields: Mapping[str, str]) -> str:
+    if not fields:
+        return "not-recorded"
+    if any(value in RUNTIME_METADATA_INCOMPLETE_STATUSES for value in fields.values()):
+        return "incomplete"
+    if all(value in RUNTIME_METADATA_READY_STATUSES for value in fields.values()):
+        return "ready"
+    return "incomplete"
+
+
+def _runtime_metadata_missing_fields(fields: Mapping[str, str]) -> dict[str, str]:
+    return {
+        field_name: status
+        for field_name, status in fields.items()
+        if status not in RUNTIME_METADATA_READY_STATUSES
+    }
+
+
+def _runtime_test_manifest_sequence_field_status(value: Any) -> str:
+    if _runtime_record_sequence(value):
+        return "available"
+    return "unavailable"
+
+
+def _runtime_test_manifest_derived_runtime_metadata_fields(
+    artifact: Mapping[str, Any],
+    contract: RuntimeAdapterContract,
+) -> dict[str, str]:
+    fields = {
+        "entryPoints": "available" if contract.entry_points else "unavailable",
+        "resourceBindings": (
+            "available" if contract.resource_bindings else "unavailable"
+        ),
+        "dispatch": (
+            "available"
+            if _complete_runtime_dispatch_geometry(contract) is not None
+            else "unavailable"
+        ),
+    }
+    if "hostInterface" in artifact:
+        fields["hostInterface"] = (
+            "available"
+            if isinstance(artifact.get("hostInterface"), Mapping)
+            else "unavailable"
+        )
+    if "parameterBlocks" in artifact:
+        fields["parameterBlocks"] = _runtime_test_manifest_sequence_field_status(
+            artifact.get("parameterBlocks")
+        )
+    return fields
+
+
+def _runtime_test_manifest_runtime_metadata(
+    test_case: RuntimeTestCase,
+    artifact_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    selected = _select_runtime_artifact(artifact_payload, test_case.fixture.selector)
+    if selected["status"] != PASSED:
+        payload = {
+            "status": "unresolved",
+            "source": "artifact-selection",
+            "artifactStatus": selected.get("status"),
+            "selector": test_case.fixture.selector.to_json(),
+        }
+        artifact = selected.get("artifact")
+        artifact_payload = _artifact_result_payload(artifact)
+        if artifact_payload is not None:
+            payload["artifact"] = artifact_payload
+        return payload
+
+    artifact = selected["artifact"]
+    contract = _runtime_adapter_contract(test_case.fixture, artifact)
+    runtime_data_status = artifact.get("runtimeDataStatus")
+    if isinstance(runtime_data_status, Mapping):
+        source = "artifact.runtimeDataStatus"
+        fields = {
+            str(field_name): _runtime_metadata_status_value(status)
+            for field_name, status in runtime_data_status.items()
+        }
+    else:
+        source = "derived-runtime-adapter-contract"
+        fields = _runtime_test_manifest_derived_runtime_metadata_fields(
+            artifact, contract
+        )
+    missing = _runtime_metadata_missing_fields(fields)
+    payload = {
+        "status": _runtime_metadata_overall_status(fields),
+        "source": source,
+        "fields": fields,
+        "artifact": _artifact_result_payload(artifact),
+    }
+    if missing:
+        payload["missingFields"] = missing
+    return payload
+
+
+def _runtime_test_manifest_runtime_metadata_diagnostics(
+    test_case: RuntimeTestCase,
+    runtime_metadata: Mapping[str, Any],
+    *,
+    fixture_index: int,
+) -> list[dict[str, Any]]:
+    if runtime_metadata.get("status") != "incomplete":
+        return []
+    missing_fields = runtime_metadata.get("missingFields")
+    return [
+        _diagnostic(
+            "warning",
+            "project.runtime-test-manifest.runtime-metadata-incomplete",
+            "Selected artifact runtime metadata is incomplete; downstream "
+            "runtime adapters may require fixture overrides before execution.",
+            fixture=test_case.fixture.id,
+            fixtureIndex=fixture_index,
+            artifact=runtime_metadata.get("artifact"),
+            missingFields=(
+                dict(missing_fields) if isinstance(missing_fields, Mapping) else {}
+            ),
+        )
+    ]
+
+
+def _runtime_test_case_with_runtime_metadata(
+    test_case: RuntimeTestCase,
+    runtime_metadata: Mapping[str, Any],
+) -> RuntimeTestCase:
+    metadata = dict(test_case.metadata)
+    metadata["runtimeMetadata"] = dict(runtime_metadata)
+    return replace(test_case, metadata=metadata)
+
+
 def _runtime_test_manifest_contract_diagnostics(
     fixture: RuntimeFixture,
     artifact: Mapping[str, Any],
@@ -2717,9 +2868,27 @@ def _runtime_test_manifest_generation_summary(
         "adapterCount": len(adapters),
         "targetCount": len(set(targets)),
         "testsByTarget": dict(sorted(Counter(targets).items())),
+        "runtimeMetadataStatusCounts": (
+            _runtime_test_manifest_runtime_metadata_status_counts(test_cases)
+        ),
         "diagnosticCount": len(diagnostics),
         "diagnosticCounts": diagnostic_counts,
     }
+
+
+def _runtime_test_manifest_runtime_metadata_status_counts(
+    test_cases: Sequence[RuntimeTestCase],
+) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for test_case in test_cases:
+        runtime_metadata = test_case.metadata.get("runtimeMetadata")
+        status = (
+            runtime_metadata.get("status")
+            if isinstance(runtime_metadata, Mapping)
+            else None
+        )
+        counts[_runtime_metadata_status_value(status)] += 1
+    return dict(sorted(counts.items()))
 
 
 def _runtime_test_manifest_artifact_input(
@@ -5464,6 +5633,7 @@ def _artifact_result_payload(
         "error",
         "toolchain",
         "toolchainRuns",
+        "runtimeDataStatus",
     ):
         if field_name in artifact:
             payload[field_name] = artifact[field_name]

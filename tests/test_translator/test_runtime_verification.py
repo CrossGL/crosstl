@@ -1063,6 +1063,7 @@ def test_build_runtime_test_manifest_from_mlx_fixture_metadata():
     assert manifest["projectRoot"] == str(ROOT)
     assert manifest["summary"]["testCount"] == 1
     assert manifest["summary"]["testsByTarget"] == {"metal": 1}
+    assert manifest["summary"]["runtimeMetadataStatusCounts"] == {"ready": 1}
     assert manifest["diagnostics"] == []
     assert manifest["metadata"]["repository"] == "mlx"
     assert manifest["metadata"]["fixtureMetadataKind"] == (
@@ -1083,6 +1084,15 @@ def test_build_runtime_test_manifest_from_mlx_fixture_metadata():
     ]
     test_case = manifest["tests"][0]
     assert test_case["adapter"] == "metal-runtime-probe"
+    assert test_case["metadata"]["runtimeMetadata"]["status"] == "ready"
+    assert test_case["metadata"]["runtimeMetadata"]["source"] == (
+        "derived-runtime-adapter-contract"
+    )
+    assert test_case["metadata"]["runtimeMetadata"]["fields"] == {
+        "entryPoints": "available",
+        "resourceBindings": "available",
+        "dispatch": "available",
+    }
     assert test_case["selector"] == {
         "source": "mlx/backend/metal/kernels/binary.metal",
         "target": "metal",
@@ -1184,6 +1194,48 @@ def test_build_runtime_test_manifest_reports_incomplete_fixture_data(tmp_path):
     assert "project.runtime-test-manifest.fixture-expected-outputs-missing" in codes
     assert "project.runtime-test-manifest.entry-points-unavailable" in codes
     parse_runtime_test_manifest(manifest)
+
+
+def test_build_runtime_test_manifest_records_runtime_metadata_readiness(tmp_path):
+    artifact = _native_runtime_artifact(
+        runtimeDataStatus={
+            "hostInterface": "available",
+            "entryPoints": "available",
+            "resourceBindings": "partial",
+            "parameterBlocks": "not-applicable",
+            "dispatch": "unavailable",
+        }
+    )
+
+    manifest = build_runtime_test_manifest(
+        _artifact_report(tmp_path, [artifact]),
+        {
+            "kind": "crosstl-project-runtime-fixture-metadata",
+            "fixtures": [_runtime_fixture(id="runtime-metadata-status")],
+        },
+    )
+
+    runtime_metadata = manifest["tests"][0]["metadata"]["runtimeMetadata"]
+    assert manifest["success"] is True
+    assert manifest["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+    assert manifest["summary"]["runtimeMetadataStatusCounts"] == {"incomplete": 1}
+    assert runtime_metadata["status"] == "incomplete"
+    assert runtime_metadata["source"] == "artifact.runtimeDataStatus"
+    assert runtime_metadata["fields"]["parameterBlocks"] == "not-applicable"
+    assert runtime_metadata["missingFields"] == {
+        "resourceBindings": "partial",
+        "dispatch": "unavailable",
+    }
+    assert manifest["diagnostics"][0]["code"] == (
+        "project.runtime-test-manifest.runtime-metadata-incomplete"
+    )
+    assert manifest["diagnostics"][0]["missingFields"] == {
+        "resourceBindings": "partial",
+        "dispatch": "unavailable",
+    }
+
+    parsed = parse_runtime_test_manifest(manifest)
+    assert parsed.test_cases[0].metadata["runtimeMetadata"]["status"] == "incomplete"
 
 
 def test_project_cli_runtime_test_manifest_text_outputs_generated_tests():
