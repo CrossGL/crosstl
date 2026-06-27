@@ -1595,16 +1595,16 @@ def test_reverse_codegen_emits_diagnostics_for_extension_conformance_constructs(
     generated_code = generate_code(ast)
 
     assert (
-        "// unsupported Slang interface/conformance construct: interface IFoo"
-        in generated_code
+        "// unsupported Slang interface/conformance construct: "
+        "interface declaration IFoo" in generated_code
     )
     assert (
-        "// unsupported Slang interface/conformance construct: struct MyType : IFoo"
-        in generated_code
+        "// unsupported Slang interface/conformance construct: "
+        "struct MyType conforms IFoo" in generated_code
     )
     assert (
-        "// unsupported Slang interface/conformance construct: extension MyType : IBar"
-        in generated_code
+        "// unsupported Slang interface/conformance construct: "
+        "extension MyType conforms IBar" in generated_code
     )
     assert "struct MyType" in generated_code
     assert "int value;" in generated_code
@@ -1689,7 +1689,7 @@ def test_reverse_codegen_emits_diagnostic_for_generic_where_conformance_constrai
 
     assert (
         "// unsupported Slang interface/conformance construct: "
-        "function useFoo where T : IFoo"
+        "function useFoo where T conforms IFoo"
     ) in generated_code
     assert "int useFoo(T value)" in generated_code
     cgl_translator.parse(generated_code)
@@ -1707,7 +1707,7 @@ def test_reverse_codegen_emits_diagnostic_for_typealias_generic_conformance_cons
 
     assert (
         "// unsupported Slang interface/conformance construct: "
-        "typealias FooAlias<T> where T : IFoo"
+        "typealias FooAlias<T> where T conforms IFoo"
     ) in generated_code
     assert "typedef Array<T, 4> FooAlias<T>;" in generated_code
     cgl_translator.parse(generated_code)

@@ -839,7 +839,13 @@ class SlangToCrossGLConverter:
         return [f"struct {struct.name} : {', '.join(conformances)}"]
 
     def format_diagnostic_comment_text(self, text):
-        return " ".join(str(text).replace("*/", "* /").split())
+        comment = " ".join(str(text).replace("*/", "* /").split())
+        comment = re.sub(
+            r"\binterface\s+([A-Za-z_][A-Za-z0-9_]*)",
+            r"interface declaration \1",
+            comment,
+        )
+        return comment.replace(" : ", " conforms ")
 
     def format_typedef_generic_constraints(self, typedefs):
         constraints = []
