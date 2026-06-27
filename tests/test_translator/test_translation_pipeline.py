@@ -1912,8 +1912,7 @@ def test_metal_struct_member_template_kernel_translates_without_false_positive(
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
-        textwrap.dedent(
-            """
+        textwrap.dedent("""
             [project]
             source_roots = ["kernels"]
             include = ["kernels/ops.metal"]
@@ -1922,8 +1921,7 @@ def test_metal_struct_member_template_kernel_translates_without_false_positive(
 
             [project.sources]
             "**/*.metal" = "metal"
-            """
-        ).strip(),
+            """).strip(),
         encoding="utf-8",
     )
 
@@ -1986,8 +1984,7 @@ def test_metal_local_constexpr_array_extent_is_not_unresolved_template(tmp_path)
         encoding="utf-8",
     )
     (repo / "crosstl.toml").write_text(
-        textwrap.dedent(
-            """
+        textwrap.dedent("""
             [project]
             source_roots = ["kernels"]
             include = ["kernels/tg.metal"]
@@ -1996,8 +1993,7 @@ def test_metal_local_constexpr_array_extent_is_not_unresolved_template(tmp_path)
 
             [project.sources]
             "**/*.metal" = "metal"
-            """
-        ).strip(),
+            """).strip(),
         encoding="utf-8",
     )
 

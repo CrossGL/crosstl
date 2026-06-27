@@ -47,9 +47,13 @@ FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
 RUNTIME_READINESS_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1388",
     "https://github.com/CrossGL/crosstl/issues/1392",
-    "https://github.com/CrossGL/crosstl/issues/1394",
     "https://github.com/CrossGL/crosstl/issues/1396",
 )
+RUNTIME_READINESS_ENTRY_POINTS = {
+    "directx": "CSMain",
+    "opengl": "main",
+    "vulkan": "arangeuint8",
+}
 RUNTIME_READINESS_DIAGNOSTIC_CODES = frozenset(
     (
         "project.runtime-test-manifest.entry-points-unavailable",
@@ -72,6 +76,7 @@ RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1452",
     "https://github.com/CrossGL/crosstl/issues/1354",
     "https://github.com/CrossGL/crosstl/issues/1362",
+    "https://github.com/CrossGL/crosstl/issues/1394",
     "https://github.com/CrossGL/crosstl/issues/1317",
     "https://github.com/CrossGL/crosstl/issues/1300",
     "https://github.com/CrossGL/crosstl/issues/939",
@@ -644,12 +649,18 @@ def _check_arange_opengl(
 
 
 def _runtime_readiness_fixture(target: str) -> dict[str, Any]:
+    entry_point = RUNTIME_READINESS_ENTRY_POINTS.get(target)
+    _require(
+        entry_point is not None,
+        f"runtime readiness entry point is not configured for target: {target}",
+    )
     return {
         "id": f"mlx-arange-{target}-runtime-readiness",
         "selector": {
             "source": MLX_ARANGE_SOURCE,
             "target": target,
         },
+        "entryPoint": entry_point,
         "inputs": [
             {
                 "name": "start",
@@ -673,6 +684,11 @@ def _runtime_readiness_fixture(target: str) -> dict[str, Any]:
                 "values": [0, 1, 2, 3],
             }
         ],
+        "runtimeAdapter": {
+            "dispatch": {
+                "globalSize": [4, 1, 1],
+            }
+        },
         "metadata": {
             "repository": "mlx",
             "source": MLX_ARANGE_SOURCE,

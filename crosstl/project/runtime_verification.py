@@ -611,6 +611,7 @@ class RuntimeFixture:
 
     id: str
     selector: RuntimeArtifactSelector
+    entry_point: str | None = None
     inputs: tuple[RuntimeValue, ...] = field(default_factory=tuple)
     expected_outputs: tuple[RuntimeValue, ...] = field(default_factory=tuple)
     default_tolerance: RuntimeTolerance = field(default_factory=RuntimeTolerance)
@@ -628,6 +629,8 @@ class RuntimeFixture:
         }
         if self.executor is not None:
             payload["executor"] = self.executor
+        if self.entry_point is not None:
+            payload["entryPoint"] = self.entry_point
         if self.adapter_contract is not None:
             adapter_contract = self.adapter_contract.to_json()
             if adapter_contract:
@@ -753,6 +756,7 @@ class RuntimeExecutionRequest:
     adapter_contract: RuntimeAdapterContract = field(
         default_factory=RuntimeAdapterContract
     )
+    diagnostics: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
     execution_plan: RuntimeExecutionPlan | None = None
 
 
@@ -1844,7 +1848,9 @@ def prepare_runtime_execution(
     constant_bindings, constant_diagnostics = _runtime_bound_constants(
         contract, artifact
     )
-    diagnostics = tuple(resource_diagnostics + constant_diagnostics)
+    diagnostics = tuple(
+        list(request.diagnostics) + resource_diagnostics + constant_diagnostics
+    )
     return RuntimeExecutionPlan(
         artifact=artifact,
         artifact_path=artifact_path,
@@ -2502,7 +2508,10 @@ def _runtime_test_manifest_generation_diagnostics(
         return diagnostics
 
     artifact = selected["artifact"]
-    contract = _runtime_adapter_contract(fixture, artifact)
+    contract, scope_diagnostics = _runtime_adapter_contract_with_diagnostics(
+        fixture, artifact
+    )
+    diagnostics.extend(scope_diagnostics)
     diagnostics.extend(
         _runtime_test_manifest_contract_diagnostics(
             fixture,
@@ -2586,7 +2595,9 @@ def _runtime_test_manifest_contract_diagnostics(
                 artifact=_artifact_result_payload(artifact),
             )
         )
-    if not contract.resource_bindings:
+    if not contract.resource_bindings and not _runtime_contract_scope_is_ambiguous(
+        contract, "resourceBindings"
+    ):
         diagnostics.append(
             _diagnostic(
                 "warning",
@@ -2611,6 +2622,19 @@ def _runtime_test_manifest_contract_diagnostics(
             )
         )
     return diagnostics
+
+
+def _runtime_contract_scope_is_ambiguous(
+    contract: RuntimeAdapterContract, field_name: str
+) -> bool:
+    scope = contract.metadata.get("entryPointScope")
+    if not isinstance(scope, Mapping):
+        return False
+    counts = scope.get("ambiguousCounts")
+    if not isinstance(counts, Mapping):
+        return False
+    count = counts.get(field_name)
+    return isinstance(count, int) and not isinstance(count, bool) and count > 0
 
 
 def _runtime_test_manifest_artifact_manifest(
@@ -3016,6 +3040,8 @@ def _runtime_test_plan_case(
         "status": "planned",
         "diagnostics": [],
     }
+    if test_case.fixture.entry_point is not None:
+        case_payload["entryPoint"] = test_case.fixture.entry_point
     if selected["status"] != PASSED:
         case_payload.update(
             {
@@ -3033,13 +3059,16 @@ def _runtime_test_plan_case(
 
     artifact = selected["artifact"]
     artifact_path = _runtime_artifact_path(artifact, root_path=root_path)
-    adapter_contract = _runtime_adapter_contract(test_case.fixture, artifact)
+    adapter_contract, contract_diagnostics = _runtime_adapter_contract_with_diagnostics(
+        test_case.fixture, artifact
+    )
     request = RuntimeExecutionRequest(
         fixture=test_case.fixture,
         artifact=artifact,
         artifact_path=artifact_path,
         project_root=root_path,
         adapter_contract=adapter_contract,
+        diagnostics=contract_diagnostics,
     )
     execution_plan = prepare_runtime_execution(request)
     diagnostics = list(execution_plan.diagnostics)
@@ -3126,6 +3155,8 @@ def _runtime_test_planned_result(
             if isinstance(diagnostic, Mapping)
         ],
     }
+    if test_case.fixture.entry_point is not None:
+        result["entryPoint"] = test_case.fixture.entry_point
     for key in ("runtimeAdapter", "runtimeExecution", "failurePhase"):
         if key in plan_case:
             result[key] = plan_case[key]
@@ -3398,6 +3429,10 @@ def _parse_runtime_fixture(value: Any, *, index: int) -> RuntimeFixture:
     return RuntimeFixture(
         id=fixture_id,
         selector=selector,
+        entry_point=_optional_string(
+            value.get("entryPoint", value.get("entry_point")),
+            field_name=f"fixtures[{index}].entryPoint",
+        ),
         inputs=inputs,
         expected_outputs=expected_outputs,
         default_tolerance=default_tolerance,
@@ -3571,9 +3606,7 @@ def _parse_runtime_resource_binding(
         raise RuntimeVerificationError(
             f"{field_name} must identify a resource by id, name, or binding."
         )
-    metadata = _parse_runtime_metadata(
-        value.get("metadata", {}), field_name=f"{field_name}.metadata"
-    )
+    metadata = _parse_runtime_contract_item_metadata(value, field_name=field_name)
     if "required" in value:
         metadata["required"] = _optional_bool(
             value.get("required"), field_name=f"{field_name}.required"
@@ -3642,9 +3675,7 @@ def _parse_runtime_specialization_constant(
         required=_optional_bool(
             value.get("required", False), field_name=f"{field_name}.required"
         ),
-        metadata=_parse_runtime_metadata(
-            value.get("metadata", {}), field_name=f"{field_name}.metadata"
-        ),
+        metadata=_parse_runtime_contract_item_metadata(value, field_name=field_name),
     )
 
 
@@ -3702,10 +3733,32 @@ def _parse_runtime_validation_hook(
         required=_optional_bool(
             value.get("required", True), field_name=f"{field_name}.required"
         ),
-        metadata=_parse_runtime_metadata(
-            value.get("metadata", {}), field_name=f"{field_name}.metadata"
-        ),
+        metadata=_parse_runtime_contract_item_metadata(value, field_name=field_name),
     )
+
+
+def _parse_runtime_contract_item_metadata(
+    value: Mapping[str, Any], *, field_name: str
+) -> dict[str, Any]:
+    metadata = _parse_runtime_metadata(
+        value.get("metadata", {}), field_name=f"{field_name}.metadata"
+    )
+    entry_points = list(_runtime_metadata_entry_points(metadata))
+    for key in ("entryPoint", "entry_point"):
+        if key not in value:
+            continue
+        entry_point = _optional_string(value.get(key), field_name=f"{field_name}.{key}")
+        if entry_point is not None:
+            entry_points.append(entry_point)
+    for key in ("entryPoints", "entry_points"):
+        if key not in value:
+            continue
+        entry_points.extend(
+            _string_tuple(value.get(key), field_name=f"{field_name}.{key}")
+        )
+    if entry_points:
+        metadata["entryPoints"] = _dedupe_strings(entry_points)
+    return metadata
 
 
 def _parse_runtime_value_list(value: Any, *, field_name: str):
@@ -4030,13 +4083,16 @@ def _verify_runtime_fixture(
 
     artifact = selected["artifact"]
     artifact_path = _runtime_artifact_path(artifact, root_path=root_path)
-    adapter_contract = _runtime_adapter_contract(fixture, artifact)
+    adapter_contract, contract_diagnostics = _runtime_adapter_contract_with_diagnostics(
+        fixture, artifact
+    )
     initial_request = RuntimeExecutionRequest(
         fixture=fixture,
         artifact=artifact,
         artifact_path=artifact_path,
         project_root=root_path,
         adapter_contract=adapter_contract,
+        diagnostics=contract_diagnostics,
     )
     execution_plan = prepare_runtime_execution(initial_request)
     setup_diagnostics = list(execution_plan.diagnostics)
@@ -4407,10 +4463,303 @@ def _artifact_failed(artifact: Mapping[str, Any]) -> bool:
 def _runtime_adapter_contract(
     fixture: RuntimeFixture, artifact: Mapping[str, Any]
 ) -> RuntimeAdapterContract:
+    contract, _ = _runtime_adapter_contract_with_diagnostics(fixture, artifact)
+    return contract
+
+
+def _runtime_adapter_contract_with_diagnostics(
+    fixture: RuntimeFixture, artifact: Mapping[str, Any]
+) -> tuple[RuntimeAdapterContract, tuple[Mapping[str, Any], ...]]:
     artifact_contract = _runtime_adapter_contract_from_artifact(artifact)
-    if fixture.adapter_contract is None:
-        return artifact_contract
-    return _merge_runtime_adapter_contract(artifact_contract, fixture.adapter_contract)
+    selection_contract = (
+        artifact_contract
+        if fixture.adapter_contract is None
+        else _merge_runtime_adapter_contract(
+            artifact_contract, fixture.adapter_contract
+        )
+    )
+    selected_entry_point, selection_source = _runtime_selected_entry_point(
+        fixture, selection_contract
+    )
+    candidates = tuple(entry.name for entry in artifact_contract.entry_points)
+    if selected_entry_point is None:
+        if len(candidates) <= 1:
+            return selection_contract, ()
+        diagnostic = _runtime_entry_point_scope_diagnostic(
+            "error",
+            "project.runtime-verification.entry-point-selection-ambiguous",
+            "Runtime fixture does not select one entry point from a multi-entry artifact.",
+            fixture,
+            artifact,
+            selected_entry_point=None,
+            candidates=candidates,
+        )
+        scoped_artifact = replace(
+            artifact_contract,
+            resource_bindings=(),
+            specialization_constants=(),
+            validation_hooks=(),
+        )
+        contract = (
+            scoped_artifact
+            if fixture.adapter_contract is None
+            else _merge_runtime_adapter_contract(
+                scoped_artifact, fixture.adapter_contract
+            )
+        )
+        return contract, (diagnostic,)
+
+    if candidates and selected_entry_point not in candidates:
+        diagnostic = _runtime_entry_point_scope_diagnostic(
+            "error",
+            "project.runtime-verification.entry-point-missing",
+            "Runtime fixture selected an entry point that is not present in the artifact contract.",
+            fixture,
+            artifact,
+            selected_entry_point=selected_entry_point,
+            candidates=candidates,
+        )
+        return selection_contract, (diagnostic,)
+
+    scoped_artifact, diagnostics = _scope_runtime_adapter_contract(
+        artifact_contract,
+        fixture=fixture,
+        artifact=artifact,
+        selected_entry_point=selected_entry_point,
+        selection_source=selection_source,
+    )
+    contract = (
+        scoped_artifact
+        if fixture.adapter_contract is None
+        else _merge_runtime_adapter_contract(scoped_artifact, fixture.adapter_contract)
+    )
+    return (
+        _select_runtime_contract_entry_point(
+            contract,
+            selected_entry_point=selected_entry_point,
+            selection_source=selection_source,
+        ),
+        diagnostics,
+    )
+
+
+def _runtime_selected_entry_point(
+    fixture: RuntimeFixture, contract: RuntimeAdapterContract
+) -> tuple[str | None, str | None]:
+    if fixture.entry_point is not None:
+        return fixture.entry_point, "fixture.entryPoint"
+    if contract.dispatch is not None and contract.dispatch.entry_point is not None:
+        return contract.dispatch.entry_point, "runtimeAdapter.dispatch.entryPoint"
+    if len(contract.entry_points) == 1:
+        return contract.entry_points[0].name, "runtimeAdapter.entryPoints"
+    return None, None
+
+
+def _scope_runtime_adapter_contract(
+    contract: RuntimeAdapterContract,
+    *,
+    fixture: RuntimeFixture,
+    artifact: Mapping[str, Any],
+    selected_entry_point: str,
+    selection_source: str | None,
+) -> tuple[RuntimeAdapterContract, tuple[Mapping[str, Any], ...]]:
+    if len(contract.entry_points) <= 1:
+        return (
+            _select_runtime_contract_entry_point(
+                contract,
+                selected_entry_point=selected_entry_point,
+                selection_source=selection_source,
+            ),
+            (),
+        )
+
+    resources, ambiguous_resources = _runtime_owned_contract_items(
+        contract.resource_bindings, selected_entry_point
+    )
+    constants, ambiguous_constants = _runtime_owned_contract_items(
+        contract.specialization_constants, selected_entry_point
+    )
+    hooks, ambiguous_hooks = _runtime_owned_contract_items(
+        contract.validation_hooks, selected_entry_point
+    )
+    diagnostics: list[Mapping[str, Any]] = []
+    if ambiguous_resources:
+        diagnostics.append(
+            _runtime_entry_point_scope_diagnostic(
+                "warning",
+                "project.runtime-verification.entry-point-resource-scope-ambiguous",
+                "Artifact resource ownership cannot be proven for the selected entry point; ambiguous resources were excluded from the runtime contract.",
+                fixture,
+                artifact,
+                selected_entry_point=selected_entry_point,
+                candidates=tuple(entry.name for entry in contract.entry_points),
+                ambiguousResources=[
+                    _runtime_resource_binding_name(binding)
+                    for binding in ambiguous_resources
+                ],
+            )
+        )
+    if ambiguous_constants:
+        diagnostics.append(
+            _runtime_entry_point_scope_diagnostic(
+                "warning",
+                "project.runtime-verification.entry-point-constant-scope-ambiguous",
+                "Artifact constant ownership cannot be proven for the selected entry point; ambiguous constants were excluded from the runtime contract.",
+                fixture,
+                artifact,
+                selected_entry_point=selected_entry_point,
+                candidates=tuple(entry.name for entry in contract.entry_points),
+                ambiguousConstants=[
+                    _runtime_constant_name(constant) for constant in ambiguous_constants
+                ],
+            )
+        )
+    if ambiguous_hooks:
+        diagnostics.append(
+            _runtime_entry_point_scope_diagnostic(
+                "warning",
+                "project.runtime-verification.entry-point-validation-scope-ambiguous",
+                "Artifact validation-hook ownership cannot be proven for the selected entry point; ambiguous hooks were excluded from the runtime contract.",
+                fixture,
+                artifact,
+                selected_entry_point=selected_entry_point,
+                candidates=tuple(entry.name for entry in contract.entry_points),
+                ambiguousValidationHooks=[hook.name for hook in ambiguous_hooks],
+            )
+        )
+
+    scoped = replace(
+        contract,
+        resource_bindings=resources,
+        specialization_constants=constants,
+        validation_hooks=hooks,
+    )
+    return (
+        _select_runtime_contract_entry_point(
+            scoped,
+            selected_entry_point=selected_entry_point,
+            selection_source=selection_source,
+            ambiguous_counts={
+                "resourceBindings": len(ambiguous_resources),
+                "specializationConstants": len(ambiguous_constants),
+                "validationHooks": len(ambiguous_hooks),
+            },
+        ),
+        tuple(diagnostics),
+    )
+
+
+def _runtime_owned_contract_items(
+    items: Sequence[Any], selected_entry_point: str
+) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
+    scoped: list[Any] = []
+    ambiguous: list[Any] = []
+    for item in items:
+        metadata = getattr(item, "metadata", {})
+        owners = _runtime_metadata_entry_points(metadata)
+        if not owners:
+            ambiguous.append(item)
+        elif selected_entry_point in owners:
+            scoped.append(item)
+    return tuple(scoped), tuple(ambiguous)
+
+
+def _runtime_metadata_entry_points(metadata: Any) -> tuple[str, ...]:
+    if not isinstance(metadata, Mapping):
+        return ()
+    names: list[str] = []
+    for key in ("entryPoint", "entry_point"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            names.append(value.strip())
+    for key in ("entryPoints", "entry_points"):
+        value = metadata.get(key)
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            names.extend(
+                item.strip() for item in value if isinstance(item, str) and item.strip()
+            )
+    return tuple(_dedupe_strings(names))
+
+
+def _select_runtime_contract_entry_point(
+    contract: RuntimeAdapterContract,
+    *,
+    selected_entry_point: str,
+    selection_source: str | None,
+    ambiguous_counts: Mapping[str, int] | None = None,
+) -> RuntimeAdapterContract:
+    entry_points = tuple(
+        entry for entry in contract.entry_points if entry.name == selected_entry_point
+    )
+    dispatch = contract.dispatch
+    selected = entry_points[0] if entry_points else None
+    if dispatch is None:
+        dispatch = RuntimeDispatchGeometry(
+            entry_point=selected_entry_point,
+            workgroup_size=(selected.workgroup_size if selected is not None else ()),
+        )
+    else:
+        dispatch = replace(
+            dispatch,
+            entry_point=selected_entry_point,
+            workgroup_size=(
+                selected.workgroup_size
+                if selected is not None and selected.workgroup_size
+                else dispatch.workgroup_size
+            ),
+        )
+    existing_scope = contract.metadata.get("entryPointScope")
+    scope_metadata: dict[str, Any] = (
+        dict(existing_scope) if isinstance(existing_scope, Mapping) else {}
+    )
+    scope_metadata.update(
+        {
+            "entryPoint": selected_entry_point,
+            "status": "scoped",
+        }
+    )
+    if selection_source is not None:
+        scope_metadata["source"] = selection_source
+    if ambiguous_counts is not None:
+        scope_metadata["ambiguousCounts"] = dict(ambiguous_counts)
+    return replace(
+        contract,
+        entry_points=entry_points,
+        dispatch=dispatch,
+        metadata={
+            **dict(contract.metadata),
+            "entryPointScope": scope_metadata,
+        },
+    )
+
+
+def _runtime_entry_point_scope_diagnostic(
+    severity: str,
+    code: str,
+    message: str,
+    fixture: RuntimeFixture,
+    artifact: Mapping[str, Any],
+    *,
+    selected_entry_point: str | None,
+    candidates: Sequence[str],
+    **context: Any,
+) -> dict[str, Any]:
+    return _runtime_execution_diagnostic(
+        severity,
+        code,
+        message,
+        artifact,
+        fixture=fixture.id,
+        artifactId=artifact.get("id"),
+        entryPoint=selected_entry_point,
+        selectedEntryPoint=selected_entry_point,
+        entryPointCandidates=list(candidates),
+        candidateEntryPoints=list(candidates),
+        target=artifact.get("target"),
+        **context,
+    )
 
 
 def _runtime_adapter_contract_from_artifact(
@@ -5434,6 +5783,8 @@ def _fixture_result(
         "comparisons": [dict(comparison) for comparison in comparisons],
         "diagnostics": [dict(diagnostic) for diagnostic in diagnostics],
     }
+    if fixture.entry_point is not None:
+        result["entryPoint"] = fixture.entry_point
     if adapter_contract is not None:
         adapter_payload = adapter_contract.to_json()
         if adapter_payload:
