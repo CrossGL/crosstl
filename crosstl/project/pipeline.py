@@ -1129,6 +1129,7 @@ RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_FIELDS = frozenset(
         "summary",
         "targets",
         "steps",
+        "deviceExecution",
         "handoffInspection",
         "diagnosticCounts",
         "diagnostics",
@@ -1195,6 +1196,7 @@ RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_FIELDS = frozenset(
         "summary",
         "targets",
         "stepResults",
+        "deviceExecution",
         "executionPlan",
         "diagnosticCounts",
         "diagnostics",
@@ -24978,6 +24980,56 @@ def _runtime_host_integration_execution_target(
     }
 
 
+def _runtime_host_integration_execution_plan_device_execution(
+    targets: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    target_payloads: list[dict[str, Any]] = []
+    requires_adapter_count = 0
+    blocked_count = 0
+    failed_count = 0
+    for target in targets:
+        target_name = target.get("target")
+        target_status = str(target.get("status") or "unknown")
+        if target_status == "ready":
+            execution_status = "requires-adapter-descriptor"
+            requires_adapter_count += 1
+        elif target_status == "failed":
+            execution_status = "failed"
+            failed_count += 1
+        else:
+            execution_status = "blocked"
+            blocked_count += 1
+        target_payloads.append(
+            {
+                "target": target_name,
+                "status": execution_status,
+                "targetStatus": target_status,
+            }
+        )
+    status = "empty"
+    if failed_count:
+        status = "failed"
+    elif requires_adapter_count and not blocked_count:
+        status = "requires-adapter-descriptors"
+    elif requires_adapter_count or blocked_count:
+        status = "blocked"
+    return {
+        "mode": "adapter-backed-device-dispatch",
+        "status": status,
+        "requiredInputs": [
+            "runtime-package-root",
+            "runtime-adapter-descriptor-root",
+            "target-runtime-runner",
+        ],
+        "targetCount": len(target_payloads),
+        "readyTargetCount": 0,
+        "requiresAdapterDescriptorTargetCount": requires_adapter_count,
+        "blockedTargetCount": blocked_count,
+        "failedTargetCount": failed_count,
+        "targets": target_payloads,
+    }
+
+
 def plan_runtime_host_integration_execution(
     handoff_manifest_path: str | os.PathLike[str],
     *,
@@ -25123,6 +25175,9 @@ def plan_runtime_host_integration_execution(
             for target in targets
         ],
         "steps": steps,
+        "deviceExecution": _runtime_host_integration_execution_plan_device_execution(
+            targets
+        ),
         "handoffInspection": {
             "kind": inspection.get("kind"),
             "success": inspection.get("success"),
@@ -26188,6 +26243,86 @@ def _runtime_host_integration_execution_result_target(
     }
 
 
+def _runtime_host_integration_execution_result_device_execution(
+    targets: Sequence[Mapping[str, Any]],
+    *,
+    package_root_status: str,
+    adapter_package: Mapping[str, Any],
+) -> dict[str, Any]:
+    descriptors = [
+        descriptor
+        for descriptor in _record_sequence(adapter_package.get("descriptors"))
+        if isinstance(descriptor, Mapping)
+    ]
+    ready_targets = {
+        str(descriptor.get("target"))
+        for descriptor in descriptors
+        if descriptor.get("status") == "ready"
+        and _is_non_empty_string(descriptor.get("target"))
+    }
+    adapter_status = str(adapter_package.get("status") or "not-provided")
+    target_payloads: list[dict[str, Any]] = []
+    ready_count = 0
+    blocked_count = 0
+    failed_count = 0
+    for target in targets:
+        target_name = target.get("target")
+        target_text = str(target_name) if _is_non_empty_string(target_name) else None
+        if adapter_status == "failed" or package_root_status in {
+            "missing",
+            "not-directory",
+        }:
+            status = "failed"
+            reason = "Required runtime package or adapter descriptors are invalid."
+            failed_count += 1
+        elif adapter_status == "not-provided":
+            status = "not-configured"
+            reason = "Runtime adapter descriptor root was not provided."
+            blocked_count += 1
+        elif package_root_status != "ready":
+            status = "blocked"
+            reason = "Runtime package root is required before device execution."
+            blocked_count += 1
+        elif target_text in ready_targets:
+            status = "ready"
+            reason = "Runtime package and adapter descriptor are ready for a runner."
+            ready_count += 1
+        else:
+            status = "blocked"
+            reason = "No verified runtime adapter descriptor was found for this target."
+            blocked_count += 1
+        target_payloads.append(
+            {
+                "target": target_name,
+                "status": status,
+                "reason": reason,
+            }
+        )
+
+    status = "empty"
+    if failed_count:
+        status = "failed"
+    elif ready_count and not blocked_count:
+        status = "ready"
+    elif ready_count:
+        status = "partial"
+    elif blocked_count:
+        status = "blocked" if adapter_status != "not-provided" else "not-configured"
+    return {
+        "mode": "adapter-backed-device-dispatch",
+        "status": status,
+        "runner": None,
+        "adapterPackageStatus": adapter_status,
+        "packageRootStatus": package_root_status,
+        "targetCount": len(target_payloads),
+        "readyTargetCount": ready_count,
+        "blockedTargetCount": blocked_count,
+        "failedTargetCount": failed_count,
+        "verifiedDescriptorCount": adapter_package.get("verifiedDescriptorCount", 0),
+        "targets": target_payloads,
+    }
+
+
 def execute_runtime_host_integration(
     execution_plan_path: str | os.PathLike[str],
     *,
@@ -26298,6 +26433,11 @@ def execute_runtime_host_integration(
     status = _runtime_host_integration_execution_result_status(
         step_results, diagnostics_payload
     )
+    device_execution = _runtime_host_integration_execution_result_device_execution(
+        targets,
+        package_root_status=package_root_status,
+        adapter_package=adapter_package,
+    )
     return {
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_KIND,
@@ -26338,6 +26478,7 @@ def execute_runtime_host_integration(
             for target in targets
         ],
         "stepResults": step_results,
+        "deviceExecution": device_execution,
         "executionPlan": {
             "kind": plan.get("kind") if plan else None,
             "success": plan.get("success") if plan else False,
