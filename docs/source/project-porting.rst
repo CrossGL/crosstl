@@ -748,9 +748,12 @@ steps. The step phases cover tool preparation, loader consumption, artifact
 loading, host responsibility handling, blocker resolution, and other host
 actions. Plans carry required tools, host responsibilities, package paths,
 scaffold files, target status, and structured diagnostics so downstream host
-or build-system tooling can decide what to run next. The plan remains metadata
-only: it does not rewrite host application code, execute device code, generate
-runtime framework code, or install target SDKs.
+or build-system tooling can decide what to run next. Plans also include a
+``deviceExecution`` readiness block that declares the adapter-backed dispatch
+inputs a target will need, including the runtime package root, runtime adapter
+descriptor root, and an external target runtime runner. The plan remains
+metadata only: it does not rewrite host application code, execute device code,
+generate runtime framework code, or install target SDKs.
 
 Execute deterministic host integration checks from a saved execution plan:
 
@@ -775,8 +778,10 @@ when ``--adapter-root`` is provided, checks required host tools on ``PATH``, and
 reports project-specific host responsibilities as skipped actionable steps.
 Blocked plan steps remain blocked in the result, and missing files, stale
 descriptor hashes, or invalid paths are emitted as structured diagnostics.
-This command still does not rewrite host application code, execute device code,
-generate runtime framework code, or install target SDKs.
+The result ``deviceExecution`` block reports whether each target has a ready
+runtime package and verified runtime adapter descriptor for an external runner.
+This command still does not rewrite host application code, dispatch device
+work, generate runtime framework code, or install target SDKs.
 
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a
