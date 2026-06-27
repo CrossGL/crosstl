@@ -761,12 +761,8 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 193,
+        "unsupported_marker_count": 178,
         "unsupported_marker_samples": [
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "CUDA_UNSUPPORTED_FP16_VECTOR_TYPES = {"
-          },
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "self.reject_unsupported_generic_functions(ast_node)"
@@ -842,6 +838,10 @@
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "f\"Unsupported {semantic} stage parameter semantic for CUDA \""
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "raise ValueError(f\"Unsupported CUDA wave intrinsic {operation}\")"
           }
         ]
       },
@@ -878,12 +878,8 @@
         "path": "crosstl/backend/HIP"
       },
       "signals": {
-        "unsupported_marker_count": 137,
+        "unsupported_marker_count": 122,
         "unsupported_marker_samples": [
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "HIP_UNSUPPORTED_FP16_VECTOR_TYPES = {"
-          },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "self.reject_unsupported_generic_functions(node)"
@@ -959,6 +955,10 @@
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "f\"Unsupported {semantic} {context} for HIP {stage_name} stage; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "f\"Unsupported {semantic} return semantic for HIP codegen; \""
           }
         ]
       },

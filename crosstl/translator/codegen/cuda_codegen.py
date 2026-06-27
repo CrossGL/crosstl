@@ -142,22 +142,21 @@ CUDA_INTEGER_BIT_FUNCTION_ALIASES = {
     "firstbithigh": "findMSB",
 }
 
-CUDA_UNSUPPORTED_FP16_VECTOR_TYPES = {
-    "vec4<f16>",
-    "vec4<float16>",
-    "vec4<half>",
-    "f16vec4",
-    "float16vec4",
-    "half4",
-}
-
-CUDA_FP16_VEC3_TYPES = {
-    "vec3<f16>",
-    "vec3<float16>",
-    "vec3<half>",
-    "f16vec3",
-    "float16vec3",
-    "half3",
+CUDA_FP16_VECTOR_TYPES = {
+    "cgl_half3": 3,
+    "cgl_half4": 4,
+    "vec3<f16>": 3,
+    "vec3<float16>": 3,
+    "vec3<half>": 3,
+    "f16vec3": 3,
+    "float16vec3": 3,
+    "half3": 3,
+    "vec4<f16>": 4,
+    "vec4<float16>": 4,
+    "vec4<half>": 4,
+    "f16vec4": 4,
+    "float16vec4": 4,
+    "half4": 4,
 }
 
 
@@ -3143,10 +3142,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def cuda_half_constructor_expression(self, constructor_type, raw_args, args):
         """Lower CrossGL FP16 constructors to CUDA's documented half intrinsics."""
-        unsupported_type = self.cuda_unsupported_fp16_vector_type(constructor_type)
-        if unsupported_type is not None:
-            self.raise_unsupported_cuda_fp16_vector_type(unsupported_type)
-
         if constructor_type in {"f16", "half", "float16"}:
             if not args:
                 return "half{}"
@@ -3281,6 +3276,21 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             raise_unresolved_generic_function_call(self, func_name, "CUDA")
 
         args = [self.visit(arg) for arg in raw_args]
+
+        vector_info = self.vector_type_info(func_name)
+        if vector_info:
+            splat_call = self.generate_vector_scalar_splat_call(
+                vector_info, raw_args, args
+            )
+            if splat_call is not None:
+                return splat_call
+            constructor_call = self.generate_vector_constructor_single_eval_call(
+                vector_info, raw_args, args
+            )
+            if constructor_call is not None:
+                return constructor_call
+            args = self.generate_vector_constructor_args(vector_info, raw_args, args)
+            return f"{vector_info['constructor']}({', '.join(args)})"
 
         half_constructor = self.cuda_half_constructor_expression(
             func_name, raw_args, args
@@ -6494,10 +6504,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if crossgl_type is None:
             return "void"
 
-        unsupported_type = self.cuda_unsupported_fp16_vector_type(crossgl_type)
-        if unsupported_type is not None:
-            self.raise_unsupported_cuda_fp16_vector_type(unsupported_type)
-
         geometry_stream_type = self.cuda_geometry_stream_mapped_type(crossgl_type)
         if geometry_stream_type is not None:
             return geometry_stream_type
@@ -6590,12 +6596,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "uvec4": "uint4",
             "f16vec2": "half2",
             "f16vec3": "cgl_half3",
+            "f16vec4": "cgl_half4",
             "float16vec3": "cgl_half3",
+            "float16vec4": "cgl_half4",
             "half3": "cgl_half3",
+            "half4": "cgl_half4",
             "half2": "half2",
             "vec3<f16>": "cgl_half3",
             "vec3<float16>": "cgl_half3",
             "vec3<half>": "cgl_half3",
+            "vec4<f16>": "cgl_half4",
+            "vec4<float16>": "cgl_half4",
+            "vec4<half>": "cgl_half4",
             "bvec2": "uchar2",
             "bvec3": "uchar3",
             "bvec4": "uchar4",
@@ -6741,6 +6753,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         base_type = str(mapped_type).split("[", 1)[0].strip()
         if base_type == "cgl_half3":
             self.require_cuda_half3_helper()
+        if base_type == "cgl_half4":
+            self.require_cuda_half4_helper()
         if base_type in {
             "CglRayTracingAccelerationStructure",
             "CglRayDesc",
@@ -10889,27 +10903,29 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return self.convert_crossgl_type_to_cuda(type_name)
 
     def vector_type_info(self, type_name):
-        half3_info = self.cuda_half3_vector_type_info(type_name)
-        if half3_info is not None:
-            return half3_info
+        half_vector_info = self.cuda_half_vector_type_info(type_name)
+        if half_vector_info is not None:
+            return half_vector_info
         narrow_info = self.cuda_narrow_integer_vector_type_info(type_name)
         if narrow_info is not None:
             return narrow_info
         return super().vector_type_info(type_name)
 
-    def cuda_half3_vector_type_info(self, type_name):
+    def cuda_half_vector_type_info(self, type_name):
         type_text = self.type_name_string(type_name)
         if type_text is None:
             return None
         compact_type = "".join(str(type_text).split())
-        if compact_type not in CUDA_FP16_VEC3_TYPES and compact_type != "cgl_half3":
+        component_count = CUDA_FP16_VECTOR_TYPES.get(compact_type)
+        if component_count is None:
             return None
-        self.require_cuda_half3_helper()
+        self.require_cuda_half_vector_helper(component_count)
+        vector_type = f"cgl_half{component_count}"
         return {
-            "type": "cgl_half3",
-            "constructor": "cgl_make_half3",
+            "type": vector_type,
+            "constructor": f"cgl_make_half{component_count}",
             "component_type": "half",
-            "components": ("x", "y", "z"),
+            "components": ("x", "y", "z", "w")[:component_count],
         }
 
     def cuda_narrow_integer_vector_type_info(self, type_name):
@@ -10947,44 +10963,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "components": components,
         }
 
-    def cuda_unsupported_fp16_vector_type(self, type_name):
-        type_text = self.type_name_string(type_name)
-        if type_text is None:
-            return None
-        compact_type = "".join(str(type_text).split())
-        if compact_type in CUDA_UNSUPPORTED_FP16_VECTOR_TYPES:
-            return compact_type
-        return None
-
-    def raise_unsupported_cuda_fp16_vector_type(self, type_name):
-        raise ValueError(
-            "CUDA does not support FP16 vector type "
-            f"{type_name}; supported FP16 CUDA aliases are f16/half "
-            "and vec2<f16>/half2; vec3<f16>/half3 lowers to cgl_half3"
-        )
-
     def require_cuda_half3_helper(self):
-        helper_name = "cgl_half3_type"
+        self.require_cuda_half_vector_helper(3)
+
+    def require_cuda_half4_helper(self):
+        self.require_cuda_half_vector_helper(4)
+
+    def require_cuda_half_conversion_helper(self):
+        helper_name = "cgl_half_conversion"
         if helper_name in self.helper_functions:
             return
         self.helper_functions[helper_name] = (
-            "struct cgl_half3\n"
-            "{\n"
-            "    half x;\n"
-            "    half y;\n"
-            "    half z;\n"
-            "\n"
-            "    __host__ __device__ cgl_half3()\n"
-            "        : x(__float2half(0.0f)), y(__float2half(0.0f)), z(__float2half(0.0f))\n"
-            "    {\n"
-            "    }\n"
-            "\n"
-            "    __host__ __device__ cgl_half3(half x_value, half y_value, half z_value)\n"
-            "        : x(x_value), y(y_value), z(z_value)\n"
-            "    {\n"
-            "    }\n"
-            "};\n"
-            "\n"
             "__host__ __device__ inline half cgl_to_half(half value)\n"
             "{\n"
             "    return value;\n"
@@ -10994,17 +10983,61 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "__host__ __device__ inline half cgl_to_half(T value)\n"
             "{\n"
             "    return __float2half(static_cast<float>(value));\n"
+            "}"
+        )
+
+    def require_cuda_half_vector_helper(self, component_count):
+        self.require_cuda_half_conversion_helper()
+        helper_name = f"cgl_half{component_count}_type"
+        if helper_name in self.helper_functions:
+            return
+
+        vector_type = f"cgl_half{component_count}"
+        components = ("x", "y", "z", "w")[:component_count]
+        fields = "\n".join(f"    half {component};" for component in components)
+        zero_initializers = ", ".join(
+            f"{component}(__float2half(0.0f))" for component in components
+        )
+        parameters = ", ".join(f"half {component}_value" for component in components)
+        value_initializers = ", ".join(
+            f"{component}({component}_value)" for component in components
+        )
+        template_parameters = ", ".join(
+            f"typename {component.upper()}" for component in components
+        )
+        make_parameters = ", ".join(
+            f"{component.upper()} {component}" for component in components
+        )
+        make_arguments = ", ".join(
+            f"cgl_to_half({component})" for component in components
+        )
+        self.helper_functions[helper_name] = (
+            f"struct {vector_type}\n"
+            "{\n"
+            f"{fields}\n"
+            "\n"
+            f"    __host__ __device__ {vector_type}()\n"
+            f"        : {zero_initializers}\n"
+            "    {\n"
+            "    }\n"
+            "\n"
+            f"    __host__ __device__ {vector_type}({parameters})\n"
+            f"        : {value_initializers}\n"
+            "    {\n"
+            "    }\n"
+            "};\n"
+            "\n"
+            f"__host__ __device__ inline {vector_type} "
+            f"cgl_make_half{component_count}()\n"
+            "{\n"
+            f"    return {vector_type}();\n"
             "}\n"
             "\n"
-            "__host__ __device__ inline cgl_half3 cgl_make_half3()\n"
+            f"template <{template_parameters}>\n"
+            f"__host__ __device__ inline {vector_type} "
+            f"cgl_make_half{component_count}({make_parameters})\n"
             "{\n"
-            "    return cgl_half3();\n"
-            "}\n"
-            "\n"
-            "template <typename X, typename Y, typename Z>\n"
-            "__host__ __device__ inline cgl_half3 cgl_make_half3(X x, Y y, Z z)\n"
-            "{\n"
-            "    return cgl_half3(cgl_to_half(x), cgl_to_half(y), cgl_to_half(z));\n"
+            f"    return {vector_type}({make_arguments});\n"
             "}"
         )
 

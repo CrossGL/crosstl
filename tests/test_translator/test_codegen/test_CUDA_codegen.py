@@ -2557,36 +2557,58 @@ class TestCudaCodeGen:
         )
         assert "f16vec3" not in cuda_code
 
-    @pytest.mark.parametrize("vector_type", ["vec4<f16>"])
-    def test_fp16_vec4_aliases_raise_cuda_diagnostic(self, vector_type):
+    @pytest.mark.parametrize("vector_type", ["vec4<f16>", "f16vec4", "half4"])
+    def test_fp16_vec4_aliases_lower_to_cuda_half4_helper(self, vector_type):
         source_code = f"""
         shader TestShader {{
             compute {{
-                {vector_type} unsupported() {{
-                    return {vector_type}(1.0, 2.0, 3.0, 4.0);
+                {vector_type} tint({vector_type} input) {{
+                    f16 scalar = f16(0.5);
+                    {vector_type} from_scalars = {vector_type}(
+                        1.0, scalar, input.z, input.w);
+                    {vector_type} from_vector = {vector_type}(input);
+                    {vector_type} from_swizzle = {vector_type}(input.wzyx);
+                    f16 component = from_scalars.w;
+                    return {vector_type}(
+                        from_vector.x, from_swizzle.y, component, input.x);
                 }}
             }}
         }}
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
 
-        with pytest.raises(
-            ValueError,
-            match=f"CUDA does not support FP16 vector type {vector_type}",
-        ):
-            CudaCodeGen().generate(ast)
+        assert "#include <cuda_fp16.h>" in cuda_code
+        assert "struct cgl_half4" in cuda_code
+        assert "__device__ cgl_half4 tint(cgl_half4 input)" in cuda_code
+        assert "half scalar = __float2half(0.5);" in cuda_code
+        assert (
+            "cgl_half4 from_scalars = cgl_make_half4(1.0, scalar, input.z, input.w);"
+            in cuda_code
+        )
+        assert (
+            "cgl_half4 from_vector = "
+            "cgl_make_half4(input.x, input.y, input.z, input.w);" in cuda_code
+        )
+        assert (
+            "cgl_half4 from_swizzle = "
+            "cgl_make_half4(input.w, input.z, input.y, input.x);" in cuda_code
+        )
+        assert "half component = from_scalars.w;" in cuda_code
+        assert (
+            "return cgl_make_half4(from_vector.x, from_swizzle.y, component, input.x);"
+            in cuda_code
+        )
+        if vector_type != "half4":
+            assert vector_type not in cuda_code
 
     @pytest.mark.parametrize(
         "vector_type",
         ["f16vec4", "float16vec4", "half4"],
     )
-    def test_fp16_wide_vector_alias_maps_raise_cuda_diagnostic(self, vector_type):
-        with pytest.raises(
-            ValueError,
-            match=f"CUDA does not support FP16 vector type {vector_type}",
-        ):
-            CudaCodeGen().convert_crossgl_type_to_cuda(vector_type)
+    def test_fp16_wide_vector_alias_maps_emit_cuda_half4(self, vector_type):
+        assert CudaCodeGen().convert_crossgl_type_to_cuda(vector_type) == "cgl_half4"
 
     def test_composite_vector_constructors_flatten_cuda_lanes(self):
         source_code = """
