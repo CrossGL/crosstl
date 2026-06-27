@@ -17,6 +17,7 @@ from ..ast import (
     ConstructorNode,
     ContinueNode,
     EnumNode,
+    ExpressionNode,
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
@@ -1380,11 +1381,45 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         visitor = getattr(self, method_name, self.generic_visit)
         return visitor(node)
 
-    def generic_visit(self, node: ASTNode) -> str:
-        """Raise a clear error for unsupported AST nodes."""
-        raise NotImplementedError(
-            f"Code generation not implemented for {type(node).__name__}"
-        )
+    def generic_visit(self, node):
+        """Return deterministic diagnostics for unsupported AST nodes."""
+        if isinstance(node, str):
+            return self.builtin_map.get(node, node)
+        if isinstance(node, list):
+            return [self.visit(item) for item in node]
+        if not isinstance(node, ASTNode):
+            return str(node)
+
+        diagnostic = self.unsupported_ast_node_diagnostic(node)
+        if isinstance(node, ExpressionNode):
+            expression_type = self.type_name_string(
+                self.current_expression_expected_type
+                or getattr(node, "expression_type", None)
+                or getattr(node, "vtype", None)
+            )
+            fallback = self.diagnostic_zero_value_for_type(expression_type)
+            return f"{diagnostic} {fallback}"
+        return diagnostic
+
+    def unsupported_ast_node_diagnostic(self, node: ASTNode) -> str:
+        """Format a compact HIP diagnostic for unhandled AST node classes."""
+        details = []
+        for name, value in sorted(vars(node).items()):
+            if name in {"annotations", "parent", "source_location"}:
+                continue
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                details.append(f"{name}={self.comment_safe_repr(value)}")
+            elif isinstance(value, (list, tuple, set, dict)):
+                details.append(f"{name}_count={len(value)}")
+            elif isinstance(value, ASTNode):
+                details.append(f"{name}={type(value).__name__}")
+
+        detail_text = f" ({', '.join(details)})" if details else ""
+        return f"/* unsupported HIP AST node: {type(node).__name__}{detail_text} */"
+
+    def comment_safe_repr(self, value):
+        """Return a repr that cannot terminate a generated C-style comment."""
+        return repr(value).replace("*/", "* /")
 
     def ordered_generic_struct_specializations(self):
         specializations = self.generic_struct_specializations or {}

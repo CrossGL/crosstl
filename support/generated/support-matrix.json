@@ -878,7 +878,7 @@
         "path": "crosstl/backend/HIP"
       },
       "signals": {
-        "unsupported_marker_count": 135,
+        "unsupported_marker_count": 137,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
@@ -930,11 +930,19 @@
           },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "\"\"\"Raise a clear error for unsupported AST nodes.\"\"\""
+            "text": "\"\"\"Return deterministic diagnostics for unsupported AST nodes.\"\"\""
           },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "raise NotImplementedError("
+            "text": "diagnostic = self.unsupported_ast_node_diagnostic(node)"
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "def unsupported_ast_node_diagnostic(self, node: ASTNode) -> str:"
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "return f\"/* unsupported HIP AST node: {type(node).__name__}{detail_text} */\""
           },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
@@ -951,14 +959,6 @@
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "f\"Unsupported {semantic} {context} for HIP {stage_name} stage; \""
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "f\"Unsupported {semantic} return semantic for HIP codegen; \""
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "f\"Unsupported {semantic} stage parameter semantic for HIP codegen; \""
           }
         ]
       },
@@ -971,7 +971,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 831
+        "test_count": 832
       },
       "translator_codegen": {
         "exists": true,
@@ -1229,7 +1229,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 409,
+        "unsupported_marker_count": 408,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",

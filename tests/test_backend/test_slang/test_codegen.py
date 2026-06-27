@@ -1575,7 +1575,7 @@ def test_generic_enum_class_codegen_reparse_from_upstream_bug_test():
     cgl_translator.parse(generated_code)
 
 
-def test_reverse_codegen_rejects_extension_conformance_constructs():
+def test_reverse_codegen_emits_diagnostics_for_extension_conformance_constructs():
     code = """
     interface IFoo {
         int foo();
@@ -1592,18 +1592,26 @@ def test_reverse_codegen_rejects_extension_conformance_constructs():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
+    generated_code = generate_code(ast)
 
-    with pytest.raises(
-        NotImplementedError,
-        match="interface/conformance constructs",
-    ) as exc:
-        generate_code(ast)
+    assert (
+        "// unsupported Slang interface/conformance construct: interface IFoo"
+        in generated_code
+    )
+    assert (
+        "// unsupported Slang interface/conformance construct: struct MyType : IFoo"
+        in generated_code
+    )
+    assert (
+        "// unsupported Slang interface/conformance construct: extension MyType : IBar"
+        in generated_code
+    )
+    assert "struct MyType" in generated_code
+    assert "int value;" in generated_code
+    cgl_translator.parse(generated_code)
 
-    message = str(exc.value)
-    assert "extension MyType : IBar" in message
 
-
-def test_reverse_codegen_rejects_generic_prefixed_extension_after_parse():
+def test_reverse_codegen_emits_diagnostic_for_generic_prefixed_extension_after_parse():
     # Reduced from shader-slang/slang@0658ed79219d6e4ee526182104ce71d476f787be
     # tests/autodiff/force-unroll-late-specialization.slang.
     code = """
@@ -1628,14 +1636,14 @@ def test_reverse_codegen_rejects_generic_prefixed_extension_after_parse():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
+    generated_code = generate_code(ast)
 
-    with pytest.raises(
-        NotImplementedError,
-        match="interface/conformance constructs",
-    ) as exc:
-        generate_code(ast)
-
-    assert "extension DiffTensorView<T, A>" in str(exc.value)
+    assert (
+        "// unsupported Slang interface/conformance construct: "
+        "extension DiffTensorView<T, A>"
+    ) in generated_code
+    assert "loadVecOnce" not in generated_code
+    cgl_translator.parse(generated_code)
 
 
 def test_reverse_codegen_erases_builtin_generic_where_constraints_from_wave_matrix():
@@ -1668,7 +1676,7 @@ def test_reverse_codegen_erases_builtin_generic_where_constraints_from_wave_matr
     cgl_translator.parse(generated_code)
 
 
-def test_reverse_codegen_rejects_generic_where_conformance_constraint():
+def test_reverse_codegen_emits_diagnostic_for_generic_where_conformance_constraint():
     code = """
     int useFoo<T>(T value) where T : IFoo {
         return value.foo();
@@ -1677,15 +1685,17 @@ def test_reverse_codegen_rejects_generic_where_conformance_constraint():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
+    generated_code = generate_code(ast)
 
-    with pytest.raises(
-        NotImplementedError,
-        match="function useFoo where T : IFoo",
-    ):
-        generate_code(ast)
+    assert (
+        "// unsupported Slang interface/conformance construct: "
+        "function useFoo where T : IFoo"
+    ) in generated_code
+    assert "int useFoo(T value)" in generated_code
+    cgl_translator.parse(generated_code)
 
 
-def test_reverse_codegen_rejects_typealias_generic_conformance_constraint():
+def test_reverse_codegen_emits_diagnostic_for_typealias_generic_conformance_constraint():
     code = """
     __generic<T : IFoo>
     typealias FooAlias = Array<T, 4>;
@@ -1693,12 +1703,14 @@ def test_reverse_codegen_rejects_typealias_generic_conformance_constraint():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
+    generated_code = generate_code(ast)
 
-    with pytest.raises(
-        NotImplementedError,
-        match="typealias FooAlias<T> where T : IFoo",
-    ):
-        generate_code(ast)
+    assert (
+        "// unsupported Slang interface/conformance construct: "
+        "typealias FooAlias<T> where T : IFoo"
+    ) in generated_code
+    assert "typedef Array<T, 4> FooAlias<T>;" in generated_code
+    cgl_translator.parse(generated_code)
 
 
 def test_for_array_assignment_update_codegen():

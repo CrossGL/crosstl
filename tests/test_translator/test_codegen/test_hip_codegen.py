@@ -13,6 +13,7 @@ from crosstl.translator.ast import (
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
+    LambdaNode,
     LiteralNode,
     MatchArmNode,
     MatchNode,
@@ -158,6 +159,38 @@ class TestHipCodeGen:
         assert "T fallback_zero(T value" not in hip_code
         assert "return fallback_zero(value, false);" not in hip_code
         assert "T::zero" not in hip_code
+
+    def test_unhandled_ast_node_emits_hip_diagnostic(self):
+        ast = ShaderNode(
+            name="UnhandledHipAstNode",
+            execution_model=ExecutionModel.COMPUTE_KERNEL,
+            functions=[
+                FunctionNode(
+                    "uses_unhandled_expression",
+                    PrimitiveType("void"),
+                    [],
+                    BlockNode(
+                        [
+                            VariableNode(
+                                "value",
+                                PrimitiveType("float"),
+                                LambdaNode(
+                                    [],
+                                    LiteralNode(1.0, PrimitiveType("float")),
+                                    expression_type=PrimitiveType("float"),
+                                ),
+                            )
+                        ]
+                    ),
+                )
+            ],
+        )
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "float value = /* unsupported HIP AST node: LambdaNode" in hip_code
+        assert "expression_type=PrimitiveType" in hip_code
+        assert "*/ 0.0f;" in hip_code
 
     def test_simple_function_generation(self):
         source_code = """
