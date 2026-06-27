@@ -117,6 +117,10 @@ def assert_metal_validates_if_available(metal_code, tmp_path):
         text=True,
         check=False,
     )
+    if compile_result.returncode != 0 and "missing Metal Toolchain" in (
+        compile_result.stderr or compile_result.stdout
+    ):
+        return
     assert compile_result.returncode == 0, compile_result.stderr
 
 

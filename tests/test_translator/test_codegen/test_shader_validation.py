@@ -6686,11 +6686,10 @@ shader TransitiveShadowedConstIndexValidation {
 
 def run_validator(command):
     result = subprocess.run(command, capture_output=True, text=True)
-    assert result.returncode == 0, (
-        f"{' '.join(command)} failed\n"
-        f"stdout:\n{result.stdout}\n"
-        f"stderr:\n{result.stderr}"
-    )
+    diagnostics = f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    if result.returncode != 0 and "missing Metal Toolchain" in diagnostics:
+        pytest.skip("macOS Metal toolchain is not installed")
+    assert result.returncode == 0, f"{' '.join(command)} failed\n" f"{diagnostics}"
 
 
 def validate_spirv_shader_source(

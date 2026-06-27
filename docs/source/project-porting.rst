@@ -601,6 +601,14 @@ generated manifest. Valid fixture records remain in the manifest so
 the same adapter dependency checks and runtime planning used by hand-authored
 manifests.
 
+Generated test records also include ``metadata.runtimeMetadata``. When the
+selected artifact carries ``runtimeDataStatus`` from a runtime artifact
+manifest, that status is preserved; otherwise the generator derives readiness
+from the merged runtime adapter contract. The manifest summary includes
+``runtimeMetadataStatusCounts`` so downstream tooling can separate incomplete
+fixture data from incomplete artifact metadata before attempting native runtime
+execution.
+
 Build a runtime loader manifest from a runtime package manifest:
 
 .. code-block:: bash
