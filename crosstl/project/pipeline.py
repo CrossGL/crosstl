@@ -66,6 +66,7 @@ RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_KIND = (
 RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_KIND = (
     "crosstl-runtime-host-integration-execution-result"
 )
+RUNTIME_DEVICE_RUNNER_MANIFEST_KIND = "crosstl-runtime-device-runner-manifest"
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
 RUNTIME_LOADER_PLAN_CONTRACT = "runtime-loader-plan-v1"
@@ -1192,6 +1193,8 @@ RUNTIME_HOST_INTEGRATION_EXECUTION_RESULT_FIELDS = frozenset(
         "adapterRoot",
         "adapterRootStatus",
         "adapterPackage",
+        "deviceRunnerManifest",
+        "deviceRunnerManifestStatus",
         "project",
         "summary",
         "targets",
@@ -25895,6 +25898,241 @@ def _runtime_host_integration_execution_adapter_manifest(
     }, diagnostics
 
 
+def _runtime_host_integration_execution_runner_manifest_empty(
+    status: str, manifest_status: str | None = None
+) -> dict[str, Any]:
+    return {
+        "kind": None,
+        "success": status not in {"failed", "missing", "invalid"},
+        "status": status,
+        "manifest": None,
+        "manifestStatus": manifest_status or status,
+        "runnerCount": 0,
+        "readyRunnerCount": 0,
+        "failedRunnerCount": 0,
+        "blockedRunnerCount": 0,
+        "runners": [],
+    }
+
+
+def _runtime_host_integration_execution_runner_manifest(
+    runner_manifest: str | os.PathLike[str] | None,
+    *,
+    plan_path: Path,
+) -> tuple[dict[str, Any], str | None, str, list[ProjectDiagnostic]]:
+    if runner_manifest is None:
+        return (
+            _runtime_host_integration_execution_runner_manifest_empty("not-provided"),
+            None,
+            "not-provided",
+            [],
+        )
+
+    manifest_path = _filesystem_path_arg(
+        runner_manifest, field_name="Runtime device runner manifest"
+    )
+    if not manifest_path.is_file():
+        return (
+            _runtime_host_integration_execution_runner_manifest_empty(
+                "failed", "missing"
+            ),
+            str(manifest_path),
+            "missing",
+            [
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "runner-manifest-missing",
+                    f"Runtime device runner manifest does not exist: {manifest_path}",
+                )
+            ],
+        )
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return (
+            _runtime_host_integration_execution_runner_manifest_empty(
+                "failed", "unreadable"
+            ),
+            str(manifest_path),
+            "unreadable",
+            [
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "runner-manifest-read-failed",
+                    f"Runtime device runner manifest could not be read: {exc}",
+                )
+            ],
+        )
+    except json.JSONDecodeError as exc:
+        return (
+            _runtime_host_integration_execution_runner_manifest_empty(
+                "failed", "invalid-json"
+            ),
+            str(manifest_path),
+            "invalid-json",
+            [
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "runner-manifest-json-invalid",
+                    f"Runtime device runner manifest is not valid JSON: {exc}",
+                )
+            ],
+        )
+
+    diagnostics: list[ProjectDiagnostic] = []
+    if not isinstance(manifest, Mapping):
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                plan_path,
+                "runner-manifest-invalid",
+                "Runtime device runner manifest must be a JSON object.",
+            )
+        )
+        return (
+            _runtime_host_integration_execution_runner_manifest_empty(
+                "failed", "invalid"
+            ),
+            str(manifest_path),
+            "invalid",
+            diagnostics,
+        )
+
+    if manifest.get("schemaVersion") != REPORT_SCHEMA_VERSION:
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                plan_path,
+                "runner-manifest-schema-invalid",
+                f"Runtime device runner manifest schemaVersion must be {REPORT_SCHEMA_VERSION}.",
+            )
+        )
+    if manifest.get("kind") != RUNTIME_DEVICE_RUNNER_MANIFEST_KIND:
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                plan_path,
+                "runner-manifest-kind-invalid",
+                "Runtime device runner manifest must be a "
+                f"{RUNTIME_DEVICE_RUNNER_MANIFEST_KIND} document.",
+            )
+        )
+
+    raw_runners = manifest.get("runners")
+    if not isinstance(raw_runners, list):
+        diagnostics.append(
+            _runtime_host_integration_execution_result_diagnostic(
+                plan_path,
+                "runner-manifest-runners-invalid",
+                "Runtime device runner manifest runners must be a list.",
+            )
+        )
+        raw_runners = []
+
+    runner_results: list[dict[str, Any]] = []
+    for index, runner in enumerate(raw_runners, start=1):
+        runner_diagnostics: list[ProjectDiagnostic] = []
+        if not isinstance(runner, Mapping):
+            runner_diagnostics.append(
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "runner-entry-invalid",
+                    f"Runtime device runner entry {index} must be an object.",
+                )
+            )
+            runner_results.append(
+                {
+                    "id": None,
+                    "target": None,
+                    "status": "failed",
+                    "capabilities": [],
+                    "command": [],
+                }
+            )
+            diagnostics.extend(runner_diagnostics)
+            continue
+        runner_id = runner.get("id")
+        runner_target = runner.get("target")
+        runner_status = str(runner.get("status") or "ready")
+        if not _is_non_empty_string(runner_id):
+            runner_diagnostics.append(
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "runner-id-missing",
+                    "Runtime device runner id must be a non-empty string.",
+                    target=runner_target,
+                )
+            )
+        if not _is_non_empty_string(runner_target):
+            runner_diagnostics.append(
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "runner-target-missing",
+                    "Runtime device runner target must be a non-empty string.",
+                )
+            )
+        if runner_status not in {"ready", "blocked", "failed"}:
+            runner_diagnostics.append(
+                _runtime_host_integration_execution_result_diagnostic(
+                    plan_path,
+                    "runner-status-invalid",
+                    "Runtime device runner status must be ready, blocked, or failed.",
+                    target=runner_target,
+                )
+            )
+        capabilities = [
+            capability
+            for capability in _record_sequence(runner.get("capabilities"))
+            if _is_non_empty_string(capability)
+        ]
+        command = [
+            part
+            for part in _record_sequence(runner.get("command"))
+            if _is_non_empty_string(part)
+        ]
+        status = "failed" if runner_diagnostics else runner_status
+        runner_results.append(
+            {
+                "id": runner_id,
+                "target": runner_target,
+                "status": status,
+                "capabilities": capabilities,
+                "command": command,
+            }
+        )
+        diagnostics.extend(runner_diagnostics)
+
+    failed_runner_count = sum(
+        1 for runner in runner_results if runner.get("status") == "failed"
+    )
+    ready_runner_count = sum(
+        1 for runner in runner_results if runner.get("status") == "ready"
+    )
+    blocked_runner_count = sum(
+        1 for runner in runner_results if runner.get("status") == "blocked"
+    )
+    status = (
+        "failed"
+        if any(diagnostic.severity == "error" for diagnostic in diagnostics)
+        else "ready"
+    )
+    return (
+        {
+            "kind": manifest.get("kind"),
+            "success": status != "failed",
+            "status": status,
+            "manifest": str(manifest_path),
+            "manifestStatus": "ready" if status != "failed" else "failed",
+            "runnerCount": len(runner_results),
+            "readyRunnerCount": ready_runner_count,
+            "failedRunnerCount": failed_runner_count,
+            "blockedRunnerCount": blocked_runner_count,
+            "runners": runner_results,
+        },
+        str(manifest_path),
+        "ready" if status != "failed" else "failed",
+        diagnostics,
+    )
+
+
 def _runtime_host_integration_execution_check_payload(
     kind: str,
     status: str,
@@ -26248,6 +26486,7 @@ def _runtime_host_integration_execution_result_device_execution(
     *,
     package_root_status: str,
     adapter_package: Mapping[str, Any],
+    runner_manifest: Mapping[str, Any],
 ) -> dict[str, Any]:
     descriptors = [
         descriptor
@@ -26261,6 +26500,18 @@ def _runtime_host_integration_execution_result_device_execution(
         and _is_non_empty_string(descriptor.get("target"))
     }
     adapter_status = str(adapter_package.get("status") or "not-provided")
+    runners = [
+        runner
+        for runner in _record_sequence(runner_manifest.get("runners"))
+        if isinstance(runner, Mapping)
+    ]
+    ready_runners_by_target = {
+        str(runner.get("target")): runner
+        for runner in runners
+        if runner.get("status") == "ready"
+        and _is_non_empty_string(runner.get("target"))
+    }
+    runner_manifest_status = str(runner_manifest.get("status") or "not-provided")
     target_payloads: list[dict[str, Any]] = []
     ready_count = 0
     blocked_count = 0
@@ -26283,21 +26534,34 @@ def _runtime_host_integration_execution_result_device_execution(
             status = "blocked"
             reason = "Runtime package root is required before device execution."
             blocked_count += 1
-        elif target_text in ready_targets:
-            status = "ready"
-            reason = "Runtime package and adapter descriptor are ready for a runner."
-            ready_count += 1
-        else:
+        elif target_text not in ready_targets:
             status = "blocked"
             reason = "No verified runtime adapter descriptor was found for this target."
             blocked_count += 1
-        target_payloads.append(
-            {
-                "target": target_name,
-                "status": status,
-                "reason": reason,
-            }
-        )
+        elif runner_manifest_status == "not-provided":
+            status = "ready-for-runner"
+            reason = "Runtime package and adapter descriptor are ready for a runner."
+            blocked_count += 1
+        elif runner_manifest_status == "failed":
+            status = "failed"
+            reason = "Runtime device runner manifest is invalid."
+            failed_count += 1
+        elif target_text in ready_runners_by_target:
+            status = "ready"
+            reason = "Runtime package, adapter descriptor, and runner are ready."
+            ready_count += 1
+        else:
+            status = "blocked"
+            reason = "No ready runtime device runner was found for this target."
+            blocked_count += 1
+        target_payload = {
+            "target": target_name,
+            "status": status,
+            "reason": reason,
+        }
+        if status == "ready" and target_text in ready_runners_by_target:
+            target_payload["runner"] = ready_runners_by_target[target_text].get("id")
+        target_payloads.append(target_payload)
 
     status = "empty"
     if failed_count:
@@ -26307,12 +26571,18 @@ def _runtime_host_integration_execution_result_device_execution(
     elif ready_count:
         status = "partial"
     elif blocked_count:
-        status = "blocked" if adapter_status != "not-provided" else "not-configured"
+        if adapter_status == "not-provided":
+            status = "not-configured"
+        elif runner_manifest_status == "not-provided":
+            status = "ready-for-runner"
+        else:
+            status = "blocked"
     return {
         "mode": "adapter-backed-device-dispatch",
         "status": status,
         "runner": None,
         "adapterPackageStatus": adapter_status,
+        "runnerManifestStatus": runner_manifest_status,
         "packageRootStatus": package_root_status,
         "targetCount": len(target_payloads),
         "readyTargetCount": ready_count,
@@ -26330,6 +26600,7 @@ def execute_runtime_host_integration(
     scaffold_root: str | os.PathLike[str] | None = None,
     package_root: str | os.PathLike[str] | None = None,
     adapter_root: str | os.PathLike[str] | None = None,
+    runner_manifest: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
     """Execute deterministic host integration checks from an execution plan."""
 
@@ -26371,11 +26642,21 @@ def execute_runtime_host_integration(
             plan_path=plan_path,
         )
     )
+    (
+        device_runner_manifest,
+        device_runner_manifest_value,
+        device_runner_manifest_status,
+        runner_manifest_diagnostics,
+    ) = _runtime_host_integration_execution_runner_manifest(
+        runner_manifest,
+        plan_path=plan_path,
+    )
     diagnostics.extend(host_root_diagnostics)
     diagnostics.extend(package_diagnostics)
     diagnostics.extend(scaffold_diagnostics)
     diagnostics.extend(adapter_diagnostics)
     diagnostics.extend(adapter_package_diagnostics)
+    diagnostics.extend(runner_manifest_diagnostics)
 
     diagnostics_payload = [diagnostic.to_json() for diagnostic in diagnostics]
     plan_ready = bool(plan) and not any(
@@ -26437,6 +26718,7 @@ def execute_runtime_host_integration(
         targets,
         package_root_status=package_root_status,
         adapter_package=adapter_package,
+        runner_manifest=device_runner_manifest,
     )
     return {
         "schemaVersion": REPORT_SCHEMA_VERSION,
@@ -26458,6 +26740,8 @@ def execute_runtime_host_integration(
         "adapterRoot": adapter_root_value,
         "adapterRootStatus": adapter_root_status,
         "adapterPackage": adapter_package,
+        "deviceRunnerManifest": device_runner_manifest_value,
+        "deviceRunnerManifestStatus": device_runner_manifest_status,
         "project": (
             dict(plan.get("project"))
             if isinstance(plan.get("project"), Mapping)

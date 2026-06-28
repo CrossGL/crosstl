@@ -497,6 +497,7 @@ def test_project_package_exposes_public_api_surface():
         "PROJECT_TEST_RUNNER_INSPECTION_KIND",
         "PROJECT_TEST_RUNNER_PLAN_KIND",
         "PROJECT_TEST_RUNNER_REPORT_KIND",
+        "RUNTIME_DEVICE_RUNNER_MANIFEST_KIND",
         "REFLECTION_AMBIGUOUS_BINDING",
         "REFLECTION_EMPTY",
         "REFLECTION_INCOMPLETE_OUTPUT",
@@ -37106,6 +37107,7 @@ def test_execute_runtime_host_integration_reports_checked_and_skipped_steps(
         "status": "not-configured",
         "runner": None,
         "adapterPackageStatus": "not-provided",
+        "runnerManifestStatus": "not-provided",
         "packageRootStatus": "ready",
         "targetCount": 1,
         "readyTargetCount": 0,
@@ -37233,9 +37235,80 @@ def test_execute_runtime_host_integration_checks_adapter_descriptors(tmp_path):
     assert payload["adapterPackage"]["failedDescriptorCount"] == 0
     assert payload["deviceExecution"] == {
         "mode": "adapter-backed-device-dispatch",
+        "status": "ready-for-runner",
+        "runner": None,
+        "adapterPackageStatus": "ready",
+        "runnerManifestStatus": "not-provided",
+        "packageRootStatus": "ready",
+        "targetCount": 1,
+        "readyTargetCount": 0,
+        "blockedTargetCount": 1,
+        "failedTargetCount": 0,
+        "verifiedDescriptorCount": 1,
+        "targets": [
+            {
+                "target": "cgl",
+                "status": "ready-for-runner",
+                "reason": (
+                    "Runtime package and adapter descriptor are ready for a runner."
+                ),
+            }
+        ],
+    }
+    descriptor = payload["adapterPackage"]["descriptors"][0]
+    assert descriptor["status"] == "ready"
+    assert {check["status"] for check in descriptor["checks"]} == {"passed"}
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+
+
+def test_execute_runtime_host_integration_reports_ready_device_runner(tmp_path):
+    repo, plan_path, _ = _write_runtime_host_integration_execution_plan_fixture(
+        tmp_path
+    )
+    adapter_dir = repo / "runtime-package" / "runtime-adapters"
+    materialize_runtime_adapters(
+        repo / "runtime-package" / "runtime-package.json",
+        adapter_dir,
+    )
+    runner_manifest = repo / "device-runners.json"
+    runner_manifest.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": project_pipeline.RUNTIME_DEVICE_RUNNER_MANIFEST_KIND,
+                "runners": [
+                    {
+                        "id": "local-cgl-runner",
+                        "target": "cgl",
+                        "status": "ready",
+                        "capabilities": ["dispatch"],
+                        "command": ["cgl-runner", "run"],
+                    }
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = execute_runtime_host_integration(
+        plan_path,
+        scaffold_root=repo / "host-loader-scaffolds",
+        package_root=repo / "runtime-package",
+        adapter_root=adapter_dir,
+        runner_manifest=runner_manifest,
+    )
+
+    assert payload["success"] is True
+    assert payload["status"] == "partial"
+    assert payload["deviceRunnerManifest"] == str(runner_manifest)
+    assert payload["deviceRunnerManifestStatus"] == "ready"
+    assert payload["deviceExecution"] == {
+        "mode": "adapter-backed-device-dispatch",
         "status": "ready",
         "runner": None,
         "adapterPackageStatus": "ready",
+        "runnerManifestStatus": "ready",
         "packageRootStatus": "ready",
         "targetCount": 1,
         "readyTargetCount": 1,
@@ -37246,15 +37319,11 @@ def test_execute_runtime_host_integration_checks_adapter_descriptors(tmp_path):
             {
                 "target": "cgl",
                 "status": "ready",
-                "reason": (
-                    "Runtime package and adapter descriptor are ready for a runner."
-                ),
+                "reason": "Runtime package, adapter descriptor, and runner are ready.",
+                "runner": "local-cgl-runner",
             }
         ],
     }
-    descriptor = payload["adapterPackage"]["descriptors"][0]
-    assert descriptor["status"] == "ready"
-    assert {check["status"] for check in descriptor["checks"]} == {"passed"}
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
 
 
@@ -37407,6 +37476,24 @@ def test_project_cli_execute_host_integration_text_outputs_results(tmp_path):
         repo / "runtime-package" / "runtime-package.json",
         adapter_dir,
     )
+    runner_manifest = repo / "device-runners.json"
+    runner_manifest.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": project_pipeline.RUNTIME_DEVICE_RUNNER_MANIFEST_KIND,
+                "runners": [
+                    {
+                        "id": "local-cgl-runner",
+                        "target": "cgl",
+                        "status": "ready",
+                    }
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
     result = subprocess.run(
         [
@@ -37423,6 +37510,8 @@ def test_project_cli_execute_host_integration_text_outputs_results(tmp_path):
             str(repo / "runtime-package"),
             "--adapter-root",
             str(adapter_dir),
+            "--runner-manifest",
+            str(runner_manifest),
             "--format",
             "text",
         ],
@@ -37439,6 +37528,7 @@ def test_project_cli_execute_host_integration_text_outputs_results(tmp_path):
     assert "Runtime package root:" in result.stdout
     assert "Runtime adapter descriptor root:" in result.stdout
     assert "Runtime adapter descriptors: ready, 1 verified, 0 failed" in result.stdout
+    assert "Runtime device runner manifest:" in result.stdout
     assert "Summary: 1 targets, 6 steps, 4 passed, 2 skipped, 0 blocked, 0 failed" in (
         result.stdout
     )

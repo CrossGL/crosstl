@@ -2834,6 +2834,13 @@ def _format_runtime_host_integration_execution_result(payload):
             f"{adapter_package.get('verifiedDescriptorCount', 0)} verified, "
             f"{adapter_package.get('failedDescriptorCount', 0)} failed"
         )
+    runner_manifest = payload.get("deviceRunnerManifest")
+    runner_manifest_status = payload.get("deviceRunnerManifestStatus")
+    if isinstance(runner_manifest, str) and runner_manifest:
+        lines.append(
+            f"Runtime device runner manifest: {runner_manifest} "
+            f"[{runner_manifest_status}]"
+        )
     scope = payload.get("scope")
     if isinstance(scope, str) and scope:
         lines.append(f"Execution scope: {scope}")
@@ -2916,6 +2923,7 @@ def _run_execute_host_integration(args):
         scaffold_root=args.scaffold_root,
         package_root=args.package_root,
         adapter_root=args.adapter_root,
+        runner_manifest=args.runner_manifest,
     )
     if args.format == "sarif":
         _write_json_payload(
@@ -6914,6 +6922,10 @@ def _build_parser():
     execute_host_integration_parser.add_argument(
         "--adapter-root",
         help="Optional runtime adapter descriptor root for descriptor checks",
+    )
+    execute_host_integration_parser.add_argument(
+        "--runner-manifest",
+        help="Optional runtime device runner manifest for runner readiness checks",
     )
     execute_host_integration_parser.add_argument(
         "--format",
