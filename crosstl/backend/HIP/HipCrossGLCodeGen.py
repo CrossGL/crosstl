@@ -4608,6 +4608,17 @@ class HipToCrossGLConverter:
             return self.visit_lvalue_expression(arg.operand)
         return self.visit(arg)
 
+    def format_hip_output_pointer_target(self, arg):
+        if isinstance(arg, CastNode):
+            return self.format_hip_output_pointer_target(arg.expression)
+        if isinstance(arg, UnaryOpNode) and arg.op == "&":
+            return self.visit_lvalue_expression(arg.operand)
+
+        target = self.visit(arg)
+        if not target:
+            return None
+        return f"(*{target})"
+
     def format_runtime_raw_output_target(self, arg):
         self.clear_lvalue_metadata_source(arg)
         return self.format_runtime_pointer_target(arg)
@@ -5000,6 +5011,15 @@ class HipToCrossGLConverter:
                 self.emit(f"var {output_name}: {var_type} = {dim3_brace_value};")
                 return
 
+            match_all_sync = self.format_hip_match_all_sync_assignment(node.value)
+            if match_all_sync is not None:
+                statements, value = match_all_sync
+                for statement in statements:
+                    self.emit(statement)
+                self.register_warp_mask_value(raw_name, output_name, value)
+                self.emit(f"var {output_name}: {var_type} = {value};")
+                return
+
             runtime_status = self.format_hip_runtime_status_expression(node.value)
             if runtime_status is not None:
                 comments, value = runtime_status
@@ -5278,6 +5298,20 @@ class HipToCrossGLConverter:
     def visit_AssignmentNode(self, node):
         left = self.visit_lvalue_expression(node.left)
         operator = getattr(node, "operator", "=")
+        match_all_sync = (
+            self.format_hip_match_all_sync_assignment(node.right)
+            if operator == "="
+            else None
+        )
+        if match_all_sync is not None:
+            statements, value = match_all_sync
+            for statement in statements:
+                self.emit(statement)
+            self.clear_lvalue_metadata_source(node.left)
+            self.register_warp_mask_assignment(node.left, left, operator, value)
+            self.emit(f"{left} = {value};")
+            return
+
         runtime_status = (
             self.format_hip_runtime_status_expression(node.right)
             if operator == "="
@@ -5628,6 +5662,7 @@ class HipToCrossGLConverter:
             "__shfl_up",
             "__shfl_down",
             "__shfl_xor",
+            "__match_all_sync",
         }:
             return self.format_unsupported_hip_warp_intrinsic(function_name, args)
 
@@ -5684,6 +5719,35 @@ class HipToCrossGLConverter:
             f"(/* hip warp intrinsic {function_name}({args_text}) "
             "not directly supported in CrossGL */ 0)"
         )
+
+    def format_hip_match_all_sync_assignment(self, value):
+        if not isinstance(value, FunctionCallNode):
+            return None
+
+        function_name = (
+            value.name if isinstance(value.name, str) else self.visit(value.name)
+        )
+        if isinstance(function_name, str) and function_name.startswith("::"):
+            function_name = function_name[2:]
+        if function_name != "__match_all_sync":
+            return None
+
+        raw_args = getattr(value, "args", []) or []
+        args = [self.visit(arg) for arg in raw_args]
+        diagnostic = self.format_hip_warp_intrinsic_call
+        if len(raw_args) != 3 or not self.is_full_or_active_warp_mask(args[0]):
+            return [], diagnostic(function_name, args)
+
+        predicate_target = self.format_hip_output_pointer_target(raw_args[2])
+        if predicate_target is None:
+            return [], diagnostic(function_name, args)
+
+        self.clear_lvalue_metadata_source(raw_args[2])
+        match_value = args[1]
+        statements = [
+            f"{predicate_target} = (WaveActiveAllEqual({match_value}) ? 1 : 0);"
+        ]
+        return statements, f"WaveMatch({match_value}).x"
 
     def format_cooperative_group_call(self, node):
         if isinstance(node.name, MemberAccessNode):

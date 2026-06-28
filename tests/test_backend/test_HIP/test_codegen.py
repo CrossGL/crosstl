@@ -1559,10 +1559,13 @@ class TestHipCodeGen:
             unsigned long long active = ::__activemask();
             unsigned long long bits = __ballot_sync(active, pred);
             unsigned long long matches = __match_any_sync(active, value);
+            int same = 0;
+            unsigned long long all_matches = ::__match_all_sync(active, value, &same);
             int all_set = __all_sync(0xffffffffffffffff, pred);
             int y = __shfl_sync(0xffffffffffffffff, value, lane);
+            unsigned long long unsupported_match = __match_all_sync(mask, value, &same);
             int unsupported = __shfl_xor_sync(mask, value, lane);
-            out[lane] = y + unsupported + all_set + active + bits + matches;
+            out[lane] = y + unsupported + unsupported_match + all_set + active + bits + matches + same + all_matches;
         }
         """
         lexer = HipLexer(code)
@@ -1575,8 +1578,11 @@ class TestHipCodeGen:
         assert "var active: u64 = WaveActiveBallot(true).x;" in result
         assert "var bits: u64 = WaveActiveBallot((pred != 0)).x;" in result
         assert "var matches: u64 = WaveMatch(value).x;" in result
+        assert "same = (WaveActiveAllEqual(value) ? 1 : 0);" in result
+        assert "var all_matches: u64 = WaveMatch(value).x;" in result
         assert "(WaveActiveAllTrue((pred != 0)) ? 1 : 0)" in result
         assert "WaveReadLaneAt(value, lane)" in result
+        assert "hip warp intrinsic __match_all_sync(mask, value" in result
         assert (
             "/* hip warp intrinsic __shfl_xor_sync(mask, value, lane) not "
             "directly supported in CrossGL */ 0"
@@ -1585,6 +1591,7 @@ class TestHipCodeGen:
         assert "__activemask()" not in result
         assert "__ballot_sync(active, pred)" not in result
         assert "__match_any_sync(active, value)" not in result
+        assert "__match_all_sync(active, value" not in result
 
     def test_rocm_docs_full_warp_reduce_sync_variants_convert(self):
         # Source: ROCm HIP C++ language extensions, warp reduce functions.
