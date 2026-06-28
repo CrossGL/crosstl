@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +11,7 @@ from crosstl.project import (
     execute_project_test_runner_plan,
     inspect_project_test_runner_plan,
 )
+from crosstl.project.runtime_verification import RuntimeParityAdapter
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -192,6 +194,115 @@ def test_project_test_runner_executes_available_project_command(tmp_path):
     assert report["results"][0]["status"] == "passed"
     assert report["results"][0]["logs"][0]["returncode"] == 0
     assert output_file.read_text(encoding="utf-8") == "ok"
+
+
+def test_project_test_runner_executes_runtime_tests_with_supplied_executor(tmp_path):
+    artifact_path = tmp_path / "out" / "opengl" / "add.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("#version 450\nvoid main() {}\n", encoding="utf-8")
+    artifact_report_path = tmp_path / "artifact-report.json"
+    artifact_report_path.write_text(
+        json.dumps(
+            _artifact_report(
+                tmp_path,
+                [
+                    _artifact(
+                        path="out/opengl/add.glsl",
+                        dispatch={
+                            "entryPoint": "main",
+                            "globalSize": [1, 1, 1],
+                            "workgroupSize": [1, 1, 1],
+                        },
+                    )
+                ],
+            )
+        ),
+        encoding="utf-8",
+    )
+    manifest = {
+        "kind": "crosstl-project-runtime-test-manifest",
+        "adapters": [
+            {
+                "id": "fixture-runtime",
+                "executor": "fixture-runtime",
+                "adapterKind": "fixture-runtime-parity",
+                "platformRequirements": {"requiredTools": []},
+            }
+        ],
+        "tests": [
+            {
+                "id": "increment-fixture",
+                "selector": {
+                    "source": "kernels/add.cgl",
+                    "target": "opengl",
+                    "variant": "debug",
+                },
+                "adapter": "fixture-runtime",
+                "inputs": [
+                    {
+                        "name": "lhs",
+                        "dtype": "float32",
+                        "shape": [1],
+                        "values": [1.0],
+                    }
+                ],
+                "expectedOutputs": [
+                    {
+                        "name": "out",
+                        "dtype": "float32",
+                        "shape": [1],
+                        "values": [2.0],
+                    }
+                ],
+            }
+        ],
+    }
+
+    class IncrementRuntime(RuntimeParityAdapter):
+        name = "increment-runtime"
+        target = "opengl"
+
+        def prepare_buffers(self, state):
+            return dict(state.resource_values)
+
+        def dispatch(self, state, prepared_buffers):
+            assert state.plan.dispatch.entry_point == "main"
+            assert prepared_buffers["out"] is None
+            return {"out": [value + 1.0 for value in prepared_buffers["lhs"]]}
+
+        def collect_outputs(self, state, dispatch_result):
+            return {
+                name: {
+                    "dtype": "float32",
+                    "shape": [len(values)],
+                    "values": values,
+                }
+                for name, values in dispatch_result.items()
+            }
+
+    plan = build_project_test_runner_plan(
+        artifact_report_path,
+        manifest,
+        project_root=tmp_path,
+    )
+
+    report = execute_project_test_runner_plan(
+        plan,
+        project_root=tmp_path,
+        runtime_executors={"fixture-runtime": IncrementRuntime()},
+    )
+
+    runtime_report = report["runtimeTestReport"]
+    runtime_result = runtime_report["results"][0]
+    assert report["success"] is True
+    assert runtime_report["success"] is True
+    assert plan["runtimeTestPlan"]["testCases"][0]["platformRequirements"] == {}
+    assert runtime_result["status"] == "passed"
+    assert (
+        runtime_result["executor"]["details"]["runtimeParityAdapter"]["runtimeAdapter"]
+        == "increment-runtime"
+    )
+    assert report["summary"]["passedCount"] == 1
 
 
 def test_project_test_runner_inspection_summarizes_unavailable_adapters(tmp_path):

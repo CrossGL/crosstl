@@ -164,6 +164,7 @@ def execute_project_test_runner_plan(
     project_root: str | os.PathLike[str] | None = None,
     output_path: str | os.PathLike[str] | None = None,
     run_runtime_tests: bool = True,
+    runtime_executors: Mapping[str, Any] | Sequence[Any] | None = None,
 ) -> dict[str, Any]:
     """Run available project commands and runtime tests from a plan."""
 
@@ -188,7 +189,11 @@ def execute_project_test_runner_plan(
         and runtime_plan.get("kind") == RUNTIME_TEST_PLAN_KIND
     ):
         runtime_report = _execute_runtime_plan(
-            runtime_plan, plan_payload.get("runtimeTestManifest"), root
+            runtime_plan,
+            plan_payload.get("runtimeTestManifest"),
+            root,
+            artifact_source=plan_payload.get("sourceArtifacts"),
+            executors=runtime_executors,
         )
     results = list(command_results)
     if isinstance(runtime_report, Mapping):
@@ -752,7 +757,12 @@ def _execute_command(
 
 
 def _execute_runtime_plan(
-    runtime_plan: Mapping[str, Any], manifest_payload: Any, root: Path
+    runtime_plan: Mapping[str, Any],
+    manifest_payload: Any,
+    root: Path,
+    *,
+    artifact_source: Any = None,
+    executors: Mapping[str, Any] | Sequence[Any] | None = None,
 ) -> Mapping[str, Any] | None:
     manifest = (
         dict(manifest_payload)
@@ -761,16 +771,25 @@ def _execute_runtime_plan(
     )
     if not manifest.get("tests"):
         return None
-    artifact_source = runtime_plan.get("sourceArtifacts", {})
+    runtime_artifact_source = runtime_plan.get("sourceArtifacts", {})
     artifact_path = (
-        artifact_source.get("path") if isinstance(artifact_source, Mapping) else None
+        runtime_artifact_source.get("path")
+        if isinstance(runtime_artifact_source, Mapping)
+        else None
     )
+    if not artifact_path:
+        artifact_path = (
+            artifact_source.get("path")
+            if isinstance(artifact_source, Mapping)
+            else None
+        )
     if not artifact_path:
         return None
     return verify_runtime_test_manifest(
         artifact_path,
         manifest,
         project_root=root,
+        executors=executors,
     )
 
 
