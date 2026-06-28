@@ -117,6 +117,10 @@ def assert_metal_validates_if_available(metal_code, tmp_path):
         text=True,
         check=False,
     )
+    if compile_result.returncode != 0 and "missing Metal Toolchain" in (
+        compile_result.stderr or compile_result.stdout
+    ):
+        return
     assert compile_result.returncode == 0, compile_result.stderr
 
 
@@ -36846,6 +36850,27 @@ def test_plan_runtime_host_integration_execution_reports_ready_steps(tmp_path):
         "requiredToolCount": 0,
         "hostResponsibilityCount": 2,
     }
+    assert payload["deviceExecution"] == {
+        "mode": "adapter-backed-device-dispatch",
+        "status": "requires-adapter-descriptors",
+        "requiredInputs": [
+            "runtime-package-root",
+            "runtime-adapter-descriptor-root",
+            "target-runtime-runner",
+        ],
+        "targetCount": 1,
+        "readyTargetCount": 0,
+        "requiresAdapterDescriptorTargetCount": 1,
+        "blockedTargetCount": 0,
+        "failedTargetCount": 0,
+        "targets": [
+            {
+                "target": "cgl",
+                "status": "requires-adapter-descriptor",
+                "targetStatus": "ready",
+            }
+        ],
+    }
     assert set(payload["targets"][0]) == (
         project_pipeline.RUNTIME_HOST_INTEGRATION_EXECUTION_PLAN_TARGET_FIELDS
     )
@@ -36985,6 +37010,10 @@ def test_project_cli_plan_host_integration_execution_text_outputs_steps(tmp_path
     assert "Summary: 1 targets, 6 steps, 6 ready, 0 blocked, 0 failed" in (
         result.stdout
     )
+    assert (
+        "Device execution readiness: requires-adapter-descriptors, "
+        "1 targets require adapter descriptors"
+    ) in result.stdout
     assert "Runtime host integration execution steps:" in result.stdout
     assert "consume-host-loader-unit" in result.stdout
 
@@ -37072,6 +37101,25 @@ def test_execute_runtime_host_integration_reports_checked_and_skipped_steps(
     assert payload["packageRootStatus"] == "ready"
     assert payload["scaffoldRoot"] == str(repo / "host-loader-scaffolds")
     assert payload["scaffoldRootStatus"] == "ready"
+    assert payload["deviceExecution"] == {
+        "mode": "adapter-backed-device-dispatch",
+        "status": "not-configured",
+        "runner": None,
+        "adapterPackageStatus": "not-provided",
+        "packageRootStatus": "ready",
+        "targetCount": 1,
+        "readyTargetCount": 0,
+        "blockedTargetCount": 1,
+        "failedTargetCount": 0,
+        "verifiedDescriptorCount": 0,
+        "targets": [
+            {
+                "target": "cgl",
+                "status": "not-configured",
+                "reason": "Runtime adapter descriptor root was not provided.",
+            }
+        ],
+    }
     assert payload["summary"] == {
         "targetCount": 1,
         "stepCount": 6,
@@ -37183,6 +37231,27 @@ def test_execute_runtime_host_integration_checks_adapter_descriptors(tmp_path):
     assert payload["adapterPackage"]["descriptorCount"] == 1
     assert payload["adapterPackage"]["verifiedDescriptorCount"] == 1
     assert payload["adapterPackage"]["failedDescriptorCount"] == 0
+    assert payload["deviceExecution"] == {
+        "mode": "adapter-backed-device-dispatch",
+        "status": "ready",
+        "runner": None,
+        "adapterPackageStatus": "ready",
+        "packageRootStatus": "ready",
+        "targetCount": 1,
+        "readyTargetCount": 1,
+        "blockedTargetCount": 0,
+        "failedTargetCount": 0,
+        "verifiedDescriptorCount": 1,
+        "targets": [
+            {
+                "target": "cgl",
+                "status": "ready",
+                "reason": (
+                    "Runtime package and adapter descriptor are ready for a runner."
+                ),
+            }
+        ],
+    }
     descriptor = payload["adapterPackage"]["descriptors"][0]
     assert descriptor["status"] == "ready"
     assert {check["status"] for check in descriptor["checks"]} == {"passed"}
@@ -37371,6 +37440,9 @@ def test_project_cli_execute_host_integration_text_outputs_results(tmp_path):
     assert "Runtime adapter descriptor root:" in result.stdout
     assert "Runtime adapter descriptors: ready, 1 verified, 0 failed" in result.stdout
     assert "Summary: 1 targets, 6 steps, 4 passed, 2 skipped, 0 blocked, 0 failed" in (
+        result.stdout
+    )
+    assert "Device execution readiness: ready, 1 ready, 0 blocked, 0 failed" in (
         result.stdout
     )
     assert "Runtime host integration step results:" in result.stdout

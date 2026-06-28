@@ -59,6 +59,10 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def _missing_metal_toolchain(result):
+    return "missing Metal Toolchain" in (result.stderr or result.stdout)
+
+
 def compile_with_metal_if_available(source: str):
     xcrun = shutil.which("xcrun")
     if xcrun is None:
@@ -84,6 +88,8 @@ def compile_with_metal_if_available(source: str):
             text=True,
         )
 
+    if result.returncode != 0 and _missing_metal_toolchain(result):
+        pytest.skip("Metal toolchain is not installed")
     assert result.returncode == 0, result.stderr
 
 

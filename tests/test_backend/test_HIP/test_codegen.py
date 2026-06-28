@@ -30,6 +30,10 @@ int main() {
 """
 
 
+def _missing_metal_toolchain(result):
+    return "missing Metal Toolchain" in (result.stderr or result.stdout)
+
+
 def compile_metal_if_available(source: str, tmp_path):
     xcrun = shutil.which("xcrun")
     if xcrun is None:
@@ -62,8 +66,8 @@ def compile_metal_if_available(source: str, tmp_path):
         check=False,
         text=True,
     )
-    if result.returncode != 0 and "missing Metal Toolchain" in result.stderr:
-        pytest.skip("macOS Metal toolchain component is not installed")
+    if result.returncode != 0 and _missing_metal_toolchain(result):
+        pytest.skip("macOS Metal toolchain is not installed")
     assert result.returncode == 0, result.stderr
 
 

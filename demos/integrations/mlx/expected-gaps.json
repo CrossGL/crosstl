@@ -35,6 +35,8 @@
     },
     "runtime_plan_diagnostics_by_code": {
       "project.runtime-test.platform-requirements-unavailable": 1,
+      "project.runtime-verification.entry-point-constant-scope-ambiguous": 1,
+      "project.runtime-verification.entry-point-resource-scope-ambiguous": 1,
       "project.runtime-verification.resource-unbound": 1
     }
   },
@@ -82,7 +84,6 @@
     "https://github.com/CrossGL/crosstl/issues/1376",
     "https://github.com/CrossGL/crosstl/issues/1388",
     "https://github.com/CrossGL/crosstl/issues/1392",
-    "https://github.com/CrossGL/crosstl/issues/1394",
     "https://github.com/CrossGL/crosstl/issues/1396"
   ],
   "resolved_issues": [
@@ -169,6 +170,7 @@
     "https://github.com/CrossGL/crosstl/issues/1338",
     "https://github.com/CrossGL/crosstl/issues/1340",
     "https://github.com/CrossGL/crosstl/issues/1346",
-    "https://github.com/CrossGL/crosstl/issues/1355"
+    "https://github.com/CrossGL/crosstl/issues/1355",
+    "https://github.com/CrossGL/crosstl/issues/1394"
   ]
 }

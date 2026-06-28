@@ -2703,6 +2703,15 @@ def _format_runtime_host_integration_execution_plan(payload):
             f"{summary.get('failedStepCount', 0)} failed"
         )
 
+    device_execution = payload.get("deviceExecution")
+    if isinstance(device_execution, Mapping):
+        lines.append(
+            "Device execution readiness: "
+            f"{device_execution.get('status', 'unknown')}, "
+            f"{device_execution.get('requiresAdapterDescriptorTargetCount', 0)} "
+            "targets require adapter descriptors"
+        )
+
     targets = payload.get("targets", [])
     if targets:
         lines.append("Runtime host integration execution targets:")
@@ -2846,6 +2855,16 @@ def _format_runtime_host_integration_execution_result(payload):
             f"{summary.get('skippedStepCount', 0)} skipped, "
             f"{summary.get('blockedStepCount', 0)} blocked, "
             f"{summary.get('failedStepCount', 0)} failed"
+        )
+
+    device_execution = payload.get("deviceExecution")
+    if isinstance(device_execution, Mapping):
+        lines.append(
+            "Device execution readiness: "
+            f"{device_execution.get('status', 'unknown')}, "
+            f"{device_execution.get('readyTargetCount', 0)} ready, "
+            f"{device_execution.get('blockedTargetCount', 0)} blocked, "
+            f"{device_execution.get('failedTargetCount', 0)} failed"
         )
 
     targets = payload.get("targets", [])

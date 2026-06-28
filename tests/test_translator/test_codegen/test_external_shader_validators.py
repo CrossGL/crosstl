@@ -1868,6 +1868,8 @@ def _run_validator(command):
     diagnostics = "\n".join(
         part for part in (result.stdout, result.stderr) if part.strip()
     )
+    if result.returncode != 0 and "missing Metal Toolchain" in diagnostics:
+        pytest.skip("macOS Metal toolchain is not installed")
     assert result.returncode == 0, diagnostics
 
 

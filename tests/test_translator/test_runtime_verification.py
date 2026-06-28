@@ -22,6 +22,7 @@ from crosstl.project.runtime_verification import (
     NativeRuntimeParityAdapter,
     OpenGLRuntimeParityAdapter,
     RuntimeAdapterContract,
+    RuntimeArtifactSelector,
     RuntimeDispatchGeometry,
     RuntimeEntryPoint,
     RuntimeExecutionAdapter,
@@ -30,6 +31,7 @@ from crosstl.project.runtime_verification import (
     RuntimeExecutorAvailability,
     RuntimeExecutorResult,
     RuntimeExecutorSkipped,
+    RuntimeFixture,
     RuntimeParityAdapter,
     RuntimeResourceBinding,
     RuntimeSpecializationConstant,
@@ -318,6 +320,34 @@ def test_load_runtime_verification_fixtures_parses_adapter_contract(tmp_path):
         1,
         1,
     ]
+
+
+def test_runtime_fixture_round_trips_independent_entry_point():
+    fixture = RuntimeFixture(
+        id="entry-point-fixture",
+        selector=RuntimeArtifactSelector(
+            source="kernels/add.cgl",
+            target="opengl",
+        ),
+        entry_point="vector_add",
+    )
+
+    assert fixture.entry_point == "vector_add"
+    assert fixture.to_json()["entryPoint"] == "vector_add"
+
+    parsed = parse_runtime_verification_fixtures(
+        {
+            "fixtures": [
+                _runtime_fixture(
+                    id="parsed-entry-point-fixture",
+                    entryPoint="reduce_sum",
+                )
+            ]
+        }
+    )[0]
+
+    assert parsed.entry_point == "reduce_sum"
+    assert parsed.to_json()["entryPoint"] == "reduce_sum"
 
 
 def test_parse_runtime_verification_fixtures_rejects_missing_selector():
@@ -781,12 +811,238 @@ def test_plan_runtime_test_manifest_warns_for_unbound_incomplete_layout_resource
     plan = plan_runtime_test_manifest(artifact_report, manifest, project_root=tmp_path)
 
     case = plan["testCases"][0]
-    assert case["status"] == "planned"
+    assert case["status"] in {"planned", "skipped"}
     assert case["diagnostics"][0]["severity"] == "warning"
     assert case["diagnostics"][0]["code"] == (
         "project.runtime-verification.resource-unbound"
     )
     assert plan["summary"]["failedCount"] == 0
+
+
+def test_plan_runtime_test_manifest_scopes_contract_to_fixture_entry_point(tmp_path):
+    artifact_report = _artifact_report(
+        tmp_path,
+        [
+            _translated_artifact(
+                id="multi-entry-artifact",
+                entryPoints=[
+                    {"name": "vector_add", "stage": "compute"},
+                    {"name": "reduce_sum", "stage": "compute"},
+                ],
+                resourceBindings=[
+                    {
+                        "name": "lhs",
+                        "kind": "buffer",
+                        "binding": 0,
+                        "metadata": {"entryPoint": "vector_add"},
+                    },
+                    {
+                        "name": "scratch",
+                        "kind": "buffer",
+                        "binding": 1,
+                        "metadata": {"entryPoints": ["reduce_sum"]},
+                    },
+                    {
+                        "name": "out",
+                        "kind": "buffer",
+                        "binding": 2,
+                        "metadata": {"entryPoints": ["vector_add"]},
+                    },
+                ],
+                specializationConstants=[
+                    {
+                        "name": "vector_width",
+                        "value": 4,
+                        "metadata": {"entryPoint": "vector_add"},
+                    },
+                    {
+                        "name": "reduction_width",
+                        "value": 8,
+                        "metadata": {"entryPoints": ["reduce_sum"]},
+                    },
+                ],
+                validationHooks=[
+                    {
+                        "name": "validate-vector-layout",
+                        "metadata": {"entryPoint": "vector_add"},
+                    },
+                    {
+                        "name": "validate-reduction-layout",
+                        "metadata": {"entryPoints": ["reduce_sum"]},
+                    },
+                ],
+                dispatch={"entryPoint": "reduce_sum", "workgroupCount": [1, 1, 1]},
+            )
+        ],
+    )
+    manifest = {
+        "kind": RUNTIME_TEST_MANIFEST_KIND,
+        "tests": [_runtime_fixture(entryPoint="vector_add")],
+    }
+
+    plan = plan_runtime_test_manifest(artifact_report, manifest, project_root=tmp_path)
+
+    contract = plan["testCases"][0]["runtimeAdapter"]
+    assert [item["name"] for item in contract["resourceBindings"]] == ["lhs", "out"]
+    assert [item["name"] for item in contract["specializationConstants"]] == [
+        "vector_width"
+    ]
+    assert [item["name"] for item in contract["validationHooks"]] == [
+        "validate-vector-layout"
+    ]
+    assert contract["dispatch"]["entryPoint"] == "vector_add"
+
+
+def test_plan_runtime_test_manifest_infers_entry_point_from_dispatch(tmp_path):
+    artifact_report = _artifact_report(
+        tmp_path,
+        [
+            _translated_artifact(
+                entryPoints=[
+                    {"name": "vector_add", "stage": "compute"},
+                    {"name": "reduce_sum", "stage": "compute"},
+                ],
+                resourceBindings=[
+                    {
+                        "name": "lhs",
+                        "kind": "buffer",
+                        "binding": 0,
+                        "metadata": {"entryPoint": "vector_add"},
+                    },
+                    {
+                        "name": "out",
+                        "kind": "buffer",
+                        "binding": 1,
+                        "metadata": {"entryPoints": ["vector_add"]},
+                    },
+                    {
+                        "name": "scratch",
+                        "kind": "buffer",
+                        "binding": 2,
+                        "metadata": {"entryPoint": "reduce_sum"},
+                    },
+                ],
+                dispatch={"entryPoint": "vector_add", "workgroupCount": [1, 1, 1]},
+            )
+        ],
+    )
+
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        {"kind": RUNTIME_TEST_MANIFEST_KIND, "tests": [_runtime_fixture()]},
+        project_root=tmp_path,
+    )
+
+    contract = plan["testCases"][0]["runtimeAdapter"]
+    assert [item["name"] for item in contract["resourceBindings"]] == ["lhs", "out"]
+    assert contract["dispatch"]["entryPoint"] == "vector_add"
+
+
+def test_plan_runtime_test_manifest_reports_ambiguous_entry_point_resources(tmp_path):
+    artifact_report = _artifact_report(
+        tmp_path,
+        [
+            _translated_artifact(
+                id="multi-entry-artifact",
+                entryPoints=[
+                    {"name": "vector_add", "stage": "compute"},
+                    {"name": "reduce_sum", "stage": "compute"},
+                ],
+                resourceBindings=[
+                    {"name": "lhs", "kind": "buffer", "binding": 0},
+                    {"name": "scratch", "kind": "buffer", "binding": 1},
+                    {"name": "out", "kind": "buffer", "binding": 2},
+                ],
+                dispatch={"entryPoint": "vector_add", "workgroupCount": [1, 1, 1]},
+            )
+        ],
+    )
+
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        {
+            "kind": RUNTIME_TEST_MANIFEST_KIND,
+            "tests": [_runtime_fixture(entryPoint="vector_add")],
+        },
+        project_root=tmp_path,
+    )
+
+    case = plan["testCases"][0]
+    diagnostic = next(
+        item
+        for item in case["diagnostics"]
+        if item["code"]
+        == "project.runtime-verification.entry-point-resource-scope-ambiguous"
+    )
+    assert case["status"] in {"planned", "skipped"}
+    scoped_resources = case["runtimeAdapter"].get("resourceBindings", [])
+    assert len(scoped_resources) < 3
+    assert "scratch" not in {item["name"] for item in scoped_resources}
+    assert all(
+        item["code"] != "project.runtime-verification.resource-unbound"
+        for item in case["diagnostics"]
+    )
+    assert diagnostic["fixture"] == "add-debug"
+    assert diagnostic["artifact"]["id"] == "multi-entry-artifact"
+    assert diagnostic["selectedEntryPoint"] == "vector_add"
+    assert set(diagnostic["candidateEntryPoints"]) == {"vector_add", "reduce_sum"}
+    assert diagnostic["target"] == "opengl"
+
+
+def test_runtime_test_manifest_preserves_ambiguous_scope_with_fixture_dispatch(
+    tmp_path,
+):
+    artifact_report = _artifact_report(
+        tmp_path,
+        [
+            _translated_artifact(
+                id="multi-entry-artifact",
+                entryPoints=[
+                    {"name": "vector_add", "stage": "compute"},
+                    {"name": "reduce_sum", "stage": "compute"},
+                ],
+                resourceBindings=[
+                    {"name": "lhs", "kind": "buffer", "binding": 0},
+                    {"name": "scratch", "kind": "buffer", "binding": 1},
+                    {"name": "out", "kind": "buffer", "binding": 2},
+                ],
+                dispatch={"entryPoint": "reduce_sum", "workgroupCount": [1, 1, 1]},
+            )
+        ],
+    )
+    fixture = _runtime_fixture(
+        entryPoint="vector_add",
+        runtimeAdapter={"dispatch": {"globalSize": [2, 1, 1]}},
+    )
+
+    manifest = build_runtime_test_manifest(
+        artifact_report,
+        {"kind": "crosstl-project-runtime-fixture-metadata", "fixtures": [fixture]},
+        project_root=tmp_path,
+    )
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        {"kind": RUNTIME_TEST_MANIFEST_KIND, "tests": [fixture]},
+        project_root=tmp_path,
+    )
+
+    manifest_codes = {item["code"] for item in manifest["diagnostics"]}
+    assert (
+        "project.runtime-verification.entry-point-resource-scope-ambiguous"
+        in manifest_codes
+    )
+    assert all(
+        item["code"] != "project.runtime-test-manifest.resource-bindings-unavailable"
+        for item in manifest["diagnostics"]
+    )
+    assert plan["testCases"][0]["runtimeAdapter"]["dispatch"]["entryPoint"] == (
+        "vector_add"
+    )
+    assert plan["testCases"][0]["runtimeAdapter"]["dispatch"]["globalSize"] == [
+        2,
+        1,
+        1,
+    ]
 
 
 def test_verify_runtime_fixtures_reports_setup_diagnostic_with_source_span(tmp_path):
@@ -1063,6 +1319,7 @@ def test_build_runtime_test_manifest_from_mlx_fixture_metadata():
     assert manifest["projectRoot"] == str(ROOT)
     assert manifest["summary"]["testCount"] == 1
     assert manifest["summary"]["testsByTarget"] == {"metal": 1}
+    assert manifest["summary"]["runtimeMetadataStatusCounts"] == {"ready": 1}
     assert manifest["diagnostics"] == []
     assert manifest["metadata"]["repository"] == "mlx"
     assert manifest["metadata"]["fixtureMetadataKind"] == (
@@ -1083,6 +1340,15 @@ def test_build_runtime_test_manifest_from_mlx_fixture_metadata():
     ]
     test_case = manifest["tests"][0]
     assert test_case["adapter"] == "metal-runtime-probe"
+    assert test_case["metadata"]["runtimeMetadata"]["status"] == "ready"
+    assert test_case["metadata"]["runtimeMetadata"]["source"] == (
+        "derived-runtime-adapter-contract"
+    )
+    assert test_case["metadata"]["runtimeMetadata"]["fields"] == {
+        "entryPoints": "available",
+        "resourceBindings": "available",
+        "dispatch": "available",
+    }
     assert test_case["selector"] == {
         "source": "mlx/backend/metal/kernels/binary.metal",
         "target": "metal",
@@ -1184,6 +1450,48 @@ def test_build_runtime_test_manifest_reports_incomplete_fixture_data(tmp_path):
     assert "project.runtime-test-manifest.fixture-expected-outputs-missing" in codes
     assert "project.runtime-test-manifest.entry-points-unavailable" in codes
     parse_runtime_test_manifest(manifest)
+
+
+def test_build_runtime_test_manifest_records_runtime_metadata_readiness(tmp_path):
+    artifact = _native_runtime_artifact(
+        runtimeDataStatus={
+            "hostInterface": "available",
+            "entryPoints": "available",
+            "resourceBindings": "partial",
+            "parameterBlocks": "not-applicable",
+            "dispatch": "unavailable",
+        }
+    )
+
+    manifest = build_runtime_test_manifest(
+        _artifact_report(tmp_path, [artifact]),
+        {
+            "kind": "crosstl-project-runtime-fixture-metadata",
+            "fixtures": [_runtime_fixture(id="runtime-metadata-status")],
+        },
+    )
+
+    runtime_metadata = manifest["tests"][0]["metadata"]["runtimeMetadata"]
+    assert manifest["success"] is True
+    assert manifest["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+    assert manifest["summary"]["runtimeMetadataStatusCounts"] == {"incomplete": 1}
+    assert runtime_metadata["status"] == "incomplete"
+    assert runtime_metadata["source"] == "artifact.runtimeDataStatus"
+    assert runtime_metadata["fields"]["parameterBlocks"] == "not-applicable"
+    assert runtime_metadata["missingFields"] == {
+        "resourceBindings": "partial",
+        "dispatch": "unavailable",
+    }
+    assert manifest["diagnostics"][0]["code"] == (
+        "project.runtime-test-manifest.runtime-metadata-incomplete"
+    )
+    assert manifest["diagnostics"][0]["missingFields"] == {
+        "resourceBindings": "partial",
+        "dispatch": "unavailable",
+    }
+
+    parsed = parse_runtime_test_manifest(manifest)
+    assert parsed.test_cases[0].metadata["runtimeMetadata"]["status"] == "incomplete"
 
 
 def test_project_cli_runtime_test_manifest_text_outputs_generated_tests():

@@ -56,6 +56,7 @@ def _translated_arange_report(module, target):
 
 
 def _runtime_arange_artifact_manifest(module, target, output_name="out"):
+    entry_point = module.RUNTIME_READINESS_ENTRY_POINTS[target]
     return {
         "kind": "crosstl-project-runtime-artifact-manifest",
         "project": {"targets": [target]},
@@ -77,7 +78,7 @@ def _runtime_arange_artifact_manifest(module, target, output_name="out"):
                 "status": "translated",
                 "entryPoints": [
                     {
-                        "name": "main",
+                        "name": entry_point,
                         "stage": "compute",
                         "workgroupSize": [1, 1, 1],
                     }
@@ -100,7 +101,7 @@ def _runtime_arange_artifact_manifest(module, target, output_name="out"):
                     },
                 ],
                 "dispatch": {
-                    "entryPoint": "main",
+                    "entryPoint": entry_point,
                     "workgroupSize": [1, 1, 1],
                     "workgroupCount": [1, 1, 1],
                 },
@@ -149,7 +150,6 @@ def test_runtime_readiness_uses_runtime_artifact_manifest_metadata(
     assert result["trackedRuntimeIssues"] == [
         "https://github.com/CrossGL/crosstl/issues/1388",
         "https://github.com/CrossGL/crosstl/issues/1392",
-        "https://github.com/CrossGL/crosstl/issues/1394",
         "https://github.com/CrossGL/crosstl/issues/1396",
     ]
     assert result["testCount"] == 1
@@ -168,9 +168,43 @@ def test_runtime_readiness_uses_runtime_artifact_manifest_metadata(
     assert manifest["metadata"]["trackedIssues"] == [
         "https://github.com/CrossGL/crosstl/issues/1388",
         "https://github.com/CrossGL/crosstl/issues/1392",
-        "https://github.com/CrossGL/crosstl/issues/1394",
         "https://github.com/CrossGL/crosstl/issues/1396",
     ]
+    assert manifest["tests"][0]["selector"] == {
+        "source": module.MLX_ARANGE_SOURCE,
+        "target": "directx",
+    }
+    assert manifest["tests"][0]["entryPoint"] == "CSMain"
+
+    plan = json.loads((mlx_root / result["runtimeTestPlan"]).read_text())
+    assert plan["testCases"][0]["runtimeExecution"]["dispatch"]["entryPoint"] == (
+        "CSMain"
+    )
+
+
+@pytest.mark.parametrize(
+    ("target", "entry_point"),
+    (("directx", "CSMain"), ("opengl", "main"), ("vulkan", "arangeuint8")),
+)
+def test_runtime_readiness_selects_entry_point_independently(target, entry_point):
+    module = _load_harness()
+
+    fixture = module._runtime_readiness_fixture(target)
+
+    assert fixture["selector"] == {
+        "source": module.MLX_ARANGE_SOURCE,
+        "target": target,
+    }
+    assert fixture["entryPoint"] == entry_point
+    assert fixture["runtimeAdapter"]["dispatch"] == {
+        "globalSize": [4, 1, 1],
+    }
+    assert "https://github.com/CrossGL/crosstl/issues/1394" not in (
+        module.RUNTIME_READINESS_TRACKED_ISSUES
+    )
+    assert "https://github.com/CrossGL/crosstl/issues/1394" in (
+        module.RESOLVED_FRONTIER_ISSUES
+    )
 
 
 def test_runtime_readiness_reports_tracked_plan_resource_blockers(
